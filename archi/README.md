@@ -11,7 +11,10 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 
 > Status, November 2026: version 0.1 in progress. M0 (runtime spike) is done. The crate
 > layering in [07-code-architecture.md](07-code-architecture.md) is approved and being
-> implemented. See [09-roadmap.md](09-roadmap.md) for the exact state of the code.
+> implemented. A design review settled the run TTL, the determinism epoch, how a script
+> ends and the details of format v1: see [08-decisions.md](08-decisions.md). These are
+> documented, not implemented yet. See [09-roadmap.md](09-roadmap.md) for the exact state
+> of the code.
 
 ## Reading order
 
@@ -19,10 +22,10 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 | --- | --- |
 | [01-product.md](01-product.md) | What ai-ptc is, who it is for, how a harness integrates it, what the model writes, the sandbox |
 | [02-journal.md](02-journal.md) | The journal: event families, `seq`, callsites, the commit invariant, run state |
-| [03-execution.md](03-execution.md) | Activations, logical time, replay, signals, cancellation, limits |
-| [04-tools.md](04-tools.md) | Tool dispatch, policies, idempotency, toolsets, code generation, type-checking |
-| [05-testing-and-observability.md](05-testing-and-observability.md) | Mocks, cassettes, scenarios, replay and forks; OpenTelemetry, read model and dashboard as projections of the journal |
-| [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, payloads in S3, scaling path, security |
+| [03-execution.md](03-execution.md) | Activations, logical time, replay, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
+| [04-tools.md](04-tools.md) | Tool dispatch, policies, idempotency, toolsets, code generation, observed result types, type-checking |
+| [05-testing-and-observability.md](05-testing-and-observability.md) | Mocks, cassettes, scenarios, replay and forks, evals; OpenTelemetry, read model and dashboard as projections of the journal |
+| [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payloads in S3, scaling path, security |
 | [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, implementation plan |
 | [08-decisions.md](08-decisions.md) | Every decision taken so far, who took it, and why |
 | [09-roadmap.md](09-roadmap.md) | Milestones, current state of the code, next steps, open questions |
@@ -33,7 +36,7 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 for how the code executes, on a runtime we fully control. Because we own the runtime,
 determinism is guaranteed by construction instead of by developer discipline, and
 because scripts are immutable and content-addressed, there is no workflow versioning
-problem.
+problem. What still changes is the runtime itself, and a determinism epoch versions it.
 
 ## Process
 

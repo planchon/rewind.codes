@@ -53,6 +53,9 @@ either with an embedded engine (SQLite, local files) or as a client of a remote 
    current state ("suspended, waiting for signal `approval`"). The harness can attach
    `labels` (agent, conversation, end user…) and its `traceparent`, so the run is
    searchable in the dashboard and appears under the agent's span in its traces.
+   It also passes an `idempotencyKey`, so a retried request returns the same run instead
+   of starting a second one, and may set a `ttl` (30 days by default, see
+   [execution](03-execution.md#run-ttl)).
 4. Host tools are executed by the harness through an SDK worker (long-poll), like
    Temporal activity workers. This is how a script calls harness functions, another
    LLM, a sub-agent, or a human.
@@ -83,6 +86,7 @@ const run = await ptc.runs.start({
   script: code,
   input: {},
   wait: "30s",
+  idempotencyKey: toolCall.id, // a retried request returns the same run
   labels: { agent: "triage", conversation: conversation.id },
   traceparent, // the LLM call that wrote the script
 });
@@ -109,10 +113,24 @@ const agentTools = ptc.agentTools({ toolset: toolset.id, labels: { conversation:
 | `list_runs({ status? })` | Runs started with the same labels (for example the same conversation). |
 | `signal_run({ run_id, name, payload })` | Sends a signal. |
 | `cancel_run({ run_id })` | Cancels a run. |
+| `retry_run({ run_id, code })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). |
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
 the lifecycle webhooks.
+
+### What `run_script` returns
+
+The result goes into the model's context, so it is bounded by design:
+
+- **Completed**: the output, truncated above a size budget, with the run id so the model
+  can read the rest through `get_run`; plus the last log lines.
+- **Suspended**: the run id and what the run is waiting for.
+- **Failed**: the error with its TypeScript location and a code frame, the trace up to
+  the failure, and the tool call that failed, if any.
+
+The size budget and how the model pages through a large output are an
+[open question](09-roadmap.md#open-questions).
 
 ## What the model writes
 
@@ -185,6 +203,10 @@ Each run has one mailbox per signal name, first in first out:
   arrival order.
 - With `{ timeout }`, `signal()` returns `undefined` if nothing arrived in time.
 
+A signal can carry an idempotency key (the `Idempotency-Key` header). The same key sent
+twice to a run delivers one signal. Without it, a retried request leaves a second
+`approval` in the mailbox, and that one approves the script's next `signal("approval")`.
+
 External systems don't know run ids. For them, the script asks for a webhook:
 
 ```ts
@@ -194,7 +216,8 @@ const event = await signal("pr_merged");          // anything POSTed to hook.url
 ```
 
 `webhook(name)` returns a unique URL bound to this run and this signal name. Every
-request posted to it becomes a `pr_merged` signal on the run. (Designed, not implemented
+request posted to it becomes a `pr_merged` signal on the run. When the sender provides a
+delivery id, it is used as the signal's idempotency key. (Designed, not implemented
 yet.)
 
 ### What exists in the sandbox
@@ -202,12 +225,23 @@ yet.)
 | Global | Behavior |
 | --- | --- |
 | `Date.now()`, `new Date()`, `performance.now()`, `Temporal.Now`, `Intl.DateTimeFormat` | Logical time (see [execution](03-execution.md)). |
-| `Math.random()`, `crypto.getRandomValues()`, `crypto.randomUUID()` | Seeded PRNG (sfc32); the seed is in the journal. |
+| `Math.random()` | Seeded PRNG (sfc32). |
+| `crypto.getRandomValues()`, `crypto.randomUUID()` | Seeded CSPRNG (ChaCha20). Scripts use them to make tokens and passwords, so their output must not be predictable. |
 | `setTimeout`, `setInterval` | Durable timers, same as `sleep`. |
 | `console.*` | Journaled as log annotations. |
+| `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. The exact baseline is an [open question](09-roadmap.md#open-questions). |
 | `fetch` | Absent, unless the toolset enables the built-in `http` tool. It is then a journaled tool call like any other. |
 | `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics` | Removed (they expose GC timing or threads). |
 | File system, env, process, network, `Deno`, Node APIs | Absent. No file system, ever. |
 
+Both random generators are keyed by the run's 256-bit seed, recorded in `run_started`.
+
 The isolate runs with `TZ=UTC` and the `en-US` ICU locale, so `Intl` output does not
 depend on the host. The sandbox refuses to start if `TZ` is not UTC.
+
+**What type-checks is what exists.** The checker's `lib` declares exactly the globals of
+this table and the ECMAScript built-ins, and nothing else (no DOM lib). A name that models
+reach for by habit but that is absent (`fetch`, `require`, `process`, `Buffer`) gets a
+hint in `ptc check` diagnostics and in the LLM trace, saying what to use instead. Adding
+or changing a global changes what scripts can observe, so it bumps the
+[determinism epoch](03-execution.md#determinism-epoch).

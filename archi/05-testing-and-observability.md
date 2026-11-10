@@ -45,9 +45,39 @@ For the embedded CLI in M1, `ptc.tools.json` gives static responses per tool
   with an existing history, and if not, where it diverges.
 - `ptc replay <run> --inspect` (later): attaches the V8 inspector, to step through a
   past production run with its real values.
-- `ptc fork <run> --script fixed.ts --at <index>` (post-V1, the event model supports it):
-  a new run that reuses the recorded results up to a point, then continues live. An
-  agent can fix a bug at step 7 without redoing the side effects of steps 1–6.
+- `ptc fork <run> --script fixed.ts [--at <index>]` (M3, before the dashboard): a new run
+  that reuses the recorded results of its parent, then continues live. An agent can fix
+  a bug at step 7 without redoing the side effects of steps 1–6. The agent tool is
+  `retry_run({ run_id, code })`.
+
+A fork rests on two things the engine already guarantees:
+
+- What `ptc replay --script` checks: the new script is replayed against the parent's
+  history, and as long as its commands match, the recorded outcomes are reused.
+- A run that ends by itself has a recorded outcome for every tool call it scheduled
+  ([how a script ends](03-execution.md#how-a-script-ends)), so the fork knows which
+  effects happened.
+
+The exact semantics are [open question 9](09-roadmap.md#open-questions).
+
+## Evals
+
+Whether the system works for models is measured, not assumed. An eval suite runs models
+end to end on the embedded engine: a task, a toolset of deterministic fake MCP servers,
+and the loop generate → check → run → fix, in virtual time (M2.5).
+
+Reported per model and per prompt rendering:
+
+- check pass rate on the first try;
+- task success;
+- number of iterations;
+- tokens.
+
+Mock mode makes this cheap: runs are hermetic and take no wall-clock time. From M3 the
+suite also replays cassettes recorded from real runs.
+
+The choices that are cheap to change today (names, error formats, the `ptc` library, the
+prompt rendering, what `run_script` returns) are decided on these numbers.
 
 ## Observability
 
@@ -134,6 +164,7 @@ up in a cassette.
 - `labels`: a string map (agent, conversation, end user, environment…), used to filter in
   the dashboard and as span attributes.
 - `trace_context`: the W3C `traceparent` and `tracestate`.
+- `idempotency_key`: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
 - The tenant, if [open question 7](09-roadmap.md#open-questions) settles there.
 
 ### Read model

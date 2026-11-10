@@ -17,6 +17,9 @@ Every call carries an **idempotency key** `"{run_id}/{seq}"`, passed in MCP `_me
 context (`traceparent`, `tracestate`) in `_meta`, with the tool call span as parent, so
 the MCP server's own spans join the run's trace.
 
+This key protects the way out. The way in (starting a run, sending a signal) has its
+own keys: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
+
 Each tool has a **policy**:
 
 | Policy | Default for | On transient error | Dispatcher crashed mid-call (outcome unknown) |
@@ -63,11 +66,42 @@ The JSON Schema → TypeScript converter is ours (objects, required, enums,
 In 0.1 the toolset model in `ptc-core` is only a sorted, deduplicated list of tool names
 with a digest. Schemas and policies arrive with M2.
 
+### Observed result types
+
+Most MCP servers declare no `outputSchema`, so the model would write code against a
+result it cannot see. But every result ever returned is in a journal. A projection
+infers, per tool, the **shape observed** in recorded results, and codegen uses it when
+the server declares nothing (M3).
+
+- Shapes only: keys and types, never values. Observations stay within a tenant.
+- A field missing from some results is optional. A tool never observed keeps the MCP
+  content type and its helpers.
+- The declaration says it is observed, not declared (`@observed` in its JSDoc), so the
+  model knows it may be incomplete.
+- Observed types serve type-checking and the prompt only. Results are never validated
+  against them, and they are not part of the toolset digest, so replay does not depend
+  on them.
+
 ## Type-checking
 
 `ptc check` (and `POST /check`) type-checks the script against `ptc.d.ts` and the
 toolset's declarations, in strict mode, before anything runs. Diagnostics are formatted
 for a model: location, message, and a short code frame.
+
+The checker's `lib` declares exactly the globals the sandbox has
+([product](01-product.md#what-exists-in-the-sandbox)): what type-checks exists at run
+time, and the reverse.
+
+Beyond `tsc`, the checker runs rules of its own, with the same type information:
+
+| Rule | Flags | Fix |
+| --- | --- | --- |
+| Floating promise | A statement whose expression is a `Promise`, or an array of them, that is neither awaited, returned nor assigned | `await`; `void expr` says it is intended |
+| Ignored async callback | An `async` function passed where its result is ignored, such as `forEach` | `for … of` with `await`, or `Promise.all` over `map` |
+| Absent global | `fetch`, `require`, `process`, `Buffer` | A hint saying what to use instead |
+
+These rules are the first line. At run time, a forgotten `await` is still harmless
+([how a script ends](03-execution.md#how-a-script-ends)).
 
 V1 runs `tsc` inside a dedicated V8 isolate started from a snapshot, as Deno
 historically did. This keeps ai-ptc a single self-contained binary. The server keeps a

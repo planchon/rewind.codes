@@ -94,12 +94,13 @@ All ports are declared in `ptc-engine`.
 
 ```
 put_script / get_script            put_toolset / get_toolset
-create_run(run, metadata)          enqueue(run, completion)
-acquire_runnable(owner, now, lease_duration) -> Lease { run_id, fence }
+create_run(run, metadata, key?)    enqueue(run, completion, key?)
+acquire_runnable(owner, epochs, now, lease_duration) -> Lease { run_id, fence }
 load_history(run, from)            take_inbox(lease)
 commit_activation(lease, Activation { entries, consumed, tool_calls, timers, cancelled_timers, status })
-release(lease)
+release(lease)                     quarantine(lease, mismatch) / release_quarantine(run)
 fire_due_timers(now)               next_timer()
+expire_due_runs(now)
 claim_tool_tasks(owner, now)       complete_tool_task(task, outcome)
 list_runs(filter)                  get_run(run)
 claim_feed(consumer, owner, now)   ack_feed(items)                       (M4)
@@ -110,6 +111,19 @@ part of its events. From M4, `commit_activation` also writes one feed item per c
 in the same transaction: the store guarantees that every committed activation is
 eventually projected.
 
+Contracts added by the November 2026 review, all covered by the conformance suite:
+
+- `key` is an idempotency key. `create_run` with a key already used returns the existing
+  run; `enqueue` with a key already seen for that run does nothing
+  ([storage](06-storage-and-scale.md#idempotency-of-the-api)).
+- `acquire_runnable` only returns runs whose epoch is in `epochs`, and never a
+  quarantined run.
+- `quarantine` releases the lease without committing anything and records the mismatch;
+  `release_quarantine` makes the run runnable again
+  ([execution](03-execution.md#non-determinism-and-quarantine)).
+- `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }` for the runs past their
+  deadline, as `fire_due_timers` does for timers.
+
 Port style: traits whose methods return `impl Future<Output = …> + Send`; adapters may
 implement them with `async fn`. The engine is generic over its adapters (static
 dispatch); composition roots pick the concrete types. `ScriptExecutor` has an associated
@@ -119,10 +133,10 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 
 | Crate | Layer | Contents |
 | --- | --- | --- |
-| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed`), `Digest`, `Payload` + canonical JSON, `Script`, `Toolset`, events, `RunState`, `ReplayCursor`, `Timestamp`, durations |
+| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, `Toolset`, events, `RunState`, `ReplayCursor`, `Timestamp`, durations |
 | `ptc-engine` | application | ports, use cases, driver (`run_until_idle`, real or virtual time), projector and span derivation (M4), in-memory adapters, store conformance suite (feature `conformance`) |
 | `ptc-format` | adapter support | serde DTOs for the stored journal, v1; golden fixture tests |
-| `ptc-runtime` | adapter | deno_core isolate, deterministic globals, ops, JS glue, module loader, `V8Executor` |
+| `ptc-runtime` | adapter | deno_core isolate, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, `V8Executor` |
 | `ptc-store-sqlite` | adapter | embedded `JournalStore` (rusqlite, bundled) |
 | `ptc-store-postgres` | adapter (M4) | production `JournalStore` (`FOR UPDATE SKIP LOCKED`) |
 | `ptc-blob` | adapter | `BlobStore` on local files, then S3 (M4) |
@@ -133,6 +147,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-cli` | composition root | the `ptc` binary: embedded engine (SQLite, files, V8) or remote client |
 | `ptc-server` | composition root (M4) | HTTP API (axum), SSE, webhooks, workers |
 | `ptc-architecture-tests` | tooling | dependency rules |
+| `evals` | tooling (M2.5) | eval suite driving the `ptc` CLI: tasks, fake MCP servers, reports |
 | `sdk/typescript` | client (M4) | client, host-tool worker, agent tools |
 | `dashboard` | client (M6) | web UI over the public HTTP API |
 
@@ -174,16 +189,17 @@ and span id `H(run, fence)` recorded as fields. Nothing about the script is emit
 replay.
 
 - Executor start errors → `run_aborted { invalid_script }`.
-- Replay mismatch → `run_aborted { non_determinism }`.
+- Replay mismatch → nothing is committed; `journal.quarantine(lease, mismatch)`.
 
 ## Tests
 
 | Where | What |
 | --- | --- |
-| `ptc-core` | Unit tests of the pure model: canonical JSON, digests, matching, `ReplayCursor`, run state, durations |
+| `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `ptc-format` | Round trips and golden fixtures (a stored v1 journal must always decode) |
-| `ptc-engine` | Use cases with in-memory adapters and a fake executor; conformance suite for stores (feed included from M4); span derivation; projector idempotence (applying a feed item twice changes nothing) |
-| `ptc-runtime` | Sandbox behavior with a test-support driver (`Promise.all`, time, randomness, signals, imports, callsites, cancellation) |
+| `ptc-engine` | Use cases with in-memory adapters and a fake executor; conformance suite for stores (idempotency keys, epochs, quarantine and run expiry; feed included from M4); span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `ptc-runtime` | Sandbox behavior with a test-support driver (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
+| Epoch corpus | Recorded journals, kept per supported epoch, replay identically in CI |
 | `ptc-store-sqlite` | The engine's conformance suite |
 | `ptc-cli` | End to end: V8 + engine + SQLite + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |
@@ -194,7 +210,7 @@ replay.
 
 | Command | Does |
 | --- | --- |
-| `ptc run script.ts [--input …] [--wait 30s] [--virtual-time]` | Starts a run and drives it until it completes or suspends |
+| `ptc run script.ts [--input …] [--wait 30s] [--ttl 30d] [--virtual-time]` | Starts a run and drives it until it completes or suspends |
 | `ptc signal <run> <name> [payload]` | Enqueues a signal |
 | `ptc cancel <run>` | Enqueues a cancellation |
 | `ptc tick` | Fires due timers and runs ready activations once |

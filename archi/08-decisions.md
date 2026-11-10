@@ -17,15 +17,21 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | **Mocks are recorded from real runs** | Cassettes from journals; TypeScript mock handlers as a complement. |
 | **Events can come from any source** | Harness, humans, other agents, other runs, external systems through webhooks. |
 | **No `fetch`, no file system** | Network only through the opt-in, journaled `http` tool. No file system at all. |
-| **The agent gets several tools**, not only `run_script` | `check_script`, `test_script`, `get_run`, `list_runs`, `signal_run`, `cancel_run`, `search_tools`. |
+| **The agent gets several tools**, not only `run_script` | `check_script`, `test_script`, `get_run`, `list_runs`, `signal_run`, `cancel_run`, `retry_run`, `search_tools`. |
 | **Everything goes through the journal** | Replay re-executes against the journal, never restores a snapshot. |
 | **Type-checking is in V1** | Generate → check → fix is the agent's main loop. |
 | **`deno_core` + `deno_ast`** | Instead of raw `rusty_v8`. |
-| **CLI surface for V1** | `run`, `check`, `test`, `replay`, `trace`, plus `signal`, `cancel`, `worker`. |
+| **CLI surface for V1** | `run`, `check`, `test`, `replay`, `fork`, `trace`, plus `signal`, `cancel`, `worker`. |
 | **Concurrency, side effects, randomness**: handled as proposed | `seq` in emission order; tool policies and idempotency keys; seeded PRNG. |
 | **OpenTelemetry for everything in the service** | Service telemetry and run telemetry, exported over OTLP. |
 | **A dashboard of every run and all the code executed on the platform** (future, M6) | Built on the journal, not on an OTel backend. |
 | **Stay with full replay for 0.1** | Instances are dropped when a run suspends; sticky execution stays in M5. |
+| **Every run has a TTL, 30 days by default** | `expires_at` in `run_started`; at the deadline the run is cancelled through the normal path. It bounds signal waits, tool calls that never answer, quarantine, and the life of a previous epoch. |
+| **The system is measured by evals** (M2.5) | Models run end to end on the embedded engine against fake MCP servers. Choices that are cheap to change are decided on the numbers. |
+| **Fork comes before the dashboard** | `ptc fork` in M3 and `retry_run({ run_id, code })` as an agent tool. Fixing step 7 without redoing steps 1–6 is what the journal is for. |
+| **Result types are inferred from the journal** when a server declares no `outputSchema` | Observed shapes, for type-checking and the prompt only. |
+| **`run_script` returns a bounded result** | It lands in the model's context: output truncated above a budget, last log lines, errors with a code frame. |
+| **What type-checks is what exists** | A baseline of deterministic web-standard globals; the checker's `lib` declares exactly the sandbox's globals; hints for absent ones such as `fetch`. |
 
 ## Architecture (approved for 0.1)
 
@@ -46,6 +52,20 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | The dashboard is a client of the public HTTP API | The SDK, the agent tools and the dashboard see the same thing; no back door into the store. |
 | Run metadata (labels, trace context) stored with the run, outside the journal's events | The script never sees it, so it can't affect determinism, and it never ends up in cassettes. |
 
+Approved in the design review of November 2026. They shape the stored format, the
+runtime's observable behavior or the port contracts, so they are frozen with format v1:
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| **Determinism epoch** in `run_started`. Glue, generators, library and codegen are kept per epoch in the binary; V8 and ICU get a worker pool per epoch | Pinning the crate version and refusing the runs of another version | The script is immutable, the runtime is not: a change in V8, the glue or codegen can shift a `seq` or a digest of a suspended run. |
+| **A replay mismatch quarantines the run** | `run_aborted { non_determinism }` at once | By construction it is a fault of the platform, never of the script. The run waits for a fix. |
+| **A script's terminal command waits for its tool calls** | Dropping pending calls when `main` settles | A forgotten `await` becomes harmless, and a run that ends by itself has an outcome for every call, which a fork needs. Costs: a raced slow tool is still awaited. |
+| **An unhandled rejection fails the run** | Ignoring it | Node's behavior. Ignoring it hid failed calls. |
+| **Idle with nothing pending fails the run with `DeadlockError`** | Leaving the run active | Nothing can wake the script. It is the script's own outcome, reproduced by replay, so `fail_run` and not `run_aborted`. |
+| **256-bit seed; ChaCha20 for `crypto`**, sfc32 kept for `Math.random` | sfc32 with a 64-bit seed for both | Scripts make tokens and passwords with `crypto`, and they were predictable. |
+| **Canonical JSON is RFC 8785** | "Keys sorted, no whitespace" | Digests are compared for as long as runs live; that wording left numbers and key order to the serializer. |
+| **Idempotency keys for starting a run and for signals** | Keys on tool calls only | A retried request must not start a second run, nor leave a second signal in the mailbox. |
+
 ## Technical (open to challenge)
 
 | Decision | Alternative rejected | Why |
@@ -55,7 +75,7 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | Commit invariant; `run_aborted` distinct from `fail_run` | Committing triggers and commands separately | Replay never sees a half-processed trigger; host failures are not replayed as script failures. |
 | Ops are synchronous; promises resolved by the JS glue | Async ops on deno_core's event loop | No hidden scheduling; delivery order is fully controlled. |
 | Logical time = `recorded_at` of the last delivered trigger, monotonic per run | Real time, or time recorded per call | Time moves only when the outside world speaks, identically on replay. |
-| Seeded sfc32 PRNG for `Math.random` and `crypto` | Journaling each random value | No journal entries for randomness; the seed is in `run_started`. |
+| Seeded generators for `Math.random` and `crypto` | Journaling each random value | No journal entries for randomness; the seed is in `run_started`. |
 | `TZ=UTC` and `en-US` locale enforced; sandbox refuses to start otherwise | Host-dependent `Intl` | Identical output on every machine. |
 | Signals: one FIFO mailbox per name; timeouts are durable timers cancelled on arrival | Drop signals nobody waits for | Nothing is lost if the signal arrives before the script waits. |
 | Content addressing everywhere (SHA-256; canonical JSON for payloads) | Random ids for scripts and payloads | Deduplication, cacheability, and digest comparison during replay. |
