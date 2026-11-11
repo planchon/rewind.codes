@@ -165,7 +165,7 @@ up in a cassette.
   the dashboard and as span attributes.
 - `trace_context`: the W3C `traceparent` and `tracestate`.
 - `idempotency_key`: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
-- The tenant, if [open question 7](09-roadmap.md#open-questions) settles there.
+- The tenant ([decided](08-decisions.md#taken-after-the-layering-november-2026): it lives here, never in the core).
 
 ### Read model
 

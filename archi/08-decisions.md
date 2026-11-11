@@ -33,6 +33,30 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | **`run_script` returns a bounded result** | It lands in the model's context: output truncated above a budget, last log lines, errors with a code frame. |
 | **What type-checks is what exists** | A baseline of deterministic web-standard globals; the checker's `lib` declares exactly the sandbox's globals; hints for absent ones such as `fetch`. |
 
+### Taken after the layering (November 2026)
+
+Answers to the questions raised once the layering was done. "Version 0.1" is ai-ptc once M1
+to M6 are done.
+
+| Decision | Notes |
+| --- | --- |
+| **An invalid script fails fast** | Starting a run compiles and checks the script (imports, names, default export; type-checking from M2) and refuses it before any run exists. The agent learns in the same call; it does not wait for an execution. |
+| **An interrupted tool call is retried with its idempotency key** | `retry` is the default policy of every tool; `at_most_once` is an opt-out per tool in the toolset. After 5 attempts the call fails with `outcomeUnknown`. |
+| **A toolset that changed during a run is reported, not failed silently** | The harness is warned and the agent or the developer decides what happens to the run (closes question 3; mechanism designed with M2). |
+| **The cancellation grace is one delivery** | The script ends within the delivery of `cancel_requested`, or it is aborted (closes question 5). |
+| **The CPU budget applies to each call into the script**, measured as CPU time | The watchdog moves from wall-clock time to the thread's CPU clock before M4. |
+| **An activation that fails 5 times in a row quarantines the run** | With the last error as reason. Logged in M1; reported through OpenTelemetry and webhooks in M4 (closes question 16). |
+| **Web-standard globals come from existing crates** | `deno_webidl`, `deno_url`, `deno_web` and the like, with their non-deterministic parts replaced (closes question 13). In general, take a maintained crate rather than rewrite one. |
+| **A signal or a cancellation sent to a finished run is refused** | 409 in the API, an error in the CLI, instead of being dropped (closes question 4). |
+| **The tenant lives in the run metadata**, never in the core | Closes question 7. |
+| **Payload size and preview are blob metadata** | A `payloads (digest, bytes, preview)` table kept by the store (closes question 1). |
+| **Webhooks: an unguessable URL and an HMAC signature** | Closes question 8. |
+| **Run labels: a bounded map set at start**, exported to OpenTelemetry for allow-listed keys only | Closes question 10. |
+| **TTL: a maximum per deployment** (365 days by default) | A run past its deadline ends `cancelled` with the reason `ttl`; no status of its own (closes question 15). |
+| **No `LISTEN/NOTIFY`** | Wake-ups in M4 do not rely on Postgres notifications. |
+| **The corpus lives in `ptc-e2e`** | A tooling crate allowed to depend on adapters. |
+| **The embedded CLI** | Schema versioned with migrations in the binary, refusing a newer schema; `--json` on every command and one exit code per outcome; a first Ctrl-C finishes the call in flight and commits it, a second one exits at once. |
+
 ## Architecture (approved for 0.1)
 
 | Decision | Why |
@@ -97,3 +121,25 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Sampling per run, from the trace id; the read model is never sampled | Sampling per activation | Every worker agrees without coordination; the dashboard stays complete. |
 | Logs exported as OTel log records | Span events | They need no open span and correlate with the activation span. |
 | W3C trace context forwarded to MCP servers in `_meta` | No propagation | MCP servers' own spans join the run's trace. |
+
+### Taken while implementing the layering (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| ECMAScript number formatting for RFC 8785 through `ryu-js`, added to the dependencies `ptc-core` may have | Our own formatter on top of Rust's shortest float printing | Rust's `{:e}` rounds exact ties up; ECMAScript and RFC 8785 round them to even (`1424953923781206.25` → `…206.2`). A runtime test compares the core's canonical numbers with V8's on thousands of random doubles. |
+| `serde_json` with `float_roundtrip` in the whole workspace | Its default float parser | The default parser can be one ULP off (`333333333.33333329`): a value going through JS and Rust would change, and its digest with it. |
+| The stored format writes every JSON value in its canonical form | The JSON library's key order | The stored bytes no longer depend on a feature some dependency enables (`preserve_order`), and they are exactly the bytes a payload's digest is computed on. |
+| Dynamic `import()` is refused when the script compiles | Refusing it in the module loader | There is no event loop in the sandbox: the import would never settle, and the script would end with a misleading `DeadlockError`. |
+| The checks at start run on the syntax tree (swc): imported modules and names, default export | Loading the module in a throwaway isolate | Cheap and deterministic, with no script code running before the run exists. What only shows when the script runs (a top-level exception) still aborts the run with `invalid_script` at its first activation. |
+| The CPU budget applies to each call into the script | A budget per activation | Every activation replays the full history: a long run must not exhaust its budget replaying it. |
+| Each generator gets its own key, `SHA-256(domain ‖ seed)`; `crypto` is the ChaCha20 keystream of RFC 8439 with a zero nonce | Keying both generators with the seed | What `Math.random` reveals tells nothing about `crypto`, and the keystream is a standard one. |
+| Unhandled rejections are read from deno_core's queue of rejections without a handler, drained after each microtask checkpoint | Our own `PromiseRejectCallback` | deno_core already tracks rejections, and removes those handled later in the same checkpoint (Node's semantics). |
+| Errors created by the glue have no glue frames in their stack, and `fail_run` drops glue frames | Raw V8 stacks | The glue's line numbers would otherwise leak into journals and change them on every edit of the glue. |
+| Each instance runs on its own thread with a single-threaded tokio runtime (for module loading), next to a watchdog thread | One thread per isolate pool | Simplest correct model to start with; open question 2 stays open. |
+| The epoch corpus lives in a tooling crate, `ptc-e2e`: blue cases must succeed, red cases must fail exactly as specified; journals are compared byte for byte and replayed from their files | Corpus inside `ptc-cli` (M1) | The corpus can exist before the CLI; the CLI's end-to-end tests will reuse the same cases. |
+| Values reach the script with their keys in canonical order, live and on replay | Keeping the order they arrived in | Stored values are canonical: a run would see one order live and another on replay, diverge, and be quarantined while healthy. Found by review. |
+| An activation that fails for any reason other than the script (a missing blob, a store error, a replay interrupted by a limit or an internal error) keeps its lease and is retried when it expires | Releasing the lease at once; quarantining | The run picked first is the one with the oldest inbox item: released at once, it would be picked again and again and block every other run. A transient failure must not stop a healthy run for good. Found by review. After 5 failures in a row the run is quarantined (owner decision above). |
+| The real `Date` stays private to the glue; only `Date.parse` and `Date.UTC` are copied | Making the logical `Date` inherit from it | Through `Object.getPrototypeOf(Date)` a script read the real clock. Found by review. |
+| After a cancellation, a script that nothing can wake fails with `CancelledError`, not `DeadlockError` | `DeadlockError` | Cancelling a wait built on `setTimeout` drops the timer: the run must still end `cancelled`. Found by review. |
+| Lone surrogates become U+FFFD when a value leaves the script | Refusing the value | A string cut in the middle of an emoji is common in generated code; no host string can hold half of a pair. Found by review. |
+

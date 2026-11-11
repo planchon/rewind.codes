@@ -1,0 +1,15 @@
+{
+  "description": "A journal with a missing entry is not a history the engine could have written: replay refuses it before running anything.",
+  "tools": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "completed"
+  },
+  "replay": {
+    "drop_entry": 2,
+    "error": "invalid history: the entry at position 2 has index 3"
+  }
+}

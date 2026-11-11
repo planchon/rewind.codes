@@ -9,12 +9,12 @@ mocks and observability are all derived from it.
 **One rule above all: the journal is the only source of truth.** No feature gets its
 own side channel: traces, metrics about runs, and the dashboard are projections of it.
 
-> Status, November 2026: version 0.1 in progress. M0 (runtime spike) is done. The crate
-> layering in [07-code-architecture.md](07-code-architecture.md) is approved and being
-> implemented. A design review settled the run TTL, the determinism epoch, how a script
-> ends and the details of format v1: see [08-decisions.md](08-decisions.md). These are
-> documented, not implemented yet. See [09-roadmap.md](09-roadmap.md) for the exact state
-> of the code.
+> Status, November 2026: version 0.1 is ai-ptc once milestones M1 to M6 are done. M0 (runtime
+> spike) is done, and so is the crate layering of
+> [07-code-architecture.md](07-code-architecture.md), with the decisions of the November design
+> review (run TTL, determinism epoch, how a script ends, format v1): see
+> [08-decisions.md](08-decisions.md). M1 (embedded store, file blobs, CLI) is next. See
+> [09-roadmap.md](09-roadmap.md) for the exact state of the code.
 
 ## Reading order
 

@@ -90,21 +90,25 @@ All ports are declared in `ptc-engine`.
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
 
-`JournalStore` methods (0.1):
+`JournalStore` methods (as implemented in `crates/ptc-engine/src/ports/journal.rs`):
 
 ```
-put_script / get_script            put_toolset / get_toolset
-create_run(run, metadata, key?)    enqueue(run, completion, key?)
+put_script(script, compiled) / get_script         put_toolset / get_toolset
+create_run(run, key?) -> Created { run_id, created }     # run carries its metadata
+enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
 acquire_runnable(owner, epochs, now, lease_duration) -> Lease { run_id, fence }
+acquire_run(run, owner, now, lease_duration) -> Lease   # any run that has not ended, quarantined or not
 load_history(run, from)            take_inbox(lease)
 commit_activation(lease, Activation { entries, consumed, tool_calls, timers, cancelled_timers, status })
 release(lease)                     quarantine(lease, mismatch) / release_quarantine(run)
 fire_due_timers(now)               next_timer()
-expire_due_runs(now)
-claim_tool_tasks(owner, now)       complete_tool_task(task, outcome)
+expire_due_runs(now) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
+claim_tool_tasks(owner, now, lease_duration, limit)    complete_tool_task(task, outcome, now)
 list_runs(filter)                  get_run(run)
 claim_feed(consumer, owner, now)   ack_feed(items)                       (M4)
 ```
+
+Stores never read a clock: every method that depends on time takes `now`.
 
 `metadata` is the run metadata (labels, trace context), stored with the run and never
 part of its events. From M4, `commit_activation` also writes one feed item per consumer
@@ -121,8 +125,20 @@ Contracts added by the November 2026 review, all covered by the conformance suit
 - `quarantine` releases the lease without committing anything and records the mismatch;
   `release_quarantine` makes the run runnable again
   ([execution](03-execution.md#non-determinism-and-quarantine)).
-- `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }` for the runs past their
-  deadline, as `fire_due_timers` does for timers.
+- `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }`, once, for the runs past
+  their deadline, as `fire_due_timers` does for timers. It enqueues nothing for a quarantined
+  run: it reports it, and the engine gives it up (`run_aborted { non_determinism }`) through
+  `acquire_run` and an ordinary `commit_activation`.
+- A terminal commit clears the run's timers, tool tasks and inbox; nothing is enqueued for a
+  terminal run any more (`Enqueued::RunEnded`).
+- `claim_tool_tasks` hands out a task again once its claim expired, with its attempt
+  incremented: the engine calls the tool again with the same idempotency key, up to 5
+  attempts ([tools](04-tools.md#side-effects-and-dispatch)). `complete_tool_task` drops the
+  outcome of a task that no longer exists.
+- Only scripts that compile are stored: `start_run` refuses the others before creating a run
+  ([execution](03-execution.md#starting-a-run)). `ScriptExecutor::compile` takes the toolset,
+  to check what the script imports from `ptc:tools`.
+- `next_timer` and `next_deadline` let the driver jump in virtual time.
 
 Port style: traits whose methods return `impl Future<Output = …> + Send`; adapters may
 implement them with `async fn`. The engine is generic over its adapters (static
@@ -133,10 +149,10 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 
 | Crate | Layer | Contents |
 | --- | --- | --- |
-| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, `Toolset`, events, `RunState`, `ReplayCursor`, `Timestamp`, durations |
-| `ptc-engine` | application | ports, use cases, driver (`run_until_idle`, real or virtual time), projector and span derivation (M4), in-memory adapters, store conformance suite (feature `conformance`) |
-| `ptc-format` | adapter support | serde DTOs for the stored journal, v1; golden fixture tests |
-| `ptc-runtime` | adapter | deno_core isolate, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, `V8Executor` |
+| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, `Toolset`, events, `RunState`, `ReplayCursor`, history validation, `Timestamp`, durations |
+| `ptc-engine` | application | ports, use cases, activation, replay, driver (`run_until_idle`, real or virtual time), projector and span derivation (M4), in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `StaticDispatcher`, system and virtual clocks, system and seeded entropy), store conformance suite (feature `conformance`) |
+| `ptc-format` | adapter support | serde DTOs for the stored journal, v1 (JSON values in their canonical form); golden fixture tests |
+| `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog and heap limit, `V8Executor` |
 | `ptc-store-sqlite` | adapter | embedded `JournalStore` (rusqlite, bundled) |
 | `ptc-store-postgres` | adapter (M4) | production `JournalStore` (`FOR UPDATE SKIP LOCKED`) |
 | `ptc-blob` | adapter | `BlobStore` on local files, then S3 (M4) |
@@ -147,6 +163,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-cli` | composition root | the `ptc` binary: embedded engine (SQLite, files, V8) or remote client |
 | `ptc-server` | composition root (M4) | HTTP API (axum), SSE, webhooks, workers |
 | `ptc-architecture-tests` | tooling | dependency rules |
+| `ptc-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `ptc-e2e replay <case>` |
 | `evals` | tooling (M2.5) | eval suite driving the `ptc` CLI: tasks, fake MCP servers, reports |
 | `sdk/typescript` | client (M4) | client, host-tool worker, agent tools |
 | `dashboard` | client (M6) | web UI over the public HTTP API |
@@ -157,13 +174,18 @@ Crates are added when their milestone starts.
 
 Checked by `crates/ptc-architecture-tests` from `cargo metadata`:
 
+- Every crate of the workspace is classified in a layer; an unclassified crate fails the check.
 - `ptc-core` depends on no internal crate. Its external dependencies are limited to
-  `serde_json`, `sha2`, `thiserror` and `uuid` (without features).
+  `ryu-js` (ECMAScript number formatting, for RFC 8785), `serde_json`, `sha2`, `thiserror` and
+  `uuid` (without features).
 - `ptc-engine` depends only on `ptc-core`.
 - `ptc-format` depends only on `ptc-core`.
 - Adapters depend on `ptc-core` and `ptc-engine` (stores also on `ptc-format`), and never
   on each other.
-- Only `ptc-cli` and `ptc-server` may depend on adapters.
+- Only `ptc-cli` and `ptc-server` may depend on adapters, and the tooling crates
+  (`ptc-e2e`, `evals`), which wire adapters like a composition root for tests. Nothing depends
+  on a composition root or a tooling crate.
+- Libraries do not use `anyhow`: each has its own error types.
 - Telemetry: `ptc-core` has no telemetry dependency (`tracing` included). The `tracing`
   facade is allowed in `ptc-engine` and the adapters. `opentelemetry*` crates are allowed
   only in `ptc-otel`.
@@ -188,7 +210,8 @@ The activation itself is a `tracing` span (service telemetry), with the run's tr
 and span id `H(run, fence)` recorded as fields. Nothing about the script is emitted during
 replay.
 
-- Executor start errors → `run_aborted { invalid_script }`.
+- Script checks at start fail → `StartError::InvalidScript`, and no run is created.
+- Executor start errors (top-level exception) → `run_aborted { invalid_script }`.
 - Replay mismatch → nothing is committed; `journal.quarantine(lease, mismatch)`.
 
 ## Tests
@@ -198,8 +221,8 @@ replay.
 | `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `ptc-format` | Round trips and golden fixtures (a stored v1 journal must always decode) |
 | `ptc-engine` | Use cases with in-memory adapters and a fake executor; conformance suite for stores (idempotency keys, epochs, quarantine and run expiry; feed included from M4); span derivation; projector idempotence (applying a feed item twice changes nothing) |
-| `ptc-runtime` | Sandbox behavior with a test-support driver (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
-| Epoch corpus | Recorded journals, kept per supported epoch, replay identically in CI |
+| `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
+| Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
 | `ptc-store-sqlite` | The engine's conformance suite |
 | `ptc-cli` | End to end: V8 + engine + SQLite + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |

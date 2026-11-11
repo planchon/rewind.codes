@@ -1,0 +1,14 @@
+{
+  "description": "main has not settled and no tool call, timer or signal wait is pending: nothing can wake the script, so the run fails with DeadlockError.",
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "DeadlockError",
+      "message": "nothing can wake the script"
+    },
+    "events": [
+      "run_started",
+      "fail_run"
+    ]
+  }
+}

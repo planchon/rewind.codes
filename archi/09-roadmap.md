@@ -1,11 +1,12 @@
 # 9. Roadmap
 
-Ordered by risk: the riskiest part (the deterministic runtime) came first.
+Ordered by risk: the riskiest part (the deterministic runtime) came first. Version 0.1 is
+ai-ptc once M1 to M6 are done.
 
 | # | Milestone | Done when | Status |
 | --- | --- | --- | --- |
 | M0 | **Runtime spike**: `ptc-core` + `ptc-runtime` | A TS script with `Promise.all` over fake tools runs, its replay is identical, non-determinism is detected. | Done |
-| 0.1 layering | **Strict boundaries**: pure core, `ptc-format`, `ptc-engine` with ports, runtime as an adapter; format v1 with the decisions of the November review (epoch, 256-bit seed, RFC 8785, `expires_at`) | The M0 behavior passes on the new layering, with the dependency rules checked. | In progress |
+| Layering | **Strict boundaries**: pure core, `ptc-format`, `ptc-engine` with ports, runtime as an adapter; format v1 with the decisions of the November review (epoch, 256-bit seed, RFC 8785, `expires_at`) | The M0 behavior passes on the new layering, with the dependency rules checked. | Done |
 | M1 | **Embedded engine**: SQLite store, file blobs, activations, timers, signals, logical and virtual time, run TTL, idempotency keys, how a script ends, quarantine, CLI | `ptc run`, `ptc signal`, `ptc replay`, `ptc trace` work locally on a run that sleeps, is interrupted, and resumes in another process. A forgotten `await`, an unhandled rejection and a deadlock each end as specified. | Next |
 | M2 | **Tools**: codegen, MCP dispatch, policies, idempotency, `ptc check` with its own rules and the sandbox `lib`, web-standard globals | A script calls a real MCP server, with types checked beforehand. | |
 | M2.5 | **Evals**: task suite, deterministic fake MCP servers, a harness driving the `ptc` CLI | A model runs the suite end to end (generate → check → run → fix), and the report gives first-try check pass rate, task success, iterations and tokens per model and prompt rendering. | |
@@ -37,89 +38,84 @@ At the end of M0: 35 tests passing, clippy clean.
 
 ## Current state of the code
 
-The 0.1 refactor has started, and **the workspace does not compile at the moment**.
-Nothing is committed yet.
+The layering is done. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
+warnings` and `cargo test --workspace` pass.
 
-- `ptc-core`: `ids.rs` (no serde, no id generation), `digest.rs`, `payload.rs`
-  (`Value | Digest`, canonical JSON) and `artifacts.rs` (`Script`, `Toolset`) are
-  rewritten. Still to do: `event.rs` without serde (adding `signal_awaited` and
-  `invalid_script`), `state.rs`, removing serde from `time.rs` and `Cargo.toml`, updating
-  the `replay.rs` tests and `lib.rs`.
-- `ptc-runtime`: still targets the M0 core API (serde events, `ContentHash`).
+| Crate | State |
+| --- | --- |
+| `ptc-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`. |
+| `ptc-format` | Format v1: one event per row, journal documents, values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
+| `ptc-engine` | Ports; use cases (start with script checks, idempotency key and TTL; signal with idempotency key; cancel; activate; fire timers; expire runs; run tool tasks, an interrupted call retried with its idempotency key up to 5 attempts; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB; driver in real and virtual time; in-memory adapters; the store conformance suite, passed by `MemoryJournal`; use-case tests on a fake executor. |
+| `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), CPU watchdog and heap limit. |
+| `ptc-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
+| `ptc-e2e` | The epoch-1 corpus: 15 blue and 22 red cases, recorded and replayed from their journals; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
 
-The decisions of the November 2026 review ([08](08-decisions.md)) are documented, not
-implemented. The M0 code still:
+Not there yet, and planned:
 
-- has a 64-bit seed, and sfc32 behind `crypto` as well as `Math.random`;
-- records the crate version as `runtime_version`, with no epoch;
-- emits the terminal command as soon as `main` settles, with tool calls still pending;
-- does not check for unhandled rejections, and leaves a deadlocked script without an
-  outcome;
-- canonicalizes JSON with sorted keys only.
+- M1: the embedded store (engine to choose, question 17) and `ptc-blob` (files), both passing
+  the conformance suite; `ptc-cli`; end-to-end tests across processes reusing the corpus.
+- M1: an activation that fails 5 times in a row quarantines the run. Today it is retried every
+  lease period, forever. It needs the store to count consecutive failures and to record why a
+  run is quarantined.
+- Instances are not kept between activations: every activation replays the full history
+  (sticky execution is M5).
+- M2: tool schemas, policies per tool (`at_most_once` as an opt-out), retries with backoff on
+  transient errors, codegen, type-checking at start and `ptc check`, the toolset-change
+  warning.
+- M2: web-standard globals (`URL`, `TextEncoder`, `atob`…) from deno crates. None yet;
+  `queueMicrotask` is present.
+- `webhook(name)` is designed, not implemented (M4).
+- The feed, the projector, OpenTelemetry and the read model (M4).
+- Before M4: the CPU budget is measured as the wall-clock time of a call, so a heavily loaded
+  host can make a script exceed it (live, the run is aborted; during replay, the activation is
+  retried). It moves to the thread's CPU clock.
+- Before M4: leases are not renewed during an activation. A replay longer than the lease
+  (30 s) lets another worker take the run over, and with several workers on a very long
+  history they can fence each other off forever. One worker (M1) is not affected; M4 needs
+  lease renewal or sticky execution.
 
 ## Next steps
 
-1. Finish `ptc-core` and its tests: `Epoch`, the 256-bit `Seed`, `expires_at` in
-   `run_started`, and RFC 8785 with golden vectors. RFC 8785 writes numbers as
-   ECMAScript does, which `serde_json` does not: either our own code in `ptc-core`, or
-   `ryu-js` added to the dependencies the core is allowed.
-2. `ptc-format` v1 with golden fixtures.
-3. `ptc-engine`: ports (idempotency keys, epochs, quarantine and run expiry included),
-   use cases, driver, in-memory adapters, conformance suite.
-4. `ptc-runtime` as an adapter: `V8Executor` on dedicated threads, its own JS encoding,
-   the `signal_awaited` op, ChaCha20 for `crypto`, the rules of
-   [how a script ends](03-execution.md#how-a-script-ends), glue selected by epoch; the 10
-   runtime tests pass again, with new ones for those rules.
-5. Dependency rules test crate, telemetry rules included (no telemetry in `ptc-core`,
-   `opentelemetry*` only in `ptc-otel`).
-6. M1: `ptc-blob` (files), `ptc-store-sqlite`, `ptc-cli` with end-to-end tests; a first
-   epoch corpus recorded from them.
-7. fmt, clippy (`-D warnings`), full test suite.
+1. Choose the embedded store (question 17).
+2. Present the principles of M1 for review (process rule): where the store's rows meet
+   `ptc-format`, the file layout of `ptc-blob`, the CLI's commands and how they drive the
+   engine across processes.
+3. Repeated activation failures quarantine the run (store contract, conformance suite).
+4. `ptc-blob` (files, atomic writes) and the embedded store, both through the conformance
+   suite.
+5. `ptc-cli` with `run`, `signal`, `cancel`, `tick`, `worker`, `replay`, `trace`, `runs`, and
+   its end-to-end tests: a run that sleeps, is interrupted and resumes in another process,
+   driven by the corpus scenarios.
 
 ## Open questions
 
-1. **Size and preview of offloaded payloads.** Traces, OTel spans and the dashboard must
-   render without downloading payloads. Proposal: the store keeps
-   `(digest, bytes, preview)` as blob metadata (a `payloads` table), outside the domain
-   model and outside `ptc-format`'s event encoding.
-2. **Thread per live instance.** Each live V8 instance holds a thread. Instances are
-   dropped when a run suspends in 0.1; a bounded sticky cache comes in M5. Is a
-   thread-per-instance model acceptable at the target scale, or do we need an isolate
-   pool per thread?
-3. **Toolset drift during long pauses.** Today: dispatch validates against the current
-   schema and fails clearly. Alternative: pin MCP server versions per run.
-4. **Signals to a finished run.** The engine drops completions for terminal runs. The API
-   should probably reject them (409) so the sender knows.
-5. **Cancellation grace.** One grace activation after `cancel_requested`. Enough, or a
-   time-bounded grace?
-6. **`continueAsNew` shape** and the default history cap (50k entries). Does the
-   continuation get a new TTL?
-7. **Tenancy.** S3 keys are per tenant, but the domain model has no tenant, and the
-   dashboard needs access scoped by tenant. Where does the tenant live: in the run id, in
-   the store, or as a port parameter? Proposal: in the run metadata, never in core.
-8. **`webhook(name)` security.** Unguessable URL only, or a signed request?
-9. **Fork semantics** (M3): how the new run references its parent, and which recorded
-   results are reused. In particular: what happens at the first command that differs
-   from the parent's (continue live, or reject the fork); which idempotency key the
-   reused and the re-executed calls carry; and what a fork does with a call left without
-   an outcome by a cancelled or aborted parent.
-10. **Run labels.** Limits (count, key and value size), whether they can change after the
-    run starts, and whether all of them become span attributes (cardinality, personal
-    data). Proposal: a bounded string map, set at start only, exported to OTel only for
-    an allow-listed set of keys.
-11. **Retention.** Finished histories are archived (scaling path, step 2). How long do
-    histories and the read model stay queryable, and does the dashboard read archived
-    histories from S3? Proposal: the read model is kept per tenant retention; a run's
-    detail page loads its archived history on demand.
-12. **`run_script` result budget.** The default size above which the output is
-    truncated, and how the model pages through the rest. To settle with the evals.
-13. **Web-standard globals.** The exact baseline, and how it is provided: selected parts
-    of `deno_web` and `deno_url`, or our own implementations. Bare `deno_core` has none
-    of `URL`, `TextEncoder` or `atob`.
-14. **Quarantine release.** By hand only, or retried automatically when a new build is
-    deployed?
-15. **Run TTL.** The maximum a deployment allows, and whether a run that expires gets a
-    status of its own instead of `cancelled`.
+Questions 1, 3, 4, 5, 7, 8, 10, 13, 15 and 16 were settled in November 2026: see
+[08-decisions.md](08-decisions.md#taken-after-the-layering-november-2026). The numbers of the
+others are kept.
+
+- **2.** **Thread per live instance.** Each live V8 instance holds a thread. Instances are
+  dropped when a run suspends until M5, where a bounded sticky cache comes. Is a
+  thread-per-instance model acceptable at the target scale, or do we need an isolate
+  pool per thread?
+- **6.** **`continueAsNew` shape** and the default history cap (50k entries). Does the
+  continuation get a new TTL? Not planned: to settle when a real run nears the cap.
+- **9.** **Fork semantics** (M3): how the new run references its parent, and which recorded
+  results are reused. In particular: what happens at the first command that differs
+  from the parent's (continue live, or reject the fork); which idempotency key the
+  reused and the re-executed calls carry; and what a fork does with a call left without
+  an outcome by a cancelled or aborted parent. To settle in the M3 review.
+- **11.** **Retention.** Finished histories are archived (scaling path, step 2). How long do
+  histories and the read model stay queryable, and does the dashboard read archived
+  histories from S3? Proposal: the read model is kept per tenant retention; a run's
+  detail page loads its archived history on demand.
+- **12.** **`run_script` result budget.** The default size above which the output is
+  truncated, and how the model pages through the rest. To settle with the evals.
+- **14.** **Quarantine release.** By hand only, or retried automatically when a new build is
+  deployed?
+- **17.** **Embedded store.** SQLite through rusqlite, as planned; libSQL, Turso's production
+  fork of SQLite; or Turso Database, its Rust rewrite (beta, with multi-process access
+  experimental). The store is behind `JournalStore` and its conformance suite, so the
+  choice can change later.
 
 ## Inputs for the M4 architecture review
 
@@ -131,9 +127,10 @@ each goes through the M4 principles review before any code.
   - whether sticky execution moves from M5 to M4;
   - `commit_activation` handing the new tool tasks, already claimed, to the worker that
     commits, instead of a second polling hop;
-  - wake-ups by `LISTEN/NOTIFY` rather than polling;
-  - payloads of medium size kept in Postgres (the `payloads` table of question 1), with
-    S3 above a measured threshold instead of 1 KiB.
+  - how a worker learns about new work without waiting for its next poll, without
+    Postgres `LISTEN/NOTIFY` (owner decision);
+  - payloads of medium size kept in Postgres (the `payloads` table), with S3 above a
+    measured threshold instead of 1 KiB.
 - **Tool task lifecycle.**
   - Timeouts, heartbeats and asynchronous completion for host tools that last days, such
     as `ask_user`.
@@ -148,7 +145,5 @@ each goes through the M4 principles review before any code.
   - SSRF protection and an egress allow-list for the `http` tool.
   - API authentication.
   - Agent tools that take a `run_id` check the run's labels.
-  - Tenancy (question 7) settled first: it touches every key, the quotas, and the
-    fairness of `acquire_runnable`.
-- **Operations.** Retention and deletion with deduplicated blobs; usage metering as a
-  projection of the journal.
+  - Tenancy settled first (in the run metadata): it touches every key, the quotas, and
+    the fairness of `acquire_runnable`.

@@ -1,0 +1,4 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"8dbdb07e6cc470d3efbbf5568eb45e5d20fcbb324d0a548c5074daa86516c0ba","toolset":"6a01c21af5f5ee2f82f9952ec2a6bca4e6d6e69177077f951b6e6057cab21067","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"run_aborted","reason":{"kind":"limit_exceeded","message":"the script emitted more than 20 commands in one activation"}}}
+]}

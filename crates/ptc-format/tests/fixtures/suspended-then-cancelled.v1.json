@@ -1,0 +1,18 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"21a0270b7f66a1e4c25933f13a1e5a1bbb4757578072930c8189131f9c6aaae1","toolset":"5598149567a46bd3164b1d42e871b4d65cf49b78dd8b4547436efd1784b533c6","input":{"value":{"repo":"acme/api"}},"seed":"19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b","epoch":1,"expires_at":1769817600000,"mode":"live"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"github.list_issues","args":{"value":{"repo":"acme/api","state":"open"}},"callsite":{"line":5,"column":24}}},
+{"index":2,"recorded_at":1767225600310,"event":{"type":"tool_call_completed","seq":1,"result":{"digest":"f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68"}}},
+{"index":3,"recorded_at":1767225600310,"event":{"type":"log","level":"info","message":"37 open issues","callsite":{"line":6,"column":11}}},
+{"index":4,"recorded_at":1767225600310,"event":{"type":"start_timer","seq":2,"duration_ms":259200000,"fire_at":1767484800310,"callsite":{"line":8,"column":26}}},
+{"index":5,"recorded_at":1767225600310,"event":{"type":"signal_awaited","name":"approval","timeout":2,"callsite":{"line":8,"column":26}}},
+{"index":6,"recorded_at":1767229200000,"event":{"type":"signal_received","name":"approval","payload":{"value":{"close":true}}}},
+{"index":7,"recorded_at":1767229200000,"event":{"type":"cancel_timer","seq":2}},
+{"index":8,"recorded_at":1767229200000,"event":{"type":"schedule_tool_call","seq":3,"tool":"github.close_issue","args":{"digest":"090772cf4068973daad3f715eb788d39fe2c02be42efd86de81f0e59198d6237"}}},
+{"index":9,"recorded_at":1767229200000,"event":{"type":"start_timer","seq":4,"duration_ms":1500,"fire_at":1767229201500}},
+{"index":10,"recorded_at":1767229200120,"event":{"type":"tool_call_failed","seq":3,"error":{"kind":"outcome_unknown","message":"connection reset","data":{"status":503}}}},
+{"index":11,"recorded_at":1767229200120,"event":{"type":"log","level":"warn","message":"close failed"}},
+{"index":12,"recorded_at":1767229201500,"event":{"type":"timer_fired","seq":4}},
+{"index":13,"recorded_at":1767229201500,"event":{"type":"signal_awaited","name":"retry"}},
+{"index":14,"recorded_at":1767229300000,"event":{"type":"cancel_requested","reason":{"kind":"requested","message":"user asked"}}},
+{"index":15,"recorded_at":1767229300000,"event":{"type":"fail_run","error":{"name":"CancelledError","message":"run cancelled: user asked","stack":"CancelledError: run cancelled: user asked\n    at main (file:///script.ts:12:5)"}}}
+]}

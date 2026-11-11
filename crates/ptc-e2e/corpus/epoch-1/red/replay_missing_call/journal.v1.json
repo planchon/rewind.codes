@@ -1,0 +1,8 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"d0a8b016b57e8efb71291e16be2e5a4d1f9ea45de98aaff77556158b91a825bf","toolset":"6a01c21af5f5ee2f82f9952ec2a6bca4e6d6e69177077f951b6e6057cab21067","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"audit.record","args":{"value":{"step":1}},"callsite":{"line":4,"column":15}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"ok":true}}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":2,"tool":"audit.record","args":{"value":{"step":2}},"callsite":{"line":5,"column":15}}},
+{"index":4,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":2,"result":{"value":{"ok":true}}}},
+{"index":5,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":"done"}}}
+]}

@@ -1,0 +1,6 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"167a8ea45272094f5138ce824fff291784a631c81e8aa070c77ba8ddb3d11340","toolset":"fe2f3b4ef49492d81cb350fb689bf9f9dff6cfd1817d72d6ff9fe3350e3d5e6a","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1767229200000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"approval","callsite":{"line":4,"column":16}}},
+{"index":2,"recorded_at":1767232800000,"event":{"type":"cancel_requested","reason":{"kind":"ttl"}}},
+{"index":3,"recorded_at":1767232800000,"event":{"type":"fail_run","error":{"name":"CancelledError","message":"run cancelled: its deadline has passed","stack":"CancelledError: run cancelled: its deadline has passed"}}}
+]}

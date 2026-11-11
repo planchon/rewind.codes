@@ -1,0 +1,24 @@
+{
+  "description": "After a failure no script code runs any more, but fail_run waits for the call in flight: its outcome is recorded, not delivered.",
+  "input": {
+    "amount": -5
+  },
+  "tools": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "RangeError",
+      "message": "invalid amount -5"
+    },
+    "events": [
+      "run_started",
+      "schedule_tool_call",
+      "tool_call_completed",
+      "fail_run"
+    ]
+  }
+}

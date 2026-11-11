@@ -1,0 +1,63 @@
+{
+  "description": "The example of archi/01-product.md: tools, a human approval with a timeout, parallel effects and a 10-day sleep, in one durable script.",
+  "input": {
+    "repo": "acme/api"
+  },
+  "tools": {
+    "github.list_issues": {
+      "$sequence": [
+        [
+          {
+            "number": 1,
+            "updated_at": "2025-10-01T00:00:00Z"
+          },
+          {
+            "number": 2,
+            "updated_at": "2025-12-30T00:00:00Z"
+          },
+          {
+            "number": 3,
+            "updated_at": "2025-09-15T00:00:00Z"
+          }
+        ],
+        [
+          {
+            "number": 3,
+            "updated_at": "2026-01-12T00:00:00Z"
+          }
+        ]
+      ]
+    },
+    "slack.post_message": {
+      "ok": true
+    },
+    "github.close_issue": {
+      "$echo": true
+    }
+  },
+  "steps": [
+    {
+      "advance": "1h"
+    },
+    {
+      "signal": {
+        "name": "approval",
+        "payload": {
+          "close": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "closed": 2,
+      "reopened": 1
+    },
+    "calls": {
+      "github.list_issues": 2,
+      "slack.post_message": 1,
+      "github.close_issue": 2
+    }
+  }
+}

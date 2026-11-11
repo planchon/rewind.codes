@@ -1,0 +1,35 @@
+{
+  "description": "Promise.all over three tool calls whose results arrive in reverse order: seq is assigned in emission order, and the replay delivers the completions in the recorded order.",
+  "input": {
+    "repo": "acme/api"
+  },
+  "tools": {
+    "github.get_issue": {
+      "$echo": true
+    }
+  },
+  "tool_order": "reversed",
+  "expect": {
+    "status": "completed",
+    "output": {
+      "numbers": [
+        1,
+        2,
+        3
+      ]
+    },
+    "calls": {
+      "github.get_issue": 3
+    },
+    "events": [
+      "run_started",
+      "schedule_tool_call",
+      "schedule_tool_call",
+      "schedule_tool_call",
+      "tool_call_completed",
+      "tool_call_completed",
+      "tool_call_completed",
+      "complete_run"
+    ]
+  }
+}

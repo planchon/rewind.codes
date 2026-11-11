@@ -1,0 +1,6 @@
+{
+  "description": "A script that does not parse is refused at start, with the parser's diagnostic: no run is created.",
+  "expect": {
+    "start_error": "the script is invalid: SyntaxError: Expected ',', got 'numeric literal (1, 1)'\n  |\n2 |   return 1;\n  |          ~\n    at script.ts:2:10"
+  }
+}

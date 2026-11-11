@@ -1,0 +1,6 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"819157b2bf70f4a0be5df0310f9bb120046bdecf5f63aea4e8b107e33640a244","toolset":"6a01c21af5f5ee2f82f9952ec2a6bca4e6d6e69177077f951b6e6057cab21067","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"audit.record","args":{"value":{"serializing":true}},"callsite":{"line":6,"column":13}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"ok":true}}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":"out"}}}
+]}

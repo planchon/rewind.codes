@@ -1,0 +1,42 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+ptc-core = { path = "crates/ptc-core" }
+ptc-engine = { path = "crates/ptc-engine" }
+ptc-format = { path = "crates/ptc-format" }
+ptc-runtime = { path = "crates/ptc-runtime" }
+
+chacha20 = "0.10"
+deno_ast = { version = "0.53", features = ["transpiling"] }
+deno_core = "0.413"
+deno_error = "0.7"
+getrandom = "0.3"
+ryu-js = "1"
+serde = { version = "1", features = ["derive"] }
+# `float_roundtrip`: parse every number to the nearest double, as JavaScript does. Without it,
+# a value going through JS and Rust could change by one ULP, and its digest with it.
+serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
+sha2 = "0.11"
+thiserror = "2"
+tokio = { version = "1", default-features = false }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+# `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
+uuid = { version = "1", default-features = false }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unwrap_used = "warn"

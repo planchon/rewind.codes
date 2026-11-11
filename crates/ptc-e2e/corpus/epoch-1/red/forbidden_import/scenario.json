@@ -1,0 +1,6 @@
+{
+  "description": "Scripts may only import \"ptc\" and \"ptc:tools\": anything else is refused at start.",
+  "expect": {
+    "start_error": "the script is invalid: cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"ptc\" and \"ptc:tools\""
+  }
+}

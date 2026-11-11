@@ -1,0 +1,7 @@
+{
+  "description": "A TTL above the deployment's maximum (365 days by default) is refused at start: no run is created.",
+  "ttl": "400d",
+  "expect": {
+    "start_error": "invalid TTL"
+  }
+}

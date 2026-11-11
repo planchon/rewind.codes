@@ -1,0 +1,9 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"61c338c80d39f20d392291af1f23d751f615cde7b6f1acb6e8599b97665d377e","toolset":"fe2f3b4ef49492d81cb350fb689bf9f9dff6cfd1817d72d6ff9fe3350e3d5e6a","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"approval","callsite":{"line":4,"column":23}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"signal_received","name":"approval","payload":{"value":1}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"start_timer","seq":1,"duration_ms":3600000,"fire_at":1767229200000,"callsite":{"line":5,"column":24}}},
+{"index":4,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"approval","timeout":1,"callsite":{"line":5,"column":24}}},
+{"index":5,"recorded_at":1767229200000,"event":{"type":"timer_fired","seq":1}},
+{"index":6,"recorded_at":1767229200000,"event":{"type":"complete_run","output":{"value":{"first":1,"second":null}}}}
+]}

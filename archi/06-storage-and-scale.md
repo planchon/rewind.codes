@@ -16,7 +16,7 @@ behind the `conformance` feature).
 ## Tables
 
 ```
-scripts    (digest PK, source, transpiled, source_map)
+scripts    (digest PK, source, transpiled, source_map)     -- only scripts that compile
 toolsets   (digest PK, spec, declarations)
 runs       (id PK, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
             expires_at, quarantine, lease_owner, lease_until, fence, sticky_worker,
@@ -96,7 +96,7 @@ The responsibilities are split by layer:
 | --- | --- |
 | `ptc-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
 | `ptc-engine` | **When** to move values: at commit, payloads above the threshold (default 1 KiB) are written to the `BlobStore` and the event keeps only the digest. On delivery to the script, the value is loaded through the `BlobStore`. |
-| `ptc-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. |
+| `ptc-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
 | `ptc-blob` | **Where** values live: `{tenant}/sha256/{digest}` on S3, `.ptc/blobs/sha256/ab/<digest>` on disk (atomic writes). |
 
 Consequences:

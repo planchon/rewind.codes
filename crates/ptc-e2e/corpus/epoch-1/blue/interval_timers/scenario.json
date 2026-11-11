@@ -1,0 +1,11 @@
+{
+  "description": "setInterval re-arms a durable timer after each tick; clearInterval stops it.",
+  "expect": {
+    "status": "completed",
+    "output": [
+      1000,
+      2000,
+      3000
+    ]
+  }
+}

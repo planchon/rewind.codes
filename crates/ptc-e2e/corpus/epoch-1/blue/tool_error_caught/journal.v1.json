@@ -1,0 +1,8 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"369a70ee88f93dfe01e3bc71254e77d7757275145e45726e1e4925ab7c974e0d","toolset":"91017b86f4a974115d366497cfca0836aa3a1dec94c18fc4f63ece4e1a8248b8","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"payments.charge","args":{"value":{"amount":100}},"callsite":{"line":6,"column":20}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_failed","seq":1,"error":{"kind":"outcome_unknown","message":"connection reset"}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":2,"tool":"payments.status","args":{"value":{"amount":100}},"callsite":{"line":10,"column":37}}},
+{"index":4,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":2,"result":{"value":{"charged":true}}}},
+{"index":5,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":{"charged":true,"checked":true}}}}
+]}

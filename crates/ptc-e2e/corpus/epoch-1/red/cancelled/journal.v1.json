@@ -1,0 +1,6 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"be14432189472473c8b2113e8a185b8d188cb72e6e30aab5e5f72aa725850efb","toolset":"fe2f3b4ef49492d81cb350fb689bf9f9dff6cfd1817d72d6ff9fe3350e3d5e6a","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"start_timer","seq":1,"duration_ms":86400000,"fire_at":1767312000000,"callsite":{"line":4,"column":9}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"cancel_requested","reason":{"kind":"requested"}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"CancelledError","message":"run cancelled","stack":"CancelledError: run cancelled"}}}
+]}

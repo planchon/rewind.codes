@@ -1,5 +1,21 @@
 # 3. Execution model
 
+## Starting a run
+
+Starting a run checks the script first and refuses it at once when it cannot run: the agent
+that wrote it learns in the same call, not from an aborted run later. No run is created and
+nothing is stored. Refused at start, with a diagnostic written for the model (a line and a
+column in `script.ts`):
+
+- a syntax error;
+- an import of anything other than `ptc` and `ptc:tools`, a dynamic `import()`, a `require`;
+- an import of a name `ptc` does not export, or of a tool the run's toolset does not have;
+- no default export, or a default export that is certainly not a function (a literal, an
+  object, a class).
+
+From M2 the same call also type-checks the script against the toolset's declarations, as
+`ptc check` does, so that most mistakes are refused before a run exists.
+
 ## Activations
 
 Completions never go straight into the history. They land in a per-run **inbox**. The
@@ -29,16 +45,31 @@ read model, see [05](05-testing-and-observability.md#the-feed-and-the-projector)
 
 Failures of the activation itself:
 
-- The script fails to load (syntax error, forbidden import) → `run_aborted { invalid_script }`.
+- The script fails to load although it passed the checks at start (an exception thrown by
+  its top-level code, a default export that turns out not to be a function) →
+  `run_aborted { invalid_script }`, with the diagnostic.
 - Replay detects non-determinism → nothing is committed, and the run is
   [quarantined](#non-determinism-and-quarantine).
 - A limit is exceeded → `run_aborted { limit_exceeded }`.
+- Anything else (a missing blob, a store error, a replay interrupted by a limit or an
+  internal error of the executor) → nothing is committed, and the lease is kept until it
+  expires: the run is activated again then, and the other runs are activated meanwhile.
+  After **5 such failures in a row**, the run is [quarantined](#non-determinism-and-quarantine)
+  with the last error: a run that cannot make progress is set aside and reported, not
+  retried forever.
 
 ## Inside the isolate
 
 Nothing is asynchronous from V8's point of view:
 
 - Ops are synchronous: they record a command, assign a `seq`, and return it.
+- Values cross the boundary as JSON. A value reaches the script with its object keys in
+  canonical order (RFC 8785), so that it looks the same live and on replay, wherever it was
+  loaded from. A string holding a lone surrogate (half of an emoji, after a `slice`) leaves
+  the script with U+FFFD in its place.
+- The script's output and the description of its failure are captured when the outcome is
+  known: serializing them runs the script's code (`toJSON`, getters), which cannot happen once
+  the terminal command is decided.
 - The JS glue turns the `seq` into a promise whose resolver is stored by `seq`.
 - Delivering a completion calls the glue's `deliver(completion)` and runs a microtask
   checkpoint.
@@ -129,6 +160,11 @@ These components are versioned together by one integer, the **determinism epoch*
 recorded in `run_started` and bumped by any change of the kind above. It is not the crate
 version: most releases leave it unchanged.
 
+The glue is observable in subtle ways too: the line numbers of its own frames can appear in
+`error.stack`. Errors the glue creates (`ToolError`, `CancelledError`, `DeadlockError`) carry
+no glue frame, and the stack recorded in `fail_run` drops them. The epoch corpus records the
+rest, so such a change shows up in CI.
+
 - **Glue, generators, library and codegen** are JavaScript embedded in the binary. A
   build keeps the versions of every epoch that may still have live runs, and uses the one
   matching the run.
@@ -153,6 +189,11 @@ the glue), never of the script. Ending the run would make its owner pay for it.
 - If it is still quarantined at its deadline, or if an operator gives up on it, the host
   ends it with `run_aborted { non_determinism }`.
 
+A run whose activations failed 5 times in a row is quarantined the same way, with the last
+error as its reason. Released, it is activated again; given up on, it ends with
+`run_aborted { internal }`. The failure is logged when the run is set aside (M1), and reported
+through OpenTelemetry and webhooks from M4.
+
 `ptc replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
 different script is the point.
 
@@ -167,7 +208,7 @@ goes idle:
 | `main` returned | Success, with its return value as output. |
 | `main` threw | Failure, with that error. |
 | A promise was rejected and still has no handler once microtasks are drained | Failure, with the rejection as the error. |
-| `main` has not settled, and no tool call, timer or signal wait is pending | Failure, `DeadlockError`: nothing can wake the script any more. |
+| `main` has not settled, and no tool call, timer or signal wait is pending | Failure, `DeadlockError`: nothing can wake the script any more. After a cancellation, the failure is `CancelledError` instead: the run ends `cancelled` (a wait built on `setTimeout` loses its timer when cancelled). |
 
 **Unhandled rejections** follow Node, its known trap included:
 `const p = tool(); await other(); await p` fails if `p` is rejected before it is
@@ -220,6 +261,12 @@ script may catch it to clean up (it gets one grace activation). Otherwise the ru
 `cancelled`, and its pending tool tasks and timers are cancelled. Cancellation does not
 wait for the tool calls in flight: their results are dropped when they arrive.
 
+The grace is the delivery of `cancel_requested` itself: once the script is idle again,
+it must have ended by itself (`complete_run`, or `fail_run`, `CancelledError` included). If it
+has not, for instance because it awaits a cleanup tool call, the host commits
+`cancel_requested` with `run_aborted { cancelled }` and drops what the script emitted in
+response, like any host abort.
+
 ## Run TTL
 
 Every run has a deadline, `expires_at`, recorded in `run_started`: the time the run was
@@ -235,8 +282,17 @@ of a previous epoch must stay up.
 
 ## Resource limits
 
-- Per activation: CPU time (a watchdog thread calls `terminate_execution`), heap size
-  (V8 heap limit + near-heap-limit callback), number of commands emitted.
+- Per call into the script: CPU time (a watchdog thread calls `terminate_execution`).
+- Per instance: heap size (V8 heap limit + near-heap-limit callback).
+- Per activation: number of commands emitted.
 - Per run: history length, payload sizes.
 
-Limit violations end the run with `run_aborted { limit_exceeded }`.
+Limit violations end the run with `run_aborted { limit_exceeded }`: the trigger is committed
+with `run_aborted`, and what the script emitted in response to it is dropped.
+
+The CPU budget applies to each call into the script (`main(input)` or one delivery, 5 s by
+default), not to the whole activation: every activation replays the full history, and a long
+run must not exhaust its budget replaying it. The budget is CPU time of the isolate's thread.
+The watchdog measures it as the wall-clock time of the call for now, which a heavily loaded
+host can make a healthy script exceed; it moves to the thread's CPU clock before M4. The heap
+limit is 128 MiB by default.

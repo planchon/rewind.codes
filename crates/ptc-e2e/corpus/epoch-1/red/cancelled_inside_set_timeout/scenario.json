@@ -1,0 +1,23 @@
+{
+  "description": "A wait built on setTimeout, cancelled: the timer is dropped, nothing can wake the script any more, and the run ends cancelled, not deadlocked.",
+  "steps": [
+    {
+      "cancel": {
+        "message": "user asked"
+      }
+    }
+  ],
+  "expect": {
+    "status": "cancelled",
+    "error": {
+      "name": "CancelledError",
+      "message": "run cancelled: user asked"
+    },
+    "events": [
+      "run_started",
+      "start_timer",
+      "cancel_requested",
+      "fail_run"
+    ]
+  }
+}

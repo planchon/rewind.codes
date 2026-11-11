@@ -1,0 +1,15 @@
+{
+  "description": "A string holding half of a surrogate pair, as slicing text with emoji produces, crosses into the journal as U+FFFD instead of breaking the run.",
+  "tools": {
+    "audit.record": {
+      "$echo": true
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "text": "�",
+      "length": 1
+    }
+  }
+}

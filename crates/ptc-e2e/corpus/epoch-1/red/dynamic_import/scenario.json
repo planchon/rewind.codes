@@ -1,0 +1,6 @@
+{
+  "description": "Dynamic import() would never settle in a sandbox without an event loop: the script is refused at start.",
+  "expect": {
+    "start_error": "the script is invalid: dynamic import() is not available in ai-ptc scripts (script.ts:2:23)"
+  }
+}

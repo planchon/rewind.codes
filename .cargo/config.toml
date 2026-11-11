@@ -1,0 +1,3 @@
+# The runtime requires TZ=UTC (Date and Intl must not depend on the host).
+[env]
+TZ = { value = "UTC", force = true }

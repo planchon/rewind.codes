@@ -24,11 +24,20 @@ Each tool has a **policy**:
 
 | Policy | Default for | On transient error | Dispatcher crashed mid-call (outcome unknown) |
 | --- | --- | --- | --- |
-| `retry` | MCP tools with `readOnlyHint` or `idempotentHint` | Retry with backoff | Retry with the same idempotency key |
-| `at_most_once` | Everything else | Fail | Fail with `outcomeUnknown: true` |
+| `retry` | Every tool | Retry with backoff | Retry with the same idempotency key |
+| `at_most_once` | Tools the toolset opts out | Fail | Fail with `outcomeUnknown: true` |
+
+An interrupted call is called again with the same idempotency key, so the tool can recognize
+it and not repeat its effect. A tool that ignores the key may then run twice: such a tool is
+declared `at_most_once` in the toolset. A call whose dispatcher died 5 times in a row fails
+with `outcomeUnknown: true` instead of being tried again.
 
 The script sees failures as a thrown `ToolError` and decides what to do. Policies can be
 overridden per tool in the toolset.
+
+Until M2, toolsets carry no policies: every tool is `retry`, and only the crash case is
+implemented (a task claimed again after its claim expired). Transient errors and their
+backoff arrive with the MCP dispatcher.
 
 Routes:
 
@@ -63,8 +72,16 @@ This is deterministic, since the schema is pinned.
 The JSON Schema → TypeScript converter is ours (objects, required, enums,
 `anyOf`/`oneOf`/`allOf`, `$ref`/`$defs`, arrays, `additionalProperties`).
 
-In 0.1 the toolset model in `ptc-core` is only a sorted, deduplicated list of tool names
+Until M2 the toolset model in `ptc-core` is only a sorted, deduplicated list of tool names
 with a digest. Schemas and policies arrive with M2.
+
+### When a toolset changes during a run
+
+A run keeps the toolset it started with, but the server behind it can change during a long
+pause: a tool renamed, removed, or with a new schema. A call that no longer matches is not
+failed silently: the harness is warned, and the agent or the developer decides what happens
+to the run (continue against the new schema, fork it with a corrected script, or cancel it).
+The mechanism is designed with M2.
 
 ### Observed result types
 

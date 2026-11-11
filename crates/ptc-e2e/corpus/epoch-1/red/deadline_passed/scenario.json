@@ -1,0 +1,22 @@
+{
+  "description": "Every run has a deadline: past it, the run is cancelled through the normal path (cancel_requested with reason ttl).",
+  "ttl": "1h",
+  "steps": [
+    {
+      "advance": "2h"
+    }
+  ],
+  "expect": {
+    "status": "cancelled",
+    "error": {
+      "name": "CancelledError",
+      "message": "its deadline has passed"
+    },
+    "events": [
+      "run_started",
+      "signal_awaited",
+      "cancel_requested",
+      "fail_run"
+    ]
+  }
+}
