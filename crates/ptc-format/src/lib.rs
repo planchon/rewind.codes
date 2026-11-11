@@ -10,7 +10,7 @@
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
-//! - a **journal document** (exports, the epoch corpus, cassettes later):
+//! - a **journal document** (exports, the epoch corpus, cassettes):
 //!   `{"v":1,"entries":[{"index":0,"recorded_at":…,"event":{"type":"run_started",…}},…]}`,
 //!   written with one entry per line so that diffs stay readable.
 //!

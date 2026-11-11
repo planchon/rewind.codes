@@ -30,15 +30,14 @@ impl Script {
     }
 }
 
-/// One tool a script may call, named as its server defines it (`github.list_issues`).
-/// Schemas and policies arrive with codegen (M2).
+/// One tool a script may call, named as its server defines it (`github.list_issues`): a name
+/// only, with no schema and no policy.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ToolSpec {
     pub name: String,
 }
 
-/// The tools a run may call: a sorted and deduplicated list of names, until toolsets carry
-/// schemas and policies (M2).
+/// The tools a run may call: a sorted and deduplicated list of names.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Toolset {
     tools: Vec<ToolSpec>,

@@ -35,10 +35,6 @@ with `outcomeUnknown: true` instead of being tried again.
 The script sees failures as a thrown `ToolError` and decides what to do. Policies can be
 overridden per tool in the toolset.
 
-Until M2, toolsets carry no policies: every tool is `retry`, and only the crash case is
-implemented (a task claimed again after its claim expired). Transient errors and their
-backoff arrive with the MCP dispatcher.
-
 Routes:
 
 - **MCP tools**: the dispatcher is an MCP client (`rmcp`, stdio or streamable HTTP).
@@ -72,23 +68,21 @@ This is deterministic, since the schema is pinned.
 The JSON Schema → TypeScript converter is ours (objects, required, enums,
 `anyOf`/`oneOf`/`allOf`, `$ref`/`$defs`, arrays, `additionalProperties`).
 
-Until M2 the toolset model in `ptc-core` is only a sorted, deduplicated list of tool names
-with a digest. Schemas and policies arrive with M2.
-
 ### When a toolset changes during a run
 
 A run keeps the toolset it started with, but the server behind it can change during a long
 pause: a tool renamed, removed, or with a new schema. A call that no longer matches is not
 failed silently: the harness is warned, and the agent or the developer decides what happens
 to the run (continue against the new schema, fork it with a corrected script, or cancel it).
-The mechanism is designed with M2.
+The mechanism is designed before its code
+([plan](09-roadmap.md#designs-to-settle-before-their-code)).
 
 ### Observed result types
 
 Most MCP servers declare no `outputSchema`, so the model would write code against a
 result it cannot see. But every result ever returned is in a journal. A projection
 infers, per tool, the **shape observed** in recorded results, and codegen uses it when
-the server declares nothing (M3).
+the server declares nothing.
 
 - Shapes only: keys and types, never values. Observations stay within a tenant.
 - A field missing from some results is optional. A tool never observed keeps the MCP
@@ -109,7 +103,8 @@ The checker's `lib` declares exactly the globals the sandbox has
 ([product](01-product.md#what-exists-in-the-sandbox)): what type-checks exists at run
 time, and the reverse.
 
-Beyond `tsc`, the checker runs rules of its own, with the same type information:
+Beyond the compiler's diagnostics, the checker runs rules of its own, with the same type
+information:
 
 | Rule | Flags | Fix |
 | --- | --- | --- |
@@ -120,10 +115,10 @@ Beyond `tsc`, the checker runs rules of its own, with the same type information:
 These rules are the first line. At run time, a forgotten `await` is still harmless
 ([how a script ends](03-execution.md#how-a-script-ends)).
 
-V1 runs `tsc` inside a dedicated V8 isolate started from a snapshot, as Deno
-historically did. This keeps ai-ptc a single self-contained binary. The server keeps a
-pool of warm checkers. Swapping in the native compiler (tsgo) later is an implementation
-detail behind the `TypeChecker` port.
+`ptc-check` drives tsgo, the native TypeScript 7 compiler, behind the `TypeChecker` port.
+How tsgo is shipped with the single `ptc` binary, and how the checker's own rules get type
+information, are [designs to settle](09-roadmap.md#designs-to-settle-before-their-code):
+TypeScript 7.0 has no programmatic API, and one is announced for 7.1.
 
 `runs.start` checks by default; the harness can skip it.
 

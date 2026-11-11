@@ -9,12 +9,12 @@ mocks and observability are all derived from it.
 **One rule above all: the journal is the only source of truth.** No feature gets its
 own side channel: traces, metrics about runs, and the dashboard are projections of it.
 
-> Status, November 2026: version 0.1 is ai-ptc once milestones M1 to M6 are done. M0 (runtime
-> spike) is done, and so is the crate layering of
+> Status, November 2026: the target is version 0.1, which this whole specification describes.
+> The runtime spike is done, and so is the crate layering of
 > [07-code-architecture.md](07-code-architecture.md), with the decisions of the November design
 > review (run TTL, determinism epoch, how a script ends, format v1): see
-> [08-decisions.md](08-decisions.md). M1 (embedded store, file blobs, CLI) is next. See
-> [09-roadmap.md](09-roadmap.md) for the exact state of the code.
+> [08-decisions.md](08-decisions.md). [09-roadmap.md](09-roadmap.md) holds the plan for 0.1 and
+> the exact state of the code.
 
 ## Reading order
 
@@ -28,7 +28,7 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 | [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payloads in S3, scaling path, security |
 | [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, implementation plan |
 | [08-decisions.md](08-decisions.md) | Every decision taken so far, who took it, and why |
-| [09-roadmap.md](09-roadmap.md) | Milestones, current state of the code, next steps, open questions |
+| [09-roadmap.md](09-roadmap.md) | Plan for 0.1: current state of the code, contracts, workstreams, designs to settle, what is out of 0.1, acceptance criteria |
 
 ## Positioning
 
@@ -40,5 +40,5 @@ problem. What still changes is the runtime itself, and a determinism epoch versi
 
 ## Process
 
-Before a milestone is implemented, its architecture principles are presented for
-review. Implementation starts after approval.
+Before code depends on a contract or a design, its architecture principles are presented
+for review, with diagrams. Implementation starts after approval.

@@ -34,8 +34,8 @@ A scenario ties it together:
 
 `ptc test scenario.json` runs it and reports a trace plus the failed expectations.
 
-For the embedded CLI in M1, `ptc.tools.json` gives static responses per tool
-(`{"$error": "message"}` for a failure), until codegen and real dispatch arrive in M2.
+In mock mode, the CLI also takes static responses per tool from `ptc.tools.json`
+(`{"$error": "message"}` for a failure).
 
 ## Replay, debugging and forks
 
@@ -43,9 +43,7 @@ For the embedded CLI in M1, `ptc.tools.json` gives static responses per tool
   checks determinism. No tool is called.
 - `ptc replay <run> --script fixed.ts`: tells whether a corrected script is compatible
   with an existing history, and if not, where it diverges.
-- `ptc replay <run> --inspect` (later): attaches the V8 inspector, to step through a
-  past production run with its real values.
-- `ptc fork <run> --script fixed.ts [--at <index>]` (M3, before the dashboard): a new run
+- `ptc fork <run> --script fixed.ts [--at <index>]`: a new run
   that reuses the recorded results of its parent, then continues live. An agent can fix
   a bug at step 7 without redoing the side effects of steps 1–6. The agent tool is
   `retry_run({ run_id, code })`.
@@ -58,13 +56,14 @@ A fork rests on two things the engine already guarantees:
   ([how a script ends](03-execution.md#how-a-script-ends)), so the fork knows which
   effects happened.
 
-The exact semantics are [open question 9](09-roadmap.md#open-questions).
+The exact semantics are a [design to settle](09-roadmap.md#designs-to-settle-before-their-code)
+before the code of `ptc fork`.
 
 ## Evals
 
 Whether the system works for models is measured, not assumed. An eval suite runs models
 end to end on the embedded engine: a task, a toolset of deterministic fake MCP servers,
-and the loop generate → check → run → fix, in virtual time (M2.5).
+and the loop generate → check → run → fix, in virtual time.
 
 Reported per model and per prompt rendering:
 
@@ -73,8 +72,8 @@ Reported per model and per prompt rendering:
 - number of iterations;
 - tokens.
 
-Mock mode makes this cheap: runs are hermetic and take no wall-clock time. From M3 the
-suite also replays cassettes recorded from real runs.
+Mock mode makes this cheap: runs are hermetic and take no wall-clock time. The suite also
+replays cassettes recorded from real runs.
 
 The choices that are cheap to change today (names, error formats, the `ptc` library, the
 prompt rendering, what `run_script` returns) are decided on these numbers.
@@ -83,9 +82,9 @@ prompt rendering, what `run_script` returns) are decided on these numbers.
 
 **The journal is the record; telemetry and dashboards are projections of it** (principle
 10 in [07](07-code-architecture.md#principles)). Nothing about what a script did is
-emitted from the isolate, from the runtime, or during replay. Every activation replays
+emitted from the isolate, from the runtime, or during replay. An activation can replay
 the whole history, so telemetry emitted while executing would be emitted again on every
-activation.
+replay.
 
 ### Two kinds of telemetry
 
@@ -178,12 +177,12 @@ separate **read model** behind the `ReadModel` port, filled by the projector:
   error kind, payload digests.
 
 It answers "which runs called `github.close_issue`", "failures by error kind", "latency
-and error rate per tool", "every script agent X ran this week". Postgres projections
-first; a columnar store fed by the same feed later, if volume requires it.
+and error rate per tool", "every script agent X ran this week". Its projections are
+Postgres tables; a columnar read model is out of 0.1.
 
 ### Dashboard
 
-The dashboard (M6) shows every run and all the code executed on the platform.
+The dashboard shows every run and all the code executed on the platform.
 
 | View | Shows |
 | --- | --- |

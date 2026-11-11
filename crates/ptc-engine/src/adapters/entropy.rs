@@ -56,8 +56,8 @@ impl Entropy for SeededEntropy {
 
     fn seed(&self) -> Seed {
         let mut bytes = [0u8; 32];
-        for chunk in bytes.chunks_exact_mut(8) {
-            chunk.copy_from_slice(&self.next().to_le_bytes());
+        for chunk in bytes.as_chunks_mut::<8>().0 {
+            *chunk = self.next().to_le_bytes();
         }
         Seed::from_bytes(bytes)
     }

@@ -14,9 +14,9 @@ goes through a journal, and everything else is derived from it:
 | Durable execution | A run can `await sleep("10d")` or wait for a signal, survive crashes and deploys, and resume by re-executing the script against its journal. |
 | Replay | Any run can be re-executed from its journal, locally, with identical results. |
 | Testing | A journal recorded from a real run becomes a cassette of mocks; time is virtual. |
-| Observability | Every tool call, timer, signal and log is an event linked to the script line that caused it. Exported as OpenTelemetry, and shown (later) in a dashboard of every run and all the code executed on the platform. |
+| Observability | Every tool call, timer, signal and log is an event linked to the script line that caused it. Exported as OpenTelemetry, and shown in a dashboard of every run and all the code executed on the platform. |
 
-V1 priorities:
+Priorities:
 
 1. **Durable workflows first.** Short "run this and give me the result" scripts are the
    same thing, started with a `wait` timeout.
@@ -124,14 +124,11 @@ the lifecycle webhooks.
 
 The result goes into the model's context, so it is bounded by design:
 
-- **Completed**: the output, truncated above a size budget, with the run id so the model
-  can read the rest through `get_run`; plus the last log lines.
+- **Completed**: the output, truncated above 256 KB, with the run id so the model can read
+  the rest through `get_run`; plus the last log lines.
 - **Suspended**: the run id and what the run is waiting for.
 - **Failed**: the error with its TypeScript location and a code frame, the trace up to
   the failure, and the tool call that failed, if any.
-
-The size budget and how the model pages through a large output are an
-[open question](09-roadmap.md#open-questions).
 
 ## What the model writes
 
@@ -177,7 +174,7 @@ declare module "ptc" {
 }
 ```
 
-Nothing else is importable in V1: no npm, no relative imports, no dynamic `import()`. A
+Nothing else is importable in 0.1: no npm, no relative imports, no dynamic `import()`. A
 curated set of deterministic utility libraries can be bundled later.
 
 ### Signals
@@ -218,8 +215,7 @@ const event = await signal("pr_merged");          // anything POSTed to hook.url
 
 `webhook(name)` returns a unique URL bound to this run and this signal name. Every
 request posted to it becomes a `pr_merged` signal on the run. When the sender provides a
-delivery id, it is used as the signal's idempotency key. (Designed, not implemented
-yet.)
+delivery id, it is used as the signal's idempotency key.
 
 ### What exists in the sandbox
 
@@ -230,7 +226,7 @@ yet.)
 | `crypto.getRandomValues()`, `crypto.randomUUID()` | Seeded CSPRNG (ChaCha20). Scripts use them to make tokens and passwords, so their output must not be predictable. |
 | `setTimeout`, `setInterval` | Durable timers, same as `sleep`. |
 | `console.*` | Journaled as log annotations. |
-| `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. The exact baseline is an [open question](09-roadmap.md#open-questions). |
+| `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. They come from existing deno crates ([decided](08-decisions.md#taken-after-the-layering-november-2026)). |
 | `fetch` | Absent, unless the toolset enables the built-in `http` tool. It is then a journaled tool call like any other. |
 | `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics` | Removed (they expose GC timing or threads). |
 | File system, env, process, network, `Deno`, Node APIs | Absent. No file system, ever. |

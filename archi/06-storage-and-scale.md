@@ -26,9 +26,9 @@ inbox      (id, run_id, event, received_at)
 signal_keys (run_id, key)                                  PK (run_id, key)
 timers     (run_id, seq, fire_at)                          index on fire_at
 tool_tasks (run_id, seq, tool, args, policy, state, attempt, lease_owner, lease_until, next_attempt_at)
-feed       (id, consumer, run_id, fence, from_idx, to_idx, lease_owner, lease_until)   M4
+feed       (id, consumer, run_id, fence, from_idx, to_idx, lease_owner, lease_until)
 
--- read model (M4), written only by the projector
+-- read model, written only by the projector
 run_summaries (run_id PK, script, toolset, status, labels, started_at, ended_at,
                last_activity_at, tool_calls, errors, history_len)
 tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, outcome,
@@ -48,9 +48,9 @@ workers pick runs by epoch, and the scheduler picks the runs past their deadline
 
 - **Workers** are stateless and pick runnable runs with `FOR UPDATE SKIP LOCKED`
   (Postgres), among the epochs they support and outside quarantine. Acquiring a lease
-  increments `fence`. The lease lasts 30 s and, from M4, the worker renews it about every
-  10 s while it works on the run, during the replay as during the execution: a long replay
-  keeps its lease, and a dead worker frees the run at most 30 s after its last renewal.
+  increments `fence`. The lease lasts 30 s, and the worker renews it about every 10 s while
+  it works on the run, during the replay as during the execution: a long replay keeps its
+  lease, and a dead worker frees the run at most 30 s after its last renewal.
 - A commit only succeeds if the fence still matches, and `PK (run_id, idx)` is a second
   guard. A worker that lost its lease (GC pause, network partition) can never corrupt a
   history.
@@ -58,16 +58,16 @@ workers pick runs by epoch, and the scheduler picks the runs past their deadline
   It also polls the runs past their deadline and pushes
   `cancel_requested { reason: "ttl" }`.
 - The **projector** claims feed items the same way, applies them to the read model and
-  the OTel export, then deletes them (M4).
+  the OTel export, then deletes them.
 - A terminal commit clears the run's pending timers and tool tasks.
 
 Scaling path:
 
 1. More workers.
 2. Partition `history` and `inbox` by `run_id`; archive the histories of finished runs.
-3. Several Postgres clusters sharded by `run_id` if needed.
-4. Move the read model to a columnar store, fed by the same feed, if dashboard queries
-   outgrow Postgres.
+
+Sharding over several Postgres clusters and a columnar read model are out of 0.1
+([plan](09-roadmap.md#out-of-01)).
 
 ## Idempotency of the API
 
@@ -113,8 +113,8 @@ Consequences:
   downloaded. Only completion results delivered to the script are fetched, and workers
   keep a local cache. Sticky execution avoids most fetches.
 - Traces, OTel spans and the dashboard must render without downloading payloads. Size
-  and preview are store metadata kept next to the digest, not part of the domain model
-  (exact place to settle, see [roadmap](09-roadmap.md#open-questions)).
+  and preview are store metadata kept next to the digest in a `payloads` table, not part of
+  the domain model ([decided](08-decisions.md#taken-after-the-layering-november-2026)).
 
 ## Security
 
@@ -126,6 +126,6 @@ inside an additional sandbox (gVisor, Firecracker, or a container per tenant).
 A run's seed keys its random generators, `crypto` included. It is protected like the
 payloads.
 
-The points still to design for M4 (egress of the `http` tool, API authentication, scope
-of the agent tools, tenancy) are listed in the
-[roadmap](09-roadmap.md#inputs-for-the-m4-architecture-review).
+The points still to design (egress of the `http` tool, API authentication, scope of the
+agent tools, tenancy, sandboxed workers) are listed in the
+[plan](09-roadmap.md#designs-to-settle-before-their-code).

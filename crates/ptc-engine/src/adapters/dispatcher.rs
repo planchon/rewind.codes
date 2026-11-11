@@ -4,8 +4,8 @@ use ptc_core::{JsonValue, ToolFailure, ToolFailureKind};
 
 use crate::ports::{ToolCall, ToolDispatcher};
 
-/// Answers every call to a tool with the same response: the embedded CLI's `ptc.tools.json`
-/// until real dispatch arrives (M2).
+/// Answers every call to a tool with the same response: the static responses of mock mode,
+/// as the CLI reads them from `ptc.tools.json`.
 ///
 /// In JSON, a tool maps to its result, or to `{"$error": "message"}` for a failure:
 ///

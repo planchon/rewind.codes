@@ -411,7 +411,7 @@ where
 
     /// Executes a claimed tool task and pushes its outcome into the run's inbox.
     ///
-    /// Every tool has the `retry` policy until toolsets carry policies (M2): a task claimed
+    /// Every tool has the `retry` policy, since toolsets carry no policies: a task claimed
     /// again after its previous claim expired (its dispatcher died mid-call) is called again
     /// with the same idempotency key, so that the tool can tell it apart from a new call
     /// (`archi/04-tools.md`). After [`EngineConfig::max_tool_attempts`], the call fails with

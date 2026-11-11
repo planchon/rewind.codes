@@ -19,33 +19,31 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | **No `fetch`, no file system** | Network only through the opt-in, journaled `http` tool. No file system at all. |
 | **The agent gets several tools**, not only `run_script` | `check_script`, `test_script`, `get_run`, `list_runs`, `signal_run`, `cancel_run`, `retry_run`, `search_tools`. |
 | **Everything goes through the journal** | Replay re-executes against the journal, never restores a snapshot. |
-| **Type-checking is in V1** | Generate → check → fix is the agent's main loop. |
+| **Type-checking is in 0.1** | Generate → check → fix is the agent's main loop. |
 | **`deno_core` + `deno_ast`** | Instead of raw `rusty_v8`. |
-| **CLI surface for V1** | `run`, `check`, `test`, `replay`, `fork`, `trace`, plus `signal`, `cancel`, `worker`. |
+| **CLI surface for 0.1** | `run`, `check`, `test`, `replay`, `fork`, `trace`, plus `signal`, `cancel`, `worker`. |
 | **Concurrency, side effects, randomness**: handled as proposed | `seq` in emission order; tool policies and idempotency keys; seeded PRNG. |
 | **OpenTelemetry for everything in the service** | Service telemetry and run telemetry, exported over OTLP. |
-| **A dashboard of every run and all the code executed on the platform** (future, M6) | Built on the journal, not on an OTel backend. |
-| **Full replay until sticky execution (M5)** | Until then, instances are dropped when a run suspends and every activation replays the history. |
+| **A dashboard of every run and all the code executed on the platform** | Built on the journal, not on an OTel backend. |
 | **Every run has a TTL, 30 days by default** | `expires_at` in `run_started`; at the deadline the run is cancelled through the normal path. It bounds signal waits, tool calls that never answer, quarantine, and the life of a previous epoch. |
-| **The system is measured by evals** (M2.5) | Models run end to end on the embedded engine against fake MCP servers. Choices that are cheap to change are decided on the numbers. |
-| **Fork comes before the dashboard** | `ptc fork` in M3 and `retry_run({ run_id, code })` as an agent tool. Fixing step 7 without redoing steps 1–6 is what the journal is for. |
+| **The system is measured by evals** | Models run end to end on the embedded engine against fake MCP servers. Choices that are cheap to change are decided on the numbers. |
+| **A failed run can be forked with a corrected script** | `ptc fork` and `retry_run({ run_id, code })` as an agent tool. Fixing step 7 without redoing steps 1–6 is what the journal is for. |
 | **Result types are inferred from the journal** when a server declares no `outputSchema` | Observed shapes, for type-checking and the prompt only. |
 | **`run_script` returns a bounded result** | It lands in the model's context: output truncated above 256 KB, last log lines, errors with a code frame. |
 | **What type-checks is what exists** | A baseline of deterministic web-standard globals; the checker's `lib` declares exactly the sandbox's globals; hints for absent ones such as `fetch`. |
 
 ### Taken after the layering (November 2026)
 
-Answers to the questions raised once the layering was done. "Version 0.1" is ai-ptc once M1
-to M6 are done.
+Answers to the questions raised once the layering was done.
 
 | Decision | Notes |
 | --- | --- |
-| **An invalid script fails fast** | Starting a run compiles and checks the script (imports, names, default export; type-checking from M2) and refuses it before any run exists. The agent learns in the same call; it does not wait for an execution. |
+| **An invalid script fails fast** | Starting a run compiles, checks and type-checks the script (imports, names, default export, types) and refuses it before any run exists. The agent learns in the same call; it does not wait for an execution. |
 | **An interrupted tool call is retried with its idempotency key** | `retry` is the default policy of every tool; `at_most_once` is an opt-out per tool in the toolset. After 5 attempts the call fails with `outcomeUnknown`. |
-| **A toolset that changed during a run is reported, not failed silently** | The harness is warned and the agent or the developer decides what happens to the run (closes question 3; mechanism designed with M2). |
+| **A toolset that changed during a run is reported, not failed silently** | The harness is warned and the agent or the developer decides what happens to the run (closes question 3). The mechanism is a [design to settle](09-roadmap.md#designs-to-settle-before-their-code). |
 | **The cancellation grace is one delivery** | The script ends within the delivery of `cancel_requested`, or it is aborted (closes question 5). |
-| **The CPU budget applies to each call into the script**, measured as CPU time | The watchdog moves from wall-clock time to the thread's CPU clock before M4. |
-| **An activation that fails 5 times in a row quarantines the run** | With the last error as reason. Logged in M1; reported through OpenTelemetry and webhooks in M4 (closes question 16). |
+| **The CPU budget applies to each call into the script**, measured as CPU time | The watchdog reads the CPU clock of the isolate's thread, not wall-clock time. |
+| **An activation that fails 5 times in a row quarantines the run** | With the last error as reason. The failure is logged and reported through OpenTelemetry and webhooks (closes question 16). |
 | **Web-standard globals come from existing crates** | `deno_webidl`, `deno_url`, `deno_web` and the like, with their non-deterministic parts replaced (closes question 13). In general, take a maintained crate rather than rewrite one. |
 | **A signal or a cancellation sent to a finished run is refused** | 409 in the API, an error in the CLI, instead of being dropped (closes question 4). |
 | **The tenant lives in the run metadata**, never in the core | Closes question 7. |
@@ -53,15 +51,18 @@ to M6 are done.
 | **Webhooks: an unguessable URL and an HMAC signature** | Closes question 8. |
 | **Run labels: a bounded map set at start**, exported to OpenTelemetry for allow-listed keys only | Closes question 10. |
 | **TTL: a maximum per deployment** (365 days by default) | A run past its deadline ends `cancelled` with the reason `ttl`; no status of its own (closes question 15). |
-| **No `LISTEN/NOTIFY`** | Wake-ups in M4 do not rely on Postgres notifications. |
+| **No `LISTEN/NOTIFY`** | Wake-ups do not rely on Postgres notifications. |
 | **The corpus lives in `ptc-e2e`** | A tooling crate allowed to depend on adapters. |
-| **The embedded store is Turso Database** | The `turso` crate, the Rust rewrite of SQLite, rather than SQLite through rusqlite or libSQL (closes question 17). It is in beta and its multi-process access is experimental: how `ptc` commands share one `.ptc` directory is settled in the M1 principles review. The store stays behind `JournalStore` and its conformance suite, so the choice can change. |
+| **The embedded store is Turso Database** | The `turso` crate, the Rust rewrite of SQLite, rather than SQLite through rusqlite or libSQL (closes question 17). It is in beta and its multi-process access is experimental: how `ptc` commands share one `.ptc` directory is a [design to settle](09-roadmap.md#designs-to-settle-before-their-code) (process model of the embedded CLI). The store stays behind `JournalStore` and its conformance suite, so the choice can change. |
 | **`run_script` returns at most 256 KB of output** | Above it the output is truncated and the model pages through the rest (closes question 12). |
 | **A quarantined run is released by hand, or retried when a new build is deployed** | A replay that fails again writes nothing, so the automatic retry is safe; a run nobody fixes ends at its TTL (closes question 14). |
 | **Retention: active runs are never touched** | A finished run's journal stays in Postgres for a configurable period, then is archived to S3 and loaded on demand; the read model is kept per tenant retention. Durations and deletion stay open (question 11). |
-| **Leases are renewed by a heartbeat during an activation** (M4) | The lease stays short (30 s) and the worker renews it about every 10 s while it lives, during the replay as during the execution. A long replay keeps its lease; a dead worker frees the run at most 30 s after its last renewal. The fence still refuses the commit of a worker that lost its lease. |
-| **The latency of the polling path is accepted** | A script of 5 sequential calls makes about ten store round trips. Gains come later from caching (instances, histories, payloads), not from a separate short path. |
+| **Leases are renewed by a heartbeat during an activation** | The lease stays short (30 s) and the worker renews it about every 10 s while it lives, during the replay as during the execution. A long replay keeps its lease; a dead worker frees the run at most 30 s after its last renewal. The fence still refuses the commit of a worker that lost its lease. |
+| **The latency of the polling path is accepted** | A script of 5 sequential calls makes about ten store round trips. Gains come from caching (instances, histories, payloads), not from a separate short path. |
 | **The embedded CLI** | Schema versioned with migrations in the binary, refusing a newer schema; `--json` on every command and one exit code per outcome; a first Ctrl-C finishes the call in flight and commits it, a second one exits at once. |
+| **No milestones: 0.1 is built as one product** | Version 0.1 is the whole specification. Everything is coded directly in its final shape, with no interim version of a feature. The plan is in [09](09-roadmap.md). |
+| **Out of 0.1** | `ptc replay --inspect`; `continueAsNew` (a run that reaches the history cap of 50k entries is aborted with `limit_exceeded`; closes question 6); a columnar read model; sharding over several Postgres clusters. |
+| **Type-checking uses tsgo (TypeScript 7)** | `ptc-check` drives tsgo, the native TypeScript 7 compiler, rather than `tsc` in a V8 isolate. How tsgo is shipped with the single `ptc` binary, and how the checker's own rules get type information, are [designs to settle](09-roadmap.md#designs-to-settle-before-their-code): TypeScript 7.0 has no programmatic API, and one is announced for 7.1. |
 
 ## Architecture (approved for 0.1)
 
@@ -75,7 +76,7 @@ to M6 are done.
 | The runtime only executes; replay lives in the engine | The V8 adapter stays small and swappable; replay logic is tested without V8. |
 | Non-determinism only through ports | The same engine is production, mock mode and the test harness. |
 | Dependency rules checked by a test | Boundaries hold without relying on discipline. |
-| Review architecture principles before each milestone | Process rule. |
+| Review the architecture principles of each contract and design, with diagrams, before the code that depends on it | Process rule. |
 | **The journal is the record; OTel, SSE and the dashboard are projections** of committed entries | One source of truth. Replay can never duplicate telemetry, and the dashboard isn't limited by OTel sampling or retention. |
 | Service telemetry through the `tracing` facade; OpenTelemetry only in `ptc-otel`, installed by composition roots; nothing in `ptc-core` | The engine stays free of vendor SDKs; exporters are a deployment choice. |
 | A read side separate from `JournalStore`: the `ReadModel` port, filled by a projector | `JournalStore` stays shaped by the write path's invariants; queries across runs get their own tables. |
@@ -114,7 +115,6 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | V8 instance on a dedicated thread behind `ScriptExecutor` | Running V8 on the async runtime | V8 objects are `!Send`; the engine stays a normal async crate. |
 | Ports as traits returning `impl Future + Send`; engine generic over adapters | `dyn` traits with `async_trait` | Static dispatch, no boxing; composition roots pick types. |
 | Tool policies `retry` / `at_most_once`, idempotency key `{run_id}/{seq}` | Always retry | A crash mid-call must not silently duplicate a non-idempotent effect. |
-| `tsc` embedded in an isolate | Requiring tsgo or Node next to ai-ptc | Single binary for harness developers. |
 | Single-file scripts, imports only from `ptc` and `ptc:tools` | npm imports | Determinism and supply chain. Curated libraries later. |
 | Tool names kept as defined by the server | camelCase renaming | They must match the descriptions the model reads. |
 | Callsites mapped to TypeScript lines through source maps | JS positions | Traces and errors point at the code the model wrote. |
@@ -136,12 +136,12 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The stored format writes every JSON value in its canonical form | The JSON library's key order | The stored bytes no longer depend on a feature some dependency enables (`preserve_order`), and they are exactly the bytes a payload's digest is computed on. |
 | Dynamic `import()` is refused when the script compiles | Refusing it in the module loader | There is no event loop in the sandbox: the import would never settle, and the script would end with a misleading `DeadlockError`. |
 | The checks at start run on the syntax tree (swc): imported modules and names, default export | Loading the module in a throwaway isolate | Cheap and deterministic, with no script code running before the run exists. What only shows when the script runs (a top-level exception) still aborts the run with `invalid_script` at its first activation. |
-| The CPU budget applies to each call into the script | A budget per activation | Every activation replays the full history: a long run must not exhaust its budget replaying it. |
+| The CPU budget applies to each call into the script | A budget per activation | An activation can replay the full history: a long run must not exhaust its budget replaying it. |
 | Each generator gets its own key, `SHA-256(domain ‖ seed)`; `crypto` is the ChaCha20 keystream of RFC 8439 with a zero nonce | Keying both generators with the seed | What `Math.random` reveals tells nothing about `crypto`, and the keystream is a standard one. |
 | Unhandled rejections are read from deno_core's queue of rejections without a handler, drained after each microtask checkpoint | Our own `PromiseRejectCallback` | deno_core already tracks rejections, and removes those handled later in the same checkpoint (Node's semantics). |
 | Errors created by the glue have no glue frames in their stack, and `fail_run` drops glue frames | Raw V8 stacks | The glue's line numbers would otherwise leak into journals and change them on every edit of the glue. |
-| Each instance runs on its own thread with a single-threaded tokio runtime (for module loading), next to a watchdog thread | One thread per isolate pool | Simplest correct model to start with; open question 2 stays open. |
-| The epoch corpus lives in a tooling crate, `ptc-e2e`: blue cases must succeed, red cases must fail exactly as specified; journals are compared byte for byte and replayed from their files | Corpus inside `ptc-cli` (M1) | The corpus can exist before the CLI; the CLI's end-to-end tests will reuse the same cases. |
+| Each instance runs on its own thread with a single-threaded tokio runtime (for module loading), next to a watchdog thread | One thread per isolate pool | Simplest correct model. Whether it holds at the target scale is a [design to settle](09-roadmap.md#designs-to-settle-before-their-code) with the sticky instance cache. |
+| The epoch corpus lives in a tooling crate, `ptc-e2e`: blue cases must succeed, red cases must fail exactly as specified; journals are compared byte for byte and replayed from their files | Corpus inside `ptc-cli` | The corpus does not need the CLI, and the CLI's end-to-end tests reuse the same cases. |
 | Values reach the script with their keys in canonical order, live and on replay | Keeping the order they arrived in | Stored values are canonical: a run would see one order live and another on replay, diverge, and be quarantined while healthy. Found by review. |
 | An activation that fails for any reason other than the script (a missing blob, a store error, a replay interrupted by a limit or an internal error) keeps its lease and is retried when it expires | Releasing the lease at once; quarantining | The run picked first is the one with the oldest inbox item: released at once, it would be picked again and again and block every other run. A transient failure must not stop a healthy run for good. Found by review. After 5 failures in a row the run is quarantined (owner decision above). |
 | The real `Date` stays private to the glue; only `Date.parse` and `Date.UTC` are copied | Making the logical `Date` inherit from it | Through `Object.getPrototypeOf(Date)` a script read the real clock. Found by review. |

@@ -63,8 +63,7 @@ where
         let state = RunState::from_history(&history)
             .map_err(|error| EngineError::CorruptHistory { run_id, error })?;
 
-        // Full replay on every activation: instances are not kept between activations until
-        // sticky execution (M5).
+        // Full replay on every activation: instances are not kept between activations.
         let mut instance = None;
         if !history.is_empty() && !state.is_terminal() {
             let input = ReplayInput {

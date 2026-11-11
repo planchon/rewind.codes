@@ -13,7 +13,7 @@ column in `script.ts`):
 - no default export, or a default export that is certainly not a function (a literal, an
   object, a class).
 
-From M2 the same call also type-checks the script against the toolset's declarations, as
+Starting a run also type-checks the script against the toolset's declarations, as
 `ptc check` does, so that most mistakes are refused before a run exists.
 
 ## Activations
@@ -130,12 +130,13 @@ for the script. Two risks remain:
 - A toolset whose schemas changed while the run was suspended: dispatch validates args
   against the current schema and fails clearly.
 
-Full replay on every activation is O(history²) over a run's life. Mitigations:
+Replaying the full history on every activation would be O(history²) over a run's life.
+Mitigations:
 
 - **Sticky execution**: the worker keeps the instance in memory and gets affinity for
   the run's next activation. Replay is the fallback, not the hot path.
-- **`continueAsNew(state)`** for runs that loop forever.
-- Histories are capped (default 50k entries).
+- Histories are capped (default 50k entries). A run that reaches the cap is aborted with
+  `limit_exceeded`; `continueAsNew` is out of 0.1.
 
 ## Determinism epoch
 
@@ -193,8 +194,8 @@ the glue), never of the script. Ending the run would make its owner pay for it.
 
 A run whose activations failed 5 times in a row is quarantined the same way, with the last
 error as its reason. Released, it is activated again; given up on, it ends with
-`run_aborted { internal }`. The failure is logged when the run is set aside (M1), and reported
-through OpenTelemetry and webhooks from M4.
+`run_aborted { internal }`. The failure is logged and reported through OpenTelemetry and
+webhooks.
 
 `ptc replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
 different script is the point.
@@ -218,7 +219,7 @@ awaited. V8 reports every promise rejected without a handler; the runtime collec
 and checks after each microtask checkpoint.
 
 **A run does not end while a tool call is in flight.** A forgotten `await` is the most
-common mistake in generated code, and `tsc` does not catch it.
+common mistake in generated code, and the TypeScript compiler does not catch it.
 
 - After `main` returned, the glue holds the output and the script stays alive: pending
   tool calls complete, their continuations run, and the table above still applies. So
@@ -293,8 +294,6 @@ Limit violations end the run with `run_aborted { limit_exceeded }`: the trigger 
 with `run_aborted`, and what the script emitted in response to it is dropped.
 
 The CPU budget applies to each call into the script (`main(input)` or one delivery, 5 s by
-default), not to the whole activation: every activation replays the full history, and a long
+default), not to the whole activation: an activation can replay the full history, and a long
 run must not exhaust its budget replaying it. The budget is CPU time of the isolate's thread.
-The watchdog measures it as the wall-clock time of the call for now, which a heavily loaded
-host can make a healthy script exceed; it moves to the thread's CPU clock before M4. The heap
-limit is 128 MiB by default.
+The heap limit is 128 MiB by default.
