@@ -2407,7 +2407,7 @@
             "type": "string"
           },
           "idempotencyKey": {
-            "description": "`{run_id}/{seq}`, the same on every attempt: the handler uses it to recognize a call it\nalready made.",
+            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\nattempt: the handler uses it to recognize a call it already made.",
             "type": "string"
           },
           "labels": {
@@ -5551,7 +5551,7 @@
         },
         "summary": "List the distinct scripts executed",
         "tags": [
-          "scripts"
+          "reading"
         ]
       }
     },
@@ -5643,7 +5643,7 @@
         },
         "summary": "One script's source",
         "tags": [
-          "scripts"
+          "reading"
         ]
       }
     },
@@ -7393,7 +7393,7 @@
       "name": "toolsets"
     },
     {
-      "description": "Type-check scripts, run scenarios in mock mode, and read the scripts executed on the platform.",
+      "description": "Type-check scripts, and run them as scenarios in mock mode.",
       "name": "scripts"
     },
     {
@@ -7409,7 +7409,7 @@
       "name": "webhooks"
     },
     {
-      "description": "Statistics and payloads, for the dashboard.",
+      "description": "The scripts executed on the platform, tool statistics and payloads, for the dashboard.",
       "name": "reading"
     },
     {

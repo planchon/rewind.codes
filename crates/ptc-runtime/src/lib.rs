@@ -13,6 +13,9 @@
 //!   can wake fails with `DeadlockError`.
 //!
 //! Each instance runs on its own thread, under the JavaScript glue of its run's epoch.
+//!
+//! [`sandbox_lib`] holds the declarations the type-checker gives scripts: exactly what the
+//! sandbox has.
 
 #![forbid(unsafe_code)]
 
@@ -22,6 +25,7 @@ mod executor;
 mod isolate;
 mod loader;
 mod ops;
+pub mod sandbox_lib;
 mod watchdog;
 
 pub use executor::{SetupError, V8Executor, V8Instance};

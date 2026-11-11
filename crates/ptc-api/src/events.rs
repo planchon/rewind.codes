@@ -283,7 +283,7 @@ pub struct EventsQuery {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     /// A committed journal entry. Payload values above 256 KiB are left out.
-    Entry(Entry),
+    Entry(Box<Entry>),
     /// The last event of a stream: the run has ended, or, without `follow`, every entry
     /// committed so far was sent.
     End { status: RunStatus },
@@ -365,7 +365,7 @@ mod tests {
                 output: json!({ "closed": 3 }).into(),
             }),
         };
-        let event = StreamEvent::Entry(Entry::from_core(&entry, view));
+        let event = StreamEvent::Entry(Box::new(Entry::from_core(&entry, view)));
         assert_eq!(event.sse_event(), "entry");
         assert_eq!(event.sse_id().as_deref(), Some("4"));
         let written = serde_json::to_value(&event).unwrap();

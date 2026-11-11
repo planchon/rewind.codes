@@ -82,11 +82,11 @@ use crate::webhooks::{
     security(("apiKey" = [])),
     tags(
         (name = "toolsets", description = "Register and pin toolsets; their declarations and credentials."),
-        (name = "scripts", description = "Type-check scripts, run scenarios in mock mode, and read the scripts executed on the platform."),
+        (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "tasks", description = "Host-tool tasks: long-polled by the harness's SDK worker, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
-        (name = "reading", description = "Statistics and payloads, for the dashboard."),
+        (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
         (name = "administration", description = "API keys, and the server itself."),
     )
 )]
@@ -100,10 +100,31 @@ pub fn document() -> Document {
 /// The document as committed at `api/openapi.json`: pretty JSON, keys in a stable order, a
 /// final newline.
 pub fn to_json() -> String {
-    let value = serde_json::to_value(document()).unwrap_or_default();
+    let value = sorted(serde_json::to_value(document()).unwrap_or_default());
     let mut json = serde_json::to_string_pretty(&value).unwrap_or_default();
     json.push('\n');
     json
+}
+
+/// Object keys in sorted order, whatever the features of `serde_json` in the build: a
+/// dependency that enables `preserve_order` must not change the committed file.
+fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(fields) => {
+            let mut fields: Vec<_> = fields.into_iter().collect();
+            fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+            serde_json::Value::Object(
+                fields
+                    .into_iter()
+                    .map(|(key, field)| (key, sorted(field)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
 }
 
 /// What every operation shares, added once rather than on each: the security scheme, the
@@ -378,7 +399,7 @@ mod operations {
 
     /// List the distinct scripts executed
     #[utoipa::path(
-        get, path = "/v1/scripts", tag = "scripts", operation_id = "listScripts",
+        get, path = "/v1/scripts", tag = "reading", operation_id = "listScripts",
         params(ScriptFilter),
         responses((status = 200, description = "A page of scripts, most recently run first.", body = ScriptPage))
     )]
@@ -386,7 +407,7 @@ mod operations {
 
     /// One script's source
     #[utoipa::path(
-        get, path = "/v1/scripts/{digest}", tag = "scripts", operation_id = "getScript",
+        get, path = "/v1/scripts/{digest}", tag = "reading", operation_id = "getScript",
         params(("digest" = String, Path, description = "SHA-256 of the source, lowercase hex.")),
         responses(
             (status = 200, description = "The script.", body = Script),

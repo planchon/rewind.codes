@@ -481,12 +481,7 @@ impl Client {
         template: &str,
         params: &[&str],
     ) -> Result<RequestBuilder, Error> {
-        let url = self.url(template, params)?;
-        let request = self.http.request(method, url);
-        Ok(match &self.api_key {
-            Some(key) => request.header(AUTHORIZATION, key.clone()),
-            None => request,
-        })
+        Ok(self.authorized(method, self.url(template, params)?))
     }
 
     /// A request whose query string is `query`, serialized as the server reads it.
@@ -500,16 +495,17 @@ impl Client {
         let mut url = self.url(template, params)?;
         let pairs = query_pairs(query)?;
         if !pairs.is_empty() {
-            let mut serializer = url.query_pairs_mut();
-            for (key, value) in &pairs {
-                serializer.append_pair(key, value);
-            }
+            url.query_pairs_mut().extend_pairs(&pairs);
         }
+        Ok(self.authorized(method, url))
+    }
+
+    fn authorized(&self, method: Method, url: Url) -> RequestBuilder {
         let request = self.http.request(method, url);
-        Ok(match &self.api_key {
+        match &self.api_key {
             Some(key) => request.header(AUTHORIZATION, key.clone()),
             None => request,
-        })
+        }
     }
 
     async fn send(&self, request: RequestBuilder) -> Result<Response, Error> {
@@ -630,6 +626,8 @@ fn query_pairs(query: &impl Serialize) -> Result<Vec<(String, String)>, Error> {
             }
         }
     }
+    // By key, whatever the features of `serde_json`; repeated keys keep their order.
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
     Ok(pairs)
 }
 

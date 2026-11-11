@@ -19,6 +19,10 @@
 //! JSON conventions: fields are camelCase, enumerated values are snake_case (as in the
 //! journal), times are RFC 3339 strings, durations are written as scripts write them
 //! (`"30s"`, `"1h30m"`) or as a number of milliseconds.
+//!
+//! Query strings: the query DTOs serialize as the server reads them; a list repeats its key
+//! (`?label=agent:triage&label=conversation:c-42`), so a server reads them with a deserializer
+//! that accepts repeated keys (`serde_html_form`, behind axum-extra's `Query`).
 
 #![forbid(unsafe_code)]
 

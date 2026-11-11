@@ -53,8 +53,8 @@ pub struct Task {
     pub tool: String,
     /// The arguments, validated against the tool's input schema.
     pub args: Value,
-    /// `{run_id}/{seq}`, the same on every attempt: the handler uses it to recognize a call it
-    /// already made.
+    /// `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
+    /// attempt: the handler uses it to recognize a call it already made.
     pub idempotency_key: String,
     /// From 1. Above 1, an earlier attempt was interrupted.
     pub attempt: u32,

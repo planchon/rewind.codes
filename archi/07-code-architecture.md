@@ -271,6 +271,7 @@ Checked by `crates/ptc-architecture-tests` from `cargo metadata`:
   (`ptc-e2e`, `evals`), which wire adapters like a composition root for tests. `ptc-cli` and
   `ptc-server` never depend on each other. Only the `ptc` binary crate depends on the
   composition roots. Nothing depends on a tooling crate.
+- The `ptc` binary crate depends only on `ptc-cli` and `ptc-server`, and nothing depends on it.
 - Libraries do not use `anyhow`: each has its own error types.
 - Telemetry: `ptc-core` has no telemetry dependency (`tracing` included). The `tracing`
   facade is allowed in `ptc-engine` and the adapters. `opentelemetry*` crates are allowed
@@ -325,11 +326,15 @@ Conventions:
 
 - Authentication by an API key as a Bearer token. The key designates the tenant
   ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
-- `Idempotency-Key` on run creation and on signals
+- `Idempotency-Key` on run creation (start and fork) and on signals
   ([idempotency](06-storage-and-scale.md#idempotency-of-the-api)).
-- Errors are `application/problem+json`, with a message written for a model.
-- The OpenAPI document is generated from the DTOs of `ptc-api` (utoipa). The SDK's types are
-  generated from the OpenAPI document.
+- Errors are `application/problem+json`, with a message written for a model. Their `type` is
+  `urn:ptc:problem:<slug>`; the slugs are listed in `api/README.md`.
+- JSON fields are camelCase, enumerated values snake_case, times RFC 3339, durations `"30s"`
+  or a number of milliseconds.
+- The OpenAPI document is generated from the DTOs of `ptc-api` (utoipa) and committed at
+  `api/openapi.json`; a test fails when it is stale. The SDK's and the dashboard's types are
+  generated from it (`api/README.md`).
 
 | Group | Endpoint | Does |
 | --- | --- | --- |
@@ -355,16 +360,23 @@ Conventions:
 | | `DELETE /v1/runs/{id}` | Erases the run, payloads included |
 | Host-tool tasks | `GET /v1/tasks` | Long-poll, filtered by toolset and tools |
 | | `POST /v1/tasks/{token}/heartbeat` | Extends the task's claim |
+| | `POST /v1/tasks/{token}/defer` | The handler answers later: the task is `deferred`, without heartbeats, until `complete` or `fail` |
 | | `POST /v1/tasks/{token}/complete` | The result; also later, asynchronously |
 | | `POST /v1/tasks/{token}/fail` | The failure |
 | | `POST /v1/tasks/{id}/approve` | Approval policy, parked tasks: the task goes on |
 | | `POST /v1/tasks/{id}/reject` | The call fails with a `ToolError` |
 | Webhooks | `POST /hooks/{token}` | Inbound, without authentication, at an unguessable URL: becomes a signal |
 | | `POST /v1/subscriptions` | Outbound: signed lifecycle events |
+| | `GET /v1/subscriptions` | Lists the subscriptions, without their secrets |
+| | `DELETE /v1/subscriptions/{id}` | Deletes a subscription |
 | Reading (dashboard) | `GET /v1/scripts` | Every distinct script, its runs, its tools |
+| | `GET /v1/scripts/{digest}` | One script's source |
 | | `GET /v1/tools/stats` | Latency, errors, retries |
 | | `GET /v1/payloads/{digest}` | A payload, on demand |
 | Administration | `POST /v1/api-keys` | Creates an API key for a tenant, with its scope; keys are revocable |
+| | `DELETE /v1/api-keys/{id}` | Revokes a key |
+| | `GET /v1/server` | The server's version, epochs and roles |
+| | `POST /v1/server/stop` | Stops the embedded server, when the CLI replaces it with one of its own version |
 
 ## Embedded server and CLI
 
