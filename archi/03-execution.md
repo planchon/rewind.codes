@@ -31,10 +31,10 @@ for trigger in take_inbox(R) (arrival order):
   if R is terminal: drop the completion
   append trigger; deliver it to the instance; run microtasks until idle
   append the commands and annotations emitted
-offload payloads above the threshold to the BlobStore
+move payloads above 1 KiB out of the events (payloads table or BlobStore)
 derive effects from the new commands: tool tasks, timers, cancelled timers
 commit_activation(lease, { entries, consumed inbox items, effects, status })   # one transaction, fenced
-release lease (or keep the instance warm)
+release lease; the instance stays in the worker's cache (sticky execution)
 ```
 
 Commands and the effects they create (tool tasks, timers) are committed in the same
@@ -127,16 +127,73 @@ Scripts are immutable and content-addressed, so there is no workflow versioning 
 for the script. Two risks remain:
 
 - A change in the ai-ptc runtime itself: see the [determinism epoch](#determinism-epoch).
-- A toolset whose schemas changed while the run was suspended: dispatch validates args
-  against the current schema and fails clearly.
+- A toolset whose schemas changed while the run was suspended: dispatch checks the call
+  against the current schema and parks the task
+  ([toolset change](04-tools.md#when-a-toolset-changes-during-a-run)).
 
 Replaying the full history on every activation would be O(history²) over a run's life.
 Mitigations:
 
-- **Sticky execution**: the worker keeps the instance in memory and gets affinity for
-  the run's next activation. Replay is the fallback, not the hot path.
+- [Sticky execution](#sticky-execution): the worker keeps the instance in memory and gets
+  the run's next activation first. Replay is the fallback, not the hot path.
 - Histories are capped (default 50k entries). A run that reaches the cap is aborted with
   `limit_exceeded`; `continueAsNew` is out of 0.1.
+
+## Sticky execution
+
+After a commit, the worker keeps the script instance in a cache, and gets the run's next
+activation first.
+
+- The cache is an LRU, bounded per worker: 500 instances and 4 GiB by default.
+- The store records the run's sticky worker at commit. When the run becomes runnable again,
+  that worker gets it first. Other workers only take it after 5 s.
+- **Hit**: the instance is cached, and its history length is the run's. Only the new trigger
+  is delivered: no replay.
+- **Miss**: a new instance starts from a V8 startup snapshot and replays the history.
+- An evicted instance releases the worker's priority on its run.
+
+Each live instance keeps its own thread and isolate. The load tests check that this holds
+within these bounds. An isolate pool per thread is built only if they fail.
+
+The cache also saves most payload reads ([payloads](06-storage-and-scale.md#payloads)).
+
+## Forks
+
+A fork is a new run started from an existing one with a corrected script, so that an agent
+can fix step 7 without redoing the side effects of steps 1 to 6
+([usage](05-testing-and-observability.md#replay-debugging-and-forks)).
+`POST /v1/runs/{id}/fork` takes the corrected script and an optional `at` index.
+
+| The fork has | Value |
+| --- | --- |
+| Run id | Its own |
+| Script | The corrected one |
+| Seed | The parent's |
+| Input | The parent's, unless the request overrides it |
+| TTL | A new one |
+| Toolset | The parent's |
+
+The engine replays the new script against the parent's history:
+
+- While its commands match the parent's, the parent's entries are copied into the fork's own
+  history: completions keep their recorded results and their `recorded_at`. No tool is
+  called again.
+- At the first command that differs, at the entry `at`, or at the end of the parent's
+  history, the fork continues live. A parent's cancellation or abort is where its history
+  ends for the fork.
+- A call made live carries the key `{fork_run_id}/{seq}`.
+- A call the parent scheduled but left without an outcome (a cancelled or aborted parent) is
+  dispatched again with the parent's key `{parent_run_id}/{seq}` if its policy is `retry`, so
+  that the tool recognizes a duplicate. It fails with `outcomeUnknown` if its policy is
+  `at_most_once`.
+- A script that reads `run.id` diverges there: the fork has its own id.
+
+With the parent's seed, the corrected script emits the same commands as long as it takes the
+same path. The `at` index forces the fork live from an entry even if the commands still
+match.
+
+The link to the parent is [run metadata](05-testing-and-observability.md#run-metadata). The
+fork's history is self-contained: it replays without the parent.
 
 ## Determinism epoch
 
@@ -234,8 +291,7 @@ common mistake in generated code, and the TypeScript compiler does not catch it.
 Consequences:
 
 - When a run ends by itself, every tool call it scheduled has a recorded outcome. This is
-  what tells a [fork](05-testing-and-observability.md#replay-debugging-and-forks) which
-  effects happened.
+  what tells a [fork](#forks) which effects happened.
 - Cancellation and host aborts (`run_aborted`) are the exceptions. They end the run at
   once, and a call left without a completion has an unknown outcome.
 - The cost: a script that races a slow tool against a timer still waits for that tool

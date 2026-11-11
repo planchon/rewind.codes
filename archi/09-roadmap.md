@@ -64,15 +64,16 @@ Not there yet:
 
 ## Contracts frozen first
 
-| Contract | Implemented by | Consumed by |
-| --- | --- | --- |
-| Engine ports (traits and conformance suites) | The adapters: runtime, stores, blobs, MCP, checker, OpenTelemetry | `ptc-engine` |
-| Stored format v1 (journal, cassettes) | `ptc-format` | The stores, `ptc test`, the e2e corpus, journal export |
-| Pinned toolset (schemas, policies, declarations) | `ptc-codegen` | The runtime (`ptc:tools`), the checker, the dispatcher, the SDK, the model's prompt |
-| HTTP API `/v1` (OpenAPI) | `ptc-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
-| Sandbox lib (`ptc.d.ts` and the checker's `lib`) | `ptc-runtime` (the globals that exist) | `ptc-check`, the prompt |
+| Contract | Specified in | Implemented by | Consumed by |
+| --- | --- | --- | --- |
+| Engine ports (traits and conformance suites) | [07](07-code-architecture.md#ports) | The adapters: runtime, stores, blobs, MCP, checker, OpenTelemetry, secrets, webhooks | `ptc-engine` |
+| Stored format v1 (events, journal documents, cassettes, pinned toolsets) | [02](02-journal.md#stored-format-v1) | `ptc-format` | The stores, `ptc test`, the e2e corpus, journal export and archive |
+| Pinned toolset (schemas, policies, declarations) | [04](04-tools.md#toolsets-and-code-generation) | `ptc-codegen` | The runtime (`ptc:tools`), the checker, the dispatcher, the SDK, the model's prompt |
+| HTTP API `/v1` (OpenAPI) | [07](07-code-architecture.md#http-api-v1) | `ptc-api` (DTOs, OpenAPI document, Rust client), `ptc-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
+| Sandbox lib (`ptc.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `ptc-runtime` (the globals that exist) | `ptc-check`, the prompt |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
+The five were approved in November 2026.
 
 ## Workstreams
 
@@ -86,57 +87,38 @@ Each contract is reviewed by the owner, with diagrams, before the code that depe
 | Tools | `ptc-codegen`, `ptc-mcp` | `ptc-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `ptc-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `ptc-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `ptc-otel` | `tracing` subscriber; `SpanExporter`; deterministic span ids; read model; LLM trace; metrics | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `ptc-server` | API `/v1`; SSE; webhooks signed with HMAC; host-tool long-poll; authentication; tenants; workers; scheduler; projector; embedded mode | Engine ports, HTTP API `/v1` |
-| CLI | `ptc-cli` | API client, embedded or remote; local commands: `check`, `test`, `replay`, `trace`, `fork` | HTTP API `/v1`, stored format v1, sandbox lib |
+| Server | `ptc-server`, `ptc-api` | API `/v1`: DTOs, OpenAPI document and Rust client in `ptc-api`; SSE; webhooks signed with HMAC; host-tool long-poll; authentication; tenants; credentials; workers; scheduler; projector; roles `api` and `worker`; embedded mode | Engine ports, HTTP API `/v1` |
+| CLI | `ptc-cli` | Client of the embedded or a remote server, through `ptc-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
 | Dashboard | `dashboard` | Scripts, Runs, Run and Tools views over the public API | HTTP API `/v1` |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Operations | deployment | Sandboxed workers; worker pools of previous epochs; retention and archiving; load and limit tests | Engine ports, HTTP API `/v1` |
 
-## Designs to settle before their code
+## Designs settled (November 2026)
 
-Each design is reviewed by the owner, with diagrams, before the code that depends on it.
+Each design below was reviewed by the owner, with diagrams. The list points to where it is
+specified.
 
-- **Process model of the embedded CLI.** Turso's multi-process access is experimental.
-  Proposed: one `ptc server --embedded` process owns `.ptc/`, and the other `ptc` commands
-  are its clients.
-- **Sticky instance cache and thread per instance** (was question 2). What is kept between
-  activations (instances, histories, payloads) and how a worker gets the run's next
-  activation. Each live V8 instance holds a thread: is a thread per instance acceptable at
-  the target scale, or does it need an isolate pool per thread?
-- **Payloads of medium size in Postgres.** Kept in the `payloads` table, with S3 above a
-  measured threshold instead of 1 KiB.
-- **Fork semantics** (was question 9). How the new run references its parent, and which
-  recorded results are reused. In particular: what happens at the first command that
-  differs from the parent's (continue live, or reject the fork); which idempotency key the
-  reused and the re-executed calls carry; and what a fork does with a call left without an
-  outcome by a cancelled or aborted parent.
-- **Host tools that last days**, such as `ask_user`: timeouts, heartbeats and asynchronous
-  completion.
-- **Tool concurrency.** A limit per run and per server in the dispatcher. It is invisible to
-  the journal. To settle with it: whether calls still queued when a script fails are
-  dispatched.
-- **The `approval` policy.** It parks a task until the harness accepts it, so that scripts
-  do not bypass the harness's permission gates.
-- **Credentials resolved at dispatch** through a provider: a token expires during a long
-  sleep.
-- **API authentication and tenancy.** Tenancy (in the run metadata) is settled first: it
-  touches every key, the quotas, and the fairness of `acquire_runnable`. Agent tools that
-  take a `run_id` check the run's labels.
-- **Egress of the `http` tool**: SSRF protection and an egress allow-list.
-- **Toolset change during a run**: how the harness is warned when a call no longer matches
-  ([tools](04-tools.md#when-a-toolset-changes-during-a-run)).
-- **Retention durations and deletion** (was question 11). The shape is decided (finished
-  journals archived to S3 and loaded on demand, read model per tenant retention). Still
-  open: how long a finished journal stays in Postgres, the default tenant retention, and
-  whether runs are ever deleted (tool arguments can hold personal data).
-- **Sandboxed workers** for multi-tenant deployments
-  ([security](06-storage-and-scale.md#security)).
-- **tsgo in `ptc-check`**: how tsgo is shipped with the single `ptc` binary, and how the
-  checker's own rules (floating promise, ignored async callback, absent global) get type
-  information. TypeScript 7.0 has no programmatic API; one is announced for 7.1.
-- **The JSON Schema → TypeScript converter.** No maintained Rust crate was found; the spec
-  says it is ours.
+- **Embedded mode**: the CLI is an API client of `ptc server --embedded`
+  ([07](07-code-architecture.md#embedded-server-and-cli)).
+- **Sticky execution and a thread per instance** (was question 2)
+  ([03](03-execution.md#sticky-execution)).
+- **Payloads in three tiers** ([06](06-storage-and-scale.md#payloads)).
+- **Fork semantics** (was question 9) ([03](03-execution.md#forks)).
+- **Tool task lifecycle**: host tools that last days, the `approval` policy, tool
+  concurrency, toolset change during a run ([04](04-tools.md#tool-task-lifecycle)).
+- **Credentials** resolved at dispatch ([04](04-tools.md#credentials)).
+- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-and-authentication)).
+- **Egress of the `http` tool** ([04](04-tools.md#the-http-tool-and-egress)).
+- **Retention and deletion** (was question 11)
+  ([06](06-storage-and-scale.md#retention-and-deletion)).
+- **Sandboxed workers** ([06](06-storage-and-scale.md#sandboxed-workers)).
+- **tsgo in `ptc-check`** and the checker's own rules ([04](04-tools.md#type-checking)).
+- **The JSON Schema → TypeScript converter**: ours, in Rust
+  ([04](04-tools.md#toolsets-and-code-generation)).
+- **The dashboard**: a React SPA served by `ptc-server`
+  ([05](05-testing-and-observability.md#dashboard)).
+- **Evals**: the models, run on demand ([05](05-testing-and-observability.md#evals)).
 
 ## Out of 0.1
 
@@ -164,7 +146,7 @@ Each design is reviewed by the owner, with diagrams, before the code that depend
 
 ## Open questions
 
-Questions 1, 3, 4, 5, 7, 8, 10, 12, 13, 14, 15, 16 and 17 were settled in November 2026: see
-[08-decisions.md](08-decisions.md#taken-after-the-layering-november-2026). Questions 2, 9 and
-11 are [designs to settle](#designs-to-settle-before-their-code), and question 6
+Questions 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 and 17 were settled in November
+2026: see [08-decisions.md](08-decisions.md#taken-after-the-layering-november-2026). Questions
+2, 9 and 11 were settled with the [designs](#designs-settled-november-2026). Question 6
 (`continueAsNew`) is [out of 0.1](#out-of-01). No other question is open.

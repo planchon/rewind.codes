@@ -13,22 +13,23 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 > The runtime spike is done, and so is the crate layering of
 > [07-code-architecture.md](07-code-architecture.md), with the decisions of the November design
 > review (run TTL, determinism epoch, how a script ends, format v1): see
-> [08-decisions.md](08-decisions.md). [09-roadmap.md](09-roadmap.md) holds the plan for 0.1 and
-> the exact state of the code.
+> [08-decisions.md](08-decisions.md). The contracts and designs of 0.1 were approved in
+> November 2026. [09-roadmap.md](09-roadmap.md) holds the plan for 0.1 and the exact state of
+> the code.
 
 ## Reading order
 
 | File | Covers |
 | --- | --- |
 | [01-product.md](01-product.md) | What ai-ptc is, who it is for, how a harness integrates it, what the model writes, the sandbox |
-| [02-journal.md](02-journal.md) | The journal: event families, `seq`, callsites, the commit invariant, run state |
-| [03-execution.md](03-execution.md) | Activations, logical time, replay, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
-| [04-tools.md](04-tools.md) | Tool dispatch, policies, idempotency, toolsets, code generation, observed result types, type-checking |
+| [02-journal.md](02-journal.md) | The journal: event families, `seq`, callsites, the commit invariant, run state, the stored format v1 |
+| [03-execution.md](03-execution.md) | Activations, logical time, replay, sticky execution, forks, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
+| [04-tools.md](04-tools.md) | Tool routes, idempotency, the tool task lifecycle, policies, toolsets, code generation, observed result types, credentials, egress of the `http` tool, type-checking |
 | [05-testing-and-observability.md](05-testing-and-observability.md) | Mocks, cassettes, scenarios, replay and forks, evals; OpenTelemetry, read model and dashboard as projections of the journal |
-| [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payloads in S3, scaling path, security |
-| [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, implementation plan |
+| [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payload tiers, scaling path, tenancy and authentication, retention, security and sandboxed workers |
+| [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, the HTTP API `/v1`, the embedded server and the CLI |
 | [08-decisions.md](08-decisions.md) | Every decision taken so far, who took it, and why |
-| [09-roadmap.md](09-roadmap.md) | Plan for 0.1: current state of the code, contracts, workstreams, designs to settle, what is out of 0.1, acceptance criteria |
+| [09-roadmap.md](09-roadmap.md) | Plan for 0.1: current state of the code, contracts, workstreams, designs settled, what is out of 0.1, acceptance criteria |
 
 ## Positioning
 

@@ -28,8 +28,10 @@ Priorities:
 ## Who uses it
 
 ai-ptc is a tool for **agent harness developers**. A harness embeds it through an HTTP
-API and a TypeScript SDK. The `ptc` CLI covers the same surface for local development,
-either with an embedded engine (Turso, local files) or as a client of a remote server.
+API ([`/v1`](07-code-architecture.md#http-api-v1)) and a TypeScript SDK. The `ptc` CLI is a
+client of the same API, for local development: of a server it starts itself on a local
+directory (Turso, local files), or of a remote one
+([embedded server](07-code-architecture.md#embedded-server-and-cli)).
 
 ```
 ┌──────────── agent harness ────────────┐       ┌──────────────── ai-ptc ────────────────┐
@@ -43,9 +45,9 @@ either with an embedded engine (Turso, local files) or as a client of a remote s
 └────────────────────────────────────────┘       └─────────────────────────────────────────┘
 ```
 
-1. The harness **registers a toolset**: MCP servers plus its own *host tools* (JSON
-   Schema + handler). ai-ptc connects to the MCP servers, pins their schemas, and returns
-   the generated TypeScript declarations.
+1. The harness **registers a toolset**: MCP servers and, optionally, its own *host tools*
+   (JSON Schema + handler). ai-ptc connects to the MCP servers, pins their schemas, and
+   returns the generated TypeScript declarations ([routes](04-tools.md#routes)).
 2. The harness puts those declarations in the system prompt and exposes the **agent
    tools** to its model (below).
 3. When the model calls `run_script`, the harness calls
@@ -60,8 +62,8 @@ either with an embedded engine (Turso, local files) or as a client of a remote s
 4. Host tools are executed by the harness through an SDK worker (long-poll), like
    Temporal activity workers. This is how a script calls harness functions, another
    LLM, a sub-agent, or a human.
-5. The harness receives lifecycle webhooks (`completed`, `failed`, `suspended`) to resume
-   the agent conversation when a long run ends.
+5. The harness receives lifecycle webhooks (`run.completed`, `run.failed`,
+   `run.suspended`) to resume the agent conversation when a long run ends.
 
 ```ts
 import { Ptc } from "@ai-ptc/sdk";
@@ -118,7 +120,8 @@ const agentTools = ptc.agentTools({ toolset: toolset.id, labels: { conversation:
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
-the lifecycle webhooks.
+the lifecycle webhooks. An API key limited to these labels makes the scope hold for every
+tool that takes a `run_id` ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
 
 ### What `run_script` returns
 
@@ -184,7 +187,7 @@ source: the harness, a human through a UI, another agent (with `signal_run`), an
 run (through a tool), or an external system through a webhook.
 
 ```
-POST /runs/{run_id}/signals/approval   { "close": true }
+POST /v1/runs/{run_id}/signals/approval   { "close": true }
 ```
 
 ```ts
@@ -227,7 +230,7 @@ delivery id, it is used as the signal's idempotency key.
 | `setTimeout`, `setInterval` | Durable timers, same as `sleep`. |
 | `console.*` | Journaled as log annotations. |
 | `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. They come from existing deno crates ([decided](08-decisions.md#taken-after-the-layering-november-2026)). |
-| `fetch` | Absent, unless the toolset enables the built-in `http` tool. It is then a journaled tool call like any other. |
+| `fetch` | Absent, unless the toolset enables the built-in `http` tool with an allow-list of hosts. It is then a journaled tool call like any other, sent by the dispatcher ([egress](04-tools.md#the-http-tool-and-egress)). |
 | `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics` | Removed (they expose GC timing or threads). |
 | File system, env, process, network, `Deno`, Node APIs | Absent. No file system, ever. |
 

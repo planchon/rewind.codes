@@ -12,9 +12,10 @@ test harness of the engine itself is built the same way.
 Mock sources, tried in order:
 
 1. **Cassettes recorded from real runs.** Any run's journal can be exported as a
-   cassette: tool calls with args and results, and the timeline of signals. Matching is
-   `sequential` (strict `seq` order) or `by_args` (tool + canonical args). Cassettes use
-   the same stored format as the journal (`ptc-format`).
+   cassette (`GET /v1/runs/{id}/journal?as=cassette`): tool calls with args and outcomes,
+   and the timeline of signals. Matching is `sequential` (strict `seq` order) or `by_args`
+   (tool + canonical args). A cassette is a document of the
+   [stored format v1](02-journal.md#stored-format-v1).
 2. **TypeScript mock handlers**, executed in a separate isolate so they cannot break the
    script's determinism.
 3. Otherwise the call fails with "no recorded response for `github.close_issue({…})`".
@@ -32,7 +33,8 @@ A scenario ties it together:
 }
 ```
 
-`ptc test scenario.json` runs it and reports a trace plus the failed expectations.
+`ptc test scenario.json` runs it in the CLI process, without a server, and reports a trace
+plus the failed expectations. `POST /v1/test` does the same on a server.
 
 In mock mode, the CLI also takes static responses per tool from `ptc.tools.json`
 (`{"$error": "message"}` for a failure).
@@ -40,13 +42,14 @@ In mock mode, the CLI also takes static responses per tool from `ptc.tools.json`
 ## Replay, debugging and forks
 
 - `ptc replay <run>`: fetches the journal and the script, re-executes them locally, and
-  checks determinism. No tool is called.
+  checks determinism. No tool is called. `<run>` can also be an exported journal document:
+  the replay then runs in the CLI process, without a server.
 - `ptc replay <run> --script fixed.ts`: tells whether a corrected script is compatible
   with an existing history, and if not, where it diverges.
-- `ptc fork <run> --script fixed.ts [--at <index>]`: a new run
-  that reuses the recorded results of its parent, then continues live. An agent can fix
-  a bug at step 7 without redoing the side effects of steps 1–6. The agent tool is
-  `retry_run({ run_id, code })`.
+- `ptc fork <run> --script fixed.ts [--at <index>] [--input …]`: a new run that reuses the
+  recorded results of its parent, then continues live. An agent can fix a bug at step 7
+  without redoing the side effects of steps 1–6. The agent tool is
+  `retry_run({ run_id, code })`, and the API `POST /v1/runs/{id}/fork`.
 
 A fork rests on two things the engine already guarantees:
 
@@ -56,8 +59,8 @@ A fork rests on two things the engine already guarantees:
   ([how a script ends](03-execution.md#how-a-script-ends)), so the fork knows which
   effects happened.
 
-The exact semantics are a [design to settle](09-roadmap.md#designs-to-settle-before-their-code)
-before the code of `ptc fork`.
+What a fork copies, when it goes live, and which idempotency keys its calls carry:
+[forks](03-execution.md#forks).
 
 ## Evals
 
@@ -74,6 +77,9 @@ Reported per model and per prompt rendering:
 
 Mock mode makes this cheap: runs are hermetic and take no wall-clock time. The suite also
 replays cassettes recorded from real runs.
+
+The models evaluated are Claude Opus, Sonnet and Haiku, and one OpenAI model. The suite runs
+on demand, not in CI: each run costs model tokens.
 
 The choices that are cheap to change today (names, error formats, the `ptc` library, the
 prompt rendering, what `run_script` returns) are decided on these numbers.
@@ -165,6 +171,7 @@ up in a cassette.
 - `trace_context`: the W3C `traceparent` and `tracestate`.
 - `idempotency_key`: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
 - The tenant ([decided](08-decisions.md#taken-after-the-layering-november-2026): it lives here, never in the core).
+- For a fork, the run it was forked from ([forks](03-execution.md#forks)).
 
 ### Read model
 
@@ -177,12 +184,13 @@ separate **read model** behind the `ReadModel` port, filled by the projector:
   error kind, payload digests.
 
 It answers "which runs called `github.close_issue`", "failures by error kind", "latency
-and error rate per tool", "every script agent X ran this week". Its projections are
-Postgres tables; a columnar read model is out of 0.1.
+and error rate per tool", "every script agent X ran this week". Its projections are tables
+in Postgres, or in Turso for the embedded server; a columnar read model is out of 0.1.
 
 ### Dashboard
 
-The dashboard shows every run and all the code executed on the platform.
+The dashboard shows every run and all the code executed on the platform. It is a React
+single-page application, served by `ptc-server`.
 
 | View | Shows |
 | --- | --- |
@@ -200,9 +208,9 @@ The dashboard shows every run and all the code executed on the platform.
 
 ### LLM trace and metrics
 
-- **Event stream**: `GET /runs/{id}/events?follow=1` (SSE), for harness UIs and the
+- **Event stream**: `GET /v1/runs/{id}/events?follow=1` (SSE), for harness UIs and the
   dashboard.
-- **LLM trace**: `GET /runs/{id}/trace?format=llm` and `ptc trace <run>`. Payloads are
+- **LLM trace**: `GET /v1/runs/{id}/trace?format=llm` and `ptc trace <run>`. Payloads are
   truncated, and each entry can be expanded individually (`ptc trace <run> --entry 7`).
 
 ```

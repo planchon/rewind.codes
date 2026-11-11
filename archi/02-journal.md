@@ -92,9 +92,33 @@ no call is pending ([how a script ends](03-execution.md#how-a-script-ends)).
 Quarantine is not a status. Like a lease, it is service state kept by the store, outside
 the history.
 
+## Stored format v1
+
+What is replayed or exported is written in the stored format, defined by `crates/ptc-format`:
+JSON, versioned `"v": 1`, every value in its canonical form. It covers four documents:
+
+| Document | Fields | Where it lives |
+| --- | --- | --- |
+| Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A row of `history` or `inbox` |
+| Journal document | `v`, `run`, `script`, `toolset`, `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
+| Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `ptc test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
+| Pinned toolset | `v`, `servers[]`, `tools[{name, route, schemas, policy}]` | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
+
+A reader refuses an unknown version, type or field. Every change of the format comes with
+an explicit migration.
+
+Service state and run metadata stay out of the format. They are table columns: never
+replayed, never exported, never in a cassette.
+
+- labels, idempotency keys, the tenant, the trace context;
+- credentials;
+- quarantine; lease, fence and sticky worker;
+- the feed;
+- a fork's link to its parent.
+
 ## Where it lives in the code
 
 - The model (`Event`, `Command`, `Completion`, `HistoryEntry`, `RunState`, `ReplayCursor`)
   is in `crates/ptc-core`. It has no serde: the core does not know how events are stored.
-- The stored form (JSON, versioned `"v": 1`) is defined by `crates/ptc-format`.
+- The stored form is defined by `crates/ptc-format` ([above](#stored-format-v1)).
 - See [code architecture](07-code-architecture.md).
