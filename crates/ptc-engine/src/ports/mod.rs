@@ -19,7 +19,7 @@
 //! | [`WebhookSender`] | memory, HTTP (`ptc-server`) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
-//! The ports with state have a conformance suite in [`crate::conformance`] (feature
+//! The ports with state have a conformance suite in the module `conformance` (feature
 //! `conformance`) that every adapter passes.
 
 mod blob;

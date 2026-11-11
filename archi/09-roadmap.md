@@ -33,9 +33,9 @@ warnings` and `cargo test --workspace` pass.
 
 | Crate | State |
 | --- | --- |
-| `ptc-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`. |
-| `ptc-format` | Format v1: one event per row, journal documents, values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
-| `ptc-engine` | Ports; use cases (start with script checks, idempotency key and TTL; signal with idempotency key; cancel; activate; fire timers; expire runs; run tool tasks, an interrupted call retried with its idempotency key up to 5 attempts; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB; driver in real and virtual time; in-memory adapters; the store conformance suite, passed by `MemoryJournal`; use-case tests on a fake executor. |
+| `ptc-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
+| `ptc-format` | Format v1: one event per row, journal documents, cassettes, pinned toolsets (canonical, hashing to the toolset's digest), values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
+| `ptc-engine` | The final ports of 0.1, each with an in-memory adapter; the conformance suites of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters. Use cases (start with script checks, idempotency key, TTL and the tenant's quota; signal with idempotency key; cancel; activate; fire timers; expire runs; run tool tasks, an interrupted call retried with its idempotency key up to 5 attempts, or failed with `outcomeUnknown` under `at_most_once`; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB, with its `payloads` rows; driver in real and virtual time; use-case tests on a fake executor. |
 | `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), CPU watchdog and heap limit. |
 | `ptc-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
 | `ptc-e2e` | The epoch-1 corpus: 15 blue and 22 red cases, recorded and replayed from their journals; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
@@ -45,9 +45,11 @@ Not there yet:
 - The other crates: `ptc-store-turso`, `ptc-store-postgres`, `ptc-blob`, `ptc-mcp`,
   `ptc-codegen`, `ptc-check`, `ptc-otel`, `ptc-cli`, `ptc-server`, the TypeScript SDK, the
   dashboard and the evals.
-- Toolsets are only a sorted, deduplicated list of tool names with a digest: no schemas, no
-  policies. Every tool is `retry`, and only the crash case is handled (a task claimed again
-  after its claim expired); transient errors and their backoff are not.
+- The engine copies each tool's route and policy into its task, and the store enforces the
+  approval state and the concurrency limits, but the engine has no backoff curve (a transient
+  failure is retried at once), no use cases for approvals, deferred results, parked tasks and
+  credentials, no execution or heartbeat timeouts, and dispatches every task itself, host tools
+  included. Payloads above 1 KiB all go to the `BlobStore`: the table tier is not used.
 - Starting a run does not type-check the script.
 - Every activation replays the full history: there is no instance cache.
 - An activation that fails 5 times in a row does not quarantine the run: it is retried every

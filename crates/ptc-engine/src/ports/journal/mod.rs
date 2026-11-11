@@ -211,8 +211,9 @@ pub trait JournalStore: Send + Sync {
         lease_duration: Duration,
     ) -> impl Future<Output = Result<Option<Lease>, StoreError>> + Send;
 
-    /// Extends a lease whose fence still matches to `now + lease_duration`; `Fenced` otherwise.
-    /// A worker calls it about every 10 s while it holds the run, replay included.
+    /// Extends a lease whose fence still matches, and that was not given up, to
+    /// `now + lease_duration`; `Fenced` otherwise. A worker calls it about every 10 s while it
+    /// holds the run, replay included.
     fn renew(
         &self,
         lease: &Lease,
@@ -299,9 +300,9 @@ pub trait JournalStore: Send + Sync {
     /// The earliest `fire_at` of all timers.
     fn next_timer(&self) -> impl Future<Output = Result<Option<Timestamp>, StoreError>> + Send;
 
-    /// Enqueues `cancel_requested { reason: "ttl" }`, once, for up to `limit` runs past their
-    /// deadline at `now` that are neither terminal nor quarantined. Reports the quarantined runs
-    /// past their deadline, every time, until they are given up.
+    /// Handles up to `limit` runs past their deadline at `now`, earliest deadline first: enqueues
+    /// `cancel_requested { reason: "ttl" }`, once, for those that are neither terminal nor
+    /// quarantined, and reports the quarantined ones, every time, until they are given up.
     fn expire_due_runs(
         &self,
         now: Timestamp,
@@ -318,7 +319,8 @@ pub trait JournalStore: Send + Sync {
     /// has passed, and `claimed` tasks whose claim expired, in the order they became due, then
     /// by run and seq. A task is only handed out while a concurrency slot is free: fewer than
     /// its policy's `concurrency` calls of the same tool in flight in its run, and for an MCP
-    /// tool fewer than its server's concurrency in flight to that server under this `owner`.
+    /// tool fewer than its server's concurrency in flight to that server (known by its tenant
+    /// and name) under this `owner`.
     /// Calls in flight are claimed tasks whose claim has not expired, and deferred tasks.
     ///
     /// Each claim increments the attempt, issues a new token, and lasts the policy's heartbeat

@@ -60,7 +60,8 @@ pub struct EngineConfig {
     pub max_tool_attempts: u32,
     /// The tenants this worker serves.
     pub tenants: TenantScope,
-    /// The tool tasks this worker claims and dispatches.
+    /// The tool tasks this worker claims and dispatches. `TaskFilter::All` by default: the
+    /// engine dispatches every task, host tools included, as in mock mode.
     pub tool_tasks: TaskFilter,
     /// Timers fired, and runs expired, per call to the store.
     pub scheduler_batch: usize,
