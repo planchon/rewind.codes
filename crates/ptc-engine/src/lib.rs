@@ -6,9 +6,11 @@
 //!   dispatch tool calls, quarantine, replay) and the driver (`run_until_idle`, in real or
 //!   virtual time).
 //! - [`replay`]: rebuilding a script from its history.
-//! - [`adapters`]: in-memory storage, static tool responses, system and virtual time, system
-//!   and seeded entropy. With a virtual clock they make mock mode and the test harness.
-//! - `conformance` (feature): the suite every `JournalStore` adapter must pass.
+//! - [`adapters`]: in-memory storage, read model, secrets, telemetry and webhooks; static tool
+//!   responses and type-checking; system and virtual time; system and seeded entropy. With a
+//!   virtual clock they make mock mode and the test harness.
+//! - `conformance` (feature): the suites every adapter of `JournalStore`, `BlobStore`,
+//!   `ReadModel` and `SecretStore` must pass.
 //!
 //! The engine is deterministic given its ports. Service telemetry goes through the `tracing`
 //! facade; what a script did is recorded in the journal, never emitted from here.

@@ -1,8 +1,25 @@
-//! `MemoryJournal` passes the store conformance suite.
+//! The in-memory adapters pass the conformance suites of their ports: they are the reference
+//! implementations of the contracts.
 
-use ptc_engine::adapters::MemoryJournal;
+use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets};
+use ptc_engine::conformance;
 
 #[tokio::test]
 async fn memory_journal_conforms() {
-    ptc_engine::conformance::run_all(MemoryJournal::new).await;
+    conformance::journal::run_all(MemoryJournal::new).await;
+}
+
+#[tokio::test]
+async fn memory_blobs_conform() {
+    conformance::blobs::run_all(MemoryBlobs::new).await;
+}
+
+#[tokio::test]
+async fn memory_read_model_conforms() {
+    conformance::read_model::run_all(MemoryReadModel::new).await;
+}
+
+#[tokio::test]
+async fn memory_secrets_conform() {
+    conformance::secrets::run_all(MemorySecrets::new).await;
 }

@@ -20,7 +20,7 @@ use std::cmp::max;
 
 use ptc_core::{
     AbortKind, AbortReason, Command, Completion, Event, HistoryEntry, HistoryError, Lifecycle,
-    RunState, Timestamp,
+    RunState, Timestamp, ToolRoute, Toolset,
 };
 use tracing::Instrument;
 
@@ -44,22 +44,24 @@ where
     /// Activates the leased run: replays its history, delivers its inbox, commits. The lease
     /// is released on success; on error the caller releases it.
     pub(crate) async fn activate(&self, lease: &Lease) -> Result<ActivationOutcome, EngineError> {
-        let span = tracing::info_span!("activation", run_id = %lease.run_id, fence = lease.fence);
+        let span = tracing::info_span!("activation", run = %lease.run, fence = lease.fence);
         self.activate_in_span(lease).instrument(span).await
     }
 
     async fn activate_in_span(&self, lease: &Lease) -> Result<ActivationOutcome, EngineError> {
-        let run_id = lease.run_id;
+        let run = &lease.run;
+        let run_id = run.id;
+        let tenant = &run.tenant;
         let inbox = self.journal.take_inbox(lease).await?;
         if inbox.is_empty() {
             self.journal.release(lease).await?;
             return Ok(ActivationOutcome::NothingToDo);
         }
 
-        let record = self.run_record(run_id).await?;
-        let stored = self.stored_script(record.script).await?;
-        let toolset = self.toolset(record.toolset).await?;
-        let history = self.journal.load_history(run_id, 0).await?;
+        let record = self.run_record(run).await?;
+        let stored = self.stored_script(tenant, record.script).await?;
+        let toolset = self.toolset(tenant, record.toolset).await?.toolset;
+        let history = self.journal.load_history(run, 0).await?;
         let state = RunState::from_history(&history)
             .map_err(|error| EngineError::CorruptHistory { run_id, error })?;
 
@@ -67,7 +69,7 @@ where
         let mut instance = None;
         if !history.is_empty() && !state.is_terminal() {
             let input = ReplayInput {
-                run_id,
+                run,
                 compiled: Ok(&stored.compiled),
                 toolset: &toolset,
                 history: &history,
@@ -125,7 +127,7 @@ where
                             message: "run_started for a run that has already started".into(),
                         });
                     }
-                    let input = payloads::load(&self.blobs, &started.input).await?;
+                    let input = payloads::load(&self.blobs, tenant, &started.input).await?;
                     let trigger = Event::Lifecycle(Lifecycle::RunStarted(started.clone()));
                     let start = StartScript {
                         run_id,
@@ -152,7 +154,7 @@ where
                             message: format!("{} arrived before run_started", completion.name()),
                         });
                     };
-                    let delivery = payloads::delivery(&self.blobs, &completion).await?;
+                    let delivery = payloads::delivery(&self.blobs, tenant, &completion).await?;
                     let grace = match completion {
                         Completion::CancelRequested { .. } => Grace::Ends,
                         _ => Grace::No,
@@ -169,15 +171,19 @@ where
 
         let status = batch.state.status();
         let mut activation = batch.into_activation();
-        payloads::offload(
+        activation.payloads = payloads::offload(
             &self.blobs,
+            tenant,
             &mut activation.entries,
             self.config.inline_threshold,
         )
         .await?;
-        derive_effects(&mut activation);
+        derive_effects(&mut activation, &toolset)
+            .map_err(|tool| EngineError::UnknownTool { run_id, tool })?;
         let entries = activation.entries.len();
-        self.journal.commit_activation(lease, activation).await?;
+        self.journal
+            .commit_activation(lease, activation, self.clock.now())
+            .await?;
         self.journal.release(lease).await?;
         tracing::debug!(entries, status = %status, "activation committed");
         Ok(ActivationOutcome::Committed { entries, status })
@@ -189,7 +195,9 @@ where
         mismatch: String,
     ) -> Result<ActivationOutcome, EngineError> {
         tracing::error!(%mismatch, "replay mismatch: run quarantined");
-        self.journal.quarantine(lease, mismatch.clone()).await?;
+        self.journal
+            .quarantine(lease, mismatch.clone(), self.clock.now())
+            .await?;
         Ok(ActivationOutcome::Quarantined { mismatch })
     }
 }
@@ -352,32 +360,37 @@ impl<'l> Batch<'l> {
     }
 
     fn into_activation(self) -> Activation {
-        Activation {
-            entries: self.entries,
-            consumed: self.consumed,
-            tool_calls: Vec::new(),
-            timers: Vec::new(),
-            cancelled_timers: Vec::new(),
-            status: self.state.status(),
-        }
+        let status = self.state.status();
+        Activation::new(self.entries, self.consumed, status)
     }
 }
 
 /// Tool tasks, timers and cancelled timers, from the new commands (outbox pattern). A
-/// terminal run has no effects: its commit clears them.
-fn derive_effects(activation: &mut Activation) {
+/// terminal run has no effects: its commit clears them. A task takes its route and policy from
+/// the pinned toolset; a tool the toolset does not have is returned as the error.
+fn derive_effects(activation: &mut Activation, toolset: &Toolset) -> Result<(), String> {
     if activation.status.is_terminal() {
-        return;
+        return Ok(());
     }
     for entry in &activation.entries {
         match &entry.event {
             Event::Command(Command::ScheduleToolCall {
                 seq, tool, args, ..
-            }) => activation.tool_calls.push(NewToolTask {
-                seq: *seq,
-                tool: tool.clone(),
-                args: args.clone(),
-            }),
+            }) => {
+                let pinned = toolset.tool(tool).ok_or_else(|| tool.clone())?;
+                let server_concurrency = match &pinned.route {
+                    ToolRoute::Mcp { server } => toolset.server(server).map(|s| s.concurrency),
+                    _ => None,
+                };
+                activation.tool_calls.push(NewToolTask {
+                    seq: *seq,
+                    tool: tool.clone(),
+                    args: args.clone(),
+                    route: pinned.route.clone(),
+                    policy: pinned.policy,
+                    server_concurrency,
+                });
+            }
             Event::Command(Command::StartTimer { seq, fire_at, .. }) => {
                 activation.timers.push(NewTimer {
                     seq: *seq,
@@ -395,4 +408,5 @@ fn derive_effects(activation: &mut Activation) {
             _ => {}
         }
     }
+    Ok(())
 }

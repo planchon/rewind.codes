@@ -13,7 +13,8 @@ use ptc_core::{
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
 use ptc_engine::ports::{
-    CompiledScript, ExecutorError, ScriptExecutor, StartScript, ToolCall, ToolDispatcher,
+    CompiledScript, Credentials, Dispatched, ExecutorError, RunFilter, RunRef, ScriptExecutor,
+    StartScript, TenantId, ToolCall, ToolDispatcher,
 };
 use ptc_engine::replay::ReplayEnd;
 use ptc_engine::{
@@ -32,8 +33,11 @@ type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
 struct Tools(Arc<Handler>);
 
 impl ToolDispatcher for Tools {
-    async fn dispatch(&self, call: ToolCall) -> Result<Value, ToolFailure> {
-        (self.0)(&call)
+    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+        match (self.0)(&call) {
+            Ok(result) => Dispatched::Result(result),
+            Err(failure) => Dispatched::Failed(failure),
+        }
     }
 }
 
@@ -43,7 +47,7 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
         message: message.into(),
         data: Some(json!({ "status": 503 })),
     };
-    match call.tool.as_str() {
+    match call.tool.name.as_str() {
         "github.get_issue" => Ok(json!({
             "number": call.args["number"],
             "title": format!("issue {}", call.args["number"]),
@@ -83,7 +87,7 @@ fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
 }
 
 struct Run {
-    id: RunId,
+    id: RunRef,
     history: Vec<HistoryEntry>,
     state: RunState,
 }
@@ -135,7 +139,7 @@ impl Run {
 }
 
 fn toolset() -> Toolset {
-    Toolset::from_names([
+    Toolset::from_host_tools([
         "github.get_issue",
         "github.close_issue",
         "audit.record",
@@ -143,16 +147,17 @@ fn toolset() -> Toolset {
         "failing",
         "slow",
     ])
+    .unwrap()
 }
 
 impl Harness {
-    async fn try_start(&self, source: &str, input: Value) -> Result<RunId, StartError> {
+    async fn try_start(&self, source: &str, input: Value) -> Result<RunRef, StartError> {
         let mut request = StartRun::new(Script::new(source), toolset(), input);
         request.mode = ptc_core::RunMode::Mock;
-        Ok(self.engine.start_run(request).await?.run_id)
+        Ok(self.engine.start_run(request).await?.run)
     }
 
-    async fn start(&self, source: &str, input: Value) -> RunId {
+    async fn start(&self, source: &str, input: Value) -> RunRef {
         self.try_start(source, input).await.unwrap()
     }
 
@@ -166,21 +171,25 @@ impl Harness {
         assert_eq!(report.quarantined, 0, "{report:?}");
     }
 
-    async fn get(&self, id: RunId) -> Run {
+    async fn get(&self, id: &RunRef) -> Run {
         let history = self.engine.export_history(id).await.unwrap();
         let state = RunState::from_history(&history).unwrap();
-        Run { id, history, state }
+        Run {
+            id: id.clone(),
+            history,
+            state,
+        }
     }
 
     async fn run(&self, source: &str, input: Value) -> Run {
         let id = self.start(source, input).await;
         self.drive().await;
-        self.get(id).await
+        self.get(&id).await
     }
 
     /// Replays the run with its own script: it must match, to the end of its history.
     async fn assert_replays(&self, run: &Run) {
-        let verdict = self.engine.replay(run.id, None).await.unwrap();
+        let verdict = self.engine.replay(&run.id, None).await.unwrap();
         assert!(matches!(verdict, ReplayVerdict::Matches(_)), "{verdict:?}");
     }
 }
@@ -264,7 +273,7 @@ async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
     assert_eq!(output["formatted"], json!("January 1, 2026"));
     assert_eq!(output["locale"], json!("1,234,567.891"));
     assert_eq!(output["perf"], json!(0));
-    assert_eq!(output["runId"], json!(a.id.to_string()));
+    assert_eq!(output["runId"], json!(a.id.id.to_string()));
     assert_eq!(output["startedAt"], json!("2026-01-01T00:00:00.000Z"));
 
     let other = harness_with(SandboxLimits::default(), 8)
@@ -323,7 +332,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     let changed_args = Script::new(FAN_OUT.replace("[1, 2, 3]", "[1, 2, 4]"));
     let verdict = harness
         .engine
-        .replay(run.id, Some(&changed_args))
+        .replay(&run.id, Some(&changed_args))
         .await
         .unwrap();
     let ReplayVerdict::Diverges(mismatch) = verdict else {
@@ -341,7 +350,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
     ));
     let verdict = harness
         .engine
-        .replay(run.id, Some(&extra_call))
+        .replay(&run.id, Some(&extra_call))
         .await
         .unwrap();
     let ReplayVerdict::Diverges(mismatch) = verdict else {
@@ -354,7 +363,7 @@ async fn replay_detects_a_changed_script_at_the_diverging_entry() {
 
     // Moving code around without changing behavior is allowed: callsites are ignored.
     let moved = Script::new(format!("\n\n// a comment\n{FAN_OUT}"));
-    let verdict = harness.engine.replay(run.id, Some(&moved)).await.unwrap();
+    let verdict = harness.engine.replay(&run.id, Some(&moved)).await.unwrap();
     assert_eq!(verdict, ReplayVerdict::Matches(ReplayEnd::EndOfHistory));
 }
 
@@ -416,26 +425,26 @@ export default async function main() {
     harness.engine.run_until_idle(&real_time).await.unwrap();
     harness
         .engine
-        .signal(id, "approval", json!({ "by": "paul" }), None)
+        .signal(&id, "approval", json!({ "by": "paul" }), None)
         .await
         .unwrap();
 
     // One hour later, the sleep ends and the script waits for "comment".
     harness.engine.clock().advance_to_ms(T0.0 + HOUR);
     harness.engine.run_until_idle(&real_time).await.unwrap();
-    let waiting = harness.get(id).await;
+    let waiting = harness.get(&id).await;
     assert_eq!(waiting.state.status(), RunStatus::Active);
     assert_eq!(waiting.state.awaited_signals()[0].name, "comment");
 
     harness.engine.clock().advance_to_ms(T0.0 + 2 * HOUR);
     harness
         .engine
-        .signal(id, "comment", json!("lgtm"), None)
+        .signal(&id, "comment", json!("lgtm"), None)
         .await
         .unwrap();
     harness.drive().await; // virtual time: "never" times out two hours later
 
-    let run = harness.get(id).await;
+    let run = harness.get(&id).await;
     assert_eq!(
         run.output(),
         &json!({ "approval": { "by": "paul" }, "comment": "lgtm", "never": null, "elapsed": 4 * HOUR })
@@ -625,7 +634,11 @@ async fn scripts_that_cannot_load_are_refused_at_start() {
             "{source}: {refused}"
         );
     }
-    let runs = harness.engine.list_runs(&Default::default()).await.unwrap();
+    let runs = harness
+        .engine
+        .list_runs(&RunFilter::new(TenantId::local()))
+        .await
+        .unwrap();
     assert!(runs.is_empty(), "no run was created: {runs:?}");
 }
 
@@ -767,20 +780,20 @@ export default async function main() { await slow({}); }
     }
     harness
         .engine
-        .cancel(polite, Some("user asked".into()))
+        .cancel(&polite, Some("user asked".into()))
         .await
         .unwrap();
-    harness.engine.cancel(blunt, None).await.unwrap();
+    harness.engine.cancel(&blunt, None).await.unwrap();
     // The cancellations are delivered before the tool answers: it is not waited for.
     while harness.engine.activate_next().await.unwrap().is_some() {}
     harness.drive().await;
 
-    let polite = harness.get(polite).await;
+    let polite = harness.get(&polite).await;
     assert_eq!(
         polite.output(),
         &json!("cleaned up after: run cancelled: user asked")
     );
-    let blunt = harness.get(blunt).await;
+    let blunt = harness.get(&blunt).await;
     assert_eq!(blunt.state.status(), RunStatus::Cancelled);
     assert_eq!(blunt.error().name, "CancelledError");
     assert_eq!(
@@ -1225,11 +1238,11 @@ async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
     harness.engine.activate_next().await.unwrap();
     harness
         .engine
-        .cancel(id, Some("user asked".into()))
+        .cancel(&id, Some("user asked".into()))
         .await
         .unwrap();
     harness.drive().await;
-    let run = harness.get(id).await;
+    let run = harness.get(&id).await;
     assert_eq!(run.state.status(), RunStatus::Cancelled);
     let error = run.error();
     assert_eq!(

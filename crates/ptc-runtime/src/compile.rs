@@ -294,7 +294,7 @@ mod tests {
     use crate::epochs::EPOCHS;
 
     fn check(source: &str) -> Result<CompiledScript, InvalidScript> {
-        let toolset = Toolset::from_names(["github.list_issues", "ask_user"]);
+        let toolset = Toolset::from_host_tools(["github.list_issues", "ask_user"]).unwrap();
         let glue = EPOCHS.last().expect("an epoch");
         compile(&Script::new(source), &toolset, glue)
     }

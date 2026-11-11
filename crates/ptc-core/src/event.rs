@@ -406,7 +406,28 @@ pub struct ToolFailure {
     pub data: Option<Value>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// The outcome of a tool call: what the dispatcher or the harness's worker reports, and what a
+/// cassette replays. It reaches the script as a [`Completion`] of the call's `seq`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ToolOutcome {
+    Result(Value),
+    Failure(ToolFailure),
+}
+
+impl ToolOutcome {
+    /// The completion that delivers this outcome to the call `seq`.
+    pub fn into_completion(self, seq: Seq) -> Completion {
+        match self {
+            ToolOutcome::Result(result) => Completion::ToolCallCompleted {
+                seq,
+                result: Payload::Value(result),
+            },
+            ToolOutcome::Failure(error) => Completion::ToolCallFailed { seq, error },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ToolFailureKind {
     /// The tool ran and reported an error.
     Error,

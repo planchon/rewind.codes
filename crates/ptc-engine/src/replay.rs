@@ -5,21 +5,21 @@
 //! script emits must match the history. No tool is called and nothing is written.
 
 use ptc_core::{
-    AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, RunId,
-    Toolset,
+    AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, Toolset,
 };
 
 use crate::payloads;
 use crate::ports::{
-    BlobError, BlobStore, CompiledScript, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
-    ScriptInstance, StartScript,
+    BlobError, BlobStore, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef,
+    ScriptExecutor, ScriptInstance, StartScript,
 };
 
 /// What to replay.
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayInput<'a> {
-    /// The run's id, which the script can read (`run.id`).
-    pub run_id: RunId,
+    /// The run: its id, which the script can read (`run.id`), and its tenant, whose blobs hold
+    /// its payloads.
+    pub run: &'a RunRef,
     /// The script as compiled, or why it does not compile.
     pub compiled: Result<&'a CompiledScript, &'a InvalidScript>,
     pub toolset: &'a Toolset,
@@ -75,11 +75,12 @@ where
         }
     };
     let started = cursor.run_started();
+    let tenant = &input.run.tenant;
     let start = StartScript {
-        run_id: input.run_id,
+        run_id: input.run.id,
         compiled,
         toolset: input.toolset.clone(),
-        input: payloads::load(blobs, &started.input).await?,
+        input: payloads::load(blobs, tenant, &started.input).await?,
         seed: started.seed,
         epoch: started.epoch,
         started_at: cursor.started_at(),
@@ -96,7 +97,7 @@ where
     loop {
         match cursor.on_idle()? {
             Next::Deliver { completion, .. } => {
-                let delivery = payloads::delivery(blobs, completion).await?;
+                let delivery = payloads::delivery(blobs, tenant, completion).await?;
                 let emitted = match instance.deliver(delivery, cursor.logical_now()).await {
                     Ok(emitted) => emitted,
                     Err(err) => return stopped(&mut cursor, Some(instance), err),

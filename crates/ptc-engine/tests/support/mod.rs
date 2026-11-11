@@ -12,8 +12,8 @@ use ptc_core::{
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
 use ptc_engine::ports::{
-    CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
-    ScriptInstance, StartScript, ToolCall, ToolDispatcher,
+    CompiledScript, Credentials, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
+    ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
 use ptc_engine::{Adapters, Engine, EngineConfig, StartRun};
 
@@ -57,7 +57,7 @@ pub fn engine_with(
 pub fn request(name: &str, input: JsonValue) -> StartRun {
     StartRun::new(
         Script::new(name),
-        Toolset::from_names(["a", "b", "cleanup"]),
+        Toolset::from_host_tools(["a", "b", "cleanup"]).unwrap(),
         input,
     )
 }
@@ -323,10 +323,13 @@ impl RecordingDispatcher {
 }
 
 impl ToolDispatcher for RecordingDispatcher {
-    async fn dispatch(&self, call: ToolCall) -> Result<JsonValue, ToolFailure> {
+    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
         let outcome = (self.handler)(&call);
         self.calls.lock().unwrap().push(call);
-        outcome
+        match outcome {
+            Ok(result) => Dispatched::Result(result),
+            Err(failure) => Dispatched::Failed(failure),
+        }
     }
 }
 

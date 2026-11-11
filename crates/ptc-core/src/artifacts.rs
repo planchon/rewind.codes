@@ -1,9 +1,6 @@
-//! The immutable inputs of a run: the script and the toolset it may call. Both are
-//! content-addressed, and a run records the digests it started with.
+//! The script, the immutable and content-addressed input of a run. A run records the digest
+//! it started with. The toolset, the other input, is in [`crate::toolset`].
 
-use serde_json::{Value, json};
-
-use crate::canonical::canonical_json;
 use crate::digest::Digest;
 
 /// The TypeScript source the model wrote. Its digest is the SHA-256 of the source, so a run
@@ -30,53 +27,6 @@ impl Script {
     }
 }
 
-/// One tool a script may call, named as its server defines it (`github.list_issues`): a name
-/// only, with no schema and no policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ToolSpec {
-    pub name: String,
-}
-
-/// The tools a run may call: a sorted and deduplicated list of names.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Toolset {
-    tools: Vec<ToolSpec>,
-}
-
-impl Toolset {
-    /// Tools are sorted by name and deduplicated, so the digest doesn't depend on their order.
-    pub fn new(tools: impl IntoIterator<Item = ToolSpec>) -> Self {
-        let mut tools: Vec<ToolSpec> = tools.into_iter().collect();
-        tools.sort();
-        tools.dedup();
-        Self { tools }
-    }
-
-    pub fn from_names<S: Into<String>>(names: impl IntoIterator<Item = S>) -> Self {
-        Self::new(names.into_iter().map(|name| ToolSpec { name: name.into() }))
-    }
-
-    pub fn tools(&self) -> &[ToolSpec] {
-        &self.tools
-    }
-
-    pub fn contains(&self, name: &str) -> bool {
-        self.tools
-            .binary_search_by(|tool| tool.name.as_str().cmp(name))
-            .is_ok()
-    }
-
-    /// SHA-256 of the canonical JSON `{"tools":[{"name":…},…]}`.
-    pub fn digest(&self) -> Digest {
-        let tools: Vec<Value> = self
-            .tools
-            .iter()
-            .map(|tool| json!({ "name": tool.name }))
-            .collect();
-        Digest::of(canonical_json(&json!({ "tools": tools })).as_bytes())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,19 +36,5 @@ mod tests {
         assert_eq!(Script::new("a").digest(), Script::new("a").digest());
         assert_ne!(Script::new("a").digest(), Script::new("b").digest());
         assert_eq!(Script::new("a").digest(), Digest::of(b"a"));
-    }
-
-    #[test]
-    fn toolset_digest_ignores_order_and_duplicates() {
-        let a = Toolset::from_names(["github.get_issue", "slack.post", "github.get_issue"]);
-        let b = Toolset::from_names(["slack.post", "github.get_issue"]);
-        assert_eq!(a, b);
-        assert_eq!(a.digest(), b.digest());
-        assert!(a.contains("slack.post"));
-        assert!(!a.contains("slack"));
-        assert_eq!(
-            Toolset::from_names(["b", "a"]).digest(),
-            Digest::of(br#"{"tools":[{"name":"a"},{"name":"b"}]}"#)
-        );
     }
 }
