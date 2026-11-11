@@ -12,7 +12,7 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | --- | --- |
 | ai-ptc is a tool for **agent harness developers** | Server + TypeScript SDK + ready-made agent tools; the CLI is for local development. |
 | **Durable workflows are the priority** | A short run is the same mechanism started with `wait`. |
-| **Built to scale** | Postgres in production. SQLite only for the embedded engine (CLI, local dev, tests). |
+| **Built to scale** | Postgres in production. Turso only for the embedded engine (CLI, local dev, tests). |
 | **Payloads live in S3**, except very small ones | Threshold 1 KiB by default. |
 | **Mocks are recorded from real runs** | Cassettes from journals; TypeScript mock handlers as a complement. |
 | **Events can come from any source** | Harness, humans, other agents, other runs, external systems through webhooks. |
@@ -25,12 +25,12 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | **Concurrency, side effects, randomness**: handled as proposed | `seq` in emission order; tool policies and idempotency keys; seeded PRNG. |
 | **OpenTelemetry for everything in the service** | Service telemetry and run telemetry, exported over OTLP. |
 | **A dashboard of every run and all the code executed on the platform** (future, M6) | Built on the journal, not on an OTel backend. |
-| **Stay with full replay for 0.1** | Instances are dropped when a run suspends; sticky execution stays in M5. |
+| **Full replay until sticky execution (M5)** | Until then, instances are dropped when a run suspends and every activation replays the history. |
 | **Every run has a TTL, 30 days by default** | `expires_at` in `run_started`; at the deadline the run is cancelled through the normal path. It bounds signal waits, tool calls that never answer, quarantine, and the life of a previous epoch. |
 | **The system is measured by evals** (M2.5) | Models run end to end on the embedded engine against fake MCP servers. Choices that are cheap to change are decided on the numbers. |
 | **Fork comes before the dashboard** | `ptc fork` in M3 and `retry_run({ run_id, code })` as an agent tool. Fixing step 7 without redoing steps 1–6 is what the journal is for. |
 | **Result types are inferred from the journal** when a server declares no `outputSchema` | Observed shapes, for type-checking and the prompt only. |
-| **`run_script` returns a bounded result** | It lands in the model's context: output truncated above a budget, last log lines, errors with a code frame. |
+| **`run_script` returns a bounded result** | It lands in the model's context: output truncated above 256 KB, last log lines, errors with a code frame. |
 | **What type-checks is what exists** | A baseline of deterministic web-standard globals; the checker's `lib` declares exactly the sandbox's globals; hints for absent ones such as `fetch`. |
 
 ### Taken after the layering (November 2026)
@@ -55,6 +55,12 @@ to M6 are done.
 | **TTL: a maximum per deployment** (365 days by default) | A run past its deadline ends `cancelled` with the reason `ttl`; no status of its own (closes question 15). |
 | **No `LISTEN/NOTIFY`** | Wake-ups in M4 do not rely on Postgres notifications. |
 | **The corpus lives in `ptc-e2e`** | A tooling crate allowed to depend on adapters. |
+| **The embedded store is Turso Database** | The `turso` crate, the Rust rewrite of SQLite, rather than SQLite through rusqlite or libSQL (closes question 17). It is in beta and its multi-process access is experimental: how `ptc` commands share one `.ptc` directory is settled in the M1 principles review. The store stays behind `JournalStore` and its conformance suite, so the choice can change. |
+| **`run_script` returns at most 256 KB of output** | Above it the output is truncated and the model pages through the rest (closes question 12). |
+| **A quarantined run is released by hand, or retried when a new build is deployed** | A replay that fails again writes nothing, so the automatic retry is safe; a run nobody fixes ends at its TTL (closes question 14). |
+| **Retention: active runs are never touched** | A finished run's journal stays in Postgres for a configurable period, then is archived to S3 and loaded on demand; the read model is kept per tenant retention. Durations and deletion stay open (question 11). |
+| **Leases are renewed by a heartbeat during an activation** (M4) | The lease stays short (30 s) and the worker renews it about every 10 s while it lives, during the replay as during the execution. A long replay keeps its lease; a dead worker frees the run at most 30 s after its last renewal. The fence still refuses the commit of a worker that lost its lease. |
+| **The latency of the polling path is accepted** | A script of 5 sequential calls makes about ten store round trips. Gains come later from caching (instances, histories, payloads), not from a separate short path. |
 | **The embedded CLI** | Schema versioned with migrations in the binary, refusing a newer schema; `--json` on every command and one exit code per outcome; a first Ctrl-C finishes the call in flight and commits it, a second one exits at once. |
 
 ## Architecture (approved for 0.1)
@@ -104,8 +110,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Signals: one FIFO mailbox per name; timeouts are durable timers cancelled on arrival | Drop signals nobody waits for | Nothing is lost if the signal arrives before the script waits. |
 | Content addressing everywhere (SHA-256; canonical JSON for payloads) | Random ids for scripts and payloads | Deduplication, cacheability, and digest comparison during replay. |
 | Inline threshold 1 KiB | Everything in S3 | Keeps tiny payloads one read away. Configurable. |
-| Postgres + SQLite behind one port with a shared conformance suite | One backend | Scale in production, zero setup locally. |
-| rusqlite (bundled) for the SQLite store | sqlx for both | Simple, synchronous, no runtime coupling for the embedded store. |
+| Postgres + an embedded store behind one port with a shared conformance suite | One backend | Scale in production, zero setup locally. |
 | V8 instance on a dedicated thread behind `ScriptExecutor` | Running V8 on the async runtime | V8 objects are `!Send`; the engine stays a normal async crate. |
 | Ports as traits returning `impl Future + Send`; engine generic over adapters | `dyn` traits with `async_trait` | Static dispatch, no boxing; composition roots pick types. |
 | Tool policies `retry` / `at_most_once`, idempotency key `{run_id}/{seq}` | Always retry | A crash mid-call must not silently duplicate a non-idempotent effect. |

@@ -9,7 +9,7 @@ ports, adapters that implement them, and composition roots that wire everything.
  entry points   ptc-cli (embedded)                    ptc-server (HTTP API, workers)
                     │  composition roots: the only crates that know every adapter
  ───────────────────┼─────────────────────────────────────────────────────────────────────
- adapters       ptc-runtime   ptc-store-sqlite   ptc-store-postgres   ptc-blob   ptc-mcp   ptc-check   ptc-otel
+ adapters       ptc-runtime   ptc-store-turso   ptc-store-postgres   ptc-blob   ptc-mcp   ptc-check   ptc-otel
                 (V8)          └──────── ptc-format (stored journal, v1) ───────┘
                     │  implement the ports
  ───────────────────┼─────────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ Dependencies only point down. Adapters never depend on each other.
    engine never handles a V8 type.
 
 8. **Errors don't cross boundaries raw.** Each crate has its own error type. Adapters
-   convert rusqlite, sqlx, S3 and deno errors into port errors. No `anyhow` in libraries.
+   convert turso, sqlx, S3 and deno errors into port errors. No `anyhow` in libraries.
 
 9. **Tooling enforces the boundaries, not discipline.** A test crate reads
    `cargo metadata` and asserts the dependency rules below.
@@ -80,7 +80,7 @@ All ports are declared in `ptc-engine`.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases and fencing; `commit_activation` | memory (engine), `ptc-store-sqlite`, `ptc-store-postgres` |
+| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases and fencing; `commit_activation` | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
 | `BlobStore` | Payload values by digest | memory (engine), `ptc-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `ptc-runtime` (V8); a fake in engine tests |
 | `ToolDispatcher` | Execute a tool call with its idempotency key | static responses (engine, CLI), `ptc-mcp`, host-tool long-poll (server) |
@@ -153,14 +153,14 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-engine` | application | ports, use cases, activation, replay, driver (`run_until_idle`, real or virtual time), projector and span derivation (M4), in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `StaticDispatcher`, system and virtual clocks, system and seeded entropy), store conformance suite (feature `conformance`) |
 | `ptc-format` | adapter support | serde DTOs for the stored journal, v1 (JSON values in their canonical form); golden fixture tests |
 | `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog and heap limit, `V8Executor` |
-| `ptc-store-sqlite` | adapter | embedded `JournalStore` (rusqlite, bundled) |
+| `ptc-store-turso` | adapter | embedded `JournalStore` (Turso Database, the `turso` crate) |
 | `ptc-store-postgres` | adapter (M4) | production `JournalStore` (`FOR UPDATE SKIP LOCKED`) |
 | `ptc-blob` | adapter | `BlobStore` on local files, then S3 (M4) |
 | `ptc-mcp` | adapter (M2) | MCP client: discovery and dispatch |
 | `ptc-codegen` | adapter support (M2) | JSON Schema / MCP tool lists → `ptc:tools`, `.d.ts`, prompt rendering |
 | `ptc-check` | adapter (M2) | `tsc` in an isolate |
 | `ptc-otel` | adapter (M4) | OpenTelemetry SDK and OTLP export: `SpanExporter`, and the `tracing` subscriber the composition roots install |
-| `ptc-cli` | composition root | the `ptc` binary: embedded engine (SQLite, files, V8) or remote client |
+| `ptc-cli` | composition root | the `ptc` binary: embedded engine (Turso, files, V8) or remote client |
 | `ptc-server` | composition root (M4) | HTTP API (axum), SSE, webhooks, workers |
 | `ptc-architecture-tests` | tooling | dependency rules |
 | `ptc-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `ptc-e2e replay <case>` |
@@ -223,13 +223,13 @@ replay.
 | `ptc-engine` | Use cases with in-memory adapters and a fake executor; conformance suite for stores (idempotency keys, epochs, quarantine and run expiry; feed included from M4); span derivation; projector idempotence (applying a feed item twice changes nothing) |
 | `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
-| `ptc-store-sqlite` | The engine's conformance suite |
-| `ptc-cli` | End to end: V8 + engine + SQLite + files, across processes (sleep, interrupt, resume) |
+| `ptc-store-turso` | The engine's conformance suite |
+| `ptc-cli` | End to end: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |
 
 ## Embedded CLI (M1)
 
-`ptc` with `--dir .ptc` (SQLite database and blob files):
+`ptc` with `--dir .ptc` (Turso database and blob files):
 
 | Command | Does |
 | --- | --- |

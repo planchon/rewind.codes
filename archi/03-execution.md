@@ -185,7 +185,9 @@ the glue), never of the script. Ending the run would make its owner pay for it.
 - The store marks the run **quarantined**, with the mismatch message, and stops offering
   it to workers. Quarantine is service state, like a lease: it is not in the history.
 - A quarantined run is released through the API or the CLI, typically after a fix, and
-  is then activated again.
+  is then activated again. A worker of a new build also retries the quarantined runs of
+  the epochs it supports once: a replay that fails again commits nothing and leaves the run
+  quarantined.
 - If it is still quarantined at its deadline, or if an operator gives up on it, the host
   ends it with `run_aborted { non_determinism }`.
 

@@ -21,14 +21,15 @@ V1 priorities:
 1. **Durable workflows first.** Short "run this and give me the result" scripts are the
    same thing, started with a `wait` timeout.
 2. **Horizontal scale from day one.** Stateless workers, Postgres as the source of truth.
-   SQLite only for the embedded engine (CLI, local dev, tests).
+   Turso, an embedded SQLite-compatible database, only for the embedded engine (CLI, local
+   dev, tests).
 3. **The journal is the only source of truth.**
 
 ## Who uses it
 
 ai-ptc is a tool for **agent harness developers**. A harness embeds it through an HTTP
 API and a TypeScript SDK. The `ptc` CLI covers the same surface for local development,
-either with an embedded engine (SQLite, local files) or as a client of a remote server.
+either with an embedded engine (Turso, local files) or as a client of a remote server.
 
 ```
 ┌──────────── agent harness ────────────┐       ┌──────────────── ai-ptc ────────────────┐

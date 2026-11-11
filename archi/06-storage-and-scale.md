@@ -7,7 +7,7 @@ Storage sits behind the `JournalStore` and `BlobStore` ports of `ptc-engine`.
 | Use | Journal | Payloads |
 | --- | --- | --- |
 | Production (`ptc-server`) | Postgres (`ptc-store-postgres`) | S3 or any S3-compatible service (`ptc-blob`) |
-| Embedded (`ptc-cli`, local dev, tests) | SQLite (`ptc-store-sqlite`, rusqlite bundled) | Local files (`ptc-blob`) |
+| Embedded (`ptc-cli`, local dev, tests) | Turso Database (`ptc-store-turso`, the `turso` crate) | Local files (`ptc-blob`) |
 | Engine unit tests, mock mode | In memory | In memory |
 
 Every journal adapter must pass the same conformance suite (shipped by `ptc-engine`
@@ -48,7 +48,9 @@ workers pick runs by epoch, and the scheduler picks the runs past their deadline
 
 - **Workers** are stateless and pick runnable runs with `FOR UPDATE SKIP LOCKED`
   (Postgres), among the epochs they support and outside quarantine. Acquiring a lease
-  increments `fence`.
+  increments `fence`. The lease lasts 30 s and, from M4, the worker renews it about every
+  10 s while it works on the run, during the replay as during the execution: a long replay
+  keeps its lease, and a dead worker frees the run at most 30 s after its last renewal.
 - A commit only succeeds if the fence still matches, and `PK (run_id, idx)` is a second
   guard. A worker that lost its lease (GC pause, network partition) can never corrupt a
   history.

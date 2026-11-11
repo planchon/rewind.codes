@@ -34,7 +34,7 @@ pub fn layer(name: &str) -> Option<Layer> {
         "ptc-core" => Layer::Domain,
         "ptc-engine" => Layer::Application,
         "ptc-format" | "ptc-codegen" => Layer::AdapterSupport,
-        "ptc-runtime" | "ptc-store-sqlite" | "ptc-store-postgres" | "ptc-blob" | "ptc-mcp"
+        "ptc-runtime" | "ptc-store-turso" | "ptc-store-postgres" | "ptc-blob" | "ptc-mcp"
         | "ptc-check" | "ptc-otel" => Layer::Adapter,
         "ptc-cli" | "ptc-server" => Layer::CompositionRoot,
         "ptc-architecture-tests" | "ptc-e2e" | "evals" => Layer::Tooling,
@@ -260,7 +260,7 @@ mod tests {
                 "ptc-runtime",
                 vec![dependency("ptc-core", None), dependency("ptc-engine", None)],
             ),
-            ("ptc-store-sqlite", vec![dependency("ptc-format", None)]),
+            ("ptc-store-turso", vec![dependency("ptc-format", None)]),
             (
                 "ptc-e2e",
                 vec![dependency("ptc-runtime", None), dependency("anyhow", None)],
@@ -311,7 +311,7 @@ mod tests {
                 "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
             ),
             (
-                "ptc-store-sqlite",
+                "ptc-store-turso",
                 vec![dependency("ptc-blob", None)],
                 "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
             ),

@@ -7,7 +7,7 @@ ai-ptc once M1 to M6 are done.
 | --- | --- | --- | --- |
 | M0 | **Runtime spike**: `ptc-core` + `ptc-runtime` | A TS script with `Promise.all` over fake tools runs, its replay is identical, non-determinism is detected. | Done |
 | Layering | **Strict boundaries**: pure core, `ptc-format`, `ptc-engine` with ports, runtime as an adapter; format v1 with the decisions of the November review (epoch, 256-bit seed, RFC 8785, `expires_at`) | The M0 behavior passes on the new layering, with the dependency rules checked. | Done |
-| M1 | **Embedded engine**: SQLite store, file blobs, activations, timers, signals, logical and virtual time, run TTL, idempotency keys, how a script ends, quarantine, CLI | `ptc run`, `ptc signal`, `ptc replay`, `ptc trace` work locally on a run that sleeps, is interrupted, and resumes in another process. A forgotten `await`, an unhandled rejection and a deadlock each end as specified. | Next |
+| M1 | **Embedded engine**: Turso store, file blobs, activations, timers, signals, logical and virtual time, run TTL, idempotency keys, how a script ends, quarantine, CLI | `ptc run`, `ptc signal`, `ptc replay`, `ptc trace` work locally on a run that sleeps, is interrupted, and resumes in another process. A forgotten `await`, an unhandled rejection and a deadlock each end as specified. | Next |
 | M2 | **Tools**: codegen, MCP dispatch, policies, idempotency, `ptc check` with its own rules and the sandbox `lib`, web-standard globals | A script calls a real MCP server, with types checked beforehand. | |
 | M2.5 | **Evals**: task suite, deterministic fake MCP servers, a harness driving the `ptc` CLI | A model runs the suite end to end (generate → check → run → fix), and the report gives first-try check pass rate, task success, iterations and tokens per model and prompt rendering. | |
 | M3 | **Testing and fork**: cassettes, TS mocks, scenarios, `ptc fork`, observed result types | `ptc test` replays a recorded real run as a scenario. `ptc fork` continues a failed run with a corrected script without repeating its recorded calls. | |
@@ -52,8 +52,8 @@ warnings` and `cargo test --workspace` pass.
 
 Not there yet, and planned:
 
-- M1: the embedded store (engine to choose, question 17) and `ptc-blob` (files), both passing
-  the conformance suite; `ptc-cli`; end-to-end tests across processes reusing the corpus.
+- M1: the Turso store (`ptc-store-turso`) and `ptc-blob` (files), both passing the
+  conformance suite; `ptc-cli`; end-to-end tests across processes reusing the corpus.
 - M1: an activation that fails 5 times in a row quarantines the run. Today it is retried every
   lease period, forever. It needs the store to count consecutive failures and to record why a
   run is quarantined.
@@ -71,25 +71,24 @@ Not there yet, and planned:
   retried). It moves to the thread's CPU clock.
 - Before M4: leases are not renewed during an activation. A replay longer than the lease
   (30 s) lets another worker take the run over, and with several workers on a very long
-  history they can fence each other off forever. One worker (M1) is not affected; M4 needs
-  lease renewal or sticky execution.
+  history they can fence each other off forever. One worker (M1) is not affected; M4
+  renews the lease with a heartbeat during an activation.
 
 ## Next steps
 
-1. Choose the embedded store (question 17).
-2. Present the principles of M1 for review (process rule): where the store's rows meet
-   `ptc-format`, the file layout of `ptc-blob`, the CLI's commands and how they drive the
-   engine across processes.
-3. Repeated activation failures quarantine the run (store contract, conformance suite).
-4. `ptc-blob` (files, atomic writes) and the embedded store, both through the conformance
+1. Present the principles of M1 for review (process rule): where the store's rows meet
+   `ptc-format`, the file layout of `ptc-blob`, the CLI's commands, and how several `ptc`
+   processes share one `.ptc` directory given Turso's experimental multi-process access.
+2. Repeated activation failures quarantine the run (store contract, conformance suite).
+3. `ptc-blob` (files, atomic writes) and the Turso store, both through the conformance
    suite.
-5. `ptc-cli` with `run`, `signal`, `cancel`, `tick`, `worker`, `replay`, `trace`, `runs`, and
+4. `ptc-cli` with `run`, `signal`, `cancel`, `tick`, `worker`, `replay`, `trace`, `runs`, and
    its end-to-end tests: a run that sleeps, is interrupted and resumes in another process,
    driven by the corpus scenarios.
 
 ## Open questions
 
-Questions 1, 3, 4, 5, 7, 8, 10, 13, 15 and 16 were settled in November 2026: see
+Questions 1, 3, 4, 5, 7, 8, 10, 12, 13, 14, 15, 16 and 17 were settled in November 2026: see
 [08-decisions.md](08-decisions.md#taken-after-the-layering-november-2026). The numbers of the
 others are kept.
 
@@ -104,31 +103,20 @@ others are kept.
   from the parent's (continue live, or reject the fork); which idempotency key the
   reused and the re-executed calls carry; and what a fork does with a call left without
   an outcome by a cancelled or aborted parent. To settle in the M3 review.
-- **11.** **Retention.** Finished histories are archived (scaling path, step 2). How long do
-  histories and the read model stay queryable, and does the dashboard read archived
-  histories from S3? Proposal: the read model is kept per tenant retention; a run's
-  detail page loads its archived history on demand.
-- **12.** **`run_script` result budget.** The default size above which the output is
-  truncated, and how the model pages through the rest. To settle with the evals.
-- **14.** **Quarantine release.** By hand only, or retried automatically when a new build is
-  deployed?
-- **17.** **Embedded store.** SQLite through rusqlite, as planned; libSQL, Turso's production
-  fork of SQLite; or Turso Database, its Rust rewrite (beta, with multi-process access
-  experimental). The store is behind `JournalStore` and its conformance suite, so the
-  choice can change later.
+- **11.** **Retention durations and deletion.** The shape is decided (finished journals
+  archived to S3 and loaded on demand, read model per tenant retention). Still open: how
+  long a finished journal stays in Postgres, the default tenant retention, and whether runs
+  are ever deleted (tool arguments can hold personal data). To settle with M4.
 
 ## Inputs for the M4 architecture review
 
 Raised by the review of November 2026 and accepted as directions. None is designed yet:
 each goes through the M4 principles review before any code.
 
-- **The short path.** Most runs last a few seconds inside an agent loop, and the design
-  has no latency budget for them. To settle:
-  - whether sticky execution moves from M5 to M4;
-  - `commit_activation` handing the new tool tasks, already claimed, to the worker that
-    commits, instead of a second polling hop;
-  - how a worker learns about new work without waiting for its next poll, without
-    Postgres `LISTEN/NOTIFY` (owner decision);
+- **Caching.** The latency of the polling path is accepted (owner decision); gains come
+  from caching. To settle:
+  - what is kept between activations (instances, histories, payloads), and whether sticky
+    execution moves from M5 to M4;
   - payloads of medium size kept in Postgres (the `payloads` table), with S3 above a
     measured threshold instead of 1 KiB.
 - **Tool task lifecycle.**
