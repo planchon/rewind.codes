@@ -9,25 +9,39 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
+ptc-api = { path = "crates/ptc-api" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
 ptc-runtime = { path = "crates/ptc-runtime" }
 
+axum = "0.8"
+base64 = "0.23"
 chacha20 = "0.10"
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
 deno_error = "0.7"
+futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
+hmac = "0.13"
+# Timestamps of the HTTP API (RFC 3339).
+jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+# The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
 ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
+# Query strings with repeated keys (`label=…&label=…`), as axum-extra's `Query` reads them.
+serde_html_form = "0.2"
 # `float_roundtrip`: parse every number to the nearest double, as JavaScript does. Without it,
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
+sse-stream = "0.3"
+tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+utoipa = { version = "6", features = ["jiff_0_2"] }
 # `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
 uuid = { version = "1", default-features = false }
 

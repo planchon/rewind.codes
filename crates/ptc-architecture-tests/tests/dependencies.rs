@@ -48,7 +48,13 @@ fn every_crate_of_the_architecture_that_exists_is_checked() {
         .iter()
         .filter_map(|package| package["name"].as_str())
         .collect();
-    for expected in ["ptc-core", "ptc-engine", "ptc-format", "ptc-runtime"] {
+    for expected in [
+        "ptc-core",
+        "ptc-engine",
+        "ptc-format",
+        "ptc-runtime",
+        "ptc-api",
+    ] {
         assert!(
             names.contains(&expected),
             "{expected} is missing from {names:?}"

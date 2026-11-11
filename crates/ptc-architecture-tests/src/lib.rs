@@ -18,7 +18,8 @@ pub enum Layer {
     Domain,
     /// `ptc-engine`: use cases and ports.
     Application,
-    /// Representations shared by adapters (`ptc-format`, `ptc-codegen`).
+    /// Representations shared at the edges: the stored format (`ptc-format`), code generation
+    /// (`ptc-codegen`), the HTTP API (`ptc-api`).
     AdapterSupport,
     /// Implementations of the ports.
     Adapter,
@@ -26,6 +27,8 @@ pub enum Layer {
     CompositionRoot,
     /// Tests and tools that wire adapters like a composition root.
     Tooling,
+    /// `ptc`: the binary, which only hands the command line to a composition root.
+    EntryPoint,
 }
 
 /// The layer of each crate of the workspace, current and planned.
@@ -33,11 +36,12 @@ pub fn layer(name: &str) -> Option<Layer> {
     Some(match name {
         "ptc-core" => Layer::Domain,
         "ptc-engine" => Layer::Application,
-        "ptc-format" | "ptc-codegen" => Layer::AdapterSupport,
+        "ptc-format" | "ptc-codegen" | "ptc-api" => Layer::AdapterSupport,
         "ptc-runtime" | "ptc-store-turso" | "ptc-store-postgres" | "ptc-blob" | "ptc-mcp"
         | "ptc-check" | "ptc-otel" => Layer::Adapter,
         "ptc-cli" | "ptc-server" => Layer::CompositionRoot,
         "ptc-architecture-tests" | "ptc-e2e" | "evals" => Layer::Tooling,
+        "ptc" => Layer::EntryPoint,
         _ => return None,
     })
 }
@@ -129,7 +133,10 @@ pub fn check(metadata: &Value) -> Vec<Violation> {
                 );
             }
             if target == "anyhow"
-                && !matches!(own_layer, Layer::CompositionRoot | Layer::Tooling)
+                && !matches!(
+                    own_layer,
+                    Layer::CompositionRoot | Layer::Tooling | Layer::EntryPoint
+                )
                 && dependency.kind != "dev"
             {
                 violation(
@@ -164,6 +171,9 @@ pub fn check(metadata: &Value) -> Vec<Violation> {
 /// The rule an internal dependency breaks, if any.
 fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str> {
     let to_layer = layer(to)?;
+    if to_layer == Layer::EntryPoint {
+        return Some("nothing depends on the ptc binary");
+    }
     match from_layer {
         Layer::Domain => Some("ptc-core depends on no internal crate"),
         Layer::Application => (to != "ptc-core").then_some("ptc-engine depends only on ptc-core"),
@@ -178,7 +188,9 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
                     to == "ptc-format" && from.starts_with("ptc-store-")
                         || to == "ptc-codegen" && matches!(from, "ptc-runtime" | "ptc-check")
                 }
-                Layer::Adapter | Layer::CompositionRoot | Layer::Tooling => false,
+                Layer::Adapter | Layer::CompositionRoot | Layer::Tooling | Layer::EntryPoint => {
+                    false
+                }
             };
             (!allowed).then_some(
                 "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
@@ -188,6 +200,8 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
             matches!(to_layer, Layer::CompositionRoot | Layer::Tooling)
                 .then_some("nothing depends on a composition root or a tool")
         }
+        Layer::EntryPoint => (to_layer != Layer::CompositionRoot)
+            .then_some("the ptc binary depends only on ptc-cli and ptc-server"),
     }
 }
 
@@ -265,6 +279,23 @@ mod tests {
                 "ptc-e2e",
                 vec![dependency("ptc-runtime", None), dependency("anyhow", None)],
             ),
+            ("ptc-api", vec![dependency("ptc-core", None)]),
+            (
+                "ptc-cli",
+                vec![dependency("ptc-api", None), dependency("ptc-runtime", None)],
+            ),
+            (
+                "ptc-server",
+                vec![dependency("ptc-api", None), dependency("ptc-engine", None)],
+            ),
+            (
+                "ptc",
+                vec![
+                    dependency("ptc-cli", None),
+                    dependency("ptc-server", None),
+                    dependency("anyhow", None),
+                ],
+            ),
         ]);
         assert_eq!(check(&clean), []);
     }
@@ -331,6 +362,41 @@ mod tests {
                 "nothing depends on a composition root or a tool",
             ),
             ("ptc-mystery", vec![], "every crate belongs to a layer"),
+            (
+                "ptc-api",
+                vec![dependency("ptc-engine", None)],
+                "adapter support crates depend only on ptc-core",
+            ),
+            (
+                "ptc-runtime",
+                vec![dependency("ptc-api", None)],
+                "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
+            ),
+            (
+                "ptc-engine",
+                vec![dependency("ptc-api", None)],
+                "ptc-engine depends only on ptc-core",
+            ),
+            (
+                "ptc-cli",
+                vec![dependency("ptc-server", None)],
+                "nothing depends on a composition root or a tool",
+            ),
+            (
+                "ptc",
+                vec![dependency("ptc-runtime", None)],
+                "the ptc binary depends only on ptc-cli and ptc-server",
+            ),
+            (
+                "ptc",
+                vec![dependency("ptc-api", None)],
+                "the ptc binary depends only on ptc-cli and ptc-server",
+            ),
+            (
+                "ptc-cli",
+                vec![dependency("ptc", None)],
+                "nothing depends on the ptc binary",
+            ),
         ];
         for (krate, dependencies, rule) in cases {
             let found = rules(&metadata(vec![(krate, dependencies)]));
