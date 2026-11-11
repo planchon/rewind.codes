@@ -109,8 +109,8 @@ them into OTel context, so the engine never depends on OpenTelemetry.
 ### The feed and the projector
 
 `commit_activation` also writes, in the same transaction, one **feed item** per
-consumer (`read_model`, `otel`): `(run_id, fence, from_idx, to_idx)`, the entries the
-activation just committed. The projector claims feed items the way the dispatcher claims
+consumer (`read_model`, `otel`, `webhooks`): `(run_id, fence, from_idx, to_idx)`, the entries
+the activation just committed. The projector claims feed items the way the dispatcher claims
 tool tasks (lease, `SKIP LOCKED`), applies them, and acknowledges them.
 
 - Delivery is at least once. Every projection is idempotent, keyed by `(run_id, idx)` or

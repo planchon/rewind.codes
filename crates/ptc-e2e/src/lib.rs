@@ -37,7 +37,7 @@ use ptc_core::{
     Timestamp, Toolset, parse_duration,
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
-use ptc_engine::ports::{Entropy, ScriptExecutor, VirtualTime};
+use ptc_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId, VirtualTime};
 use ptc_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use ptc_engine::{
     Adapters, DriveOptions, Engine, EngineConfig, Limits, ReplayVerdict, StartRun, ToolOrder,
@@ -127,6 +127,8 @@ impl Case {
             script,
         };
         case.check_color()?;
+        Toolset::from_host_tools(case.scenario.tools.keys())
+            .map_err(|err| format!("{name}/scenario.json: tools: {err}"))?;
         Ok(case)
     }
 
@@ -134,8 +136,11 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
+    /// The scenario's tools, as host tools with the default policy: in mock mode every call
+    /// goes to the scenario's responses, whatever its route.
     pub fn toolset(&self) -> Toolset {
-        Toolset::from_names(self.scenario.tools.keys())
+        Toolset::from_host_tools(self.scenario.tools.keys())
+            .expect("the tools were checked when the case was loaded")
     }
 
     /// The run's id: the first id of the scenario's entropy.
@@ -257,8 +262,8 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     if let Some(ttl) = &case.scenario.ttl {
         request.ttl = Some(parse_duration(ttl).map_err(|err| format!("ttl {ttl:?}: {err}"))?);
     }
-    let run_id = match engine.start_run(request).await {
-        Ok(created) => created.run_id,
+    let run = match engine.start_run(request).await {
+        Ok(created) => created.run,
         Err(refused) => return Ok(Live::Refused(refused.to_string())),
     };
 
@@ -279,8 +284,8 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
                 engine.run_until_idle(options).await
             }
             .map_err(|err| err.to_string())?;
-            if let Some((run_id, error)) = report.failures.first() {
-                return Err(format!("an activation of run {run_id} failed: {error}"));
+            if let Some((run, error)) = report.failures.first() {
+                return Err(format!("an activation of run {} failed: {error}", run.id));
             }
             if report.interrupted {
                 return Err(format!("the run never became idle: {report:?}"));
@@ -294,12 +299,12 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         match step {
             Step::Signal { name, payload, key } => {
                 engine
-                    .signal(run_id, name.clone(), payload.clone(), key.clone())
+                    .signal(&run, name.clone(), payload.clone(), key.clone())
                     .await
                     .map_err(fail)?;
             }
             Step::Cancel { message } => {
-                engine.cancel(run_id, message.clone()).await.map_err(fail)?;
+                engine.cancel(&run, message.clone()).await.map_err(fail)?;
             }
             Step::Advance(by) => {
                 let by = parse_duration(by).map_err(|err| format!("advance {by:?}: {err}"))?;
@@ -312,15 +317,15 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     drive(true).await?;
 
     // The engine's own replay, from its store, must agree with the live run.
-    match engine.replay(run_id, None).await.map_err(fail)? {
+    match engine.replay(&run, None).await.map_err(fail)? {
         ReplayVerdict::Matches(_) => {}
         other => return Err(format!("the engine's replay of the live run: {other:?}")),
     }
 
-    let history = engine.export_history(run_id).await.map_err(fail)?;
+    let history = engine.export_history(&run).await.map_err(fail)?;
     let state = RunState::from_history(&history).map_err(|err| err.to_string())?;
     Ok(Live::Ran(Box::new(Recorded {
-        run_id,
+        run_id: run.id,
         history,
         state,
     })))
@@ -338,8 +343,9 @@ pub async fn replay_journal(case: &Case, history: &[HistoryEntry], script: &Scri
     let executor = executor(&case.scenario);
     let toolset = case.toolset();
     let compiled = executor.compile(script, &toolset);
+    let run = RunRef::new(TenantId::local(), case.run_id());
     let input = ReplayInput {
-        run_id: case.run_id(),
+        run: &run,
         compiled: compiled.as_ref(),
         toolset: &toolset,
         history,

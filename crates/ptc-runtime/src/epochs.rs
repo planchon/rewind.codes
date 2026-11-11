@@ -130,14 +130,13 @@ fn js_string(text: &str) -> String {
 mod tests {
     use super::*;
 
+    // A pinned toolset only has namespaces that are identifiers (`ptc_core::Toolset::new`).
     #[test]
     fn generates_namespaces_and_bare_tools() {
-        let module = tools_module_v1(&Toolset::from_names([
-            "github.list_issues",
-            "github.close-issue",
-            "ask_user",
-            "bad-namespace.tool",
-        ]));
+        let module = tools_module_v1(
+            &Toolset::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
+                .unwrap(),
+        );
         assert_eq!(
             module,
             "import hooks from \"ptc:internal\";\n\
@@ -148,12 +147,10 @@ mod tests {
              });\n\
              export const ask_user = (args) => call(\"ask_user\", args);\n"
         );
-        let exports: Vec<String> = tool_exports_v1(&Toolset::from_names([
-            "github.list_issues",
-            "github.close-issue",
-            "ask_user",
-            "bad-namespace.tool",
-        ]))
+        let exports: Vec<String> = tool_exports_v1(
+            &Toolset::from_host_tools(["github.list_issues", "github.close-issue", "ask_user"])
+                .unwrap(),
+        )
         .into_iter()
         .collect();
         assert_eq!(exports, ["ask_user", "github"]);

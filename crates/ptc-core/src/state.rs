@@ -12,7 +12,7 @@ use crate::ids::{Epoch, Seq};
 use crate::payload::Payload;
 use crate::time::Timestamp;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum RunStatus {
     /// Only `run_started` is enqueued: the run has not been activated yet.
     Pending,

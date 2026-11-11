@@ -11,8 +11,8 @@ Storage sits behind the `JournalStore`, `BlobStore`, `ReadModel` and `SecretStor
 | Embedded (`ptc server --embedded`, local dev, tests) | Turso Database (`ptc-store-turso`, the `turso` crate) | Local files (`ptc-blob`) |
 | Engine unit tests, mock mode | In memory | In memory |
 
-Every adapter of a port passes that port's conformance suite, shipped by `ptc-engine`
-behind the `conformance` feature.
+Every adapter of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore` passes that port's
+conformance suite, shipped by `ptc-engine` behind the `conformance` feature.
 
 ## Tables
 
@@ -25,16 +25,18 @@ scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
 runs       (tenant, id, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
             expires_at, quarantine, failures, lease_owner, lease_until, fence, sticky_worker,
-            parent, labels, trace_context, idempotency_key, created_at, updated_at)
+            parent, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
+            archive)
             PK (tenant, id), UNIQUE (tenant, idempotency_key)
 history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
 inbox      (id, run_id, event, received_at)
 signal_keys (run_id, key)                                  PK (run_id, key)
 timers     (run_id, seq, fire_at)                          index on fire_at
-tool_tasks (run_id, seq, tool, args, policy, state, attempt, token, lease_owner, lease_until,
-            next_attempt_at, parked_reason)
+tool_tasks (run_id, seq, tool, route, args, policy, server_concurrency, state, attempt, token,
+            lease_owner, lease_until, next_attempt_at, parked_reason, created_at)
 webhook_tokens (token PK, run_id, name)
-payloads   (tenant, digest, bytes, preview, value)         PK (tenant, digest)  -- value up to 64 KiB
+payloads   (tenant, digest, bytes, preview, value, unreferenced_since)
+                                                           PK (tenant, digest)  -- value up to 64 KiB
 payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
 secrets    (tenant, owner, ciphertext)                     PK (tenant, owner)   -- owner: a toolset or a run
 subscriptions (tenant, id, url, secret, events)
@@ -54,9 +56,12 @@ tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, out
 
 `epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
-`quarantine` holds the reason a run is
-[quarantined](03-execution.md#non-determinism-and-quarantine), and `failures` counts its
-activations that failed in a row.
+`quarantine` holds why a run is
+[quarantined](03-execution.md#non-determinism-and-quarantine) (non-determinism or repeated
+failures, the reason, and the last build that retried it), and `failures` counts its
+activations that failed in a row. A tool task keeps the route and policy of its tool, copied from
+the pinned toolset: the claim enforces the concurrency limits from them. `archive` points to the
+journal document of an archived run, in the `BlobStore`.
 
 ## Leases, fencing, workers
 

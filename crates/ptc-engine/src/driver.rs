@@ -5,11 +5,11 @@
 //! virtual time, when nothing is ready, the clock jumps to the next timer or deadline, so a
 //! 10-day sleep takes no wall-clock time.
 
-use ptc_core::{RunId, Timestamp};
+use ptc_core::Timestamp;
 
 use crate::engine::{ActivationOutcome, Engine, EngineError};
 use crate::ports::{
-    BlobStore, Clock, Entropy, JournalStore, ScriptExecutor, ToolDispatcher, VirtualTime,
+    BlobStore, Clock, Entropy, JournalStore, RunRef, ScriptExecutor, ToolDispatcher, VirtualTime,
 };
 
 /// The order in which claimed tool calls are run, and so the order of their completions.
@@ -51,7 +51,7 @@ pub struct DriveReport {
     pub expired: usize,
     pub quarantined: usize,
     /// Activations that failed: those runs are activated again once their lease expires.
-    pub failures: Vec<(RunId, EngineError)>,
+    pub failures: Vec<(RunRef, EngineError)>,
     /// `max_passes` was reached while things were still happening.
     pub interrupted: bool,
 }
@@ -108,9 +108,7 @@ where
             report.activations += 1;
             match activation.outcome {
                 ActivationOutcome::Quarantined { .. } => report.quarantined += 1,
-                ActivationOutcome::Failed(error) => {
-                    report.failures.push((activation.run_id, error))
-                }
+                ActivationOutcome::Failed(error) => report.failures.push((activation.run, error)),
                 ActivationOutcome::Committed { .. } | ActivationOutcome::NothingToDo => {}
             }
         }

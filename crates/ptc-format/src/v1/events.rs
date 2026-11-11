@@ -1,5 +1,4 @@
-//! Format v1. Frozen: a change here must keep every stored v1 journal decoding to the same
-//! domain values (the golden fixtures in `tests/` pin it).
+//! Events and journal entries, v1.
 
 use ptc_core::{
     AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
@@ -109,7 +108,7 @@ pub(crate) enum PayloadV1 {
 /// A JSON value, written in its canonical form (RFC 8785): sorted keys, ECMAScript numbers,
 /// minimal escaping. The stored bytes of a value are then exactly the bytes its digest is
 /// computed on, whatever the JSON library's settings.
-pub(crate) struct CanonicalJson(Value);
+pub(crate) struct CanonicalJson(pub(crate) Value);
 
 impl Serialize for CanonicalJson {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -307,11 +306,7 @@ impl From<&Completion> for EventV1 {
             },
             Completion::ToolCallFailed { seq, error } => EventV1::ToolCallFailed {
                 seq: seq.0,
-                error: ToolFailureV1 {
-                    kind: error.kind.into(),
-                    message: error.message.clone(),
-                    data: error.data.clone().map(CanonicalJson),
-                },
+                error: error.into(),
             },
             Completion::TimerFired { seq } => EventV1::TimerFired { seq: seq.0 },
             Completion::SignalReceived { name, payload } => EventV1::SignalReceived {
@@ -360,6 +355,16 @@ impl From<&Payload> for PayloadV1 {
         match payload {
             Payload::Value(value) => PayloadV1::Value(CanonicalJson(value.clone())),
             Payload::Digest(digest) => PayloadV1::Digest(digest.to_hex()),
+        }
+    }
+}
+
+impl From<&ToolFailure> for ToolFailureV1 {
+    fn from(failure: &ToolFailure) -> Self {
+        Self {
+            kind: failure.kind.into(),
+            message: failure.message.clone(),
+            data: failure.data.clone().map(CanonicalJson),
         }
     }
 }
@@ -491,11 +496,7 @@ impl TryFrom<EventV1> for Event {
             EventV1::ToolCallFailed { seq, error } => {
                 Event::Completion(Completion::ToolCallFailed {
                     seq: Seq(seq),
-                    error: ToolFailure {
-                        kind: error.kind.into(),
-                        message: error.message,
-                        data: error.data.map(|CanonicalJson(data)| data),
-                    },
+                    error: error.into(),
                 })
             }
             EventV1::TimerFired { seq } => {
@@ -543,6 +544,16 @@ impl TryFrom<PayloadV1> for Payload {
             PayloadV1::Value(CanonicalJson(value)) => Payload::Value(value),
             PayloadV1::Digest(hex) => Payload::Digest(digest(&hex)?),
         })
+    }
+}
+
+impl From<ToolFailureV1> for ToolFailure {
+    fn from(dto: ToolFailureV1) -> Self {
+        Self {
+            kind: dto.kind.into(),
+            message: dto.message,
+            data: dto.data.map(|CanonicalJson(data)| data),
+        }
     }
 }
 
@@ -601,7 +612,7 @@ impl From<LogLevelV1> for LogLevel {
 // -------------------------------------------------------------------------------------------
 // Hex
 
-fn digest(hex: &str) -> Result<Digest, String> {
+pub(crate) fn digest(hex: &str) -> Result<Digest, String> {
     unhex(hex)
         .map(Digest::from_bytes)
         .ok_or_else(|| format!("invalid digest {hex:?}: expected 64 lowercase hex digits"))

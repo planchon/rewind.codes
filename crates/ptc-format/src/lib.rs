@@ -6,22 +6,27 @@
 //! converted to versioned DTOs at the edge, and a stored v1 journal must always decode.
 //! A future v2 gets its own module and an explicit migration from v1.
 //!
-//! Two shapes are defined:
+//! Four documents are defined (`archi/02-journal.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
-//! - a **journal document** (exports, the epoch corpus, cassettes):
+//! - a **journal document** (exports, the epoch corpus):
 //!   `{"v":1,"entries":[{"index":0,"recorded_at":…,"event":{"type":"run_started",…}},…]}`,
-//!   written with one entry per line so that diffs stay readable.
+//!   written with one entry per line so that diffs stay readable;
+//! - a **cassette** (mocks recorded from a run, replayed by `ptc test`):
+//!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
+//! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, in its
+//!   canonical form, so that its bytes hash to the toolset's digest.
 //!
-//! Payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`, seeds and digests as
-//! lowercase hex, times as milliseconds since the Unix epoch.
+//! In events, payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`; in
+//! cassettes, as plain values. Seeds and digests are lowercase hex, times and durations are
+//! milliseconds. A reader refuses an unknown version, type or field.
 
 #![forbid(unsafe_code)]
 
 mod v1;
 
-use ptc_core::{Event, HistoryEntry};
+use ptc_core::{Cassette, Event, HistoryEntry, Toolset, canonical_json};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -44,6 +49,10 @@ pub enum FormatError {
     InvalidDocument(String),
     #[error("invalid journal entry at position {position}: {message}")]
     InvalidEntry { position: usize, message: String },
+    #[error("invalid cassette: {0}")]
+    InvalidCassette(String),
+    #[error("invalid pinned toolset: {0}")]
+    InvalidToolset(String),
 }
 
 /// One event, as stored in a row: `{"v":1,"type":…,…}`.
@@ -109,6 +118,36 @@ pub fn decode_history(json: &str) -> Result<Vec<HistoryEntry>, FormatError> {
                         .map_err(|message| FormatError::InvalidEntry { position, message })
                 })
                 .collect()
+        }
+    }
+}
+
+/// A cassette document: the version and the matching, then one call or signal per line.
+pub fn encode_cassette(cassette: &Cassette) -> String {
+    v1::encode_cassette(cassette)
+}
+
+/// Decodes a cassette written by [`encode_cassette`], or by hand, of any supported version.
+pub fn decode_cassette(json: &str) -> Result<Cassette, FormatError> {
+    let mut object = parse_object(json)?;
+    match take_version(&mut object)? {
+        Version::V1 => v1::decode_cassette(object).map_err(FormatError::InvalidCassette),
+    }
+}
+
+/// The pinned toolset document, in its canonical form (RFC 8785): its bytes hash to
+/// [`Toolset::digest`].
+pub fn encode_toolset(toolset: &Toolset) -> String {
+    canonical_json(&v1::toolset_document(toolset))
+}
+
+/// Decodes a pinned toolset document, of any supported version. Servers and tools may come in
+/// any order, and the toolset's invariants are checked ([`Toolset::new`]).
+pub fn decode_toolset(json: &str) -> Result<Toolset, FormatError> {
+    let mut object = parse_object(json)?;
+    match take_version(&mut object)? {
+        Version::V1 => {
+            v1::decode_toolset(Value::Object(object)).map_err(FormatError::InvalidToolset)
         }
     }
 }

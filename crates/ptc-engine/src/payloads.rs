@@ -1,13 +1,19 @@
 //! When payload values move (`archi/06-storage-and-scale.md`, "Payloads"): at commit, values
-//! above the threshold go to the `BlobStore` and the entry keeps only the digest; on delivery
-//! to the script, values are loaded back.
+//! above the threshold go to the `BlobStore` and the entry keeps only the digest, with a
+//! `payloads` row (size, preview) committed with the activation; on delivery to the script,
+//! values are loaded back.
+
+use std::collections::BTreeSet;
 
 use ptc_core::{
     Command, Completion, Event, HistoryEntry, JsonValue, Lifecycle, Payload, ToolFailure,
     canonical_json, canonicalize,
 };
 
-use crate::ports::{BlobError, BlobStore, Delivery};
+use crate::ports::{BlobError, BlobStore, Delivery, PayloadRecord, TenantId};
+
+/// Characters of a payload kept as its preview.
+const PREVIEW_CHARS: usize = 256;
 
 /// The payload an event carries, if any (an event carries at most one).
 pub(crate) fn payload_of(event: &Event) -> Option<&Payload> {
@@ -38,12 +44,16 @@ pub(crate) fn value_size(payload: &Payload) -> Option<usize> {
     payload.value().map(|value| canonical_json(value).len())
 }
 
-/// Moves the values above `threshold` bytes to the blob store, keeping their digests.
+/// Moves the values above `threshold` bytes to the blob store, keeping their digests, and
+/// returns their rows, one per digest.
 pub(crate) async fn offload<B: BlobStore>(
     blobs: &B,
+    tenant: &TenantId,
     entries: &mut [HistoryEntry],
     threshold: usize,
-) -> Result<(), BlobError> {
+) -> Result<Vec<PayloadRecord>, BlobError> {
+    let mut records = Vec::new();
+    let mut seen = BTreeSet::new();
     for entry in entries {
         let Some(payload) = payload_mut(&mut entry.event) else {
             continue;
@@ -56,10 +66,18 @@ pub(crate) async fn offload<B: BlobStore>(
             continue;
         }
         let digest = Payload::digest_of(value);
-        blobs.put(digest, canonical.into_bytes()).await?;
+        if seen.insert(digest) {
+            records.push(PayloadRecord {
+                digest,
+                size: canonical.len() as u64,
+                preview: payload.preview(PREVIEW_CHARS),
+                value: None,
+            });
+            blobs.put(tenant, digest, canonical.into_bytes()).await?;
+        }
         *payload = Payload::Digest(digest);
     }
-    Ok(())
+    Ok(records)
 }
 
 /// The value of a payload, loaded from the blob store if only its digest is held, with its
@@ -67,13 +85,14 @@ pub(crate) async fn offload<B: BlobStore>(
 /// was loaded from. A loaded value is checked against its digest.
 pub(crate) async fn load<B: BlobStore>(
     blobs: &B,
+    tenant: &TenantId,
     payload: &Payload,
 ) -> Result<JsonValue, BlobError> {
     match payload {
         Payload::Value(value) => Ok(canonicalize(value)),
         Payload::Digest(digest) => {
             let bytes = blobs
-                .get(*digest)
+                .get(tenant, *digest)
                 .await?
                 .ok_or(BlobError::Missing(*digest))?;
             let value: JsonValue =
@@ -95,13 +114,14 @@ pub(crate) async fn load<B: BlobStore>(
 /// Loads every payload of the entries: the history as a self-contained document.
 pub(crate) async fn load_all<B: BlobStore>(
     blobs: &B,
+    tenant: &TenantId,
     entries: &mut [HistoryEntry],
 ) -> Result<(), BlobError> {
     for entry in entries {
         if let Some(payload) = payload_mut(&mut entry.event)
             && let Payload::Digest(_) = payload
         {
-            *payload = Payload::Value(load(blobs, payload).await?);
+            *payload = Payload::Value(load(blobs, tenant, payload).await?);
         }
     }
     Ok(())
@@ -110,12 +130,13 @@ pub(crate) async fn load_all<B: BlobStore>(
 /// The delivery of a completion, its payloads loaded.
 pub(crate) async fn delivery<B: BlobStore>(
     blobs: &B,
+    tenant: &TenantId,
     completion: &Completion,
 ) -> Result<Delivery, BlobError> {
     Ok(match completion {
         Completion::ToolCallCompleted { seq, result } => Delivery::ToolCallCompleted {
             seq: *seq,
-            result: load(blobs, result).await?,
+            result: load(blobs, tenant, result).await?,
         },
         Completion::ToolCallFailed { seq, error } => Delivery::ToolCallFailed {
             seq: *seq,
@@ -127,7 +148,7 @@ pub(crate) async fn delivery<B: BlobStore>(
         Completion::TimerFired { seq } => Delivery::TimerFired { seq: *seq },
         Completion::SignalReceived { name, payload } => Delivery::SignalReceived {
             name: name.clone(),
-            payload: load(blobs, payload).await?,
+            payload: load(blobs, tenant, payload).await?,
         },
         Completion::CancelRequested { reason } => Delivery::CancelRequested {
             reason: reason.clone(),

@@ -101,8 +101,8 @@ JSON, versioned `"v": 1`, every value in its canonical form. It covers four docu
 | --- | --- | --- |
 | Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A row of `history` or `inbox` |
 | Journal document | `v`, `run`, `script`, `toolset`, `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
-| Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `ptc test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
-| Pinned toolset | `v`, `servers[]`, `tools[{name, route, schemas, policy}]` | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
+| Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `ptc test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
+| Pinned toolset | `v`, `servers[{name, transport, concurrency}]`, `tools[{name, route, description?, schemas, policy}]` | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
 
 A reader refuses an unknown version, type or field. Every change of the format comes with
 an explicit migration.

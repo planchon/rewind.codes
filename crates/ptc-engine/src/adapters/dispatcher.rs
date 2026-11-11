@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use ptc_core::{JsonValue, ToolFailure, ToolFailureKind};
 
-use crate::ports::{ToolCall, ToolDispatcher};
+use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
 
 /// Answers every call to a tool with the same response: the static responses of mock mode,
 /// as the CLI reads them from `ptc.tools.json`.
@@ -71,8 +71,13 @@ impl StaticDispatcher {
 }
 
 impl ToolDispatcher for StaticDispatcher {
-    async fn dispatch(&self, call: ToolCall) -> Result<JsonValue, ToolFailure> {
-        self.respond(&call.tool)
+    /// The tool's response, or its failure. A tool without a response fails with
+    /// `unavailable`, for good: retrying would not make one appear.
+    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+        match self.respond(&call.tool.name) {
+            Ok(result) => Dispatched::Result(result),
+            Err(failure) => Dispatched::Failed(failure),
+        }
     }
 }
 

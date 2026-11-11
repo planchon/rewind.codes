@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use ptc_core::{JsonValue, ToolFailure, ToolFailureKind};
-use ptc_engine::ports::{ToolCall, ToolDispatcher};
+use ptc_engine::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
 use serde_json::Value;
 
 /// Answers tool calls from the `tools` of a scenario. A superset of `ptc.tools.json`:
@@ -50,19 +50,19 @@ impl ScenarioTools {
             .responses
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let response = match responses.get_mut(&call.tool) {
+        let response = match responses.get_mut(&call.tool.name) {
             Some(Responses::Always(response)) => response.clone(),
             Some(Responses::Sequence(sequence)) => sequence.pop_front().ok_or_else(|| {
                 failure(
                     ToolFailureKind::Unavailable,
-                    format!("{} has no response left", call.tool),
+                    format!("{} has no response left", call.tool.name),
                     None,
                 )
             })?,
             None => {
                 return Err(failure(
                     ToolFailureKind::Unavailable,
-                    format!("{} has no response in the scenario", call.tool),
+                    format!("{} has no response in the scenario", call.tool.name),
                     None,
                 ));
             }
@@ -99,7 +99,10 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 }
 
 impl ToolDispatcher for ScenarioTools {
-    async fn dispatch(&self, call: ToolCall) -> Result<JsonValue, ToolFailure> {
-        self.respond(&call)
+    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+        match self.respond(&call) {
+            Ok(result) => Dispatched::Result(result),
+            Err(failure) => Dispatched::Failed(failure),
+        }
     }
 }

@@ -78,8 +78,13 @@ Dependencies only point down. Adapters never depend on each other.
 
 ## Ports
 
-All ports are declared in `ptc-engine`. Each port has a conformance suite in `ptc-engine`
-(feature `conformance`), and every adapter of the port passes it.
+All ports are declared in `ptc-engine` (`crates/ptc-engine/src/ports/`), each with an in-memory
+adapter in `ptc-engine` that is the reference implementation of its contract. The ports with
+state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, have a conformance suite in
+`ptc-engine` (feature `conformance`, modules `conformance::journal`, `::blobs`, `::read_model`,
+`::secrets`), and every adapter of the port passes it. The contracts of the other ports are not
+observable through the port alone (a span exported twice, an HMAC signature, the egress rules):
+their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
@@ -87,10 +92,10 @@ All ports are declared in `ptc-engine`. Each port has a conformance suite in `pt
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `ptc-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `ptc-runtime` (V8); a fake in engine tests |
 | `ToolDispatcher` | Execute a tool call with its idempotency key and credentials | static responses and cassettes (engine, mock mode); TypeScript mocks (`ptc-runtime`, in a separate isolate); `ptc-mcp` (MCP servers, built-ins `http` and `webhook`) |
-| `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | `ptc-check` (tsgo) |
+| `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `ptc-check` (tsgo) |
 | `ReadModel` | Projections for questions across runs | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
 | `SpanExporter` | Export spans derived from committed entries | memory (engine), `ptc-otel` (OpenTelemetry) |
-| `SecretStore` | Credentials per toolset and per run, encrypted at rest | `ptc-store-turso`, `ptc-store-postgres` |
+| `SecretStore` | Credentials per toolset and per run, encrypted at rest | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
 | `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`ptc-server`) |
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
@@ -100,88 +105,112 @@ SDK worker claims them through `GET /v1/tasks` ([routes](04-tools.md#routes)).
 
 ### `JournalStore`
 
-Methods (declared in `crates/ptc-engine/src/ports/journal.rs`):
+Methods (declared in `crates/ptc-engine/src/ports/journal/mod.rs`):
 
 ```
-put_script(script, compiled) / get_script         put_toolset / get_toolset
-create_run(run, key?) -> Created { run_id, created } | QuotaExceeded   # run carries its tenant and metadata
+put_script(tenant, script, compiled) / get_script(tenant, digest)
+put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest)
+create_run(NewRun { run: (tenant, id), started, metadata, created_at }, key?) -> Created { run, created } | QuotaExceeded
 enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
-acquire_runnable(owner, epochs, now, lease_duration) -> Lease { run_id, fence }
+get_run(run)                       list_runs(RunFilter { tenant, status, labels, quarantined, after, limit })
+acquire_runnable(AcquireRunnable { owner, epochs, tenants, now, lease_duration, sticky_grace, draw }) -> Lease { run, fence }
 acquire_run(run, owner, now, lease_duration) -> Lease   # any run that has not ended, quarantined or not
+acquire_quarantined(owner, build, epochs, now, lease_duration) -> Lease   # each quarantined run once per build
 renew(lease, now, lease_duration)
 load_history(run, from)            take_inbox(lease)
-commit_activation(lease, Activation { entries, consumed, payloads, tool_calls, timers, cancelled_timers, status })
+commit_activation(lease, Activation { entries, consumed, payloads, tool_calls, timers, cancelled_timers, status }, now)
 release(lease)                     forget_sticky(run, owner)
 record_failure(lease, error, now) -> Failures { count, quarantined }
-quarantine(lease, mismatch) / release_quarantine(run)
-fire_due_timers(now)               next_timer()
-expire_due_runs(now) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
-claim_tool_tasks(owner, filter, now, lease_duration, limit)    heartbeat_tool_task(token, now)
-retry_tool_task(token, next_attempt_at)    defer_tool_task(token, until)    park_tool_task(token, reason)
-approve_tool_task(task) / reject_tool_task(task, now)    resume_parked(run | toolset, now)
-complete_tool_task(task | token, outcome, now)    expire_deferred_tool_tasks(now)
-create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> (run, name)
-get_payload(tenant, digest) -> { bytes, preview, value? }
-unreferenced_payloads(tenant, before) -> digests    forget_payloads(tenant, digests)
-runs_to_archive(now) -> runs       archive_run(run)    delete_run(run)
-get_tenant(tenant)                 find_api_key(hash) -> { tenant, scope }
-list_runs(filter)                  get_run(run)
-claim_feed(consumer, owner, now)   ack_feed(items)
+quarantine(lease, mismatch, now)   release_quarantine(run)
+fire_due_timers(now, limit)        next_timer()
+expire_due_runs(now, limit) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
+claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, toolset, tools }}, now, limit)
+    -> [ClaimedTask { task, token, previous_claim_expired }]
+heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)
+defer_tool_task(token, until)      park_tool_task(token, reason)
+complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
+approve_tool_task(task, now) / reject_tool_task(task, failure, now)    resume_parked(Run(run) | Toolset { tenant, toolset }, now)
+tool_tasks(run)
+create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
+put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
+get_payload(tenant, digest) -> { digest, size, preview, value? }
+unreferenced_payloads(now, limit) -> [(tenant, digest)]    forget_payloads([(tenant, digest)], now)
+runs_to_archive(now, limit)        archive_run(run, document, now)
+runs_to_delete(now, limit)         delete_run(run, now)
+put_tenant(tenant) / get_tenant(id) / list_tenants()
+put_api_key(key) / find_api_key(hash) / revoke_api_key(hash, now)
+claim_feed(consumer, owner, now, lease_duration, limit)    ack_feed(ids)
 ```
 
-Stores never read a clock: every method that depends on time takes `now`. Every method is
-scoped by the tenant: a run, a script, a toolset or a payload of one tenant is never visible
-to another.
+Stores never read a clock: every method that depends on time takes `now`, and the random draw
+of `acquire_runnable` is passed in too. Tokens (tool tasks, webhooks) are the only values a store
+draws from a CSPRNG. Every method is scoped by the tenant: a run (`RunRef { tenant, id }`), a
+script, a toolset, a payload or a task of one tenant is never visible to another. Run ids are
+unique across tenants.
 
 `metadata` is the run metadata (labels, trace context, the parent of a fork), stored with
 the run and never part of its events. `commit_activation` also writes one feed item per
-consumer in the same transaction: the store guarantees that every committed activation is
-eventually projected.
+consumer (`read_model`, `otel`, `webhooks`) in the same transaction: the store guarantees that
+every committed activation is eventually projected.
 
 Contracts, all covered by the conformance suite:
 
-- `key` is an idempotency key. `create_run` with a key already used returns the existing
-  run; `enqueue` with a key already seen for that run does nothing
+- `key` is an idempotency key. `create_run` with a key already used in the tenant returns the
+  existing run; `enqueue` with a key already seen for that run does nothing
   ([storage](06-storage-and-scale.md#idempotency-of-the-api)).
 - `create_run` returns `QuotaExceeded` when the tenant already has its maximum of active runs
-  ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
-- `acquire_runnable` only returns runs whose epoch is in `epochs`, and never a quarantined
-  run. It draws a tenant at random among those with runnable work, then takes that tenant's
-  oldest runnable run.
+  ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)); a retried request with its key
+  still returns its run.
+- `acquire_runnable` only returns runs whose epoch is in `epochs` and whose tenant is in
+  `tenants`, and never a quarantined run. It draws a tenant among those with runnable work
+  (ordered by id, the one at `draw` modulo their number), then takes that tenant's oldest
+  runnable run (the oldest inbox item first).
 - Sticky affinity: `commit_activation` records the committing worker as the run's sticky
   worker. `acquire_runnable` gives a runnable run to its sticky worker first, and to the other
-  workers only once it has been runnable for 5 s. `forget_sticky` drops the priority when the
-  worker evicts the instance ([sticky execution](03-execution.md#sticky-execution)).
+  workers only once its oldest inbox item has waited `sticky_grace` (5 s). `forget_sticky` drops
+  the priority when the worker evicts the instance
+  ([sticky execution](03-execution.md#sticky-execution)).
 - `renew` extends a lease whose fence still matches. A worker calls it about every 10 s while
   it holds the run ([leases](06-storage-and-scale.md#leases-fencing-workers)).
-- `record_failure` counts the run's activations that failed in a row and keeps the last
-  error. The fifth quarantines the run with that error as its reason. A successful
-  `commit_activation` resets the count ([activations](03-execution.md#activations)).
-- `quarantine` releases the lease without committing anything and records the mismatch;
-  `release_quarantine` makes the run runnable again
+- `record_failure` counts the run's activations that failed in a row and keeps the lease. The
+  fifth quarantines the run with that error as its reason (kind `failures`) and releases the
+  lease. A successful `commit_activation` and `release_quarantine` reset the count
+  ([activations](03-execution.md#activations)).
+- `quarantine` releases the lease without committing anything and records the mismatch (kind
+  `non_determinism`); `release_quarantine` makes the run runnable again; `acquire_quarantined`
+  hands each quarantined run of the given epochs to one worker of a new build, once
   ([execution](03-execution.md#non-determinism-and-quarantine)).
 - `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }`, once, for the runs past
   their deadline, as `fire_due_timers` does for timers. It enqueues nothing for a quarantined
-  run: it reports it, and the engine gives it up (`run_aborted { non_determinism }`) through
-  `acquire_run` and an ordinary `commit_activation`.
-- A terminal commit clears the run's timers, tool tasks and inbox; nothing is enqueued for a
-  terminal run any more (`Enqueued::RunEnded`).
-- Tool tasks follow the [lifecycle](04-tools.md#tool-task-lifecycle). `claim_tool_tasks` only
-  hands out `ready` tasks whose `next_attempt_at` has passed, within the concurrency limits.
-  It hands out a task again once its claim expired, with its attempt incremented: the engine
-  calls the tool again with the same idempotency key, up to 5 attempts. `complete_tool_task`
-  writes the completion to the run's inbox, and drops the outcome of a task that no longer
-  exists. `resume_parked` makes ready again the tasks parked by `credentials.expired`, once the
-  run's or the toolset's credentials are renewed. `expire_deferred_tool_tasks` ends the
-  deferred tasks whose timeout passed.
-- A webhook token is unguessable and maps to one run and one signal name. A request to a
-  token whose run has ended is refused.
+  run: it reports it, and the engine gives it up (`run_aborted { non_determinism }`, or
+  `{ internal }` after repeated failures) through `acquire_run` and an ordinary
+  `commit_activation`.
+- A terminal commit clears the run's timers, tool tasks, inbox, webhook tokens and quarantine;
+  nothing is enqueued for a terminal run any more (`Enqueued::RunEnded`).
+- Tool tasks follow the [lifecycle](04-tools.md#tool-task-lifecycle). A new task starts in
+  `approval` when its policy asks for it, else `ready`. `claim_tool_tasks` only hands out
+  `ready` tasks whose `next_attempt_at` has passed, and `claimed` tasks whose claim expired
+  (attempt + 1, `previous_claim_expired`), within the concurrency limits: the policy's calls of
+  the same tool in flight per run, and the server's calls in flight per worker for an MCP tool;
+  a claimed task not expired and a deferred task are in flight. A claim lasts the policy's
+  heartbeat timeout and has its own token: once the task is claimed again, the old token is
+  refused. `complete_tool_task` writes the outcome to the run's inbox, and drops the outcome of
+  a task that no longer exists. `resume_parked` makes ready again the tasks parked by
+  `credentials_expired`, once the run's or the toolset's credentials are renewed.
+  `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
+  failure.
+- A webhook token is unguessable, the same for a run and a signal name, and maps to one run and
+  one signal name. A token whose run has ended no longer resolves.
 - `commit_activation` writes, in the same transaction, the `payloads` rows of the payloads
   that left the events (digest, size, preview, and the value up to 64 KiB) and the run's
-  `payload_refs` ([payloads](06-storage-and-scale.md#payloads)).
-- `runs_to_archive` lists the finished runs past their time in the store; `archive_run`
-  removes their rows once their journal document is archived; `delete_run` erases a run and
-  its payload references ([retention](06-storage-and-scale.md#retention-and-deletion)).
+  `payload_refs` ([payloads](06-storage-and-scale.md#payloads)). `delete_run` starts the grace
+  of the payloads it leaves unreferenced; `unreferenced_payloads` and `forget_payloads` apply
+  each tenant's grace.
+- `runs_to_archive` lists the finished runs past their tenant's journal retention;
+  `archive_run` removes their history once their journal document is in the `BlobStore`, and
+  keeps the record and the payload references; `runs_to_delete` lists the archives past their
+  retention; `delete_run` erases a run, its feed items and its payload references
+  ([retention](06-storage-and-scale.md#retention-and-deletion)).
 - Only scripts that compile are stored: `start_run` refuses the others before creating a run
   ([execution](03-execution.md#starting-a-run)). `ScriptExecutor::compile` takes the toolset,
   to check what the script imports from `ptc:tools`.
@@ -190,31 +219,40 @@ Contracts, all covered by the conformance suite:
 ### The other ports
 
 - **`BlobStore`**: `put(tenant, digest, bytes)`, `get(tenant, digest)`, `delete(tenant,
-  digest)`. Values are immutable: a second `put` of a digest changes nothing. `get` checks
-  the digest of what it reads. `delete` serves the cleanup of unreferenced payloads.
+  digest)`. Immutable bytes keyed by their SHA-256: payload values above the table tier (their
+  canonical JSON, so the key is the payload's digest) and the journal documents of archived
+  runs. `put` refuses bytes that do not hash to the digest; a second `put` changes nothing.
+  `get` checks the digest of what it reads. `delete` serves cleanup.
 - **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, unchanged. The
   executor knows nothing about the instance cache, which lives in the engine.
-- **`ToolDispatcher`**: `dispatch(call, credentials)` returns one of: an outcome (a result or
-  a failure); a transient failure, after which the engine puts the task back to `ready` with
-  backoff, or fails it under `at_most_once`; a deferred result, with the token the handler
-  will answer with; a reason to park the task (schema changed at dispatch, credentials
-  refused). The dispatcher never writes to the journal.
+- **`ToolDispatcher`**: `dispatch(call, credentials) -> Dispatched`. The call carries the run,
+  the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, the
+  claim's token and the trace context. `Dispatched` is one of: `Result` and `Failed` (the
+  outcome); `Transient`, after which the engine puts the task back to `ready` with backoff, or
+  fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
+  token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher
+  never writes to the journal.
 - **`TypeChecker`**: `check(script, declarations) -> diagnostics`. Deterministic.
-  Diagnostics are written for a model, with a location in `script.ts`, and include the
-  checker's own rules ([type-checking](04-tools.md#type-checking)).
-- **`ReadModel`**: `apply(feed item, entries)`, idempotent: applying a feed item twice
-  changes nothing. `search_runs(filter)`, `scripts(filter)`, `tool_stats(filter)`. `purge`
-  and `delete_run` serve [retention](06-storage-and-scale.md#retention-and-deletion).
-- **`SpanExporter`**: `export(spans)`. Spans have deterministic ids, so exporting one twice
-  gives the same span.
+  Diagnostics are written for a model, with a location in `script.ts`, a severity, their source
+  (a TypeScript code or one of the checker's own rules), a hint and a code frame
+  ([type-checking](04-tools.md#type-checking)).
+- **`ReadModel`**: `apply(run, entries)`, idempotent and order-independent, keyed by `(run,
+  index)`. `search_runs(search)`, `scripts(filter)`, `tool_stats(filter)`,
+  `observed_shapes(tenant, tools)`. `purge(ended_before, tenants)` and `delete_run(run)` serve
+  [retention](06-storage-and-scale.md#retention-and-deletion).
+- **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
+  exporting one twice gives the same span.
 - **`SecretStore`**: `put(tenant, owner, credentials)`, where the owner is a toolset or a
   run; `resolve(tenant, run, toolset)`, which returns the run's credentials if it has some,
-  else the toolset's; `delete(tenant, owner)`. Envelope encryption: each tenant has a data
-  key, itself encrypted by a master key from the deployment's configuration. Secrets leave
-  the store only toward the dispatcher ([credentials](04-tools.md#credentials)).
+  else the toolset's, never merged; `delete(tenant, owner)`. Credentials are headers and
+  environment variables per MCP server. Envelope encryption: each tenant has a data key, itself
+  encrypted by a master key from the deployment's configuration. Secrets leave the store only
+  toward the dispatcher ([credentials](04-tools.md#credentials)).
 - **`WebhookSender`**: `send(subscription, event)`. Each delivery is signed with HMAC, and
-  retried when it fails. Events include `run.completed`, `run.failed`,
-  `run.suspended`, `tool.schema_changed` and `credentials.expired`.
+  retried when it fails. Events are `run.completed`, `run.failed` (failed, cancelled or
+  aborted), `run.suspended`, `run.quarantined`, `tool.schema_changed` and
+  `credentials.expired`, with a deterministic id for receivers to deduplicate. Subscriptions
+  are kept by the `JournalStore`.
 - **`Clock`** and **`Entropy`**: unchanged.
 
 Port style: traits whose methods return `impl Future<Output = …> + Send`; adapters may
@@ -226,8 +264,8 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 
 | Crate | Layer | Contents |
 | --- | --- | --- |
-| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, `Toolset`, events, `RunState`, `ReplayCursor`, history validation, `Timestamp`, durations |
-| `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `StaticDispatcher`, system and virtual clocks, system and seeded entropy), the conformance suites of every port (feature `conformance`) |
+| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
+| `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state (feature `conformance`) |
 | `ptc-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `ptc-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `ptc-server` and `ptc-cli` |
 | `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog and heap limit, `V8Executor`; the TypeScript mock dispatcher |
@@ -309,7 +347,7 @@ Nothing about the script is emitted during replay.
 | --- | --- |
 | `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `ptc-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
-| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of every port (idempotency keys, epochs, quarantine and failure counts, run expiry, the feed, tool task lifecycle, sticky affinity, tenants, retention); span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine and failure counts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
 | `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
 | `ptc-store-turso`, `ptc-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |

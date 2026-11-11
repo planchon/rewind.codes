@@ -3,17 +3,22 @@
 
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use ptc_core::{
     AbortKind, AbortReason, CancelReason, Completion, Digest, Epoch, Event, HistoryEntry,
-    HistoryError, JsonValue, Lifecycle, NonDeterminism, Payload, RunId, RunMode, RunStarted,
-    RunState, RunStatus, Script, Seq, ToolFailure, ToolFailureKind, Toolset,
+    HistoryError, Interruption, JsonValue, Lifecycle, NonDeterminism, Payload, RunId, RunMode,
+    RunStarted, RunState, RunStatus, Script, Seq, ToolFailure, ToolFailureKind, ToolOutcome,
+    Toolset,
 };
 
 use crate::payloads;
 use crate::ports::{
-    Activation, BlobError, BlobStore, Clock, Created, Enqueued, Entropy, ExecutorError,
-    InvalidScript, JournalStore, NewRun, RunFilter, RunMetadata, RunRecord, ScriptExecutor,
-    StoreError, StoredScript, ToolCall, ToolDispatcher, ToolTask,
+    AcquireRunnable, Activation, BlobError, BlobStore, ClaimedTask, Clock, CreateRun, Created,
+    Dispatched, Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun,
+    QuarantineKind, RunFilter, RunMetadata, RunRecord, RunRef, STICKY_GRACE, ScriptExecutor,
+    StoreError, StoredScript, StoredToolset, TaskFilter, TenantId, TenantScope, ToolCall,
+    ToolDeclarations, ToolDispatcher,
 };
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 
@@ -53,6 +58,13 @@ pub struct EngineConfig {
     /// Attempts at a tool call whose dispatcher keeps dying mid-call. Past it, the call fails
     /// with `outcome_unknown`.
     pub max_tool_attempts: u32,
+    /// The tenants this worker serves.
+    pub tenants: TenantScope,
+    /// The tool tasks this worker claims and dispatches. `TaskFilter::All` by default: the
+    /// engine dispatches every task, host tools included, as in mock mode.
+    pub tool_tasks: TaskFilter,
+    /// Timers fired, and runs expired, per call to the store.
+    pub scheduler_batch: usize,
     pub limits: Limits,
 }
 
@@ -66,6 +78,9 @@ impl Default for EngineConfig {
             max_ttl: Duration::from_secs(365 * DAY),
             inline_threshold: 1024,
             max_tool_attempts: 5,
+            tenants: TenantScope::All,
+            tool_tasks: TaskFilter::All,
+            scheduler_batch: 1_000,
             limits: Limits::default(),
         }
     }
@@ -93,13 +108,19 @@ pub struct Engine<J, B, X, D, C, E> {
     pub(crate) clock: C,
     pub(crate) entropy: E,
     pub(crate) config: EngineConfig,
+    /// Draws for the tenant `acquire_runnable` picks: consecutive draws go round the tenants
+    /// with runnable work.
+    draws: AtomicU64,
 }
 
 /// A request to start a run.
 #[derive(Debug, Clone)]
 pub struct StartRun {
+    pub tenant: TenantId,
     pub script: Script,
     pub toolset: Toolset,
+    /// The declarations generated from the toolset, stored with it.
+    pub declarations: ToolDeclarations,
     pub input: JsonValue,
     pub mode: RunMode,
     /// The run's TTL; [`EngineConfig::default_ttl`] when `None`.
@@ -110,11 +131,14 @@ pub struct StartRun {
 }
 
 impl StartRun {
-    /// A live run with no TTL, metadata or idempotency key.
+    /// A live run of the tenant `local`, with no declarations, TTL, metadata or idempotency
+    /// key.
     pub fn new(script: Script, toolset: Toolset, input: JsonValue) -> Self {
         Self {
+            tenant: TenantId::local(),
             script,
             toolset,
+            declarations: ToolDeclarations::default(),
             input,
             mode: RunMode::Live,
             ttl: None,
@@ -136,6 +160,9 @@ pub enum StartError {
     InputTooLarge { size: usize, max: usize },
     #[error("the executor supports no determinism epoch")]
     NoEpoch,
+    /// The tenant already has its maximum of active runs.
+    #[error("the tenant already has {quota} active runs, its maximum")]
+    QuotaExceeded { quota: u32 },
     #[error(transparent)]
     Store(#[from] StoreError),
 }
@@ -148,6 +175,9 @@ pub enum EngineError {
     Blob(#[from] BlobError),
     #[error("run {0} not found")]
     RunNotFound(RunId),
+    /// A command names a tool its run's toolset does not have.
+    #[error("run {run_id} called {tool}, which its toolset does not have")]
+    UnknownTool { run_id: RunId, tool: String },
     #[error("script {0} not found")]
     ScriptNotFound(Digest),
     #[error("toolset {0} not found")]
@@ -165,7 +195,7 @@ pub enum EngineError {
 /// What [`Engine::activate_next`] did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivationReport {
-    pub run_id: RunId,
+    pub run: RunRef,
     pub outcome: ActivationOutcome,
 }
 
@@ -219,6 +249,7 @@ where
             clock,
             entropy,
             config,
+            draws: AtomicU64::new(0),
         }
     }
 
@@ -276,12 +307,17 @@ where
             .executor
             .compile(&request.script, &request.toolset)
             .map_err(StartError::InvalidScript)?;
-        self.journal.put_script(&request.script, &compiled).await?;
-        self.journal.put_toolset(&request.toolset).await?;
+        let tenant = request.tenant;
+        self.journal
+            .put_script(&tenant, &request.script, &compiled)
+            .await?;
+        self.journal
+            .put_toolset(&tenant, &request.toolset, &request.declarations)
+            .await?;
 
         let now = self.clock.now();
         let run = NewRun {
-            id: self.entropy.run_id(),
+            run: RunRef::new(tenant, self.entropy.run_id()),
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: request.toolset.digest(),
@@ -294,18 +330,22 @@ where
             metadata: request.metadata,
             created_at: now,
         };
-        let created = self
+        let created = match self
             .journal
             .create_run(run, request.idempotency_key)
-            .await?;
-        tracing::debug!(run_id = %created.run_id, created = created.created, "run started");
+            .await?
+        {
+            CreateRun::Created(created) => created,
+            CreateRun::QuotaExceeded { quota } => return Err(StartError::QuotaExceeded { quota }),
+        };
+        tracing::debug!(run = %created.run, created = created.created, "run started");
         Ok(created)
     }
 
     /// Sends a signal to a run. It lands in the run's mailbox for `name`, first in first out.
     pub async fn signal(
         &self,
-        run_id: RunId,
+        run: &RunRef,
         name: impl Into<String>,
         payload: JsonValue,
         idempotency_key: Option<String>,
@@ -314,30 +354,30 @@ where
             name: name.into(),
             payload: Payload::Value(payload),
         };
-        self.enqueue(run_id, completion, idempotency_key).await
+        self.enqueue(run, completion, idempotency_key).await
     }
 
     /// Asks a run to cancel: every pending await of the script rejects with `CancelledError`.
     pub async fn cancel(
         &self,
-        run_id: RunId,
+        run: &RunRef,
         message: Option<String>,
     ) -> Result<Enqueued, EngineError> {
         let completion = Completion::CancelRequested {
             reason: CancelReason::Requested(message),
         };
-        self.enqueue(run_id, completion, None).await
+        self.enqueue(run, completion, None).await
     }
 
     async fn enqueue(
         &self,
-        run_id: RunId,
+        run: &RunRef,
         completion: Completion,
         idempotency_key: Option<String>,
     ) -> Result<Enqueued, EngineError> {
         Ok(self
             .journal
-            .enqueue(run_id, completion, idempotency_key, self.clock.now())
+            .enqueue(run, completion, idempotency_key, self.clock.now())
             .await?)
     }
 
@@ -348,16 +388,16 @@ where
     /// runnable. An activation that fails is reported, not returned as an error: only a
     /// failure to lease a run is.
     pub async fn activate_next(&self) -> Result<Option<ActivationReport>, EngineError> {
-        let lease = self
-            .journal
-            .acquire_runnable(
-                &self.config.worker,
-                self.executor.epochs(),
-                self.clock.now(),
-                self.config.lease_duration,
-            )
-            .await?;
-        let Some(lease) = lease else {
+        let request = AcquireRunnable {
+            owner: &self.config.worker,
+            epochs: self.executor.epochs(),
+            tenants: &self.config.tenants,
+            now: self.clock.now(),
+            lease_duration: self.config.lease_duration,
+            sticky_grace: STICKY_GRACE,
+            draw: self.draws.fetch_add(1, Ordering::Relaxed),
+        };
+        let Some(lease) = self.journal.acquire_runnable(&request).await? else {
             return Ok(None);
         };
         let outcome = match self.activate(&lease).await {
@@ -365,12 +405,12 @@ where
             // The lease is kept: the run is retried once it expires, and meanwhile the other
             // runs are activated instead of this one again and again.
             Err(error) => {
-                tracing::error!(run_id = %lease.run_id, %error, "activation failed");
+                tracing::error!(run = %lease.run, %error, "activation failed");
                 ActivationOutcome::Failed(error)
             }
         };
         Ok(Some(ActivationReport {
-            run_id: lease.run_id,
+            run: lease.run,
             outcome,
         }))
     }
@@ -380,15 +420,21 @@ where
 
     /// Pushes `timer_fired` into the inbox of every run whose timer is due.
     pub async fn fire_due_timers(&self) -> Result<usize, EngineError> {
-        Ok(self.journal.fire_due_timers(self.clock.now()).await?)
+        Ok(self
+            .journal
+            .fire_due_timers(self.clock.now(), self.config.scheduler_batch)
+            .await?)
     }
 
     /// Cancels the runs past their deadline (`cancel_requested { reason: "ttl" }`), and gives
     /// up the quarantined ones.
     pub async fn expire_due_runs(&self) -> Result<usize, EngineError> {
-        let expired = self.journal.expire_due_runs(self.clock.now()).await?;
-        for run_id in &expired.quarantined {
-            self.give_up(*run_id).await?;
+        let expired = self
+            .journal
+            .expire_due_runs(self.clock.now(), self.config.scheduler_batch)
+            .await?;
+        for run in &expired.quarantined {
+            self.give_up(run).await?;
         }
         Ok(expired.cancelled.len() + expired.quarantined.len())
     }
@@ -397,61 +443,109 @@ where
     // The way out: tool calls
 
     /// Claims tool tasks for this worker.
-    pub async fn claim_tool_tasks(&self, limit: usize) -> Result<Vec<ToolTask>, EngineError> {
+    pub async fn claim_tool_tasks(&self, limit: usize) -> Result<Vec<ClaimedTask>, EngineError> {
         Ok(self
             .journal
             .claim_tool_tasks(
                 &self.config.worker,
+                &self.config.tool_tasks,
                 self.clock.now(),
-                self.config.lease_duration,
                 limit,
             )
             .await?)
     }
 
-    /// Executes a claimed tool task and pushes its outcome into the run's inbox.
+    /// Executes a claimed tool task and reports what became of it to the store.
     ///
-    /// Every tool has the `retry` policy, since toolsets carry no policies: a task claimed
-    /// again after its previous claim expired (its dispatcher died mid-call) is called again
-    /// with the same idempotency key, so that the tool can tell it apart from a new call
-    /// (`archi/04-tools.md`). After [`EngineConfig::max_tool_attempts`], the call fails with
-    /// `outcome_unknown`.
-    pub async fn run_tool_task(&self, task: ToolTask) -> Result<(), EngineError> {
-        let outcome = if task.attempt > self.config.max_tool_attempts {
-            Completion::ToolCallFailed {
-                seq: task.seq,
-                error: ToolFailure {
-                    kind: ToolFailureKind::OutcomeUnknown,
-                    message: format!(
-                        "the call was interrupted {} times and may or may not have taken effect",
-                        task.attempt - 1
-                    ),
-                    data: None,
-                },
-            }
-        } else {
-            let call = ToolCall {
-                run_id: task.run_id,
-                seq: task.seq,
-                tool: task.tool.clone(),
-                args: payloads::load(&self.blobs, &task.args).await?,
-                idempotency_key: idempotency_key(task.run_id, task.seq),
-                attempt: task.attempt,
+    /// A task claimed again after its previous claim expired (its dispatcher died mid-call) is
+    /// called again with the same idempotency key, so that the tool can tell it apart from a
+    /// new call (`archi/04-tools.md`); under `at_most_once`, or after
+    /// [`EngineConfig::max_tool_attempts`], the call fails with `outcome_unknown` instead.
+    pub async fn run_tool_task(&self, claimed: ClaimedTask) -> Result<(), EngineError> {
+        let ClaimedTask {
+            task,
+            token,
+            previous_claim_expired,
+        } = claimed;
+        let run = task.task.run.clone();
+        let seq = task.task.seq;
+        let now = self.clock.now();
+        let interrupted = task.attempt > self.config.max_tool_attempts
+            || (previous_claim_expired && task.policy.on_interruption == Interruption::AtMostOnce);
+        if interrupted {
+            let failure = ToolFailure {
+                kind: ToolFailureKind::OutcomeUnknown,
+                message: format!(
+                    "the call was interrupted {} times and may or may not have taken effect",
+                    task.attempt - 1
+                ),
+                data: None,
             };
-            match self.dispatcher.dispatch(call).await {
-                Ok(result) => Completion::ToolCallCompleted {
-                    seq: task.seq,
-                    result: Payload::Value(result),
-                },
-                Err(error) => Completion::ToolCallFailed {
-                    seq: task.seq,
-                    error,
-                },
-            }
+            self.journal
+                .complete_tool_task(&token, ToolOutcome::Failure(failure), now)
+                .await?;
+            return Ok(());
+        }
+
+        let stored = self.toolset(&run.tenant, task.toolset).await?;
+        let tool =
+            stored
+                .toolset
+                .tool(&task.tool)
+                .cloned()
+                .ok_or_else(|| EngineError::UnknownTool {
+                    run_id: run.id,
+                    tool: task.tool.clone(),
+                })?;
+        let server = tool
+            .namespace()
+            .and_then(|server| stored.toolset.server(server))
+            .cloned();
+        let call = ToolCall {
+            run: run.clone(),
+            seq,
+            tool,
+            server,
+            args: payloads::load(&self.blobs, &run.tenant, &task.args).await?,
+            idempotency_key: idempotency_key(run.id, seq),
+            attempt: task.attempt,
+            token: token.clone(),
+            trace_context: None,
         };
-        self.journal
-            .complete_tool_task(&task, outcome, self.clock.now())
-            .await?;
+        let journal = &self.journal;
+        match self.dispatcher.dispatch(call, None).await {
+            Dispatched::Result(result) => {
+                let outcome = ToolOutcome::Result(result);
+                journal
+                    .complete_tool_task(&token, outcome, self.clock.now())
+                    .await?;
+            }
+            Dispatched::Failed(failure) => {
+                let outcome = ToolOutcome::Failure(failure);
+                journal
+                    .complete_tool_task(&token, outcome, self.clock.now())
+                    .await?;
+            }
+            Dispatched::Transient(failure) => {
+                let retry = task.policy.on_interruption == Interruption::Retry
+                    && task.attempt < self.config.max_tool_attempts;
+                if retry {
+                    journal.retry_tool_task(&token, self.clock.now()).await?;
+                } else {
+                    let outcome = ToolOutcome::Failure(failure);
+                    journal
+                        .complete_tool_task(&token, outcome, self.clock.now())
+                        .await?;
+                }
+            }
+            Dispatched::Deferred => {
+                let record = self.run_record(&run).await?;
+                journal.defer_tool_task(&token, record.expires_at).await?;
+            }
+            Dispatched::Park(reason) => {
+                journal.park_tool_task(&token, reason).await?;
+            }
+        }
         Ok(())
     }
 
@@ -470,17 +564,19 @@ where
 
     /// Makes a quarantined run runnable again, typically after a fix. Returns whether it was
     /// quarantined.
-    pub async fn release_quarantine(&self, run_id: RunId) -> Result<bool, EngineError> {
-        Ok(self.journal.release_quarantine(run_id).await?)
+    pub async fn release_quarantine(&self, run: &RunRef) -> Result<bool, EngineError> {
+        Ok(self.journal.release_quarantine(run).await?)
     }
 
-    /// Ends a quarantined run with `run_aborted { non_determinism }`. Returns `false` if the
-    /// run is not quarantined, or is leased.
-    pub async fn give_up(&self, run_id: RunId) -> Result<bool, EngineError> {
+    /// Ends a quarantined run: `run_aborted { non_determinism }` after a replay mismatch,
+    /// `run_aborted { internal }` after repeated failures. Returns `false` if the run is not
+    /// quarantined, or is leased.
+    pub async fn give_up(&self, run: &RunRef) -> Result<bool, EngineError> {
+        let run_id = run.id;
         let lease = self
             .journal
             .acquire_run(
-                run_id,
+                run,
                 &self.config.worker,
                 self.clock.now(),
                 self.config.lease_duration,
@@ -490,11 +586,11 @@ where
             return Ok(false);
         };
         let result = async {
-            let record = self.run_record(run_id).await?;
-            let Some(mismatch) = record.quarantine else {
+            let record = self.run_record(run).await?;
+            let Some(quarantine) = record.quarantine else {
                 return Ok(false);
             };
-            let history = self.journal.load_history(run_id, 0).await?;
+            let history = self.journal.load_history(run, 0).await?;
             let state = RunState::from_history(&history)
                 .map_err(|error| EngineError::CorruptHistory { run_id, error })?;
             let recorded_at = state
@@ -504,8 +600,11 @@ where
                 index: state.history_len(),
                 recorded_at,
                 event: Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
-                    kind: AbortKind::NonDeterminism,
-                    message: mismatch,
+                    kind: match quarantine.kind {
+                        QuarantineKind::NonDeterminism => AbortKind::NonDeterminism,
+                        QuarantineKind::Failures => AbortKind::Internal,
+                    },
+                    message: quarantine.reason,
                 })),
             };
             let consumed = self
@@ -515,15 +614,10 @@ where
                 .into_iter()
                 .map(|item| item.id)
                 .collect();
-            let activation = Activation {
-                entries: vec![entry],
-                consumed,
-                tool_calls: Vec::new(),
-                timers: Vec::new(),
-                cancelled_timers: Vec::new(),
-                status: RunStatus::Aborted,
-            };
-            self.journal.commit_activation(&lease, activation).await?;
+            let activation = Activation::new(vec![entry], consumed, RunStatus::Aborted);
+            self.journal
+                .commit_activation(&lease, activation, self.clock.now())
+                .await?;
             tracing::warn!(%run_id, "quarantined run given up");
             Ok(true)
         }
@@ -540,19 +634,20 @@ where
     /// tool is called.
     pub async fn replay(
         &self,
-        run_id: RunId,
+        run: &RunRef,
         script: Option<&Script>,
     ) -> Result<ReplayVerdict, EngineError> {
-        let record = self.run_record(run_id).await?;
+        let run_id = run.id;
+        let record = self.run_record(run).await?;
         let script = match script {
             Some(script) => script.clone(),
-            None => self.stored_script(record.script).await?.script,
+            None => self.stored_script(&run.tenant, record.script).await?.script,
         };
-        let toolset = self.toolset(record.toolset).await?;
+        let toolset = self.toolset(&run.tenant, record.toolset).await?.toolset;
         let compiled = self.executor.compile(&script, &toolset);
-        let history = self.journal.load_history(run_id, 0).await?;
+        let history = self.journal.load_history(run, 0).await?;
         let input = ReplayInput {
-            run_id,
+            run,
             compiled: compiled.as_ref(),
             toolset: &toolset,
             history: &history,
@@ -566,8 +661,8 @@ where
         }
     }
 
-    pub async fn get_run(&self, run_id: RunId) -> Result<Option<RunRecord>, EngineError> {
-        Ok(self.journal.get_run(run_id).await?)
+    pub async fn get_run(&self, run: &RunRef) -> Result<Option<RunRecord>, EngineError> {
+        Ok(self.journal.get_run(run).await?)
     }
 
     pub async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, EngineError> {
@@ -575,42 +670,52 @@ where
     }
 
     /// The run's history as stored: large payloads are digests.
-    pub async fn history(&self, run_id: RunId) -> Result<Vec<HistoryEntry>, EngineError> {
-        self.run_record(run_id).await?;
-        Ok(self.journal.load_history(run_id, 0).await?)
+    pub async fn history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EngineError> {
+        self.run_record(run).await?;
+        Ok(self.journal.load_history(run, 0).await?)
     }
 
     /// The run's history with every payload loaded: a self-contained document.
-    pub async fn export_history(&self, run_id: RunId) -> Result<Vec<HistoryEntry>, EngineError> {
-        let mut history = self.history(run_id).await?;
-        payloads::load_all(&self.blobs, &mut history).await?;
+    pub async fn export_history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EngineError> {
+        let mut history = self.history(run).await?;
+        payloads::load_all(&self.blobs, &run.tenant, &mut history).await?;
         Ok(history)
     }
 
     /// The run's state, folded from its history.
-    pub async fn run_state(&self, run_id: RunId) -> Result<RunState, EngineError> {
-        let history = self.history(run_id).await?;
-        RunState::from_history(&history)
-            .map_err(|error| EngineError::CorruptHistory { run_id, error })
+    pub async fn run_state(&self, run: &RunRef) -> Result<RunState, EngineError> {
+        let history = self.history(run).await?;
+        RunState::from_history(&history).map_err(|error| EngineError::CorruptHistory {
+            run_id: run.id,
+            error,
+        })
     }
 
-    pub(crate) async fn run_record(&self, run_id: RunId) -> Result<RunRecord, EngineError> {
+    pub(crate) async fn run_record(&self, run: &RunRef) -> Result<RunRecord, EngineError> {
         self.journal
-            .get_run(run_id)
+            .get_run(run)
             .await?
-            .ok_or(EngineError::RunNotFound(run_id))
+            .ok_or(EngineError::RunNotFound(run.id))
     }
 
-    pub(crate) async fn stored_script(&self, digest: Digest) -> Result<StoredScript, EngineError> {
+    pub(crate) async fn stored_script(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<StoredScript, EngineError> {
         self.journal
-            .get_script(digest)
+            .get_script(tenant, digest)
             .await?
             .ok_or(EngineError::ScriptNotFound(digest))
     }
 
-    pub(crate) async fn toolset(&self, digest: Digest) -> Result<Toolset, EngineError> {
+    pub(crate) async fn toolset(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<StoredToolset, EngineError> {
         self.journal
-            .get_toolset(digest)
+            .get_toolset(tenant, digest)
             .await?
             .ok_or(EngineError::ToolsetNotFound(digest))
     }
