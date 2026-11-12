@@ -10,7 +10,8 @@ use ptc_core::{Digest, RunId, Timestamp, Toolset};
 use ptc_engine::Engine;
 use ptc_engine::adapters::SystemEntropy;
 use ptc_engine::ports::{
-    Clock, JournalStore, ReadModel, RunRecord, RunRef, StoredToolset, TenantId, ToolDeclarations,
+    Clock, JournalStore, ReadModel, Retention, RunRecord, RunRef, StoredToolset, TenantId,
+    ToolDeclarations,
 };
 use ptc_engine::projector::{Projector, ProjectorConfig};
 use ptc_engine::retention::Housekeeper;
@@ -47,6 +48,8 @@ pub(crate) struct Settings {
     pub(crate) embedded: bool,
     pub(crate) roles: Vec<ServerRole>,
     pub(crate) run_quota: Option<u32>,
+    /// The retention of the tenants this server creates.
+    pub(crate) retention: Retention,
     pub(crate) allow_stdio: bool,
     /// Where lifecycle webhooks may go.
     pub(crate) webhook_egress: WebhookEgress,

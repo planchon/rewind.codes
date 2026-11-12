@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 use ptc_api::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
 use ptc_api::common::{Labels, timestamp};
 use ptc_core::Digest;
-use ptc_engine::ports::{JournalStore, Retention, Tenant, TenantId};
+use ptc_engine::ports::{JournalStore, Tenant, TenantId};
 use ptc_engine::text::refuse_nul_in_labels;
 
 use crate::app::App;
@@ -54,14 +54,15 @@ pub(super) async fn create_key(
     Ok((StatusCode::CREATED, Json(key)).into_response())
 }
 
-/// A tenant gets its record, with the deployment's quota, when its first key is created.
+/// A tenant gets its record, with the deployment's quota and retention, when its first key is
+/// created.
 pub(crate) async fn ensure_tenant(app: &App, tenant: &TenantId) -> Result<(), ApiError> {
     if app.store.get_tenant(tenant).await?.is_none() {
         app.store
             .put_tenant(&Tenant {
                 id: tenant.clone(),
                 active_run_quota: app.settings.run_quota,
-                retention: Retention::default(),
+                retention: app.settings.retention,
             })
             .await?;
     }

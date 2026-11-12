@@ -4,7 +4,7 @@
 //! The test starts a MinIO container with a unique name on a free local port, creates its
 //! buckets with the MinIO client, and removes the container when it ends. MinIO no longer
 //! publishes its own images, so both come from Chainguard's builds. Without Docker the test is
-//! skipped, and says so.
+//! skipped, and says so, unless `PTC_REQUIRE_DOCKER` is set (CI): it fails then.
 
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
@@ -93,6 +93,10 @@ impl Minio {
             eprintln!(
                 "SKIPPED: the S3 conformance test needs Docker to run MinIO, and Docker is \
                  absent or its daemon is not running"
+            );
+            assert!(
+                std::env::var_os("PTC_REQUIRE_DOCKER").is_none(),
+                "PTC_REQUIRE_DOCKER is set: Docker must be running"
             );
             return None;
         }

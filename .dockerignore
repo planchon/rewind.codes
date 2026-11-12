@@ -1,0 +1,8 @@
+# The build context of the Dockerfile: the workspace without build outputs.
+.git
+**/target
+**/node_modules
+dashboard/dist
+sdk/typescript/dist
+**/.ptc
+deploy/.env

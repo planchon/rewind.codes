@@ -5,7 +5,7 @@
 //! The collector writes what it receives as OTLP JSON to files the test reads. Each exporter the
 //! suite creates reads only what arrived after it was created. The container has a unique name
 //! and local ports, and is removed when the test ends. Without Docker the test is skipped, and
-//! says so.
+//! says so, unless `PTC_REQUIRE_DOCKER` is set (CI): it fails then.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -513,6 +513,10 @@ impl OtelCollector {
             eprintln!(
                 "SKIPPED: the OTLP test needs Docker to run an OpenTelemetry Collector, and \
                  Docker is absent or its daemon is not running"
+            );
+            assert!(
+                std::env::var_os("PTC_REQUIRE_DOCKER").is_none(),
+                "PTC_REQUIRE_DOCKER is set: Docker must be running"
             );
             return None;
         }

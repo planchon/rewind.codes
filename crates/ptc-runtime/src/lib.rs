@@ -35,6 +35,7 @@ mod mocks;
 mod ops;
 pub mod sandbox_lib;
 mod snapshot;
+mod vendored;
 mod watchdog;
 
 pub use executor::{SetupError, V8Executor, V8Instance};

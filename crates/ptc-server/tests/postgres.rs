@@ -1,7 +1,8 @@
 //! The API end to end on Postgres (Docker): a server with the api role only and two servers with
 //! the worker role only share one database and one blob directory. Runs started through the api
 //! server are activated by the workers; host-tool tasks are long-polled through the api server;
-//! quotas hold across them. Skipped, with a message, when Docker is absent.
+//! quotas hold across them. Skipped, with a message, when Docker is absent, unless
+//! `PTC_REQUIRE_DOCKER` is set (CI): they fail then.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -31,6 +32,10 @@ impl Postgres {
             .output();
         if !matches!(&docker, Ok(output) if output.status.success()) {
             eprintln!("SKIPPED: the Postgres tests of ptc-server need Docker, which is absent");
+            assert!(
+                std::env::var_os("PTC_REQUIRE_DOCKER").is_none(),
+                "PTC_REQUIRE_DOCKER is set: Docker must be running"
+            );
             return None;
         }
         let nanos = SystemTime::now()

@@ -1,0 +1,292 @@
+# The reference deployment of ai-ptc (deploy/README.md): Postgres, MinIO (S3), an OpenTelemetry
+# Collector, one api server and two workers behind an edge, and the workers' egress gateway.
+#
+#   ./init.sh                                   # writes .env with fresh secrets, once
+#   docker compose up -d --build                # workers under runc
+#   docker compose --profile gvisor up -d       # workers under gVisor (needs runsc)
+#
+# Networks:
+#   public  the edge, the api's outbound calls (MCP discovery), services outside the deployment
+#   core    internal, no route out: the stores, the collector, the api, the workers, the egress
+#
+# Workers hold no network of their own: each joins the namespace of a holder (`worker-N-net`)
+# whose default route goes through the egress gateway, their only way out.
+
+name: ai-ptc
+
+x-ptc: &ptc
+  image: ${PTC_IMAGE:-ai-ptc:local}
+  restart: unless-stopped
+  # A stopping server lets the work in flight commit, for up to 30 s.
+  stop_grace_period: 40s
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs:
+    - /tmp:size=64m
+
+x-ptc-env: &ptc-env
+  PTC_STORE: postgres://ptc:${POSTGRES_PASSWORD:?run ./init.sh first}@postgres:5432/ptc
+  PTC_BLOBS: s3://ptc-payloads
+  PTC_S3_ENDPOINT: http://minio:9000
+  PTC_S3_REGION: us-east-1
+  PTC_S3_ALLOW_HTTP: "true"
+  PTC_S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?run ./init.sh first}
+  PTC_S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?run ./init.sh first}
+  PTC_MASTER_KEY: ${PTC_MASTER_KEY:?run ./init.sh first}
+  PTC_PUBLIC_URL: ${PTC_PUBLIC_URL:-http://localhost:8080}
+  PTC_OTLP_ENDPOINT: http://otel-collector:4318
+  PTC_LOG: ${PTC_LOG:-info}
+  PTC_DEFAULT_TTL: ${PTC_DEFAULT_TTL:-30d}
+  PTC_MAX_TTL: ${PTC_MAX_TTL:-365d}
+  # MCP servers at private addresses the servers may reach (names, *.domain, CIDR networks):
+  # `loadgen` is the load generator's fake MCP server (profile load).
+  PTC_ALLOW_INTERNAL_MCP: ${PTC_ALLOW_INTERNAL_MCP:-loadgen}
+
+x-worker: &worker
+  <<: *ptc
+  command: [server, --role, worker]
+  mem_limit: ${PTC_WORKER_MEMORY:-1g}
+  cpus: ${PTC_WORKER_CPUS:-2}
+  depends_on: &worker-depends
+    postgres: { condition: service_healthy }
+    minio-init: { condition: service_completed_successfully }
+    otel-collector: { condition: service_started }
+
+x-worker-env: &worker-env
+  <<: *ptc-env
+  PTC_ACTIVATIONS: ${PTC_WORKER_ACTIVATIONS:-4}
+  PTC_DISPATCHES: ${PTC_WORKER_DISPATCHES:-64}
+  PTC_CACHE_INSTANCES: ${PTC_CACHE_INSTANCES:-500}
+  PTC_CACHE_MEMORY: ${PTC_CACHE_MEMORY:-384MiB}
+
+x-holder: &holder
+  build: ./egress
+  image: ai-ptc-egress:local
+  entrypoint: [/usr/local/bin/route.sh]
+  restart: unless-stopped
+  cap_drop: [ALL]
+  cap_add: [NET_ADMIN]
+  environment:
+    PTC_EGRESS_ADDRESS: ${PTC_EGRESS_ADDRESS:-172.29.213.2}
+  dns: ["${PTC_EGRESS_ADDRESS:-172.29.213.2}"]
+  networks: [core]
+  mem_limit: 16m
+  depends_on: [egress]
+
+networks:
+  public: {}
+  core:
+    internal: true
+    ipam:
+      config:
+        # Fixed addresses below .128 (the egress gateway is .2); Docker hands out the rest.
+        - subnet: ${PTC_CORE_SUBNET:-172.29.213.0/24}
+          ip_range: ${PTC_CORE_RANGE:-172.29.213.128/25}
+
+volumes:
+  postgres: {}
+  minio: {}
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    command: [postgres, -c, max_connections=200]
+    environment:
+      POSTGRES_USER: ptc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run ./init.sh first}
+      POSTGRES_DB: ptc
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [core]
+    mem_limit: 512m
+    shm_size: 128m
+    healthcheck:
+      test: [CMD, pg_isready, -U, ptc, -d, ptc]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    restart: unless-stopped
+    command: [server, /data, --address, ":9000"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?run ./init.sh first}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?run ./init.sh first}
+      MC_HOST_local: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@127.0.0.1:9000
+    volumes: [minio:/data]
+    networks: [core]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, mc, ready, local]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  # The bucket of large payloads and archived journals.
+  minio-init:
+    image: cgr.dev/chainguard/minio-client:latest
+    command: [mb, --ignore-existing, ptc/ptc-payloads]
+    environment:
+      MC_HOST_ptc: http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000
+    networks: [core]
+    depends_on:
+      minio: { condition: service_healthy }
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.165.0
+    restart: unless-stopped
+    command: [--config, /etc/otelcol/config.yaml]
+    volumes: [./otel-collector.yaml:/etc/otelcol/config.yaml:ro]
+    networks: [core]
+    mem_limit: 256m
+
+  # The workers' only way out: forwards to the addresses of PTC_EGRESS_ALLOW's names only.
+  egress:
+    build: ./egress
+    image: ai-ptc-egress:local
+    restart: unless-stopped
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, NET_BIND_SERVICE, SETUID, SETGID]
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      PTC_EGRESS_ADDRESS: ${PTC_EGRESS_ADDRESS:-172.29.213.2}
+      # MCP servers, hosts of `http` tools, receivers of webhook subscriptions. `loadgen` is the
+      # fake MCP server of the load generator (profile load).
+      PTC_EGRESS_ALLOW: ${PTC_EGRESS_ALLOW:-loadgen}
+      PTC_EGRESS_LOG_QUERIES: ${PTC_EGRESS_LOG_QUERIES:-}
+    networks:
+      core: { ipv4_address: "${PTC_EGRESS_ADDRESS:-172.29.213.2}" }
+      public: {}
+    mem_limit: 64m
+
+  api:
+    <<: *ptc
+    build:
+      context: ..
+      target: ptc
+    command: [server, --role, api]
+    environment:
+      <<: *ptc-env
+      PTC_WORKER_NAME: api
+      PTC_ADMIN_KEY: ${PTC_ADMIN_KEY:?run ./init.sh first}
+      PTC_ADMIN_TENANT: ${PTC_ADMIN_TENANT:-default}
+      PTC_RUN_QUOTA: ${PTC_RUN_QUOTA:-10000}
+      PTC_JOURNAL_RETENTION: ${PTC_JOURNAL_RETENTION:-30d}
+      PTC_ARCHIVE_RETENTION: ${PTC_ARCHIVE_RETENTION:-365d}
+      PTC_READ_MODEL_RETENTION: ${PTC_READ_MODEL_RETENTION:-90d}
+      PTC_PAYLOAD_GRACE: ${PTC_PAYLOAD_GRACE:-24h}
+    tmpfs:
+      - /tmp:size=64m
+      # tsgo, extracted at the first type-check: it must be executable.
+      - /var/cache/ptc:size=256m,exec,uid=65532,gid=65532,mode=0700
+    networks: [public, core]
+    mem_limit: 512m
+    cpus: 2
+    depends_on:
+      <<: *worker-depends
+
+  edge:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    volumes: [./edge/Caddyfile:/etc/caddy/Caddyfile:ro]
+    ports:
+      - ${PTC_BIND:-127.0.0.1}:${PTC_PORT:-8080}:8080
+    networks: [public, core]
+    mem_limit: 128m
+    depends_on: [api]
+
+  # The network namespaces of the workers.
+  worker-1-net: *holder
+  worker-2-net: *holder
+
+  worker-1:
+    <<: *worker
+    profiles: [runc]
+    network_mode: service:worker-1-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-1
+    depends_on:
+      <<: *worker-depends
+      worker-1-net: { condition: service_started }
+
+  worker-2:
+    <<: *worker
+    profiles: [runc]
+    network_mode: service:worker-2-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-2
+    depends_on:
+      <<: *worker-depends
+      worker-2-net: { condition: service_started }
+
+  # The same workers under gVisor: `docker compose --profile gvisor up -d` on a host whose
+  # Docker has the runsc runtime (https://gvisor.dev/docs/user_guide/install/).
+  worker-1-gvisor:
+    <<: *worker
+    profiles: [gvisor]
+    runtime: runsc
+    network_mode: service:worker-1-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-1
+    depends_on:
+      <<: *worker-depends
+      worker-1-net: { condition: service_started }
+
+  worker-2-gvisor:
+    <<: *worker
+    profiles: [gvisor]
+    runtime: runsc
+    network_mode: service:worker-2-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-2
+    depends_on:
+      <<: *worker-depends
+      worker-2-net: { condition: service_started }
+
+  # The worker pool of the previous build, kept after an upgrade that changed the determinism
+  # epoch until the runs of its epochs end (README, "Upgrades"). Its build only runs the epochs
+  # it supports, so it only takes their runs.
+  worker-previous-net:
+    <<: *holder
+    profiles: [previous-epoch]
+
+  worker-previous:
+    <<: *worker
+    image: ${PTC_PREVIOUS_IMAGE:-ai-ptc:local}
+    profiles: [previous-epoch]
+    runtime: ${PTC_PREVIOUS_RUNTIME:-runc}
+    network_mode: service:worker-previous-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-previous
+    depends_on:
+      <<: *worker-depends
+      worker-previous-net: { condition: service_started }
+
+  # The load generator (`ptc-load`), with its fake MCP server at http://loadgen:9100/mcp, which
+  # the workers reach through the egress gateway: `docker compose --profile load run --rm
+  # loadgen run …` (README, "Load and limit tests").
+  loadgen:
+    build:
+      context: ..
+      target: load
+    image: ${PTC_LOAD_IMAGE:-ai-ptc-load:local}
+    profiles: [load]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      PTC_URL: http://edge:8080
+      PTC_ADMIN_KEY: ${PTC_ADMIN_KEY:?run ./init.sh first}
+      PTC_LOAD_MCP_LISTEN: 0.0.0.0:9100
+      PTC_LOAD_MCP_URL: http://loadgen:9100/mcp
+    networks: [public]
+    mem_limit: 512m
+    depends_on: [edge]

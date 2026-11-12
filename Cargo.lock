@@ -3830,6 +3830,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptc-load"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "ptc-api",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
 name = "ptc-mcp"
 version = "0.1.0"
 dependencies = [

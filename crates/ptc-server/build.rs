@@ -30,7 +30,13 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("set by cargo"));
     let dashboard = manifest.join("../../dashboard");
     let dist = match env::var_os("PTC_DASHBOARD_DIST") {
-        Some(dist) => PathBuf::from(dist),
+        Some(dist) => {
+            // A new build in the same place changes the files to embed: cargo scans the
+            // directory for changes.
+            let dist = PathBuf::from(dist);
+            println!("cargo:rerun-if-changed={}", dist.display());
+            dist
+        }
         None => {
             for source in SOURCES {
                 println!(

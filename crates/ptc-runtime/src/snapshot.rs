@@ -46,8 +46,9 @@ pub(crate) fn build(glue: &'static Glue) -> Result<&'static [u8], ExecutorError>
         .map_err(|err| internal(err.to_string()))?;
     let _context = tokio.enter();
     crate::executor::init_v8();
+    // The extensions' JavaScript comes from the binary, not from the build machine's disk.
     let mut runtime = JsRuntimeForSnapshot::try_new(RuntimeOptions {
-        extensions: ops::extensions(),
+        extensions: crate::vendored::for_snapshot(ops::extensions())?,
         ..Default::default()
     })
     .map_err(|err| internal(err.to_string()))?;
