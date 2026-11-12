@@ -51,6 +51,10 @@ serde_html_form = "0.2"
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
+# The production store (ptc-store-postgres): Postgres through sqlx, without its macros (queries are
+# built at run time) and with rustls on aws-lc-rs, the provider the HTTP clients already use. 0.8:
+# sqlx 0.9 needs Rust 1.94, above the workspace's 1.88.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "uuid"] }
 sse-stream = "0.3"
 tempfile = "3"
 thiserror = "2"
