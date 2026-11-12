@@ -8,7 +8,9 @@
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
 //! [`Egress`] lends the egress checks of `http` to the other requests a deployment sends where a
-//! tenant says: the server's lifecycle webhooks.
+//! tenant says: the server's lifecycle webhooks, and the MCP servers of a deployed server
+//! ([`McpEgress`]), where the operator may let some internal hosts through
+//! ([`InternalAllowList`]).
 //! The dispatchers never write to the journal; credentials go only into the transport, never
 //! into a result, a failure or a log.
 //!
@@ -16,7 +18,8 @@
 //!
 //! ```text
 //! connection (pooled by tenant, server and credentials) ── 401 ──► Park(credentials_expired)
-//!   │                                                     └ unreachable ──► Transient
+//!   │   only where McpConfig::egress lets it go           ├ unreachable ──► Transient
+//!   │                                                     └ address refused ──► Failed
 //!   ▼ unless approved after a schema change: the server's current tool
 //!   │   gone, args refused by a new input schema, output schema changed ──► Park(schema_changed)
 //!   ▼ tools/call with _meta { io.ai-ptc/idempotency-key, traceparent, tracestate }
@@ -43,11 +46,13 @@ mod failure;
 mod http;
 mod result;
 mod schema;
+mod transport;
 
 pub use http::{
-    Egress, HttpConfig, HttpTool, NameResolver, Resolving, SystemResolver, http_input_schema,
-    http_output_schema, http_tool,
+    Egress, HttpConfig, HttpTool, InternalAllowList, NameResolver, Resolving, SystemResolver,
+    http_input_schema, http_output_schema, http_tool,
 };
+pub use transport::McpEgress;
 
 use connection::Pool;
 use failure::Failure;
@@ -56,8 +61,11 @@ use failure::Failure;
 pub const IDEMPOTENCY_KEY_META: &str = "io.ai-ptc/idempotency-key";
 
 /// How [`McpDispatcher`] manages its connections.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct McpConfig {
+    /// Where the streamable HTTP servers may be: with the egress checks of a deployment by
+    /// default, anywhere for the embedded server and the CLI.
+    pub egress: McpEgress,
     /// How long opening a session may take: connecting or starting the process, then
     /// initializing. Listing the tools at discovery gets as long again.
     pub connect_timeout: Duration,
@@ -79,6 +87,7 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
+            egress: McpEgress::default(),
             connect_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(5 * 60),
             tools_ttl: Duration::from_secs(60),
@@ -124,7 +133,8 @@ pub enum McpError {
     /// The server did not answer in time.
     #[error("{message}")]
     Timeout { server: String, message: String },
-    /// The server answered, but not with its tools.
+    /// The server answered, but not with its tools; or it may not be reached at all: its
+    /// address is refused by the egress checks, or it redirects elsewhere.
     #[error("{message}")]
     Refused { server: String, message: String },
     /// The HTTP client of the `http` tool could not be built.
@@ -262,7 +272,8 @@ impl McpDispatcher {
         match lease.connection().call(params).await {
             Ok(result) => result::outcome(&call.tool, result),
             Err(error) => {
-                let (failure, broken) = failure::of_service(&server.name, &error);
+                let (failure, broken) =
+                    failure::of_service(&server.name, &error, lease.connection().answers());
                 if broken {
                     lease.forget();
                 }
