@@ -174,6 +174,18 @@ impl Isolate {
         Ok(())
     }
 
+    /// The memory the isolate holds, in bytes, from V8's heap statistics: the heap's total
+    /// size (what V8 reserved for it, used or not), plus what V8 allocated with `malloc` and
+    /// the external memory its objects keep alive (array buffers).
+    pub(crate) fn memory_usage(&mut self) -> u64 {
+        let statistics = self.runtime.v8_isolate().get_heap_statistics();
+        let bytes = statistics
+            .total_heap_size()
+            .saturating_add(statistics.malloced_memory())
+            .saturating_add(statistics.external_memory());
+        u64::try_from(bytes).unwrap_or(u64::MAX)
+    }
+
     pub(crate) fn state<R>(&mut self, f: impl FnOnce(&mut ExecState) -> R) -> R {
         f(self
             .runtime

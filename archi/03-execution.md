@@ -145,7 +145,8 @@ Mitigations:
 After a commit, the worker keeps the script instance in a cache, and gets the run's next
 activation first.
 
-- The cache is an LRU, bounded per worker: 500 instances and 4 GiB by default.
+- The cache is an LRU, bounded per worker: 500 instances and 4 GiB by default. An instance's
+  memory is its isolate's, as V8's heap statistics give it after each call into the script.
 - The store records the run's sticky worker at commit. When the run becomes runnable again,
   that worker gets it first. Other workers only take it after 5 s.
 - **Hit**: the instance is cached, and its history length is the run's. Only the new trigger

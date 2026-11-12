@@ -98,6 +98,11 @@ impl Instance {
         self.run(&deliver, &delivery_json(delivery))
     }
 
+    /// The memory the isolate holds, in bytes.
+    pub(crate) fn memory_usage(&mut self) -> u64 {
+        self.isolate.memory_usage()
+    }
+
     /// Calls a hook with one string argument, drains microtasks, then evaluates the script's
     /// outcome (`idle`), all under the CPU budget.
     fn run(

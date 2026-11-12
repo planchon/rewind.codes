@@ -80,17 +80,24 @@ impl ScriptExecutor for V8Executor {
             .map_err(|err| {
                 ExecutorError::Internal(format!("cannot spawn the isolate thread: {err}"))
             })?;
-        let emitted = emitted.await.map_err(|_| stopped())??;
+        let ran = emitted.await.map_err(|_| stopped())??;
         Ok((
             V8Instance {
                 requests: Mutex::new(requests),
+                memory: ran.memory,
             },
-            emitted,
+            ran.emitted,
         ))
     }
 }
 
-type Reply = oneshot::Sender<Result<Vec<Emitted>, ExecutorError>>;
+/// What a call into the isolate produced, and the memory the isolate holds after it.
+struct Ran {
+    emitted: Vec<Emitted>,
+    memory: u64,
+}
+
+type Reply = oneshot::Sender<Result<Ran, ExecutorError>>;
 
 struct Request {
     delivery: Delivery,
@@ -103,6 +110,8 @@ struct Request {
 pub struct V8Instance {
     // `mpsc::Sender` is `Send` but not `Sync`; the mutex makes the instance `Sync` as well.
     requests: Mutex<mpsc::Sender<Request>>,
+    /// The memory the isolate held after its last call, measured on its thread.
+    memory: u64,
 }
 
 impl ScriptInstance for V8Instance {
@@ -121,7 +130,16 @@ impl ScriptInstance for V8Instance {
                 reply,
             })
             .map_err(|_| stopped())?;
-        emitted.await.map_err(|_| stopped())?
+        let ran = emitted.await.map_err(|_| stopped())??;
+        self.memory = ran.memory;
+        Ok(ran.emitted)
+    }
+
+    /// The isolate's heap statistics after its last call: its heap's total size, plus what V8
+    /// allocated outside it (`malloc`, array buffers). The sticky cache sums it against its
+    /// memory bound.
+    fn memory_usage(&self) -> u64 {
+        self.memory
     }
 }
 
@@ -160,15 +178,26 @@ fn run_isolate(
     };
     let result = isolate.start(&start.input);
     let alive = result.is_ok();
-    if started.send(result).is_err() || !alive {
+    if started.send(measured(&mut isolate, result)).is_err() || !alive {
         return;
     }
     while let Ok(request) = inbox.recv() {
         let result = isolate.deliver(&request.delivery, request.now);
         let alive = result.is_ok();
-        let _ = request.reply.send(result);
+        let _ = request.reply.send(measured(&mut isolate, result));
         if !alive {
             return;
         }
     }
+}
+
+/// A call's result, with the memory the isolate holds after it.
+fn measured(
+    isolate: &mut Instance,
+    result: Result<Vec<Emitted>, ExecutorError>,
+) -> Result<Ran, ExecutorError> {
+    result.map(|emitted| Ran {
+        emitted,
+        memory: isolate.memory_usage(),
+    })
 }
