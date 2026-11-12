@@ -9,17 +9,19 @@
 //! - [`replay`]: rebuilding a script from its history.
 //! - [`projector`]: the feed's consumers: read model, run telemetry ([`telemetry`]) and
 //!   lifecycle webhooks, projected from committed entries.
+//! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`retention`]: archives, deletion, payload cleanup.
 //! - [`mock`]: mock mode: cassettes, mocks, and scenarios run in virtual time.
 //! - [`trace`]: the LLM trace of a run.
 //! - [`adapters`]: in-memory storage, read model, secrets, telemetry and webhooks; static tool
 //!   responses and type-checking; system and virtual time; system and seeded entropy. With a
 //!   virtual clock they make mock mode and the test harness.
-//! - `conformance` (feature): the suites every adapter of `JournalStore`, `BlobStore`,
-//!   `ReadModel` and `SecretStore` must pass.
+//! - `conformance` (feature): the five suites every adapter of `JournalStore`, `BlobStore`,
+//!   `ReadModel`, `SecretStore` and `SpanExporter` must pass.
 //!
-//! The engine is deterministic given its ports. Service telemetry goes through the `tracing`
-//! facade; what a script did is recorded in the journal, never emitted from here.
+//! The engine is deterministic given its ports. Service telemetry (spans, logs and measurements)
+//! goes through the `tracing` facade; what a script did is recorded in the journal, never
+//! emitted from here.
 
 #![forbid(unsafe_code)]
 
@@ -32,6 +34,7 @@ mod driver;
 mod engine;
 mod export;
 mod fork;
+pub mod metrics;
 pub mod mock;
 mod payloads;
 pub mod ports;

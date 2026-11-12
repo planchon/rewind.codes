@@ -15,6 +15,9 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
 use opentelemetry_sdk::logs::{LogBatch, LogExporter};
+use opentelemetry_sdk::metrics::Temporality;
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
 use opentelemetry_sdk::trace::{SpanData, SpanExporter};
 use tokio::runtime::Handle;
 
@@ -81,6 +84,44 @@ pub(crate) fn log_exporter(
         OtlpProtocol::HttpProtobuf => {
             let mut builder = builder.with_http().with_protocol(Protocol::HttpBinary);
             if let Some(endpoint) = config.http_endpoint("/v1/logs") {
+                builder = builder.with_endpoint(endpoint);
+            }
+            if let Some(timeout) = config.timeout {
+                builder = builder.with_timeout(timeout);
+            }
+            if !config.headers.is_empty() {
+                builder = builder.with_headers(headers(config));
+            }
+            builder.build()
+        }
+    };
+    built.map_err(|error| OtelError::Build(error.to_string()))
+}
+
+/// The OTLP metric exporter `config` describes. Called within a Tokio runtime. Its temporality
+/// is `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`, else cumulative.
+pub(crate) fn metric_exporter(
+    config: &OtlpConfig,
+) -> Result<opentelemetry_otlp::MetricExporter, OtelError> {
+    runtime()?;
+    let builder = opentelemetry_otlp::MetricExporter::builder();
+    let built = match config.resolved_protocol()? {
+        OtlpProtocol::Grpc => {
+            let mut builder = builder.with_tonic();
+            if let Some(endpoint) = &config.endpoint {
+                builder = builder.with_endpoint(endpoint.clone());
+            }
+            if let Some(timeout) = config.timeout {
+                builder = builder.with_timeout(timeout);
+            }
+            if !config.headers.is_empty() {
+                builder = builder.with_metadata(metadata(config)?);
+            }
+            builder.build()
+        }
+        OtlpProtocol::HttpProtobuf => {
+            let mut builder = builder.with_http().with_protocol(Protocol::HttpBinary);
+            if let Some(endpoint) = config.http_endpoint("/v1/metrics") {
                 builder = builder.with_endpoint(endpoint);
             }
             if let Some(timeout) = config.timeout {
@@ -202,5 +243,33 @@ impl<E: LogExporter + 'static> LogExporter for OnRuntime<E> {
         if let Some(exporter) = Arc::get_mut(&mut self.exporter) {
             exporter.set_resource(resource);
         }
+    }
+}
+
+/// The SDK's periodic reader exports from its own thread and lends the batch for the export's
+/// duration: the export cannot become a task of its own, so this thread drives it on the runtime
+/// until it ends.
+impl<E: PushMetricExporter> PushMetricExporter for OnRuntime<E> {
+    async fn export(&self, metrics: &ResourceMetrics) -> OTelSdkResult {
+        let suppressed = Context::current().with_telemetry_suppressed();
+        if Handle::try_current().is_ok() {
+            return Err(OTelSdkError::InternalFailure(
+                "metrics are exported from the reader's thread, outside the runtime".into(),
+            ));
+        }
+        self.runtime
+            .block_on(self.exporter.export(metrics).with_context(suppressed))
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.exporter.force_flush()
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.exporter.shutdown_with_timeout(timeout)
+    }
+
+    fn temporality(&self) -> Temporality {
+        self.exporter.temporality()
     }
 }

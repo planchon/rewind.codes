@@ -9,7 +9,15 @@
 //! - **Service telemetry**: what the platform does, from the `tracing` facade of the engine and
 //!   the adapters. [`install`] sets up the process's subscriber; [`ServiceTelemetry`] turns
 //!   `tracing` spans into OpenTelemetry spans, joined to a run's trace by the fields they record
-//!   (`trace_id`, `span_id`, `parent_span_id`, `traceparent`), and events into log records.
+//!   (`trace_id`, `span_id`, `parent_span_id`, `traceparent`), events into log records, and
+//!   measurements into metrics.
+//!
+//! Measurements are `tracing` events and spans whose fields name an instrument, as
+//! `tracing-opentelemetry` does: `monotonic_counter.<name>`, `counter.<name>` (up-down),
+//! `histogram.<name>` and `gauge.<name>` on an event record its value; `histogram.<name>` on a
+//! span records the span's duration in seconds when it closes. Fields named `ptc.*` are their
+//! attributes, and no other. A measurement is not a log, and `RUST_LOG` never filters it out.
+//! `ptc_engine::metrics` lists what the engine measures.
 //!
 //! Composition roots build both within their Tokio runtime:
 //!
@@ -35,6 +43,7 @@
 mod config;
 mod convert;
 mod exporter;
+mod metrics;
 mod otlp;
 mod service;
 mod subscriber;
