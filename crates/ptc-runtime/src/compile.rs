@@ -32,19 +32,7 @@ pub(crate) fn compile(
     toolset: &Toolset,
     glue: &Glue,
 ) -> Result<CompiledScript, InvalidScript> {
-    let specifier = ModuleSpecifier::parse(SCRIPT_SPECIFIER)
-        .map_err(|err| invalid(format!("internal: {err}")))?;
-    let parsed = deno_ast::parse_module(ParseParams {
-        specifier,
-        text: script.source().into(),
-        media_type: MediaType::TypeScript,
-        capture_tokens: false,
-        scope_analysis: false,
-        maybe_syntax: None,
-    })
-    // Diagnostics name the script as stack traces and callsites do.
-    .map_err(|err| invalid(err.to_string().replace(SCRIPT_SPECIFIER, "script.ts")))?;
-
+    let parsed = parse(script, SCRIPT_SPECIFIER)?;
     Checker {
         parsed: &parsed,
         std: glue
@@ -55,7 +43,43 @@ pub(crate) fn compile(
         tools: (glue.tool_exports)(toolset),
     }
     .check()?;
+    let Transpiled {
+        javascript,
+        source_map,
+    } = emit(parsed)?;
+    Ok(CompiledScript {
+        javascript,
+        source_map,
+    })
+}
 
+/// TypeScript compiled to JavaScript, with its source map.
+pub(crate) struct Transpiled {
+    pub(crate) javascript: String,
+    pub(crate) source_map: String,
+}
+
+/// Compiles a module without the checks of a script: a module of mock handlers.
+pub(crate) fn transpile(source: &Script, specifier: &str) -> Result<Transpiled, InvalidScript> {
+    emit(parse(source, specifier)?)
+}
+
+fn parse(source: &Script, specifier: &str) -> Result<ParsedSource, InvalidScript> {
+    let file = specifier.trim_start_matches("file:///");
+    deno_ast::parse_module(ParseParams {
+        specifier: ModuleSpecifier::parse(specifier)
+            .map_err(|err| invalid(format!("internal: {err}")))?,
+        text: source.source().into(),
+        media_type: MediaType::TypeScript,
+        capture_tokens: false,
+        scope_analysis: false,
+        maybe_syntax: None,
+    })
+    // Diagnostics name the file as stack traces and callsites do.
+    .map_err(|err| invalid(err.to_string().replace(specifier, file)))
+}
+
+fn emit(parsed: ParsedSource) -> Result<Transpiled, InvalidScript> {
     let emitted = parsed
         .transpile(
             &TranspileOptions::default(),
@@ -68,8 +92,7 @@ pub(crate) fn compile(
         )
         .map_err(|err| invalid(err.to_string()))?
         .into_source();
-
-    Ok(CompiledScript {
+    Ok(Transpiled {
         javascript: emitted.text,
         source_map: emitted.source_map.unwrap_or_default(),
     })
@@ -376,7 +399,7 @@ mod tests {
         assert_eq!(
             refused("import { fetch } from \"ptc\";\nexport default async () => fetch;"),
             "\"ptc\" has no export named \"fetch\" (script.ts:1:10); it exports CancelledError, \
-             ToolError, run, signal, sleep"
+             ToolError, run, signal, sleep, webhook"
         );
         assert_eq!(
             refused("import { jira } from \"ptc:tools\";\nexport default async () => jira;"),

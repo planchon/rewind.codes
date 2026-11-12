@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ptc_core::{
-    AbortKind, Annotation, Callsite, Command, Completion, Epoch, Event, HistoryEntry, RunId,
-    RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, ToolFailure,
-    ToolFailureKind, Toolset, canonical_json,
+    AbortKind, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry,
+    RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, Tool,
+    ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
 };
 use ptc_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
@@ -55,6 +55,17 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
             "title": format!("issue {}", call.args["number"]),
         })),
         "flaky" => Err(failure(ToolFailureKind::OutcomeUnknown, "connection reset")),
+        "webhook" => Ok(json!({
+            "url": format!("https://ptc.example.com/hooks/tok_{}", call.args["name"].as_str().unwrap_or_default()),
+        })),
+        // Echoes the request it was sent, as a JSON body.
+        "http" => Ok(json!({
+            "status": if call.args["url"].as_str().unwrap_or_default().ends_with("/missing") { 404 } else { 200 },
+            "statusText": "OK",
+            "url": call.args["url"],
+            "headers": [["Content-Type", "application/json"], ["x-b", "1"], ["x-a", "0"], ["x-b", "2"]],
+            "body": { "text": call.args.to_string() },
+        })),
         "failing" => Err(failure(ToolFailureKind::Error, "boom")),
         _ => Ok(json!({ "ok": true })),
     }
@@ -165,13 +176,26 @@ fn toolset() -> Toolset {
 
 impl Harness {
     async fn try_start(&self, source: &str, input: Value) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), toolset(), input);
+        self.try_start_with(source, input, toolset()).await
+    }
+
+    async fn try_start_with(
+        &self,
+        source: &str,
+        input: Value,
+        toolset: Toolset,
+    ) -> Result<RunRef, StartError> {
+        let mut request = StartRun::new(Script::new(source), toolset, input);
         request.mode = ptc_core::RunMode::Mock;
         Ok(self.engine.start_run(request).await?.run)
     }
 
     async fn start(&self, source: &str, input: Value) -> RunRef {
         self.try_start(source, input).await.unwrap()
+    }
+
+    async fn start_with(&self, source: &str, input: Value, toolset: Toolset) -> RunRef {
+        self.try_start_with(source, input, toolset).await.unwrap()
     }
 
     async fn drive(&self) {
@@ -495,115 +519,84 @@ impl AdvanceMs for VirtualClock {
     }
 }
 
+/// What type-checks is what exists (`archi/04-tools.md`, "Type-checking"): the isolate's global
+/// names are exactly those `lib/globals.json` declares, with `fetch` only for a toolset that
+/// enables the `http` tool.
 #[tokio::test]
-async fn the_sandbox_has_exactly_the_documented_globals() {
-    let harness = harness();
-    let run = harness
-        .run(
-            r#"
+async fn the_sandbox_has_exactly_the_declared_globals() {
+    const SCRIPT: &str = r#"
 export default async function main() {
-  const absent = ["fetch", "Deno", "WeakRef", "FinalizationRegistry", "SharedArrayBuffer",
-                  "Atomics", "__bootstrap", "__ptcHandoff", "require", "process", "Buffer"];
+  const absent = ["Deno", "WeakRef", "FinalizationRegistry", "SharedArrayBuffer", "Atomics",
+                  "WebAssembly", "__bootstrap", "__ptcHooks", "__ptcHandoff", "require", "process",
+                  "Buffer"];
   return {
     absent: absent.filter((name) => typeof (globalThis as any)[name] !== "undefined"),
     globals: Object.getOwnPropertyNames(globalThis).sort(),
+    blobUrls: typeof (URL as any).createObjectURL,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     locale: Intl.DateTimeFormat().resolvedOptions().locale,
   };
 }
-"#,
-            json!({}),
-        )
-        .await;
-    let output = run.output();
-    assert_eq!(output["absent"], json!([]));
-    assert_eq!(output["timezone"], "UTC");
-    assert_eq!(output["locale"], "en-US");
+"#;
+    let declared = ptc_runtime::sandbox_lib::declared_globals();
+    for http_tool in [false, true] {
+        let harness = harness();
+        let toolset = if http_tool {
+            builtins_toolset()
+        } else {
+            toolset()
+        };
+        let id = harness.start_with(SCRIPT, json!({}), toolset).await;
+        harness.drive().await;
+        let run = harness.get(&id).await;
+        let output = run.output();
+        assert_eq!(output["absent"], json!([]));
+        assert_eq!(output["blobUrls"], "undefined");
+        assert_eq!(output["timezone"], "UTC");
+        assert_eq!(output["locale"], "en-US");
+        let globals: std::collections::BTreeSet<&str> = output["globals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(globals, declared.names(http_tool), "http tool: {http_tool}");
+    }
+}
 
-    // Beyond the ECMAScript built-ins, only what archi/01-product.md lists.
-    let ecmascript = [
-        "AggregateError",
-        "Array",
-        "ArrayBuffer",
-        "AsyncDisposableStack",
-        "BigInt",
-        "BigInt64Array",
-        "BigUint64Array",
-        "Boolean",
-        "DataView",
-        "Date",
-        "DisposableStack",
-        "Error",
-        "EvalError",
-        "Float16Array",
-        "Float32Array",
-        "Float64Array",
-        "Function",
-        "Infinity",
-        "Int16Array",
-        "Int32Array",
-        "Int8Array",
-        "Intl",
-        "Iterator",
-        "JSON",
-        "Map",
-        "Math",
-        "NaN",
-        "Number",
-        "Object",
-        "Promise",
-        "Proxy",
-        "RangeError",
-        "ReferenceError",
-        "Reflect",
-        "RegExp",
-        "Set",
-        "String",
-        "SuppressedError",
-        "Symbol",
-        "SyntaxError",
-        "Temporal",
-        "TypeError",
-        "URIError",
-        "Uint16Array",
-        "Uint32Array",
-        "Uint8Array",
-        "Uint8ClampedArray",
-        "WeakMap",
-        "WeakSet",
-        "WebAssembly",
-        "decodeURI",
-        "decodeURIComponent",
-        "encodeURI",
-        "encodeURIComponent",
-        "escape",
-        "eval",
-        "globalThis",
-        "isFinite",
-        "isNaN",
-        "parseFloat",
-        "parseInt",
-        "undefined",
-        "unescape",
-    ];
-    let documented = [
-        "clearInterval",
-        "clearTimeout",
-        "console",
-        "crypto",
-        "performance",
-        "queueMicrotask",
-        "setInterval",
-        "setTimeout",
-    ];
-    let unexpected: Vec<&str> = output["globals"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(Value::as_str)
-        .filter(|name| !ecmascript.contains(name) && !documented.contains(name))
-        .collect();
-    assert_eq!(unexpected, Vec::<&str>::new(), "undocumented globals");
+/// A toolset with the built-ins `http` and `webhook`, pinned with the schemas of
+/// `ptc_runtime::builtins`, and one host tool.
+fn builtins_toolset() -> Toolset {
+    Toolset::new(
+        [],
+        [
+            Tool::new(
+                "http",
+                ToolRoute::Builtin(Builtin::Http {
+                    allowed_hosts: vec!["api.example.com".into()],
+                }),
+                ptc_runtime::builtins::http_input_schema(),
+            ),
+            Tool::new(
+                "webhook",
+                ToolRoute::Builtin(Builtin::Webhook),
+                ptc_runtime::builtins::webhook_input_schema(),
+            ),
+            Tool::new(
+                "github.get_issue",
+                ToolRoute::Host {
+                    group: Some("github".into()),
+                },
+                json!({
+                    "type": "object",
+                    "properties": { "number": { "type": "integer", "minimum": 1 } },
+                    "required": ["number"],
+                    "additionalProperties": false,
+                }),
+            ),
+        ],
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -1262,5 +1255,355 @@ async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
         (error.name.as_str(), error.message.as_str()),
         ("CancelledError", "run cancelled: user asked")
     );
+    harness.assert_replays(&run).await;
+}
+
+/// Each piece of TypeScript's lib beyond ES2024 that `lib/tsconfig.json` lists is shipped by
+/// V8: what type-checks exists.
+#[tokio::test]
+async fn the_ecmascript_lib_beyond_es2024_exists() {
+    let harness = harness();
+    let run = harness
+        .run(
+            r#"
+export default async function main() {
+  const g: any = globalThis;
+  const L = g.Intl.Locale.prototype;
+  const libs: Record<string, unknown[]> = {
+    "es2025.collection": [g.Set.prototype.union, g.Set.prototype.isDisjointFrom],
+    "es2025.float16": [g.Float16Array, g.Math.f16round, g.DataView.prototype.getFloat16],
+    "es2025.intl": [g.Intl.DurationFormat],
+    "es2025.iterator": [g.Iterator.from, g.Iterator.prototype.map, g.Iterator.prototype.toArray],
+    "es2025.promise": [g.Promise.try],
+    "es2025.regexp": [g.RegExp.escape],
+    "esnext.array": [g.Array.fromAsync],
+    "esnext.collection": [g.Map.prototype.getOrInsert, g.Map.prototype.getOrInsertComputed,
+                          g.WeakMap.prototype.getOrInsert, g.WeakMap.prototype.getOrInsertComputed],
+    "esnext.date": [g.Date.prototype.toTemporalInstant],
+    "esnext.disposable": [g.DisposableStack, g.AsyncDisposableStack, g.SuppressedError],
+    "esnext.error": [g.Error.isError],
+    "esnext.intl": [L.getCalendars, L.getCollations, L.getHourCycles, L.getNumberingSystems,
+                    L.getTextInfo, L.getTimeZones, L.getWeekInfo],
+    "esnext.temporal": [g.Temporal.Instant, g.Temporal.Now.instant],
+    "esnext.typedarrays": [g.Uint8Array.prototype.toHex, g.Uint8Array.prototype.setFromHex,
+                           g.Uint8Array.fromHex, g.Uint8Array.prototype.toBase64,
+                           g.Uint8Array.prototype.setFromBase64, g.Uint8Array.fromBase64],
+  };
+  return Object.fromEntries(
+    Object.entries(libs).map(([lib, members]) => [lib, members.every((m) => typeof m === "function")]),
+  );
+}
+"#,
+            json!({}),
+        )
+        .await;
+    let config: Value = serde_json::from_str(ptc_runtime::sandbox_lib::TSCONFIG_JSON).unwrap();
+    let listed: Vec<&str> = config["compilerOptions"]["lib"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|lib| lib.starts_with("es2025") || lib.starts_with("esnext"))
+        .collect();
+    let checked = run.output().as_object().unwrap();
+    for lib in listed {
+        assert_eq!(checked.get(lib), Some(&json!(true)), "{lib}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Web-standard globals, args validation, webhook and fetch
+
+#[tokio::test]
+async fn web_standard_globals_are_pure_and_replay() {
+    let harness = harness();
+    let run = harness
+        .run(
+            r#"
+export default async function main() {
+  const url = new URL("../b?x=1#h", "https://Example.com/a/c");
+  url.searchParams.append("y", "z w");
+  const params = new URLSearchParams({ b: "2", a: "1" });
+  params.sort();
+  const bytes = new TextEncoder().encode("héllo 👋");
+  const copy = structuredClone({ when: new Date(0), list: [1, { a: 2 }], map: new Map([["k", 1]]) });
+  let bad = "";
+  try { new URL("not a url"); } catch (e) { bad = (e as Error).name; }
+  let notLatin1 = "";
+  try { btoa("👋"); } catch (e) { notLatin1 = (e as Error).name; }
+  return {
+    href: url.href,
+    host: url.host,
+    params: params.toString(),
+    canParse: [URL.canParse("https://a.example"), URL.canParse("nope")],
+    bytes: Array.from(bytes),
+    text: new TextDecoder().decode(bytes),
+    latin1: new TextDecoder("latin1").decode(new Uint8Array([0xe9])),
+    base64: btoa("hello"),
+    decoded: atob("aGVsbG8="),
+    copy: [copy.when instanceof Date, copy.when.getTime(), copy.list, copy.map.get("k")],
+    errors: [bad, notLatin1],
+  };
+}
+"#,
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        run.output(),
+        &json!({
+            "href": "https://example.com/b?x=1&y=z+w#h",
+            "host": "example.com",
+            "params": "a=1&b=2",
+            "canParse": [true, false],
+            "bytes": [104, 195, 169, 108, 108, 111, 32, 240, 159, 145, 139],
+            "text": "héllo 👋",
+            "latin1": "é",
+            "base64": "aGVsbG8=",
+            "decoded": "hello",
+            "copy": [true, 0, [1, { "a": 2 }], 1],
+            "errors": ["TypeError", "InvalidCharacterError"],
+        })
+    );
+    harness.assert_replays(&run).await;
+}
+
+#[tokio::test]
+async fn invalid_args_throw_a_type_error_at_the_call_site_and_record_nothing() {
+    let harness = harness();
+    let script = r#"
+import { github } from "ptc:tools";
+
+export default async function main() {
+  let caught = "";
+  try {
+    await github.get_issue({ number: 0, extra: true } as any);
+  } catch (e) {
+    caught = `${(e as Error).name}: ${(e as Error).message}`;
+  }
+  const issue = await github.get_issue({ number: 4 });
+  await github.get_issue({ number: "4" } as any);
+}
+"#;
+    let id = harness
+        .start_with(script, json!({}), builtins_toolset())
+        .await;
+    harness.drive().await;
+    let run = harness.get(&id).await;
+    let error = run.error();
+    assert_eq!(error.name, "TypeError");
+    assert_eq!(
+        error.message,
+        "invalid arguments for github.get_issue: args.number: \"4\" is not of type \"integer\""
+    );
+    // The stack starts at the script's call, without frames of the glue.
+    let stack = error.stack.as_deref().unwrap();
+    assert!(
+        stack.contains("at main (file:///script.ts:12:16)"),
+        "{stack}"
+    );
+    assert!(!stack.contains("ptc:"), "{stack}");
+    // Only the valid call was recorded.
+    let calls: Vec<&Command> = run
+        .commands()
+        .into_iter()
+        .filter(|command| matches!(command, Command::ScheduleToolCall { .. }))
+        .collect();
+    assert_eq!(calls.len(), 1, "{:#?}", run.history);
+    harness.assert_replays(&run).await;
+
+    let caught = harness
+        .start_with(
+            r#"
+import { github } from "ptc:tools";
+export default async function main() {
+  const p = github.get_issue({ number: 0, extra: true } as any);
+  return await p.then(() => "resolved", (e: Error) => `${e.name}: ${e.message}`);
+}
+"#,
+            json!({}),
+            builtins_toolset(),
+        )
+        .await;
+    harness.drive().await;
+    assert_eq!(
+        harness.get(&caught).await.output(),
+        &json!(
+            "TypeError: invalid arguments for github.get_issue: args.number: 0 is less than the \
+             minimum of 1; args: Additional properties are not allowed ('extra' was unexpected)"
+        )
+    );
+}
+
+#[tokio::test]
+async fn webhook_is_a_journaled_call_of_the_built_in() {
+    let harness = harness();
+    let id = harness
+        .start_with(
+            r#"
+import { webhook, signal } from "ptc";
+
+export default async function main() {
+  const hook = await webhook("pr_merged");
+  const event = await signal<{ merged: boolean }>("pr_merged");
+  return { url: hook.url, merged: event.merged };
+}
+"#,
+            json!({}),
+            builtins_toolset(),
+        )
+        .await;
+    harness.drive().await;
+    harness
+        .engine
+        .signal(&id, "pr_merged", json!({ "merged": true }), None)
+        .await
+        .unwrap();
+    harness.drive().await;
+    let run = harness.get(&id).await;
+    assert_eq!(
+        run.output(),
+        &json!({ "url": "https://ptc.example.com/hooks/tok_pr_merged", "merged": true })
+    );
+    let Command::ScheduleToolCall {
+        tool,
+        args,
+        callsite,
+        ..
+    } = run.commands()[0]
+    else {
+        panic!("{:#?}", run.history);
+    };
+    assert_eq!(tool, "webhook");
+    assert_eq!(args.value(), Some(&json!({ "name": "pr_merged" })));
+    assert_eq!(callsite.map(|c| c.line), Some(5));
+    harness.assert_replays(&run).await;
+
+    // Without the built-in, webhook() rejects at the call site, and nothing is recorded.
+    let run = harness
+        .run(
+            r#"
+import { webhook } from "ptc";
+export default async function main() {
+  return await webhook("x").then(() => "resolved", (e: Error) => `${e.name}: ${e.message}`);
+}
+"#,
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        run.output(),
+        &json!(
+            "TypeError: webhook() needs the built-in webhook tool, which this run's toolset does \
+             not have"
+        )
+    );
+    assert_eq!(run.events(), ["run_started", "complete_run"]);
+}
+
+#[tokio::test]
+async fn fetch_is_a_journaled_call_of_the_http_tool() {
+    let harness = harness();
+    let id = harness
+        .start_with(
+            r#"
+export default async function main() {
+  const response = await fetch(new URL("https://API.example.com/v1/items?q=1"), {
+    method: "post",
+    headers: [["X-Trace", " abc "], ["Accept", "application/json"]],
+    body: JSON.stringify({ name: "x" }),
+  });
+  const sent = await response.json();
+  let again = "";
+  try { await response.text(); } catch (e) { again = (e as Error).message; }
+  const missing = await fetch("https://api.example.com/missing");
+  const bytes = await missing.bytes();
+  const form = await fetch("https://api.example.com/form", {
+    method: "PUT",
+    body: new URLSearchParams({ a: "1" }),
+  });
+  const binary = await fetch("https://api.example.com/upload", {
+    method: "POST",
+    body: new Uint8Array([0, 255]),
+  });
+  let refused = "";
+  try { await fetch("ftp://api.example.com/x"); } catch (e) { refused = `${(e as Error).name}: ${(e as Error).message}`; }
+  let getBody = "";
+  try { await fetch("https://api.example.com/", { body: "x" }); } catch (e) { getBody = (e as Error).message; }
+  return {
+    status: response.status,
+    ok: response.ok,
+    url: response.url,
+    redirected: response.redirected,
+    used: response.bodyUsed,
+    contentType: response.headers.get("content-type"),
+    xb: response.headers.get("X-B"),
+    headers: [...response.headers],
+    sent,
+    again,
+    missing: [missing.status, missing.ok, bytes.length > 0],
+    form: (await form.json()).body,
+    binary: (await binary.json()).body,
+    refused,
+    getBody,
+  };
+}
+"#,
+            json!({}),
+            builtins_toolset(),
+        )
+        .await;
+    harness.drive().await;
+    let run = harness.get(&id).await;
+    let output = run.output();
+    assert_eq!(output["status"], 200);
+    assert_eq!(output["ok"], true);
+    assert_eq!(output["url"], "https://api.example.com/v1/items?q=1");
+    assert_eq!(output["redirected"], false);
+    assert_eq!(output["used"], true);
+    assert_eq!(output["contentType"], "application/json");
+    assert_eq!(output["xb"], "1, 2");
+    assert_eq!(
+        output["headers"],
+        json!([
+            ["content-type", "application/json"],
+            ["x-a", "0"],
+            ["x-b", "1, 2"]
+        ])
+    );
+    assert_eq!(
+        output["sent"],
+        json!({
+            "url": "https://api.example.com/v1/items?q=1",
+            "method": "POST",
+            "headers": [
+                ["x-trace", "abc"],
+                ["accept", "application/json"],
+                ["content-type", "text/plain;charset=UTF-8"],
+            ],
+            "body": { "text": "{\"name\":\"x\"}" },
+        })
+    );
+    assert_eq!(
+        output["again"],
+        "the body of this response was already read"
+    );
+    assert_eq!(output["missing"], json!([404, false, true]));
+    assert_eq!(output["form"], json!({ "text": "a=1" }));
+    assert_eq!(output["binary"], json!({ "base64": "AP8=" }));
+    assert_eq!(
+        output["refused"],
+        "TypeError: fetch only sends http and https requests, not ftp:"
+    );
+    assert_eq!(output["getBody"], "a GET request cannot have a body");
+    let tools: Vec<&str> = run
+        .commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::ScheduleToolCall { tool, .. } => Some(tool.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tools, ["http", "http", "http", "http"]);
     harness.assert_replays(&run).await;
 }

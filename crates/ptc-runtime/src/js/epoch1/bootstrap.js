@@ -1,12 +1,16 @@
 // Bootstrap of the ai-ptc sandbox, determinism epoch 1.
 //
-// FROZEN: a change a script can observe (a seq, a digest, a value, a global) needs a new epoch
-// (archi/03-execution.md, "Determinism epoch").
+// FROZEN once 0.1 ships: a change a script can observe (a seq, a digest, a value, a global)
+// needs a new epoch (archi/03-execution.md, "Determinism epoch").
 //
-// Runs once per isolate, before any module. It makes every source of non-determinism
-// deterministic, removes ambient capabilities, and returns the hooks Rust drives the script
-// with: start(input), deliver(completion) and idle(). The `ptc` modules get their hooks
-// through a global that `ptc:internal` deletes before any user code runs.
+// It runs once per process, when the epoch's V8 startup snapshot is built: it makes every
+// source of non-determinism deterministic, installs the web-standard globals of deno_web,
+// and leaves the hooks Rust drives the script with in `globalThis.__ptcHooks`. Every instance
+// starts from that snapshot. Rust takes the hooks, then calls init(config) with what belongs to
+// the run (its id, its start, its seed, whether the toolset has the http tool); init removes the
+// ambient capabilities, `Deno`, `__bootstrap` and the hooks from the global object before any
+// module is loaded. The `ptc` modules get their hooks through a global that
+// `ptc:internal` deletes before any user code runs.
 //
 // Nothing here is asynchronous from V8's point of view: ops record a command and return its
 // seq, and promises are settled when Rust delivers the matching completion.
@@ -14,26 +18,36 @@
 ((globalThis) => {
   "use strict";
 
+  const { core, primordials } = globalThis.__bootstrap;
   const {
     ArrayBufferIsView,
+    ArrayBufferPrototypeGetByteLength,
+    ArrayBufferPrototypeSlice,
+    ArrayIsArray,
     ArrayPrototypeFilter,
     ArrayPrototypeIndexOf,
     ArrayPrototypeJoin,
     ArrayPrototypeMap,
     ArrayPrototypePush,
     ArrayPrototypeShift,
+    ArrayPrototypeSort,
     ArrayPrototypeSplice,
+    ArrayPrototypeValues,
     Error,
     JSONParse,
     JSONStringify,
+    NumberIsInteger,
     NumberParseInt,
     ObjectDefineProperty,
+    ObjectEntries,
     ObjectFreeze,
     ObjectGetOwnPropertyDescriptor,
+    ObjectPrototypeIsPrototypeOf,
     Promise,
     PromisePrototypeThen,
     PromiseReject,
     PromiseResolve,
+    RangeError,
     ReflectApply,
     ReflectConstruct,
     RegExpPrototypeExec,
@@ -43,9 +57,16 @@
     StringPrototypePadStart,
     StringPrototypeSlice,
     StringPrototypeSplit,
+    StringPrototypeToLowerCase,
+    StringPrototypeToUpperCase,
+    StringPrototypeTrim,
+    SymbolIterator,
     TypeError,
+    TypedArrayPrototypeGetBuffer,
+    TypedArrayPrototypeGetByteLength,
+    TypedArrayPrototypeGetByteOffset,
     Uint8Array,
-  } = globalThis.__bootstrap.primordials;
+  } = primordials;
 
   const {
     op_drain_pending_rejections,
@@ -54,19 +75,54 @@
     op_ptc_complete,
     op_ptc_fail,
     op_ptc_log,
-    op_ptc_math_random_state,
     op_ptc_now,
     op_ptc_random_fill,
-    op_ptc_run_id,
     op_ptc_signal_awaited,
     op_ptc_start_timer,
-    op_ptc_started_at,
-  } = globalThis.Deno.core.ops;
+  } = core.ops;
 
   // ---------------------------------------------------------------------------------------
-  // Callsites: the position in the model's script, source-mapped to TypeScript.
+  // Web-standard globals, from deno_web: pure and deterministic. Their non-deterministic
+  // parts (timers, performance, blobs, message ports) are never installed.
+
+  const { URL, URLSearchParams } = core.loadExtScript("ext:deno_web/00_url.js");
+  const { TextDecoder, TextEncoder } = core.loadExtScript("ext:deno_web/08_text_encoding.js");
+  const { atob, btoa } = core.loadExtScript("ext:deno_web/05_base64.js");
+  const { structuredClone } = core.loadExtScript("ext:deno_web/13_message_port.js");
+  const { forgivingBase64Decode, forgivingBase64Encode } = core.loadExtScript(
+    "ext:deno_web/00_infra.js",
+  );
+  // Blob URLs need the blob store, which the sandbox does not have. Loading the module that
+  // adds them first means nothing adds them back later.
+  core.loadExtScript("ext:deno_web/09_file.js");
+  delete URL.createObjectURL;
+  delete URL.revokeObjectURL;
+
+  function defineGlobal(name, value, writable = true) {
+    ObjectDefineProperty(globalThis, name, { value, writable, configurable: true });
+  }
+
+  for (
+    const [name, value] of [
+      ["URL", URL],
+      ["URLSearchParams", URLSearchParams],
+      ["TextEncoder", TextEncoder],
+      ["TextDecoder", TextDecoder],
+      ["atob", atob],
+      ["btoa", btoa],
+      ["structuredClone", structuredClone],
+    ]
+  ) {
+    defineGlobal(name, value);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Stacks: the script's own frames only. Frames of the runtime's modules (`ptc:…`) and of
+  // the web globals (`ext:…`) would leak their line numbers into journals.
 
   const SCRIPT_FRAME = /file:\/\/\/script\.ts:(\d+):(\d+)/;
+  // Such as "    at start (ptc:bootstrap:467:16)" or "    at new URL (ext:deno_web/00_url.js:1:2)".
+  const INTERNAL_FRAME = /^\s+at (?:.* \()?(?:ptc:\w+|ext:[\w/.-]+):\d+:\d+\)?$/;
 
   function callsite() {
     const stack = new Error().stack ?? "";
@@ -75,6 +131,29 @@
       if (match) return [NumberParseInt(match[1], 10), NumberParseInt(match[2], 10)];
     }
     return [0, 0];
+  }
+
+  function scriptStack(stack) {
+    return ArrayPrototypeJoin(
+      ArrayPrototypeFilter(
+        StringPrototypeSplit(String(stack ?? ""), "\n"),
+        (line) => RegExpPrototypeExec(INTERNAL_FRAME, line) === null,
+      ),
+      "\n",
+    );
+  }
+
+  // An error raised by the glue on behalf of a call the script made: a fresh error of the same
+  // kind, whose stack starts at the script's call.
+  function atCallSite(error) {
+    const Kind = ObjectPrototypeIsPrototypeOf(RangeError.prototype, error) ? RangeError : TypeError;
+    const raised = new Kind(String(error?.message ?? error));
+    ObjectDefineProperty(raised, "stack", {
+      value: scriptStack(raised.stack),
+      writable: true,
+      configurable: true,
+    });
+    return raised;
   }
 
   // ---------------------------------------------------------------------------------------
@@ -87,7 +166,7 @@
   }
 
   const now = () => op_ptc_now();
-  const startedAt = op_ptc_started_at();
+  let startedAt = 0; // set by init
 
   const LogicalDate = function Date(...args) {
     if (new.target === undefined) return String(new NativeDate(now()));
@@ -127,8 +206,10 @@
     return ReflectApply(formatToParts, this, [date === undefined ? now() : date]);
   };
 
-  if (globalThis.Temporal !== undefined) {
+  // V8 installs Temporal when an isolate starts from the snapshot, not in it: init calls this.
+  function logicalTemporalNow() {
     const Temporal = globalThis.Temporal;
+    if (Temporal === undefined) return;
     const instant = () => Temporal.Instant.fromEpochMilliseconds(now());
     const zoned = (timeZone = "UTC") => instant().toZonedDateTimeISO(timeZone);
     ObjectDefineProperty(Temporal, "Now", {
@@ -144,19 +225,11 @@
     });
   }
 
-  ObjectDefineProperty(globalThis, "performance", {
-    value: ObjectFreeze({ now: () => now() - startedAt, timeOrigin: startedAt }),
-    configurable: true,
-  });
-
   // ---------------------------------------------------------------------------------------
   // Randomness: sfc32 for Math.random, ChaCha20 (in Rust) for crypto. Both are keyed by the
-  // run's seed, each with its own derived key.
+  // run's seed, each with its own derived key. init sets the state of sfc32.
 
-  let [a, b, c, d] = ArrayPrototypeMap(
-    StringPrototypeSplit(op_ptc_math_random_state(), ","),
-    (word) => NumberParseInt(word, 10) >>> 0,
-  );
+  let a = 0, b = 0, c = 0, d = 0;
   function sfc32() {
     const t = (((a + b) | 0) + d) | 0;
     d = (d + 1) | 0;
@@ -166,12 +239,12 @@
     c = (c + t) | 0;
     return t >>> 0;
   }
-  for (let i = 0; i < 12; i++) sfc32();
   globalThis.Math.random = () => sfc32() / 4294967296;
 
   const hex = (byte) => StringPrototypePadStart(byte.toString(16), 2, "0");
-  ObjectDefineProperty(globalThis, "crypto", {
-    value: ObjectFreeze({
+  defineGlobal(
+    "crypto",
+    ObjectFreeze({
       getRandomValues(array) {
         if (!ArrayBufferIsView(array) || array instanceof globalThis.DataView) {
           throw new TypeError("crypto.getRandomValues expects an integer typed array");
@@ -190,8 +263,8 @@
         }-${StringPrototypeSlice(h, 16, 20)}-${StringPrototypeSlice(h, 20)}`;
       },
     }),
-    configurable: true,
-  });
+    false,
+  );
 
   // ---------------------------------------------------------------------------------------
   // Errors the script can see. They are created by the glue, outside the script's code, so
@@ -263,20 +336,13 @@
     if (failure === undefined) failure = describe(error);
   }
 
-  // A frame of the runtime's own modules, such as "    at start (ptc:bootstrap:467:16)".
-  const GLUE_FRAME = /^\s+at (?:.* \()?ptc:\w+:\d+:\d+\)?$/;
-
   function describe(error) {
     try {
       if (!(error instanceof Error)) return { name: "Error", message: show(error), stack: "" };
-      const stack = ArrayPrototypeFilter(
-        StringPrototypeSplit(String(error.stack ?? ""), "\n"),
-        (line) => RegExpPrototypeExec(GLUE_FRAME, line) === null,
-      );
       return {
         name: String(error.name),
         message: String(error.message),
-        stack: ArrayPrototypeJoin(stack, "\n"),
+        stack: scriptStack(error.stack),
       };
     } catch {
       return { name: "Error", message: "the script failed with a value that cannot be described", stack: "" };
@@ -301,20 +367,28 @@
     throw new TypeError(`invalid duration: ${String(duration)}`);
   }
 
+  // A tool call: the op checks the arguments against the tool's pinned input schema and
+  // records the command. A call refused before it is recorded rejects with an error whose stack
+  // starts at the script's call.
   function callTool(tool, args) {
     let json;
     try {
       json = JSONStringify(args === undefined ? {} : args);
     } catch (error) {
       return PromiseReject(
-        new TypeError(`the arguments of ${tool} are not serializable to JSON: ${error.message}`),
+        atCallSite(`the arguments of ${tool} are not serializable to JSON: ${error.message}`),
       );
     }
     if (json === undefined) {
-      return PromiseReject(new TypeError(`the arguments of ${tool} are not serializable to JSON`));
+      return PromiseReject(atCallSite(`the arguments of ${tool} are not serializable to JSON`));
     }
     const [line, column] = callsite();
-    const seq = op_ptc_call_tool(tool, wellFormed(json), line, column);
+    let seq;
+    try {
+      seq = op_ptc_call_tool(tool, wellFormed(json), line, column);
+    } catch (error) {
+      return PromiseReject(atCallSite(error));
+    }
     toolsInFlight++;
     return new Promise((resolve, reject) => {
       pending.set(seq, { kind: "tool", tool, resolve, reject });
@@ -327,6 +401,11 @@
     return new Promise((resolve, reject) => {
       pending.set(seq, { kind: "sleep", resolve, reject });
     });
+  }
+
+  // `webhook(name)`: a call of the built-in `webhook` tool, which returns `{ url }`.
+  function webhook(name) {
+    return callTool("webhook", { name: String(name) });
   }
 
   // setTimeout and setInterval on top of durable timers. An interval keeps its first seq as
@@ -479,11 +558,269 @@
   }
 
   // ---------------------------------------------------------------------------------------
+  // fetch: a call of the built-in `http` tool, present only when the toolset enables it
+  // (archi/04-tools.md, "The http tool and egress"). The request and the response cross the
+  // boundary as JSON (archi/08-decisions.md):
+  //
+  //   args   { url, method, headers: [[name, value], …], body?: { text } | { base64 } }
+  //   result { status, statusText?, url?, redirected?, headers?: [[name, value], …],
+  //            body?: { text } | { base64 } }
+
+  const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+  const HEADER_VALUE = /^[^\0\r\n]*$/;
+  const NORMALIZED_METHODS = ["DELETE", "GET", "HEAD", "OPTIONS", "POST", "PUT"];
+  const FORBIDDEN_METHODS = ["CONNECT", "TRACE", "TRACK"];
+
+  function headerName(name) {
+    name = String(name);
+    if (RegExpPrototypeExec(HTTP_TOKEN, name) === null) {
+      throw new TypeError(`invalid header name: ${JSONStringify(name)}`);
+    }
+    return StringPrototypeToLowerCase(name);
+  }
+
+  function headerValue(value) {
+    value = StringPrototypeTrim(String(value));
+    if (RegExpPrototypeExec(HEADER_VALUE, value) === null) {
+      throw new TypeError(`invalid header value: ${JSONStringify(value)}`);
+    }
+    return value;
+  }
+
+  function headerList(init) {
+    const list = [];
+    if (init === undefined || init === null) return list;
+    if (ObjectPrototypeIsPrototypeOf(HeadersPrototype, init)) {
+      for (const [name, value] of init) ArrayPrototypePush(list, [name, value]);
+    } else if (typeof init[SymbolIterator] === "function") {
+      for (const pair of init) {
+        if (!ArrayIsArray(pair) || pair.length !== 2) {
+          throw new TypeError("headers must be [name, value] pairs");
+        }
+        ArrayPrototypePush(list, [headerName(pair[0]), headerValue(pair[1])]);
+      }
+    } else if (typeof init === "object") {
+      for (const [name, value] of ObjectEntries(init)) {
+        ArrayPrototypePush(list, [headerName(name), headerValue(value)]);
+      }
+    } else {
+      throw new TypeError("headers must be [name, value] pairs, an object or Headers");
+    }
+    return list;
+  }
+
+  function hasHeader(list, name) {
+    for (const [key] of list) if (key === name) return true;
+    return false;
+  }
+
+  function bytesOf(view) {
+    if (ArrayBufferIsView(view)) {
+      return new Uint8Array(
+        TypedArrayPrototypeGetBuffer(view),
+        TypedArrayPrototypeGetByteOffset(view),
+        TypedArrayPrototypeGetByteLength(view),
+      );
+    }
+    return new Uint8Array(view, 0, ArrayBufferPrototypeGetByteLength(view));
+  }
+
+  function httpRequest(input, init) {
+    const url = new URL(ObjectPrototypeIsPrototypeOf(URL.prototype, input) ? input.href : String(input));
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new TypeError(`fetch only sends http and https requests, not ${url.protocol}`);
+    }
+    let method = init?.method === undefined ? "GET" : String(init.method);
+    if (RegExpPrototypeExec(HTTP_TOKEN, method) === null) {
+      throw new TypeError(`invalid method: ${JSONStringify(method)}`);
+    }
+    const upper = StringPrototypeToUpperCase(method);
+    if (ArrayPrototypeIndexOf(FORBIDDEN_METHODS, upper) !== -1) {
+      throw new TypeError(`the method ${method} is not allowed`);
+    }
+    if (ArrayPrototypeIndexOf(NORMALIZED_METHODS, upper) !== -1) method = upper;
+
+    const headers = headerList(init?.headers);
+    const request = { url: url.href, method, headers };
+    const body = init?.body;
+    if (body !== undefined && body !== null) {
+      if (method === "GET" || method === "HEAD") {
+        throw new TypeError(`a ${method} request cannot have a body`);
+      }
+      let contentType;
+      if (typeof body === "string") {
+        request.body = { text: body };
+        contentType = "text/plain;charset=UTF-8";
+      } else if (ObjectPrototypeIsPrototypeOf(URLSearchParams.prototype, body)) {
+        request.body = { text: body.toString() };
+        contentType = "application/x-www-form-urlencoded;charset=UTF-8";
+      } else if (ArrayBufferIsView(body) || body instanceof globalThis.ArrayBuffer) {
+        request.body = { base64: forgivingBase64Encode(bytesOf(body)) };
+      } else {
+        throw new TypeError("a body is a string, URLSearchParams, an ArrayBuffer or a typed array");
+      }
+      if (contentType !== undefined && !hasHeader(headers, "content-type")) {
+        ArrayPrototypePush(headers, ["content-type", contentType]);
+      }
+    }
+    return request;
+  }
+
+  // The headers of a response, read-only. Iteration is sorted by name, and the values of a
+  // name repeated are joined with ", ", as the Fetch standard does.
+  class Headers {
+    #list;
+    constructor(list) {
+      this.#list = list;
+    }
+    get(name) {
+      name = StringPrototypeToLowerCase(String(name));
+      const values = [];
+      for (const [key, value] of this.#list) if (key === name) ArrayPrototypePush(values, value);
+      return values.length === 0 ? null : ArrayPrototypeJoin(values, ", ");
+    }
+    has(name) {
+      return hasHeader(this.#list, StringPrototypeToLowerCase(String(name)));
+    }
+    #combined() {
+      const names = [];
+      for (const [key] of this.#list) {
+        if (ArrayPrototypeIndexOf(names, key) === -1) ArrayPrototypePush(names, key);
+      }
+      ArrayPrototypeSort(names);
+      return ArrayPrototypeMap(names, (name) => [name, this.get(name)]);
+    }
+    forEach(callback, thisArg) {
+      for (const [name, value] of this.#combined()) {
+        ReflectApply(callback, thisArg, [value, name, this]);
+      }
+    }
+    entries() {
+      return ArrayPrototypeValues(this.#combined());
+    }
+    keys() {
+      return ArrayPrototypeValues(ArrayPrototypeMap(this.#combined(), (entry) => entry[0]));
+    }
+    values() {
+      return ArrayPrototypeValues(ArrayPrototypeMap(this.#combined(), (entry) => entry[1]));
+    }
+    [SymbolIterator]() {
+      return this.entries();
+    }
+  }
+  const HeadersPrototype = Headers.prototype;
+
+  // The response of a request. Its body can be read once.
+  class Response {
+    #status;
+    #statusText;
+    #url;
+    #redirected;
+    #headers;
+    #body;
+    #used = false;
+    constructor(result) {
+      if (result === null || typeof result !== "object" || !NumberIsInteger(result.status)) {
+        throw new TypeError("the http tool returned something that is not a response");
+      }
+      this.#status = result.status;
+      this.#statusText = String(result.statusText ?? "");
+      this.#url = String(result.url ?? "");
+      this.#redirected = result.redirected === true;
+      this.#headers = new Headers(
+        ArrayPrototypeMap(
+          ArrayIsArray(result.headers) ? result.headers : [],
+          ([name, value]) => [StringPrototypeToLowerCase(String(name)), String(value)],
+        ),
+      );
+      this.#body = result.body ?? { text: "" };
+    }
+    get ok() {
+      return this.#status >= 200 && this.#status <= 299;
+    }
+    get status() {
+      return this.#status;
+    }
+    get statusText() {
+      return this.#statusText;
+    }
+    get url() {
+      return this.#url;
+    }
+    get redirected() {
+      return this.#redirected;
+    }
+    get headers() {
+      return this.#headers;
+    }
+    get bodyUsed() {
+      return this.#used;
+    }
+    #read() {
+      if (this.#used) throw new TypeError("the body of this response was already read");
+      this.#used = true;
+      return this.#body;
+    }
+    #bytes() {
+      const body = this.#read();
+      return typeof body.base64 === "string"
+        ? forgivingBase64Decode(body.base64)
+        : new TextEncoder().encode(String(body.text ?? ""));
+    }
+    #text() {
+      const body = this.#read();
+      return typeof body.base64 === "string"
+        ? new TextDecoder().decode(forgivingBase64Decode(body.base64))
+        : String(body.text ?? "");
+    }
+    text() {
+      return settle(() => this.#text());
+    }
+    json() {
+      return settle(() => JSONParse(this.#text()));
+    }
+    bytes() {
+      return settle(() => this.#bytes());
+    }
+    arrayBuffer() {
+      return settle(() => {
+        const bytes = this.#bytes();
+        const offset = TypedArrayPrototypeGetByteOffset(bytes);
+        return ArrayBufferPrototypeSlice(
+          TypedArrayPrototypeGetBuffer(bytes),
+          offset,
+          offset + TypedArrayPrototypeGetByteLength(bytes),
+        );
+      });
+    }
+  }
+
+  function settle(read) {
+    try {
+      return PromiseResolve(read());
+    } catch (error) {
+      return PromiseReject(error);
+    }
+  }
+
+  function fetch(input, init = undefined) {
+    let request;
+    try {
+      request = httpRequest(input, init);
+    } catch (error) {
+      return PromiseReject(atCallSite(error));
+    }
+    return PromisePrototypeThen(callTool("http", request), (result) => new Response(result));
+  }
+
+  // ---------------------------------------------------------------------------------------
   // Console: journaled as annotations.
 
   function show(value) {
     if (typeof value === "string") return value;
-    if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`;
+    if (value instanceof Error) {
+      return value.stack === undefined ? `${value.name}: ${value.message}` : scriptStack(value.stack);
+    }
     try {
       return JSONStringify(value) ?? String(value);
     } catch {
@@ -506,6 +843,66 @@
 
   // ---------------------------------------------------------------------------------------
   // Hooks driven by Rust.
+
+  // What belongs to the run, once per instance, before any module is loaded:
+  // { runId, startedAt, mathRandom: [a, b, c, d], http }.
+  function init(configJson) {
+    const config = JSONParse(configJson);
+    startedAt = config.startedAt;
+    [a, b, c, d] = ArrayPrototypeMap(config.mathRandom, (word) => word >>> 0);
+    for (let i = 0; i < 12; i++) sfc32();
+
+    defineGlobal(
+      "performance",
+      ObjectFreeze({ now: () => now() - startedAt, timeOrigin: startedAt }),
+      false,
+    );
+    if (config.http) defineGlobal("fetch", fetch);
+
+    const run = ObjectFreeze({
+      id: config.runId,
+      get startedAt() {
+        return new NativeDate(startedAt);
+      },
+    });
+
+    globalThis.__ptcHandoff = ObjectFreeze({
+      callTool,
+      sleep,
+      signal,
+      webhook,
+      run,
+      ToolError,
+      CancelledError,
+      setMain(fn) {
+        if (typeof fn !== "function") {
+          throw new TypeError("the script must `export default` its main function");
+        }
+        main = fn;
+      },
+    });
+
+    logicalTemporalNow();
+
+    // Capabilities go now, before any module is loaded: what exposes GC timing or threads,
+    // WebAssembly (code the sandbox cannot see the source of), and the runtime's own handles.
+    // Not in the snapshot: V8 completes these globals when an isolate starts from it, and
+    // deno_core reads its callbacks from `Deno.core` then.
+    for (
+      const name of [
+        "WeakRef",
+        "FinalizationRegistry",
+        "SharedArrayBuffer",
+        "Atomics",
+        "WebAssembly",
+        "Deno",
+        "__bootstrap",
+        "__ptcHooks",
+      ]
+    ) {
+      delete globalThis[name];
+    }
+  }
 
   function start(inputJson) {
     let result;
@@ -606,43 +1003,5 @@
     }
   }
 
-  // ---------------------------------------------------------------------------------------
-  // Remove ambient and non-deterministic capabilities.
-
-  for (
-    const name of [
-      "WeakRef",
-      "FinalizationRegistry",
-      "SharedArrayBuffer",
-      "Atomics",
-      "Deno",
-      "__bootstrap",
-    ]
-  ) {
-    delete globalThis[name];
-  }
-
-  const run = ObjectFreeze({
-    id: op_ptc_run_id(),
-    get startedAt() {
-      return new NativeDate(startedAt);
-    },
-  });
-
-  globalThis.__ptcHandoff = ObjectFreeze({
-    callTool,
-    sleep,
-    signal,
-    run,
-    ToolError,
-    CancelledError,
-    setMain(fn) {
-      if (typeof fn !== "function") {
-        throw new TypeError("the script must `export default` its main function");
-      }
-      main = fn;
-    },
-  });
-
-  return { start, deliver, idle };
+  globalThis.__ptcHooks = { init, start, deliver, idle };
 })(globalThis);

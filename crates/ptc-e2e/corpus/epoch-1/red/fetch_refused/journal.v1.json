@@ -1,0 +1,6 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"eb685b8f0437dbd2b1c2ed17ef17cc78add3d759f65bc404159e5b8f1e373041","toolset":"6d3ec1c9297fadb9a52e8854e612f33334afd7f5ec6c2aa7c0ad63cb9ada1060","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"http","args":{"value":{"headers":[],"method":"GET","url":"https://metadata.internal/latest"}},"callsite":{"line":2,"column":26}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_failed","seq":1,"error":{"kind":"error","message":"metadata.internal is not in the toolset's allow-list"}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"ToolError","message":"http failed: metadata.internal is not in the toolset's allow-list","stack":"ToolError: http failed: metadata.internal is not in the toolset's allow-list"}}}
+]}

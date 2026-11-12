@@ -231,7 +231,7 @@ delivery id, it is used as the signal's idempotency key.
 | `console.*` | Journaled as log annotations. |
 | `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. They come from existing deno crates ([decided](08-decisions.md#taken-after-the-layering-november-2026)). |
 | `fetch` | Absent, unless the toolset enables the built-in `http` tool with an allow-list of hosts. It is then a journaled tool call like any other, sent by the dispatcher ([egress](04-tools.md#the-http-tool-and-egress)). |
-| `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics` | Removed (they expose GC timing or threads). |
+| `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics`, `WebAssembly` | Removed (they expose GC timing or threads, or run code the sandbox cannot see the source of). |
 | File system, env, process, network, `Deno`, Node APIs | Absent. No file system, ever. |
 
 Both random generators are keyed by the run's 256-bit seed, recorded in `run_started`.

@@ -1,0 +1,35 @@
+{
+  "description": "Args are validated against the tool's pinned JSON Schema inside the op: an invalid call throws a TypeError at the call site, which the script can catch, and nothing is recorded for it.",
+  "input": {
+    "numbers": [4, "7", 0]
+  },
+  "tools": {
+    "github.get_issue": {
+      "title": "Crash on start"
+    }
+  },
+  "schemas": {
+    "github.get_issue": {
+      "type": "object",
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 }
+      },
+      "required": ["number"],
+      "additionalProperties": false
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "titles": ["Crash on start"],
+      "refused": [
+        "TypeError: invalid arguments for github.get_issue: args.number: \"7\" is not of type \"integer\"",
+        "TypeError: invalid arguments for github.get_issue: args.number: 0 is less than the minimum of 1"
+      ]
+    },
+    "calls": {
+      "github.get_issue": 1
+    },
+    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]
+  }
+}

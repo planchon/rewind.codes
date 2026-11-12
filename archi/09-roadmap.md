@@ -35,12 +35,12 @@ warnings` and `cargo test --workspace` pass.
 | --- | --- |
 | `ptc-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
 | `ptc-format` | Format v1: one event per row, journal documents, cassettes, pinned toolsets (canonical, hashing to the toolset's digest), values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
-| `ptc-engine` | The final ports of 0.1, each with an in-memory adapter; the conformance suites of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters. Use cases (start with script checks, idempotency key, TTL and the tenant's quota; signal with idempotency key; cancel; activate; fire timers; expire runs; tool tasks: policies and backoff, claims heartbeated up to the execution timeout, credentials resolved at dispatch, parked tasks and their webhooks, approvals, the host-tool worker's claim, heartbeat, deferral and answers by token, the `webhook` built-in, a routing dispatcher; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB, with its `payloads` rows; driver in real and virtual time; use-case tests on a fake executor. |
-| `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), CPU watchdog and heap limit. |
+| `ptc-engine` | The final ports of 0.1, each with an in-memory adapter; the conformance suites of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters. Use cases (start with script checks, idempotency key, TTL and the tenant's quota; signal with idempotency key; cancel; activate; fire timers; expire runs; run tool tasks, an interrupted call retried with its idempotency key up to 5 attempts, or failed with `outcomeUnknown` under `at_most_once`; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB, with its `payloads` rows; driver in real and virtual time; use-case tests on a fake executor. |
+| `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, started from the epoch's V8 snapshot, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, the web-standard globals of `deno_web`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), a CPU watchdog on the isolate thread's CPU clock and a heap limit; args validated against the pinned schema inside the op; `webhook()`; `fetch` with the `http` tool; `ptc:tools` generated from routes; TypeScript mock handlers as a `ToolDispatcher` (`TsMocks`). |
 | `ptc-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
-| `ptc-e2e` | The epoch-1 corpus: 20 blue and 23 red cases, recorded and replayed from their journals; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
+| `ptc-e2e` | The epoch-1 corpus: 25 blue and 28 red cases, recorded and replayed from their journals; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
 | `ptc-api` | The HTTP API `/v1` as a contract: the DTOs of every endpoint, problem+json errors, `Idempotency-Key`, the event stream, webhook payloads signed following Standard Webhooks and their verification, the OpenAPI 3.1 document committed at `api/openapi.json` (a test fails when it is stale), and an async client over HTTP(S) and over the embedded server's unix socket. |
-| Sandbox lib | `crates/ptc-runtime/lib/`: `ptc.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. The isolate does not match it yet: it lacks `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone` and `webhook`, and still has `Iterator`, `Float16Array`, `DisposableStack`, `AsyncDisposableStack`, `SuppressedError` and `WebAssembly`, which the ES2024 lib does not declare. |
+| Sandbox lib | `crates/ptc-runtime/lib/`: `ptc.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. A test checks that the isolate's globals are exactly the declared ones, with and without the `http` tool. |
 | `dashboard` | Scripts, Runs, Run and Tools views over the API `/v1`, with types generated from `api/openapi.json`: filters kept in the URL, the source with each call, timer, signal wait and log next to its line, a timeline that compresses idle gaps, payloads on demand, live through the event stream, light and dark themes. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `ptc-server` embeds ([07](07-code-architecture.md#dashboard)). |
 
 Not there yet:
@@ -53,14 +53,10 @@ Not there yet:
 - An activation that fails 5 times in a row does not quarantine the run: it is retried every
   lease period, forever. The store does not count consecutive failures, nor record why a run
   is quarantined.
-- The watchdog measures the wall-clock time of a call, not the thread's CPU clock, so a
-  heavily loaded host can make a script exceed its budget (live, the run is aborted; during
-  replay, the activation is retried).
 - Leases are not renewed during an activation. A replay longer than the lease (30 s) lets
   another worker take the run over, and with several workers on a very long history they can
   fence each other off forever.
-- No web-standard globals (`URL`, `TextEncoder`, `atob`…); `queueMicrotask` is present.
-- No `webhook(name)`, no feed, no projector, no OpenTelemetry export, no read model.
+- No feed, no projector, no OpenTelemetry export, no read model.
 
 ## Contracts frozen first
 
@@ -81,7 +77,7 @@ The five were approved in November 2026.
 | --- | --- | --- | --- |
 | Domain and format | `ptc-core`, `ptc-format` | Toolset with schemas and policies; cassettes; a fork's link to its parent | Stored format v1, pinned toolset |
 | Engine | `ptc-engine` | Policies and backoff; tool task lifecycle; sticky instance cache; lease heartbeat; quarantine after 5 failures; feed and projector; fork; toolset change; mock mode; tenants | Engine ports, stored format v1, pinned toolset |
-| Runtime (V8) | `ptc-runtime` | Web-standard globals from deno crates; the thread's CPU clock; startup snapshots; args validated against schemas; `webhook()`; the `http` tool | Engine ports, pinned toolset, sandbox lib |
+| Runtime (V8) | `ptc-runtime` | Nothing beyond the load and limit tests of operations | Engine ports, pinned toolset, sandbox lib |
 | Stores | `ptc-store-turso`, `ptc-store-postgres` | Turso and Postgres, through the same conformance suite: feed, failure counts, tenants, tables ready to partition | Engine ports, stored format v1 |
 | Blobs | `ptc-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `ptc-codegen`, `ptc-mcp` | `ptc-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `ptc-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |

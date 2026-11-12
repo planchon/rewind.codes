@@ -12,7 +12,7 @@
 //! | `ptc.d.ts` | The `ptc` module |
 //! | `globals.d.ts` | The sandbox's globals beyond ECMAScript |
 //! | `fetch.d.ts` | `fetch`, only for a toolset that enables the `http` tool |
-//! | `tsconfig.json` | tsgo's options: strict, ES2024 without shared memory and weak references, plus `Temporal`, no DOM |
+//! | `tsconfig.json` | tsgo's options: strict, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
 //! | `globals.json` | The declared global names, the `ptc` exports, and a hint for each absent global models reach for |
 //!
 //! The checker writes the script as `script.ts` next to these files and the toolset's
@@ -50,8 +50,8 @@ pub fn files(http_tool: bool) -> Vec<(&'static str, &'static str)> {
 /// The names `globals.json` declares.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclaredGlobals {
-    /// The ECMAScript built-ins the lib declares (ES2024, without `SharedArrayBuffer`,
-    /// `Atomics`, `WeakRef` and `FinalizationRegistry`).
+    /// The ECMAScript built-ins the lib declares (ES2025 and the ESNext pieces V8 ships, without
+    /// `SharedArrayBuffer`, `Atomics`, `WeakRef`, `FinalizationRegistry` and `WebAssembly`).
     pub ecmascript: BTreeSet<String>,
     /// The sandbox's own globals (`archi/01-product.md`, "What exists in the sandbox").
     pub sandbox: BTreeSet<String>,
@@ -217,6 +217,7 @@ mod tests {
             "Atomics",
             "WeakRef",
             "FinalizationRegistry",
+            "WebAssembly",
         ] {
             assert!(!declared.names(true).contains(removed), "{removed}");
         }
@@ -285,13 +286,27 @@ mod tests {
         }
     }
 
+    /// The ESNext pieces of TypeScript's lib whose every declaration V8 ships (a test of the
+    /// sandbox checks each one exists). Not `esnext.decorators` (no `Symbol.metadata`), nor
+    /// `esnext.sharedmemory` (removed).
+    const ESNEXT: [&str; 8] = [
+        "esnext.array",
+        "esnext.collection",
+        "esnext.date",
+        "esnext.disposable",
+        "esnext.error",
+        "esnext.intl",
+        "esnext.temporal",
+        "esnext.typedarrays",
+    ];
+
     #[test]
-    fn tsconfig_is_strict_es2024_without_dom() {
+    fn tsconfig_is_strict_es2025_without_dom() {
         let config: Value = serde_json::from_str(TSCONFIG_JSON).unwrap();
         let options = &config["compilerOptions"];
         assert_eq!(options["strict"], true);
         assert_eq!(options["noEmit"], true);
-        assert_eq!(options["target"], "es2024");
+        assert_eq!(options["target"], "es2025");
         assert_eq!(options["types"], serde_json::json!([]));
         let libs: Vec<&str> = options["lib"]
             .as_array()
@@ -300,7 +315,19 @@ mod tests {
             .map(|lib| lib.as_str().unwrap())
             .collect();
         assert!(libs.contains(&"es2024.promise"));
-        assert!(libs.contains(&"esnext.temporal"));
+        for lib in [
+            "es2025.collection",
+            "es2025.float16",
+            "es2025.intl",
+            "es2025.iterator",
+            "es2025.promise",
+            "es2025.regexp",
+        ] {
+            assert!(libs.contains(&lib), "{lib}");
+        }
+        for lib in ESNEXT {
+            assert!(libs.contains(&lib), "{lib}");
+        }
         for lib in &libs {
             assert!(
                 lib.starts_with("es") && !lib.contains("dom") && !lib.contains("webworker"),
@@ -311,9 +338,8 @@ mod tests {
                 "{lib} declares globals the sandbox removes"
             );
             assert!(
-                !lib.starts_with("es2025")
-                    && (!lib.starts_with("esnext") || *lib == "esnext.temporal"),
-                "{lib} is beyond ES2024"
+                !lib.starts_with("esnext") || ESNEXT.contains(lib),
+                "{lib} declares what V8 may not ship"
             );
         }
         assert_eq!(config["include"], serde_json::json!(["*.ts"]));

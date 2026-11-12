@@ -33,8 +33,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ptc_core::{
-    Command, Event, HistoryEntry, Interruption, Lifecycle, RunId, RunMode, RunOutcome, RunState,
-    Script, Timestamp, Toolset, parse_duration,
+    Builtin, Command, Event, HistoryEntry, Interruption, Lifecycle, RunId, RunMode, RunOutcome,
+    RunState, Script, Timestamp, Tool, ToolRoute, Toolset, parse_duration,
 };
 use ptc_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
@@ -141,8 +141,9 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools, as host tools with the default policy unless `policies` says
-    /// otherwise: in mock mode every call goes to the scenario's responses, whatever its route.
+    /// The scenario's tools: host tools, and the built-ins `http` and `webhook`, with the
+    /// pinned schemas of `schemas` and the policies of `policies` (the default otherwise). In
+    /// mock mode every call goes to the scenario's responses, whatever its route.
     pub fn toolset(&self) -> Toolset {
         scenario_toolset(&self.scenario).expect("the tools were checked when the case was loaded")
     }
@@ -190,13 +191,43 @@ impl Case {
     }
 }
 
+/// The scenario's tools: host tools, and the built-ins `http` and `webhook` with the schemas
+/// of `ptc_runtime::builtins`; `schemas` pins the input schema of some tools, and `policies`
+/// changes the default policy of some.
 fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
-    let toolset =
-        Toolset::from_host_tools(scenario.tools.keys()).map_err(|err| format!("tools: {err}"))?;
-    if scenario.policies.is_empty() {
-        return Ok(toolset);
+    if let Some(unknown) = scenario
+        .schemas
+        .keys()
+        .find(|name| !scenario.tools.contains_key(*name))
+    {
+        return Err(format!("schemas: {unknown} is not a tool of the scenario"));
     }
-    let mut tools = toolset.tools().to_vec();
+    let mut tools: Vec<Tool> = scenario
+        .tools
+        .keys()
+        .map(|name| {
+            let (route, schema) = match name.as_str() {
+                "http" => (
+                    ToolRoute::Builtin(Builtin::Http {
+                        allowed_hosts: scenario.http_hosts.clone(),
+                    }),
+                    ptc_runtime::builtins::http_input_schema(),
+                ),
+                "webhook" => (
+                    ToolRoute::Builtin(Builtin::Webhook),
+                    ptc_runtime::builtins::webhook_input_schema(),
+                ),
+                _ => (
+                    ToolRoute::Host {
+                        group: name.split_once('.').map(|(group, _)| group.to_owned()),
+                    },
+                    Value::Object(serde_json::Map::new()),
+                ),
+            };
+            let schema = scenario.schemas.get(name).cloned().unwrap_or(schema);
+            Tool::new(name.clone(), route, schema)
+        })
+        .collect();
     for (name, policy) in &scenario.policies {
         let tool = tools
             .iter_mut()
@@ -213,7 +244,7 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
             }
         };
     }
-    Toolset::new([], tools).map_err(|err| format!("policies: {err}"))
+    Toolset::new([], tools).map_err(|err| format!("tools: {err}"))
 }
 
 fn read(path: &Path) -> Result<String, String> {
