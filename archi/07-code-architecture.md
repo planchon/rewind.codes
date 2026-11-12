@@ -457,7 +457,9 @@ project/
     server.sock             the API /v1, mode 0600
     journal.db              Turso: every table of the store; meta holds the schema version and virtual time
     journal.db-wal          Turso's write-ahead log
-    blobs/sha256/ab/cdef…   payloads above 64 KiB, named by their digest, written to a temporary file then renamed
+    blobs/
+      local/sha256/ab/cdef… payloads above 64 KiB of the tenant local, named by their digest
+      .staging/             where a blob is written and synced before it is renamed
 ```
 
 Commands:

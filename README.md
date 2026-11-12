@@ -20,6 +20,7 @@ against recorded runs, and observability.
 | [`ptc-engine`](crates/ptc-engine) | application | Use cases, ports, activation, replay, driver, in-memory adapters, store conformance suite. |
 | [`ptc-format`](crates/ptc-format) | adapter support | The stored journal, format v1. |
 | [`ptc-runtime`](crates/ptc-runtime) | adapter | The V8 sandbox behind the `ScriptExecutor` port. |
+| [`ptc-blob`](crates/ptc-blob) | adapter | The `BlobStore` on local files and on S3, and the workers' blob cache. |
 | [`ptc-architecture-tests`](crates/ptc-architecture-tests) | tooling | The dependency rules between crates. |
 | [`ptc-e2e`](crates/ptc-e2e) | tooling | The end-to-end corpus, recorded and replayed. |
 

@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 ptc-api = { path = "crates/ptc-api" }
+ptc-blob = { path = "crates/ptc-blob" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
@@ -34,6 +35,10 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 # messages reach scripts, so a new version is a change of the determinism epoch. No default
 # features: a schema never loads a remote or local `$ref`.
 jsonschema = { version = "=0.61.1", default-features = false }
+# The S3 backend of ptc-blob, without the local-file backend (ptc-blob writes its own files).
+object_store = { version = "0.14", default-features = false, features = ["aws"] }
+# The workers' blob cache in ptc-blob: concurrent, bounded by weight (bytes).
+quick_cache = "0.7"
 # The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
 # The CPU clock of the isolate's thread (`CLOCK_THREAD_CPUTIME_ID`), without unsafe code.
