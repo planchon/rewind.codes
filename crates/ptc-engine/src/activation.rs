@@ -147,7 +147,7 @@ where
     async fn activate_leased(&self, lease: &Lease, purpose: Purpose) -> ActivationOutcome {
         let span = tracing::info_span!(
             "activation",
-            run = %lease.run,
+            ptc.run_id = %lease.run.id,
             fence = lease.fence,
             trace_id = tracing::field::Empty,
             span_id = tracing::field::Empty,

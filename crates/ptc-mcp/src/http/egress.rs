@@ -370,6 +370,8 @@ fn forbidden_v6(address: Ipv6Addr) -> Option<&'static str> {
         [first, ..] if first & 0xffc0 == 0xfe80 => "link-local",
         [first, ..] if first & 0xffc0 == 0xfec0 => "site-local",
         [first, ..] if first & 0xff00 == 0xff00 => "multicast",
+        // Everything else outside 2000::/3, the global unicast range.
+        [first, ..] if first & 0xe000 != 0x2000 => "reserved",
         _ => return None,
     };
     Some(reason)
@@ -412,6 +414,11 @@ mod tests {
             "fd00:ec2::254",
             "fe80::1",
             "ff02::1",
+            // Outside the global unicast range: reserved by the IETF.
+            "::ffff:0:7f00:1",
+            "100:0:0:1::1",
+            "4000::1",
+            "e000::1",
         ] {
             assert!(refused(address), "{address} must be refused");
         }

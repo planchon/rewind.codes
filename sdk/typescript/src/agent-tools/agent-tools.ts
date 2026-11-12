@@ -235,7 +235,7 @@ export class AgentTools {
   private async runScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const code = requireString(input, "code");
     const wait = this.waitOf(input["wait"]);
-    const idempotencyKey = await idempotencyKeyOf(options.toolCallId);
+    const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
     const run = await this.client.runs.start({
       script: code,
       toolset: this.options.toolset,
@@ -382,7 +382,7 @@ export class AgentTools {
     const runId = requireString(input, "run_id");
     const code = requireString(input, "code");
     await this.scopedRun(runId, options.signal);
-    const idempotencyKey = await idempotencyKeyOf(options.toolCallId);
+    const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
     const run = await this.client.runs.fork(runId, {
       script: code,
       labels: this.options.labels,
@@ -433,10 +433,11 @@ export class AgentTools {
   }
 
   /**
-   * A key the server already knows returns the run it started, whoever started it: with tool call
-   * ids that repeat (a harness numbering them per turn), another conversation's run, or the run of
-   * an earlier script. Such a run is the harness's fault, never shown to the model: it must carry
-   * the agent's labels and be a run of this very script.
+   * A key the server already knows returns the run it started, whoever started it. The key of a
+   * run is scoped by the agent's labels, so this is a safety net: an agent without labels, or two
+   * agents with the same labels whose tool call ids repeat, would get another conversation's run,
+   * or the run of an earlier script. Such a run is the harness's fault, never shown to the model:
+   * it must carry the agent's labels and be a run of this very script.
    */
   private async checkAnswered(
     run: Run,
@@ -561,13 +562,45 @@ function valueOf(source: string | (() => string | undefined) | undefined): strin
 
 /**
  * The idempotency key of a tool call: its id when the server takes it as one, otherwise the
- * SHA-256 of the id, so the same tool call always gives the same key.
+ * SHA-256 of the id, so the same tool call always gives the same key. `signal_run` uses it: a
+ * signal's key is unique per run.
  */
 export async function idempotencyKeyOf(toolCallId: string | undefined): Promise<string | undefined> {
   if (toolCallId === undefined || toolCallId === "") {
     return undefined;
   }
   return isValidIdempotencyKey(toolCallId) ? toolCallId : sha256Hex(toolCallId);
+}
+
+/**
+ * The idempotency key of the run a tool call starts (`run_script`, `retry_run`): the SHA-256 of
+ * `JSON.stringify([labels, toolCallId])`, the labels as `[key, value]` pairs sorted by key (by
+ * code point). A run's key is unique per tenant, and harnesses number their tool calls alike
+ * (`call_0`, `call_1`…): agents with other labels never share a key. The same tool call of the
+ * same agent always gives the same key.
+ */
+export async function runIdempotencyKey(
+  labels: Labels | undefined,
+  toolCallId: string | undefined,
+): Promise<string | undefined> {
+  if (toolCallId === undefined || toolCallId === "") {
+    return undefined;
+  }
+  const scope = Object.entries(labels ?? {}).sort(([a], [b]) => byCodePoint(a, b));
+  return sha256Hex(JSON.stringify([scope, toolCallId]));
+}
+
+/** Compares two texts by code point, as Rust compares its strings. */
+function byCodePoint(a: string, b: string): number {
+  const left = Array.from(a);
+  const right = Array.from(b);
+  for (let index = 0; index < Math.min(left.length, right.length); index += 1) {
+    const difference = (left[index]?.codePointAt(0) ?? 0) - (right[index]?.codePointAt(0) ?? 0);
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+  return left.length - right.length;
 }
 
 /** The SHA-256 of a text's UTF-8, in hexadecimal: a script's digest, as the server computes it. */

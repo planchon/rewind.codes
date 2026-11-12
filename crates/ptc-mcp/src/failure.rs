@@ -249,8 +249,11 @@ pub(crate) fn human(duration: Duration) -> String {
     }
 }
 
+/// The challenge comes from the server: cut like its other messages.
 fn unauthorized_message(server: &str, detail: &str) -> String {
-    format!("{server} refused the credentials (HTTP 401): {detail}")
+    bounded(&format!(
+        "{server} refused the credentials (HTTP 401): {detail}"
+    ))
 }
 
 /// The HTTP status somewhere in the error's sources, with its detail, if there is one.
@@ -420,5 +423,16 @@ mod tests {
         let message = bounded(&"x".repeat(5000));
         assert_eq!(message.chars().count(), MESSAGE + 1);
         assert!(message.ends_with('…'));
+        // A 401's challenge comes from the server too.
+        let (failure, _) = of_service(
+            "github",
+            &transport(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                "x".repeat(5000),
+            ))),
+        );
+        let Failure::Unauthorized(message) = failure else {
+            panic!("a 401 parks the call: {failure:?}");
+        };
+        assert_eq!(message.chars().count(), MESSAGE + 1);
     }
 }
