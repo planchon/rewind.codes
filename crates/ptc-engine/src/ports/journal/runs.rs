@@ -81,7 +81,8 @@ pub enum Enqueued {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quarantine {
     pub kind: QuarantineKind,
-    /// The replay mismatch, or the last error of the failed activations.
+    /// The replay mismatch, the last error of the failed activations, or how many activations
+    /// never finished.
     pub reason: String,
     pub since: Timestamp,
     /// The build of the last worker that retried the run after a deploy, if any: a worker of
@@ -94,12 +95,14 @@ pub enum QuarantineKind {
     /// Replay did not match the history. Given up, the run ends with
     /// `run_aborted { non_determinism }`.
     NonDeterminism,
-    /// The run's activations failed [`QUARANTINE_AFTER_FAILURES`] times in a row. Given up, the
-    /// run ends with `run_aborted { internal }`.
+    /// The run's activations failed [`QUARANTINE_AFTER_FAILURES`] times in a row, or never
+    /// finished: their worker died during them. Given up, the run ends with
+    /// `run_aborted { internal }`.
     Failures,
 }
 
-/// Consecutive failed activations after which a run is quarantined.
+/// Consecutive failed activations after which a run is quarantined: an activation that never
+/// finished, because its worker died during it, counts as a failed one.
 pub const QUARANTINE_AFTER_FAILURES: u32 = 5;
 
 /// What `record_failure` did.
@@ -131,8 +134,12 @@ pub struct RunRecord {
     pub expires_at: Timestamp,
     pub history_len: u64,
     pub quarantine: Option<Quarantine>,
-    /// Activations that failed in a row since the last commit.
+    /// Activations that failed in a row since the last commit, as `record_failure` counted them.
     pub failures: u32,
+    /// Activations started since the last commit: the leases `acquire_runnable` handed out, the
+    /// current activation included. Those that neither committed nor recorded a failure never
+    /// finished: their worker died during them.
+    pub attempts: u32,
     /// The worker that committed last and keeps the run's instance in its cache.
     pub sticky_worker: Option<String>,
     pub metadata: RunMetadata,

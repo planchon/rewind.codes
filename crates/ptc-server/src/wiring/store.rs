@@ -20,11 +20,11 @@ use ptc_core::{
 use ptc_engine::ports::{
     AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun, Credentials,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
-    NewRun, ParkReason, ParkedScope, PayloadRecord, ProjectedRun, ReadModel, ReadModelError,
-    RunFilter, RunRecord, RunRef, RunSearch, RunSummary, ScriptFilter, ScriptSummary, SecretError,
-    SecretOwner, SecretStore, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter,
-    TaskRef, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolStats,
-    ToolStatsFilter, ToolTask, WebhookTarget, WebhookToken,
+    NewRun, ParkReason, ParkedScope, PayloadRecord, ProjectedRun, QuarantineKind, ReadModel,
+    ReadModelError, RunFilter, RunRecord, RunRef, RunSearch, RunSummary, ScriptFilter,
+    ScriptSummary, SecretError, SecretOwner, SecretStore, StoreError, StoredScript, StoredToolset,
+    Subscription, TaskFilter, TaskRef, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope,
+    ToolDeclarations, ToolStats, ToolStatsFilter, ToolTask, WebhookTarget, WebhookToken,
 };
 use ptc_store_postgres::PostgresStore;
 use ptc_store_turso::TursoStore;
@@ -284,10 +284,11 @@ impl JournalStore for Store {
     async fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
         now: Timestamp,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.quarantine(lease, mismatch, now).await)
+        each!(self, store => store.quarantine(lease, kind, reason, now).await)
     }
 
     async fn release_quarantine(&self, run: &RunRef) -> Result<bool, StoreError> {

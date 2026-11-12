@@ -45,7 +45,7 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at"
+         ended_at, archive_document, archived_at, parent_at, attempts"
     };
 }
 
@@ -96,6 +96,7 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
         history_len: row.u64(7)?,
         quarantine,
         failures: row.u32(12)?,
+        attempts: row.u32(25)?,
         sticky_worker: row.opt_text(13)?,
         metadata: RunMetadata {
             labels: decode_labels(&row.text(14)?)?,
@@ -240,6 +241,15 @@ async fn run_status(connection: &Connection, run: &RunRef) -> Result<RunStatus, 
     Ok(codec::parse_status(&row.text(0)?)?)
 }
 
+/// Whether a lease counts as an activation started, in the run's `attempts`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Attempt {
+    /// `acquire_runnable`: the lease activates the run.
+    Counted,
+    /// `acquire_run`, `acquire_quarantined`.
+    NotCounted,
+}
+
 /// Takes a lease on a run whose fence is `fence`: the fence is incremented.
 async fn take_lease(
     connection: &Connection,
@@ -248,15 +258,18 @@ async fn take_lease(
     owner: &str,
     now: Timestamp,
     duration: Duration,
+    attempt: Attempt,
 ) -> Result<Lease, StoreError> {
     let fence = fence + 1;
     sql::execute(
         connection,
-        "UPDATE runs SET fence = ?, lease_owner = ?, lease_until = ? WHERE id = ?",
+        "UPDATE runs SET fence = ?, lease_owner = ?, lease_until = ?, attempts = attempts + ? \
+         WHERE id = ?",
         vec![
             int(fence),
             text(owner),
             ts(now.saturating_add(duration)),
+            int(u64::from(attempt == Attempt::Counted)),
             run_id(run.id),
         ],
     )
@@ -719,9 +732,9 @@ impl JournalStore for TursoStore {
             sql::execute(
                 connection,
                 "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
-                 expires_at, expiry_enqueued, failures, fence, labels, traceparent, tracestate, \
-                 parent, parent_at, idempotency_key, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 expires_at, expiry_enqueued, failures, attempts, fence, labels, traceparent, \
+                 tracestate, parent, parent_at, idempotency_key, created_at, updated_at) \
+                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     run_id(run.run.id),
                     tenant(tenant_id),
@@ -914,6 +927,7 @@ impl JournalStore for TursoStore {
                 request.owner,
                 now,
                 request.lease_duration,
+                Attempt::Counted,
             )
             .await?;
             Ok(Some(lease))
@@ -950,6 +964,7 @@ impl JournalStore for TursoStore {
                 owner,
                 now,
                 lease_duration,
+                Attempt::NotCounted,
             )
             .await?;
             Ok(Some(lease))
@@ -996,8 +1011,16 @@ impl JournalStore for TursoStore {
                 vec![text(build), run_id(run.id)],
             )
             .await?;
-            let lease =
-                take_lease(connection, run, row.u64(2)?, owner, now, lease_duration).await?;
+            let lease = take_lease(
+                connection,
+                run,
+                row.u64(2)?,
+                owner,
+                now,
+                lease_duration,
+                Attempt::NotCounted,
+            )
+            .await?;
             Ok(Some(lease))
         })
         .await
@@ -1135,7 +1158,7 @@ impl JournalStore for TursoStore {
             let last = activation.entries.last().map(|entry| entry.recorded_at);
             sql::execute(
                 connection,
-                "UPDATE runs SET history_len = ?, status = ?, failures = 0, \
+                "UPDATE runs SET history_len = ?, status = ?, failures = 0, attempts = 0, \
                  updated_at = COALESCE(?, updated_at), ended_at = COALESCE(?, ended_at), \
                  sticky_worker = COALESCE(?, sticky_worker) WHERE id = ?",
                 vec![
@@ -1342,7 +1365,8 @@ impl JournalStore for TursoStore {
     async fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
         now: Timestamp,
     ) -> Result<(), StoreError> {
         let connection = self.connection().await?;
@@ -1354,8 +1378,8 @@ impl JournalStore for TursoStore {
                 "UPDATE runs SET quarantine_kind = ?, quarantine_reason = ?, quarantine_since = ?, \
                  lease_owner = NULL, lease_until = NULL WHERE id = ?",
                 vec![
-                    text(codec::quarantine_kind(QuarantineKind::NonDeterminism)),
-                    text(mismatch),
+                    text(codec::quarantine_kind(kind)),
+                    text(reason),
                     ts(now),
                     run_id(lease.run.id),
                 ],
@@ -1379,8 +1403,9 @@ impl JournalStore for TursoStore {
             .ok_or(StoreError::RunNotFound(run.id))?;
             sql::execute(
                 connection,
-                "UPDATE runs SET failures = 0, quarantine_kind = NULL, quarantine_reason = NULL, \
-                 quarantine_since = NULL, quarantine_retried_by = NULL WHERE id = ?",
+                "UPDATE runs SET failures = 0, attempts = 0, quarantine_kind = NULL, \
+                 quarantine_reason = NULL, quarantine_since = NULL, quarantine_retried_by = NULL \
+                 WHERE id = ?",
                 vec![run_id(run.id)],
             )
             .await?;

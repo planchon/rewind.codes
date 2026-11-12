@@ -69,6 +69,7 @@ CREATE TABLE runs (
     quarantine_since bigint,
     quarantine_retried_by text,
     failures bigint NOT NULL DEFAULT 0,
+    attempts bigint NOT NULL DEFAULT 0,
     lease_owner text,
     lease_until bigint,
     fence bigint NOT NULL DEFAULT 0,

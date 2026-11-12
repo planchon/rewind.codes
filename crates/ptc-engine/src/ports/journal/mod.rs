@@ -182,7 +182,8 @@ pub trait JournalStore: Send + Sync {
     // Leases and activations
 
     /// Leases a runnable run: one with something in its inbox, not leased (or whose lease
-    /// expired), not quarantined, of an epoch in `epochs`, of a tenant in scope.
+    /// expired), not quarantined, of an epoch in `epochs`, of a tenant in scope. The lease counts
+    /// as an activation started: it increments the run's `attempts`, in the same transaction.
     ///
     /// - A run whose sticky worker is the caller is taken first, oldest inbox item first.
     /// - A run whose sticky worker is another worker is only offered once its oldest inbox item
@@ -196,7 +197,7 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<Option<Lease>, StoreError>> + Send;
 
     /// Leases a given run if it has not ended and is not leased, quarantined or not: to give
-    /// up a quarantined run, to end a run by hand.
+    /// up a quarantined run, to end a run by hand. It does not count in `attempts`.
     fn acquire_run(
         &self,
         run: &RunRef,
@@ -209,7 +210,7 @@ pub trait JournalStore: Send + Sync {
     /// of `build` has retried yet, and records that `build` retried it: a worker of a new build
     /// retries each quarantined run of its epochs and tenants once. A run of a tenant out of
     /// scope is neither leased nor marked: a worker of its own pool retries it. A retry that
-    /// fails again calls `quarantine`.
+    /// fails again calls `quarantine`. It does not count in `attempts`.
     fn acquire_quarantined(
         &self,
         owner: &str,
@@ -248,8 +249,8 @@ pub trait JournalStore: Send + Sync {
     /// continue the history exactly (the next index first). In the same transaction: the
     /// payload rows and the run's payload references, the tool tasks (`approval` if their
     /// policy asks for it, else `ready` at `now`), timers, cancelled timers, one feed item per
-    /// consumer when there are entries, the reset of the failure count, and the lease owner as
-    /// the run's sticky worker. A terminal status clears the run's timers, tool tasks, inbox,
+    /// consumer when there are entries, the reset of the failure count and of the attempts, and
+    /// the lease owner as the run's sticky worker. A terminal status clears the run's timers, tool tasks, inbox,
     /// webhook tokens and quarantine.
     ///
     /// A payload without its value (its value is in the `BlobStore`) needs a row that
@@ -284,17 +285,19 @@ pub trait JournalStore: Send + Sync {
         now: Timestamp,
     ) -> impl Future<Output = Result<Failures, StoreError>> + Send;
 
-    /// Quarantines the run for non-determinism with the replay mismatch, and releases the
-    /// lease without committing anything.
+    /// Quarantines the run with `kind` and `reason`, and releases the lease without committing
+    /// anything: `NonDeterminism` with the replay mismatch, or `Failures` when the run's last
+    /// activations never finished.
     fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
         now: Timestamp,
     ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
-    /// Makes a quarantined run runnable again and resets its failure count. Returns whether it
-    /// was quarantined.
+    /// Makes a quarantined run runnable again and resets its failure count and its attempts.
+    /// Returns whether it was quarantined.
     fn release_quarantine(
         &self,
         run: &RunRef,

@@ -66,6 +66,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        a_sticky_worker_that_died_holds_its_run_no_longer_than_its_lease
+    );
+    check!(
+        "journal",
+        new_store(),
         a_commit_writes_entries_inbox_effects_and_metadata
     );
     check!(
@@ -85,6 +90,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         "journal",
         new_store(),
         failures_are_counted_and_the_fifth_quarantines
+    );
+    check!(
+        "journal",
+        new_store(),
+        activations_started_since_the_last_commit_are_counted
     );
     check!(
         "journal",
@@ -574,7 +584,7 @@ pub async fn create_run_enqueues_run_started<S: JournalStore>(store: &S) {
     assert_eq!(record.idempotency_key.as_deref(), Some("call-1"));
     assert_eq!((record.created_at, record.updated_at), (T0, T0));
     assert_eq!(record.quarantine, None);
-    assert_eq!(record.failures, 0);
+    assert_eq!((record.failures, record.attempts), (0, 0));
     assert_eq!(record.sticky_worker, None);
     assert_eq!(record.ended_at, None);
     assert_eq!(record.archive, None);
@@ -787,7 +797,12 @@ pub async fn acquire_runnable_respects_epochs_quarantine_and_tenants<S: JournalS
         .expect("the other tenant's run");
     assert_eq!(lease.run, other);
     store
-        .quarantine(&lease, "mismatch".into(), T0)
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "mismatch".into(),
+            T0,
+        )
         .await
         .expect("quarantine");
     assert_eq!(
@@ -909,6 +924,42 @@ pub async fn sticky_workers_get_their_runs_first<S: JournalStore>(store: &S) {
         .await
         .expect("no sticky worker any more");
     assert_eq!(lease.run, run_ref(1));
+}
+
+pub async fn a_sticky_worker_that_died_holds_its_run_no_longer_than_its_lease<S: JournalStore>(
+    store: &S,
+) {
+    // w1 commits the run, and is its sticky worker. A trigger arrives; w1 leases the run, and
+    // dies before it commits anything.
+    let run = start(store, run_ref(1)).await;
+    let woken = later(T0, 1_000);
+    store
+        .enqueue(&run, Completion::TimerFired { seq: Seq(1) }, None, woken)
+        .await
+        .expect("enqueue");
+    let as_worker = |owner: &'static str, at: Timestamp| async move {
+        store
+            .acquire_runnable(&request(owner, at, 0))
+            .await
+            .expect("acquire_runnable")
+    };
+    let dead = as_worker("worker", woken).await.expect("its sticky worker");
+    assert_eq!(dead.run, run);
+
+    // The lease holds the run until it expires, and not a moment longer: the sticky priority
+    // of the dead worker adds no grace, since its trigger has waited longer than that already.
+    let expiry = woken.saturating_add(LEASE);
+    assert_eq!(as_worker("w2", Timestamp(expiry.0 - 1)).await, None);
+    let taken = as_worker("w2", expiry)
+        .await
+        .expect("another worker takes it as soon as the lease expires");
+    assert_eq!(taken.run, run);
+    assert!(taken.fence > dead.fence);
+    assert_eq!(
+        record(store, &run).await.sticky_worker.as_deref(),
+        Some("worker"),
+        "leasing a run does not make the worker sticky: only a commit does"
+    );
 }
 
 pub async fn a_commit_writes_entries_inbox_effects_and_metadata<S: JournalStore>(store: &S) {
@@ -1077,7 +1128,10 @@ pub async fn a_commit_with_a_stale_fence_writes_nothing<S: JournalStore>(store: 
             .is_empty()
     );
     for result in [
-        store.quarantine(&stale, "x".into(), T0).await.map(|_| ()),
+        store
+            .quarantine(&stale, QuarantineKind::NonDeterminism, "x".into(), T0)
+            .await
+            .map(|_| ()),
         store
             .record_failure(&stale, "x".into(), T0)
             .await
@@ -1383,6 +1437,98 @@ pub async fn failures_are_counted_and_the_fifth_quarantines<S: JournalStore>(sto
     assert_eq!(record(store, &run).await.failures, 0);
 }
 
+pub async fn activations_started_since_the_last_commit_are_counted<S: JournalStore>(store: &S) {
+    let run = start(store, run_ref(1)).await;
+    assert_eq!(record(store, &run).await.attempts, 0);
+    store
+        .enqueue(&run, Completion::TimerFired { seq: Seq(1) }, None, T0)
+        .await
+        .expect("enqueue");
+
+    // Each lease `acquire_runnable` hands out counts, whether the activation fails, records
+    // its failure, or never ends because its worker died.
+    let mut at = T0;
+    for attempts in 1..=3 {
+        acquire(store, at)
+            .await
+            .expect("runnable once the lease expired");
+        let found = record(store, &run).await;
+        assert_eq!((found.attempts, found.failures), (attempts, 0));
+        at = at.saturating_add(LEASE);
+    }
+    let lease = acquire(store, at).await.expect("runnable");
+    let failures = store
+        .record_failure(&lease, "blob missing".into(), at)
+        .await
+        .expect("record_failure");
+    assert_eq!(failures.count, 1, "record_failure counts what it records");
+    let found = record(store, &run).await;
+    assert_eq!((found.attempts, found.failures), (4, 1));
+
+    // Leasing a given run, or a quarantined one, activates nothing that counts.
+    at = at.saturating_add(LEASE);
+    let explicit = lease_of(store, &run, at).await;
+    store.release(&explicit).await.expect("release");
+    assert_eq!(record(store, &run).await.attempts, 4);
+
+    // A commit resets the count.
+    let lease = acquire(store, at).await.expect("runnable");
+    assert_eq!(record(store, &run).await.attempts, 5);
+    let consumed = inbox_ids(store, &lease).await;
+    commit(
+        store,
+        &lease,
+        Activation::new(vec![], consumed, RunStatus::Active),
+        at,
+    )
+    .await;
+    store.release(&lease).await.expect("release");
+    let found = record(store, &run).await;
+    assert_eq!((found.attempts, found.failures), (0, 0));
+
+    // The engine quarantines a run whose activations never finished, with the kind
+    // `failures`; releasing the quarantine resets the count.
+    store
+        .enqueue(&run, Completion::TimerFired { seq: Seq(2) }, None, at)
+        .await
+        .expect("enqueue");
+    acquire(store, at).await.expect("runnable");
+    at = at.saturating_add(LEASE);
+    let lease = acquire(store, at)
+        .await
+        .expect("runnable once the lease expired");
+    assert_eq!(record(store, &run).await.attempts, 2);
+    store
+        .quarantine(
+            &lease,
+            QuarantineKind::Failures,
+            "the activation never finished".into(),
+            at,
+        )
+        .await
+        .expect("quarantine");
+    let quarantine = record(store, &run).await.quarantine.expect("quarantined");
+    assert_eq!(quarantine.kind, QuarantineKind::Failures);
+    assert_eq!(quarantine.reason, "the activation never finished");
+    assert_eq!(acquire(store, at).await, None, "never offered");
+    let retried = store
+        .acquire_quarantined("w", "build-2", EPOCHS, &ALL_TENANTS, at, LEASE)
+        .await
+        .expect("acquire_quarantined")
+        .expect("a new build retries it");
+    store.release(&retried).await.expect("release");
+    assert_eq!(record(store, &run).await.attempts, 2);
+    assert!(
+        store
+            .release_quarantine(&run)
+            .await
+            .expect("release_quarantine")
+    );
+    assert_eq!(record(store, &run).await.attempts, 0);
+    acquire(store, at).await.expect("runnable again");
+    assert_eq!(record(store, &run).await.attempts, 1);
+}
+
 pub async fn quarantine_releases_the_lease_and_hides_the_run<S: JournalStore>(store: &S) {
     let run = start(store, run_ref(1)).await;
     store
@@ -1392,7 +1538,12 @@ pub async fn quarantine_releases_the_lease_and_hides_the_run<S: JournalStore>(st
     let lease = acquire(store, T0).await.expect("runnable");
     let at = later(T0, 7);
     store
-        .quarantine(&lease, "history entry 1 is …".into(), at)
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "history entry 1 is …".into(),
+            at,
+        )
         .await
         .expect("quarantine");
     assert_eq!(store.load_history(&run, 0).await.expect("history").len(), 1);
@@ -1435,7 +1586,12 @@ pub async fn a_new_build_retries_each_quarantined_run_once<S: JournalStore>(stor
     for quarantined in [&run, &run_ref(2)] {
         let lease = lease_of(store, quarantined, T0).await;
         store
-            .quarantine(&lease, "mismatch".into(), T0)
+            .quarantine(
+                &lease,
+                QuarantineKind::NonDeterminism,
+                "mismatch".into(),
+                T0,
+            )
             .await
             .expect("quarantine");
     }
@@ -1461,7 +1617,12 @@ pub async fn a_new_build_retries_each_quarantined_run_once<S: JournalStore>(stor
     );
     // The retry fails again: the run stays quarantined, and build-2 never retries it again.
     store
-        .quarantine(&lease, "mismatch again".into(), T0)
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "mismatch again".into(),
+            T0,
+        )
         .await
         .expect("quarantine");
     let quarantine = record(store, &run).await.quarantine.expect("quarantined");
@@ -1488,7 +1649,12 @@ pub async fn quarantined_runs_are_retried_by_workers_of_their_tenant<S: JournalS
     let run = start(store, run_ref(1)).await;
     let lease = lease_of(store, &run, T0).await;
     store
-        .quarantine(&lease, "mismatch".into(), T0)
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "mismatch".into(),
+            T0,
+        )
         .await
         .expect("quarantine");
 
@@ -1581,7 +1747,12 @@ pub async fn runs_expire_once_and_quarantined_runs_are_reported<S: JournalStore>
     create(store, run_ref(3)).await;
     let lease = lease_of(store, &run_ref(2), T0).await;
     store
-        .quarantine(&lease, "mismatch".into(), T0)
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "mismatch".into(),
+            T0,
+        )
         .await
         .expect("quarantine");
 
@@ -3348,7 +3519,7 @@ pub async fn list_runs_filters_and_pages<S: JournalStore>(store: &S) {
     store.create_run(late, None).await.expect("create_run");
     let lease = lease_of(store, &run_ref(3), T0).await;
     store
-        .quarantine(&lease, "m".into(), T0)
+        .quarantine(&lease, QuarantineKind::NonDeterminism, "m".into(), T0)
         .await
         .expect("quarantine");
     create(store, run_in(&tenant("other"), 4)).await;

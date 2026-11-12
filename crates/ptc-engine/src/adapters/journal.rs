@@ -412,6 +412,7 @@ impl JournalStore for MemoryJournal {
             history_len: 0,
             quarantine: None,
             failures: 0,
+            attempts: 0,
             sticky_worker: None,
             metadata: run.metadata,
             idempotency_key: idempotency_key.clone(),
@@ -563,6 +564,7 @@ impl JournalStore for MemoryJournal {
             return Ok(None);
         };
         let run = state.run_mut(&chosen)?;
+        run.record.attempts = run.record.attempts.saturating_add(1);
         Ok(Some(run.lease(request.owner, now, request.lease_duration)))
     }
 
@@ -687,6 +689,7 @@ impl JournalStore for MemoryJournal {
         run.record.history_len = run.history.len() as u64;
         run.record.status = activation.status;
         run.record.failures = 0;
+        run.record.attempts = 0;
         if owner.is_some() {
             run.record.sticky_worker = owner;
         }
@@ -816,7 +819,8 @@ impl JournalStore for MemoryJournal {
     async fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
         now: Timestamp,
     ) -> Result<(), StoreError> {
         let mut state = self.lock()?;
@@ -827,8 +831,8 @@ impl JournalStore for MemoryJournal {
             .take()
             .and_then(|previous| previous.retried_by);
         run.record.quarantine = Some(Quarantine {
-            kind: QuarantineKind::NonDeterminism,
-            reason: mismatch,
+            kind,
+            reason,
             since: now,
             retried_by,
         });
@@ -840,6 +844,7 @@ impl JournalStore for MemoryJournal {
         let mut state = self.lock()?;
         let found = state.run_mut(run)?;
         found.record.failures = 0;
+        found.record.attempts = 0;
         Ok(found.record.quarantine.take().is_some())
     }
 
