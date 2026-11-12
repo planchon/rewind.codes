@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "evals"]
 
 [workspace.package]
 version = "0.1.0"
@@ -27,7 +27,7 @@ ptc-cli = { path = "crates/ptc-cli" }
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
-# The command line of the `ptc` binary.
+# The command lines of the `ptc` binary and of the evals.
 clap = { version = "4", features = ["derive", "env"] }
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"

@@ -291,7 +291,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc` | entry point | the `ptc` binary: hands `ptc server …` to `ptc-server` and every other command to `ptc-cli`, nothing else |
 | `ptc-architecture-tests` | tooling | dependency rules |
 | `ptc-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `ptc-e2e replay <case>` |
-| `evals` | tooling | eval suite driving the `ptc` CLI: tasks, fake MCP servers, reports |
+| `evals` | tooling | eval suite: tasks, deterministic fake MCP servers, the engine wired in process with the agent tools of the SDK, clients of the model APIs, reports ([08](08-decisions.md#taken-while-building-the-evals-november-2026)) |
 | `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools |
 | `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
@@ -372,11 +372,13 @@ Nothing about the script is emitted during replay.
 | `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
 | `ptc-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |
+| `evals` | Every task solved by its reference solution, through the agent tools and the scripted model; the fake servers, the agent tools' texts, the metrics; the model clients against local fakes of the Anthropic and OpenAI APIs |
 
 ## HTTP API `/v1`
 
-`ptc-server` serves the API. The CLI, the SDK and its agent tools, the dashboard and the
-evals are its clients.
+`ptc-server` serves the API. The CLI, the SDK and its agent tools and the dashboard are its
+clients. The evals use its DTOs, with the engine in process
+([08](08-decisions.md#taken-while-building-the-evals-november-2026)).
 
 Conventions:
 

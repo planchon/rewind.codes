@@ -23,6 +23,7 @@ against recorded runs, and observability.
 | [`ptc-blob`](crates/ptc-blob) | adapter | The `BlobStore` on local files and on S3, and the workers' blob cache. |
 | [`ptc-architecture-tests`](crates/ptc-architecture-tests) | tooling | The dependency rules between crates. |
 | [`ptc-e2e`](crates/ptc-e2e) | tooling | The end-to-end corpus, recorded and replayed. |
+| [`evals`](evals) | tooling | The eval suite: models solve tasks end to end against fake MCP servers ([evals/README.md](evals/README.md)). |
 
 Dependencies only point down; `ptc-architecture-tests` fails the build otherwise.
 
@@ -35,6 +36,8 @@ cargo test -p ptc-e2e                                    # the end-to-end corpus
 cargo test -p ptc-e2e red::deadlock                      # one case
 PTC_E2E_RECORD=1 cargo test -p ptc-e2e --test corpus     # record the journals again, then review the diff
 cargo run -p ptc-e2e -- replay epoch-1/blue/triage_workflow [--script other.ts]
+cargo run -p evals -- list                               # the eval tasks
+cargo run -p evals -- run --model claude-opus-5-5        # run models on them (costs tokens)
 ```
 
 ## End-to-end corpus
