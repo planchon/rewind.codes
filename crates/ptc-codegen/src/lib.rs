@@ -15,15 +15,17 @@
 //! recorded results, when there are some, marked `@observed`: for a host tool, the result's
 //! shape; for an MCP tool, which returns its content, the shape of its `structuredContent`.
 //!
-//! Built-ins are not part of `ptc:tools`: scripts reach `http` through `fetch` (declared by the
-//! sandbox lib when the toolset enables it) and `webhook` through the `ptc` module. The prompt
-//! still lists them, with the hosts `fetch` may reach.
+//! `ptc-tools.d.ts` always declares the module `ptc:tools` (`declare module "ptc:tools" { … }`),
+//! empty for a toolset without tools. Built-ins are not part of it: scripts reach `http` through
+//! `fetch` and `webhook` through the `ptc` module. For a toolset that enables `http`, the file
+//! starts with [`HTTP_TOOL_REFERENCE`], from which the type-checker knows to declare `fetch`.
+//! The prompt lists the built-ins too, with the hosts `fetch` may reach.
 
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 
-use ptc_core::{Shape, Toolset};
+use ptc_core::{Builtin, Shape, ToolRoute, Toolset};
 
 mod dts;
 mod model;
@@ -31,6 +33,11 @@ mod observed;
 mod prompt;
 mod schema;
 mod ty;
+
+/// The first line of the `ptc-tools.d.ts` of a toolset that enables the `http` tool. It is how
+/// the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the check.
+/// `ptc-check` exports the same line (`HTTP_TOOL_REFERENCE`); `archi/04-tools.md` records it.
+pub const HTTP_TOOL_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
 /// What codegen generated for a toolset.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,7 +71,11 @@ pub struct ToolDeclaration {
 /// left out, as the runtime leaves it out of the module.
 pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declarations {
     let exports = model::exports(toolset, observed);
-    let typescript = dts::module(&toolset.digest().short(), &exports);
+    let http_tool = toolset
+        .tools()
+        .iter()
+        .any(|tool| matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. })));
+    let typescript = dts::module(&toolset.digest().short(), &exports, http_tool);
 
     let mut tools = Vec::new();
     for export in &exports {

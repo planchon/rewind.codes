@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use deno_ast::{MediaType, ModuleSpecifier, ParseParams};
-use ptc_codegen::{Declarations, generate};
+use ptc_codegen::{Declarations, HTTP_TOOL_REFERENCE, generate};
 use ptc_core::{Builtin, McpServer, McpTransport, Shape, Tool, ToolRoute, Toolset};
 use serde_json::Value;
 
@@ -199,4 +199,51 @@ fn reverse_keys(value: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(reverse_keys).collect()),
         other => other.clone(),
     }
+}
+
+#[test]
+fn the_declarations_of_a_toolset_with_the_http_tool_start_with_its_reference() {
+    for case in cases() {
+        let (toolset, observed) = load(&case);
+        let typescript = generate(&toolset, &observed).typescript;
+        let http_tool = toolset.tool("http").is_some();
+        assert_eq!(
+            typescript.starts_with(&format!("{HTTP_TOOL_REFERENCE}\n")),
+            http_tool,
+            "{}",
+            case.display()
+        );
+        assert_eq!(
+            typescript.matches(HTTP_TOOL_REFERENCE).count(),
+            usize::from(http_tool)
+        );
+        // Every toolset declares the module, the empty one included.
+        assert!(
+            typescript.contains("\ndeclare module \"ptc:tools\" {\n"),
+            "{}",
+            case.display()
+        );
+    }
+}
+
+/// The type-checker learns that a script has `fetch` from this line only; `ptc-check` holds the
+/// same literal and records it in the spec, which both crates are checked against.
+#[test]
+fn the_http_tool_reference_is_the_one_the_spec_records() {
+    let spec = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../archi/04-tools.md");
+    let spec = fs::read_to_string(spec).unwrap();
+    let row = spec
+        .lines()
+        .find(|line| line.starts_with("| Sandbox globals |"))
+        .expect("04 lists what tsgo sees");
+    assert!(
+        row.contains(&format!(
+            "`ptc-tools.d.ts` then starts with `{HTTP_TOOL_REFERENCE}`"
+        )),
+        "archi/04-tools.md does not record {HTTP_TOOL_REFERENCE:?}: {row}"
+    );
+    assert_eq!(
+        HTTP_TOOL_REFERENCE,
+        r#"/// <reference path="fetch.d.ts" />"#
+    );
 }
