@@ -10,6 +10,7 @@ use ptc_api::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
 use ptc_api::common::{Labels, timestamp};
 use ptc_core::Digest;
 use ptc_engine::ports::{JournalStore, Retention, Tenant, TenantId};
+use ptc_engine::text::refuse_nul_in_labels;
 
 use crate::app::App;
 use crate::auth::{Access, Caller, key_hash, new_key};
@@ -26,6 +27,7 @@ pub(super) async fn create_key(
     caller.allow(Access::Admin)?;
     let tenant =
         TenantId::new(request.tenant).map_err(|error| ApiError::invalid(error.to_string()))?;
+    refuse_nul_in_labels(&request.allowed_labels.0)?;
     ensure_tenant(&app, &tenant).await?;
     let key = new_key()?;
     let hash = key_hash(&key);

@@ -206,6 +206,8 @@ CREATE TABLE payloads (
     preview text NOT NULL,
     value text,
     unreferenced_since bigint,
+    -- When a cleanup started deleting the payload: its blob may be gone.
+    deletion_started_at bigint,
     PRIMARY KEY (tenant, digest)
 );
 CREATE INDEX payloads_unreferenced ON payloads (unreferenced_since)

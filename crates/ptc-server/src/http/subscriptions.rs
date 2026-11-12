@@ -15,6 +15,7 @@ use ptc_api::webhooks::{
 use ptc_core::RunId;
 use ptc_engine::adapters::SystemEntropy;
 use ptc_engine::ports::{Entropy, JournalStore, Secret, Subscription};
+use ptc_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::App;
 use crate::auth::{Access, Caller};
@@ -32,12 +33,14 @@ pub(super) async fn create(
     Body(request): Body<CreateSubscription>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
+    refuse_nul("the url", &request.url)?;
     app.settings
         .webhook_egress
         .check_subscription(&request.url)
         .await
         .map_err(|reason| ApiError::invalid(format!("url {:?}: {reason}", request.url)))?;
     let labels = caller.within(request.labels.0)?;
+    refuse_nul_in_labels(&labels)?;
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(ApiError::internal)?;
     let secret = WebhookSecret::from_bytes(key).map_err(ApiError::internal)?;

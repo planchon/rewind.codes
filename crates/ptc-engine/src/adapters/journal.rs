@@ -11,11 +11,11 @@ use crate::adapters::random_token;
 use crate::ports::{
     AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
-    NewRun, ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES,
-    Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef, StoreError, StoredScript,
-    StoredToolset, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
-    TenantId, ToolDeclarations, ToolTask, Trigger, WebhookTarget, WebhookToken,
-    deferred_timeout_failure,
+    NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
+    StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef, TaskState,
+    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask, Trigger,
+    WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
 
 /// `JournalStore` in memory: engine tests and mock mode. It is the reference implementation
@@ -84,6 +84,8 @@ struct StoredPayload {
     record: PayloadRecord,
     refs: BTreeSet<RunId>,
     unreferenced_since: Option<Timestamp>,
+    /// When a cleanup started deleting the payload: its blob may be gone.
+    deletion_started: Option<Timestamp>,
 }
 
 #[derive(Debug)]
@@ -141,6 +143,30 @@ impl State {
                 received_at: now,
             });
         }
+    }
+
+    /// A commit's payloads of the blob tier need a reserved row whose deletion has not
+    /// started: their blob may be gone otherwise.
+    fn check_reserved(
+        &self,
+        tenant: &TenantId,
+        payloads: &[PayloadRecord],
+    ) -> Result<(), StoreError> {
+        for payload in payloads.iter().filter(|payload| payload.value.is_none()) {
+            let reserved = self
+                .payloads
+                .get(&(tenant.clone(), payload.digest))
+                .is_some_and(|stored| stored.deletion_started.is_none());
+            if !reserved {
+                return Err(unreserved(payload.digest));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the run has feed items left to apply: its history is still needed.
+    fn has_feed_items(&self, run_id: RunId) -> bool {
+        self.feed.values().any(|row| row.item.run.id == run_id)
     }
 
     fn retention(&self, tenant: &TenantId) -> crate::ports::Retention {
@@ -560,6 +586,7 @@ impl JournalStore for MemoryJournal {
         owner: &str,
         build: &str,
         epochs: &[Epoch],
+        tenants: &TenantScope,
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
@@ -569,6 +596,7 @@ impl JournalStore for MemoryJournal {
             .values()
             .filter(|run| !run.is_terminal() && !run.is_leased(now))
             .filter(|run| epochs.contains(&run.record.epoch))
+            .filter(|run| tenants.contains(&run.record.run.tenant))
             .filter_map(|run| {
                 let quarantine = run.record.quarantine.as_ref()?;
                 (quarantine.retried_by.as_deref() != Some(build))
@@ -630,9 +658,10 @@ impl JournalStore for MemoryJournal {
         now: Timestamp,
     ) -> Result<(), StoreError> {
         let mut state = self.lock()?;
-        let run = state.leased(lease)?;
-
+        state.leased(lease)?;
         // Validate everything before writing anything: the commit is all or nothing.
+        state.check_reserved(&lease.run.tenant, &activation.payloads)?;
+        let run = state.leased(lease)?;
         let next = run.history.len() as u64;
         for (offset, entry) in activation.entries.iter().enumerate() {
             if entry.index != next + offset as u64 {
@@ -702,12 +731,15 @@ impl JournalStore for MemoryJournal {
                 record: payload.clone(),
                 refs: BTreeSet::new(),
                 unreferenced_since: None,
+                deletion_started: None,
             });
             if stored.record.value.is_none() && payload.value.is_some() {
                 stored.record.value = payload.value;
             }
             stored.refs.insert(lease.run.id);
             stored.unreferenced_since = None;
+            // A payload of the blob tier was checked above: only a value stops a deletion.
+            stored.deletion_started = None;
         }
         if has_entries {
             for consumer in FeedConsumer::ALL {
@@ -1283,6 +1315,45 @@ impl JournalStore for MemoryJournal {
             .map(|stored| stored.record.clone()))
     }
 
+    async fn reserve_payloads(
+        &self,
+        tenant: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let mut state = self.lock()?;
+        let mut deleting = Vec::new();
+        for payload in payloads {
+            let key = (tenant.clone(), payload.digest);
+            match state.payloads.get_mut(&key) {
+                Some(stored) if stored.deletion_started.is_some() => {
+                    deleting.push(payload.digest);
+                }
+                Some(stored) => {
+                    if stored.refs.is_empty() {
+                        stored.unreferenced_since = Some(
+                            stored
+                                .unreferenced_since
+                                .map_or(now, |since| since.max(now)),
+                        );
+                    }
+                }
+                None => {
+                    state.payloads.insert(
+                        key,
+                        StoredPayload {
+                            record: payload.clone(),
+                            refs: BTreeSet::new(),
+                            unreferenced_since: Some(now),
+                            deletion_started: None,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(deleting)
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,
@@ -1292,7 +1363,7 @@ impl JournalStore for MemoryJournal {
         Ok(state
             .payloads
             .iter()
-            .filter(|((tenant, _), stored)| unreferenced_past_grace(&state, tenant, stored, now))
+            .filter(|((tenant, _), stored)| deletable(&state, tenant, stored, now))
             .map(|(key, _)| key.clone())
             .take(limit)
             .collect())
@@ -1310,14 +1381,35 @@ impl JournalStore for MemoryJournal {
                 state
                     .payloads
                     .get(*key)
-                    .is_some_and(|stored| unreferenced_past_grace(&state, &key.0, stored, now))
+                    .is_some_and(|stored| deletable(&state, &key.0, stored, now))
             })
             .cloned()
             .collect();
         for key in &forgettable {
-            state.payloads.remove(key);
+            if let Some(stored) = state.payloads.get_mut(key) {
+                stored.deletion_started = Some(now);
+            }
         }
         Ok(forgettable)
+    }
+
+    async fn drop_payloads(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> Result<usize, StoreError> {
+        let mut state = self.lock()?;
+        let mut dropped = 0;
+        for key in payloads {
+            let deleted = state.payloads.get(key).is_some_and(|stored| {
+                stored.refs.is_empty() && stored.deletion_started == Some(started)
+            });
+            if deleted {
+                state.payloads.remove(key);
+                dropped += 1;
+            }
+        }
+        Ok(dropped)
     }
 
     async fn runs_to_archive(
@@ -1330,6 +1422,7 @@ impl JournalStore for MemoryJournal {
             .runs
             .values()
             .filter(|run| run.is_terminal() && run.record.archive.is_none())
+            .filter(|run| !state.has_feed_items(run.record.run.id))
             .filter_map(|run| {
                 let ended_at = run.record.ended_at?;
                 let retention = state.retention(&run.record.run.tenant);
@@ -1348,10 +1441,11 @@ impl JournalStore for MemoryJournal {
         now: Timestamp,
     ) -> Result<bool, StoreError> {
         let mut state = self.lock()?;
+        let pending = state.has_feed_items(run.id);
         let Ok(found) = state.run_mut(run) else {
             return Ok(false);
         };
-        if !found.is_terminal() || found.record.archive.is_some() {
+        if !found.is_terminal() || found.record.archive.is_some() || pending {
             return Ok(false);
         }
         found.history = Vec::new();
@@ -1479,6 +1573,14 @@ impl JournalStore for MemoryJournal {
     }
 }
 
+/// The conflict of a commit referencing a blob that may be gone.
+fn unreserved(digest: Digest) -> StoreError {
+    StoreError::Conflict(format!(
+        "payload {} has no reserved row, or is being deleted: its blob may be gone",
+        digest.short()
+    ))
+}
+
 /// Applies `update` to the task holding `token`.
 fn update_by_token(
     state: &mut State,
@@ -1495,14 +1597,14 @@ fn update_by_token(
         .map_or(TaskUpdate::NotFound, update))
 }
 
-fn unreferenced_past_grace(
-    state: &State,
-    tenant: &TenantId,
-    stored: &StoredPayload,
-    now: Timestamp,
-) -> bool {
+/// Whether cleanup may start deleting the payload at `now`: no run has referenced it for its
+/// grace, and its deletion has not started, or started too long ago to be still going on.
+fn deletable(state: &State, tenant: &TenantId, stored: &StoredPayload, now: Timestamp) -> bool {
     stored.refs.is_empty()
         && stored
             .unreferenced_since
             .is_some_and(|since| since.saturating_add(state.retention(tenant).payload_grace) <= now)
+        && stored
+            .deletion_started
+            .is_none_or(|started| started.saturating_add(PAYLOAD_DELETION_TIMEOUT) <= now)
 }

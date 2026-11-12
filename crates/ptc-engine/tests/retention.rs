@@ -6,7 +6,8 @@
 mod support;
 
 use ptc_core::{Digest, JournalDocument, Payload, RunStatus, Timestamp};
-use ptc_engine::adapters::MemoryReadModel;
+use ptc_engine::adapters::{MemoryReadModel, MemorySpanExporter, MemoryWebhooks};
+use ptc_engine::projector::{Projector, ProjectorConfig};
 use std::collections::BTreeMap;
 
 use ptc_engine::ports::{
@@ -94,6 +95,22 @@ async fn finished_runs_are_archived_then_deleted() {
         0
     );
     later(&engine, 2);
+    // The projector has not applied the run's entries yet: its history is still needed.
+    assert_eq!(
+        housekeeper
+            .archive(engine.clock().now(), encode)
+            .await
+            .unwrap(),
+        0
+    );
+    let projector = Projector {
+        journal: engine.journal(),
+        read_model: &read_model,
+        exporter: &MemorySpanExporter::new(),
+        webhooks: &MemoryWebhooks::new(),
+        config: ProjectorConfig::default(),
+    };
+    assert!(projector.project_all(engine.clock().now()).await.unwrap() > 0);
     assert_eq!(
         housekeeper
             .archive(engine.clock().now(), encode)

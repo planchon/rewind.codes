@@ -1044,6 +1044,27 @@ async fn without_a_public_url_the_webhook_builtin_is_unavailable() {
     );
 }
 
+#[tokio::test]
+async fn a_webhook_name_with_a_nul_character_is_refused() {
+    let config = EngineConfig {
+        public_url: Some("https://ptc.example.com/".into()),
+        ..EngineConfig::default()
+    };
+    let engine = engine_with(caller(), RecordingDispatcher::echo(), config);
+    let mut request = calling("webhook", toolset(|_| {}));
+    request.input["args"] = json!({ "name": "pr\u{0}merged" });
+    let run = engine.start_run(request).await.unwrap().run;
+    drive(&engine).await;
+    assert_eq!(
+        output(&engine, &run).await,
+        json!({
+            "error": "error",
+            "message": "the webhook name contains a NUL character (U+0000), which cannot be \
+                        stored: remove it",
+        })
+    );
+}
+
 // -------------------------------------------------------------------------------------------
 // Tenants
 

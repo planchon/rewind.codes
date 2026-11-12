@@ -168,7 +168,9 @@ async fn run(
             diagnostics: Vec::new(),
         },
         ScenarioError::Start(
-            refused @ (StartError::InvalidTtl { .. } | StartError::InputTooLarge { .. }),
+            refused @ (StartError::InvalidTtl { .. }
+            | StartError::InputTooLarge { .. }
+            | StartError::NulCharacter(_)),
         ) => CliError::usage(format!("the run cannot start: {refused}")),
         ScenarioError::Start(refused @ StartError::QuotaExceeded { .. }) => {
             CliError::Refused(format!("the run cannot start: {refused}"))

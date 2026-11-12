@@ -24,11 +24,11 @@ use ptc_core::{
 use ptc_engine::ports::{
     AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
-    Lease, NewRun, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, Quarantine,
-    QuarantineKind, Retention, RunFilter, RunMetadata, RunRecord, RunRef, Secret, StoreError,
-    StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask, TraceContext, Trigger,
-    WebhookTarget, WebhookToken, deferred_timeout_failure,
+    Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
+    RunRecord, RunRef, Secret, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter,
+    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
+    ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
@@ -685,6 +685,13 @@ impl PostgresStore {
                 ))
                 .into());
             }
+        }
+        if activation
+            .payloads
+            .iter()
+            .any(|payload| payload.value.is_none())
+        {
+            check_reserved(&mut tx, &lease.run, &activation.payloads).await?;
         }
         let to_idx = from_idx + activation.entries.len() as u64;
         let terminal = activation.status.is_terminal();
@@ -1443,6 +1450,87 @@ impl PostgresStore {
         Ok(WebhookToken(token))
     }
 
+    async fn reserve_payloads_once(
+        &self,
+        tenant_id: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, Fail> {
+        // One row per digest, in digest order: the order every writer locks payload rows in.
+        let by_digest: BTreeMap<Digest, &PayloadRecord> = payloads
+            .iter()
+            .map(|payload| (payload.digest, payload))
+            .collect();
+        let digests: Vec<Vec<u8>> = by_digest.keys().map(|digest| bytes(*digest)).collect();
+        let mut tx = self.pool.begin().await?;
+        // The rows there, locked in digest order, as every writer locks them.
+        let rows = sqlx::query(
+            "SELECT digest, deletion_started_at IS NOT NULL FROM payloads \
+             WHERE tenant = $1 AND digest = ANY($2) ORDER BY digest FOR UPDATE",
+        )
+        .bind(tenant(tenant_id))
+        .bind(digests)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut deleting = BTreeSet::new();
+        for row in &rows {
+            if row.boolean(1)? {
+                deleting.insert(row.digest(0)?);
+            }
+        }
+        let kept: Vec<&PayloadRecord> = by_digest
+            .values()
+            .filter(|payload| !deleting.contains(&payload.digest))
+            .copied()
+            .collect();
+        if !kept.is_empty() {
+            // A missing row is created; a row without references starts its grace again. A row
+            // created since the lock above is not being deleted either.
+            sqlx::query(
+                "INSERT INTO payloads (tenant, digest, bytes, preview, value, unreferenced_since) \
+                 SELECT $1, digest, bytes, preview, value, $6 \
+                 FROM unnest($2::bytea[], $3::bigint[], $4::text[], $5::text[]) \
+                     WITH ORDINALITY AS p(digest, bytes, preview, value, n) \
+                 ORDER BY n \
+                 ON CONFLICT (tenant, digest) DO UPDATE SET \
+                     unreferenced_since = GREATEST(payloads.unreferenced_since, $6) \
+                 WHERE payloads.unreferenced_since IS NOT NULL \
+                     AND payloads.deletion_started_at IS NULL",
+            )
+            .bind(tenant(tenant_id))
+            .bind(
+                kept.iter()
+                    .map(|payload| bytes(payload.digest))
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                kept.iter()
+                    .map(|payload| int(payload.size))
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                kept.iter()
+                    .map(|payload| payload.preview.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                kept.iter()
+                    .map(|payload| payload.value.as_ref().map(codec::encode_value))
+                    .collect::<Vec<_>>(),
+            )
+            .bind(ts(now))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        // In the order asked.
+        Ok(payloads
+            .iter()
+            .map(|payload| payload.digest)
+            .filter(|digest| deleting.contains(digest))
+            .collect())
+    }
+
     async fn forget_payloads_once(
         &self,
         payloads: &[(TenantId, Digest)],
@@ -1454,13 +1542,14 @@ impl PostgresStore {
         let digests: Vec<Vec<u8>> = sorted.iter().map(|(_, digest)| bytes(*digest)).collect();
         let default_grace = ms(Retention::default().payload_grace);
         let rows = sqlx::query(
-            "DELETE FROM payloads p USING ( \
+            "UPDATE payloads p SET deletion_started_at = $3 FROM ( \
                  SELECT tenant, digest FROM unnest($1::text[], $2::bytea[]) AS f(tenant, digest) \
                  ORDER BY tenant, digest) f \
              WHERE p.tenant = f.tenant AND p.digest = f.digest \
              AND p.unreferenced_since IS NOT NULL \
              AND p.unreferenced_since <= $3 - COALESCE( \
                  (SELECT payload_grace_ms FROM tenants WHERE id = p.tenant), $4) \
+             AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= $3 - $5) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
              RETURNING p.tenant, p.digest",
@@ -1469,6 +1558,7 @@ impl PostgresStore {
         .bind(digests)
         .bind(ts(now))
         .bind(default_grace)
+        .bind(ms(PAYLOAD_DELETION_TIMEOUT))
         .fetch_all(&self.pool)
         .await?;
         let forgotten: BTreeSet<(TenantId, Digest)> = rows
@@ -1483,6 +1573,32 @@ impl PostgresStore {
             .collect())
     }
 
+    async fn drop_payloads_once(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> Result<usize, Fail> {
+        // Payload rows are locked by digest, as commits lock them.
+        let sorted: BTreeSet<(TenantId, Digest)> = payloads.iter().cloned().collect();
+        let tenants: Vec<&str> = sorted.iter().map(|(owner, _)| tenant(owner)).collect();
+        let digests: Vec<Vec<u8>> = sorted.iter().map(|(_, digest)| bytes(*digest)).collect();
+        let dropped = sqlx::query(
+            "DELETE FROM payloads p USING ( \
+                 SELECT tenant, digest FROM unnest($1::text[], $2::bytea[]) AS f(tenant, digest) \
+                 ORDER BY tenant, digest) f \
+             WHERE p.tenant = f.tenant AND p.digest = f.digest \
+             AND p.deletion_started_at = $3 \
+             AND NOT EXISTS (SELECT 1 FROM payload_refs r \
+                             WHERE r.tenant = p.tenant AND r.digest = p.digest)",
+        )
+        .bind(tenants)
+        .bind(digests)
+        .bind(ts(started))
+        .execute(&self.pool)
+        .await?;
+        Ok(usize::try_from(dropped.rows_affected()).unwrap_or(usize::MAX))
+    }
+
     async fn archive_once(
         &self,
         run: &RunRef,
@@ -1493,12 +1609,15 @@ impl PostgresStore {
         let Some(locked) = lock_run(&mut tx, run).await? else {
             return Ok(false);
         };
-        let archived: bool =
-            sqlx::query_scalar("SELECT archive_document IS NOT NULL FROM runs WHERE id = $1")
-                .bind(uuid(run.id))
-                .fetch_one(&mut *tx)
-                .await?;
-        if !locked.status.is_terminal() || archived {
+        // A run with feed items left keeps its history until they are applied.
+        let (archived, pending): (bool, bool) = sqlx::query_as(
+            "SELECT archive_document IS NOT NULL, \
+             EXISTS (SELECT 1 FROM feed WHERE run_id = runs.id) FROM runs WHERE id = $1",
+        )
+        .bind(uuid(run.id))
+        .fetch_one(&mut *tx)
+        .await?;
+        if !locked.status.is_terminal() || archived || pending {
             return Ok(false);
         }
         sqlx::query(
@@ -1656,8 +1775,46 @@ async fn insert_tool_tasks(
     Ok(())
 }
 
+/// Locks the existing payload rows of an activation, by digest, and checks that each payload of
+/// the blob tier has a row, reserved before its blob was written, whose deletion has not
+/// started: its blob may be gone otherwise.
+async fn check_reserved(
+    conn: &mut PgConnection,
+    run: &RunRef,
+    payloads: &[PayloadRecord],
+) -> Result<(), Fail> {
+    let digests: BTreeSet<Digest> = payloads.iter().map(|payload| payload.digest).collect();
+    let digests: Vec<Vec<u8>> = digests.into_iter().map(bytes).collect();
+    let rows = sqlx::query(
+        "SELECT digest, deletion_started_at IS NULL FROM payloads \
+         WHERE tenant = $1 AND digest = ANY($2) ORDER BY digest FOR UPDATE",
+    )
+    .bind(tenant(&run.tenant))
+    .bind(digests)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut usable = BTreeSet::new();
+    for row in &rows {
+        if row.boolean(1)? {
+            usable.insert(row.digest(0)?);
+        }
+    }
+    match payloads
+        .iter()
+        .find(|payload| payload.value.is_none() && !usable.contains(&payload.digest))
+    {
+        Some(payload) => Err(StoreError::Conflict(format!(
+            "payload {} has no reserved row, or is being deleted: its blob may be gone",
+            payload.digest.short()
+        ))
+        .into()),
+        None => Ok(()),
+    }
+}
+
 /// Writes the payload rows of an activation, by digest, and the run's references to them. A row
-/// already there keeps its value, gets one if it had none, and is referenced again.
+/// already there keeps its value, gets one if it had none, is referenced again, and is no longer
+/// being deleted.
 async fn insert_payloads(
     conn: &mut PgConnection,
     run: &RunRef,
@@ -1686,8 +1843,10 @@ async fn insert_payloads(
                  WITH ORDINALITY AS p(digest, bytes, preview, value, n) \
              ORDER BY n \
              ON CONFLICT (tenant, digest) DO UPDATE SET \
-                 value = COALESCE(payloads.value, EXCLUDED.value), unreferenced_since = NULL \
+                 value = COALESCE(payloads.value, EXCLUDED.value), unreferenced_since = NULL, \
+                 deletion_started_at = NULL \
              WHERE payloads.unreferenced_since IS NOT NULL \
+                 OR payloads.deletion_started_at IS NOT NULL \
                  OR (payloads.value IS NULL AND EXCLUDED.value IS NOT NULL)) \
          INSERT INTO payload_refs (tenant, digest, run_id) \
          SELECT $1, digest, $2 FROM unnest($3::bytea[]) AS r(digest) \
@@ -2043,33 +2202,41 @@ impl JournalStore for PostgresStore {
         owner: &str,
         build: &str,
         epoch_list: &[Epoch],
+        tenants: &TenantScope,
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
         if epoch_list.is_empty() {
             return Ok(None);
         }
-        let row = sqlx::query(concat!(
+        let (scope, scoped) = scope_clause("tenant", tenants, 6);
+        let statement = format!(
             "UPDATE runs SET fence = fence + 1, lease_owner = $1, lease_until = $2, \
                  quarantine_retried_by = $3 \
              WHERE (tenant, id) = ( \
                  SELECT tenant, id FROM runs \
-                 WHERE quarantine_kind IS NOT NULL AND status NOT IN ",
-            terminal!(),
-            "     AND (lease_until IS NULL OR lease_until <= $4) \
+                 WHERE quarantine_kind IS NOT NULL AND status NOT IN {terminal} \
+                 AND (lease_until IS NULL OR lease_until <= $4) \
                  AND (quarantine_retried_by IS NULL OR quarantine_retried_by <> $3) \
-                 AND epoch = ANY($5) \
+                 AND epoch = ANY($5){scope} \
                  ORDER BY quarantine_since, tenant, id LIMIT 1 FOR NO KEY UPDATE SKIP LOCKED) \
-             RETURNING tenant, id, fence"
-        ))
-        .bind(owner)
-        .bind(ts(now.saturating_add(lease_duration)))
-        .bind(build)
-        .bind(ts(now))
-        .bind(epochs(epoch_list))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Error::from)?;
+             RETURNING tenant, id, fence",
+            terminal = terminal!(),
+        );
+        let query = sqlx::query(&statement)
+            .bind(owner)
+            .bind(ts(now.saturating_add(lease_duration)))
+            .bind(build)
+            .bind(ts(now))
+            .bind(epochs(epoch_list));
+        let query = match scoped {
+            Some(scoped) => query.bind(scoped),
+            None => query,
+        };
+        let row = query
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(Error::from)?;
         Ok(row.map(|row| lease_from_row(&row)).transpose()?)
     }
 
@@ -2615,6 +2782,18 @@ impl JournalStore for PostgresStore {
         }))
     }
 
+    async fn reserve_payloads(
+        &self,
+        tenant_id: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        if payloads.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(retrying(|| self.reserve_payloads_once(tenant_id, payloads, now)).await?)
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,
@@ -2627,6 +2806,7 @@ impl JournalStore for PostgresStore {
             "SELECT p.tenant, p.digest FROM payloads p LEFT JOIN tenants t ON t.id = p.tenant \
              WHERE p.unreferenced_since IS NOT NULL \
              AND p.unreferenced_since <= $1 - COALESCE(t.payload_grace_ms, $2) \
+             AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= $1 - $4) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
              ORDER BY p.tenant, p.digest LIMIT $3",
@@ -2634,6 +2814,7 @@ impl JournalStore for PostgresStore {
         .bind(ts(now))
         .bind(ms(Retention::default().payload_grace))
         .bind(limit(max))
+        .bind(ms(PAYLOAD_DELETION_TIMEOUT))
         .fetch_all(&self.pool)
         .await
         .map_err(Error::from)?;
@@ -2654,6 +2835,17 @@ impl JournalStore for PostgresStore {
         Ok(retrying(|| self.forget_payloads_once(payloads, now)).await?)
     }
 
+    async fn drop_payloads(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> Result<usize, StoreError> {
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+        Ok(retrying(|| self.drop_payloads_once(payloads, started)).await?)
+    }
+
     // ---------------------------------------------------------------------------------------
     // Retention
 
@@ -2667,6 +2859,7 @@ impl JournalStore for PostgresStore {
             terminal!(),
             " AND r.archive_document IS NULL AND r.ended_at IS NOT NULL \
              AND r.ended_at <= $1 - COALESCE(t.journal_retention_ms, $2) \
+             AND NOT EXISTS (SELECT 1 FROM feed f WHERE f.run_id = r.id) \
              ORDER BY r.ended_at, r.tenant, r.id LIMIT $3"
         ))
         .bind(ts(now))

@@ -35,7 +35,7 @@ timers     (run_id, seq, fire_at)                          index on fire_at
 tool_tasks (run_id, seq, tool, route, args, policy, server_concurrency, state, attempt, token,
             lease_owner, lease_until, next_attempt_at, parked_reason, created_at)
 webhook_tokens (token PK, run_id, name)
-payloads   (tenant, digest, bytes, preview, value, unreferenced_since)
+payloads   (tenant, digest, bytes, preview, value, unreferenced_since, deletion_started_at)
                                                            PK (tenant, digest)  -- value up to 64 KiB
 payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
 secrets    (tenant, owner, ciphertext)                     PK (tenant, owner)   -- owner: a toolset or a run
@@ -191,6 +191,12 @@ Active runs are never touched. Defaults, configurable per tenant:
   rows, its credentials and its payload references. Tool arguments can hold personal data.
 - A `payload_refs` table, filled at commit, records which runs reference a payload. Cleanup
   deletes the payloads that no run has referenced for 24 h, per tenant.
+- A blob delete cannot be undone or fenced, so no commit may count on a blob being deleted. A
+  large payload's row is reserved before its blob is written, which restarts its grace; cleanup
+  marks a row, deletes its blob, then the row. A payload whose deletion has started is
+  committed with its value in its row instead ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
+- A finished run is archived only once the projector has applied all its feed items: the read
+  model, the traces and the webhooks read its history until then.
 
 ## Security
 

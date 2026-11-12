@@ -15,8 +15,8 @@ use ptc_core::{
 };
 
 pub use activation::{
-    AcquireRunnable, Activation, InboxItem, Lease, NewTimer, NewToolTask, PayloadRecord,
-    STICKY_GRACE, Trigger,
+    AcquireRunnable, Activation, InboxItem, Lease, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
+    PayloadRecord, STICKY_GRACE, Trigger,
 };
 pub use feed::{FeedConsumer, FeedItem};
 pub use runs::{
@@ -31,7 +31,7 @@ pub use tasks::{
 
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
-use super::tenancy::{ApiKey, RunRef, Tenant, TenantId};
+use super::tenancy::{ApiKey, RunRef, Tenant, TenantId, TenantScope};
 use super::webhooks::Subscription;
 
 /// A script as stored: only scripts that compile are stored.
@@ -205,14 +205,17 @@ pub trait JournalStore: Send + Sync {
         lease_duration: Duration,
     ) -> impl Future<Output = Result<Option<Lease>, StoreError>> + Send;
 
-    /// Leases a quarantined run of an epoch in `epochs` that no worker of `build` has retried
-    /// yet, and records that `build` retried it: a worker of a new build retries each
-    /// quarantined run of its epochs once. A retry that fails again calls `quarantine`.
+    /// Leases a quarantined run of an epoch in `epochs` and of a tenant in scope that no worker
+    /// of `build` has retried yet, and records that `build` retried it: a worker of a new build
+    /// retries each quarantined run of its epochs and tenants once. A run of a tenant out of
+    /// scope is neither leased nor marked: a worker of its own pool retries it. A retry that
+    /// fails again calls `quarantine`.
     fn acquire_quarantined(
         &self,
         owner: &str,
         build: &str,
         epochs: &[Epoch],
+        tenants: &TenantScope,
         now: Timestamp,
         lease_duration: Duration,
     ) -> impl Future<Output = Result<Option<Lease>, StoreError>> + Send;
@@ -248,6 +251,11 @@ pub trait JournalStore: Send + Sync {
     /// consumer when there are entries, the reset of the failure count, and the lease owner as
     /// the run's sticky worker. A terminal status clears the run's timers, tool tasks, inbox,
     /// webhook tokens and quarantine.
+    ///
+    /// A payload without its value (its value is in the `BlobStore`) needs a row that
+    /// `reserve_payloads` created or kept, and whose deletion has not started: otherwise the
+    /// commit is a `Conflict` and writes nothing, since its blob may be gone. A payload with its
+    /// value creates its row or completes it, and stops its deletion.
     fn commit_activation(
         &self,
         lease: &Lease,
@@ -477,28 +485,57 @@ pub trait JournalStore: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<PayloadRecord>, StoreError>> + Send;
 
+    /// Reserves the rows of payloads whose values an activation writes to the `BlobStore`,
+    /// before it writes them, in one transaction. A missing row is created as its record
+    /// describes it, without references; a row without references starts its grace again at
+    /// `now`. No cleanup deletes a reserved payload before its grace has passed again, so its
+    /// blob is still there when the activation commits.
+    ///
+    /// Returns the payloads whose deletion has started (`forget_payloads`), left as they are:
+    /// their blobs may be deleted at any time, so the activation commits their values in their
+    /// rows instead.
+    fn reserve_payloads(
+        &self,
+        tenant: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<Digest>, StoreError>> + Send;
+
     /// Up to `limit` payloads that no run has referenced for longer than their tenant's
-    /// `payload_grace`, at `now`.
+    /// `payload_grace`, at `now`, and whose deletion has not started, or started at least
+    /// [`PAYLOAD_DELETION_TIMEOUT`] ago.
     fn unreferenced_payloads(
         &self,
         now: Timestamp,
         limit: usize,
     ) -> impl Future<Output = Result<Vec<(TenantId, Digest)>, StoreError>> + Send;
 
-    /// Deletes the rows of the given payloads that are still unreferenced past their grace at
-    /// `now`, and returns those: their blobs can be deleted. A payload referenced again since
-    /// is kept.
+    /// Starts deleting the given payloads that `unreferenced_payloads` would still return at
+    /// `now`, and returns those: their rows are marked as being deleted since `now`, and their
+    /// blobs can be deleted. A payload referenced or reserved again since is kept. Once the
+    /// blobs are deleted, `drop_payloads` removes the rows.
     fn forget_payloads(
         &self,
         payloads: &[(TenantId, Digest)],
         now: Timestamp,
     ) -> impl Future<Output = Result<Vec<(TenantId, Digest)>, StoreError>> + Send;
 
+    /// Removes the rows of the given payloads whose deletion `forget_payloads` started at
+    /// `started`, once their blobs are deleted. A row that a commit took back since, with its
+    /// value, is kept, and so is a row whose deletion was started again. Returns how many rows
+    /// were removed.
+    fn drop_payloads(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> impl Future<Output = Result<usize, StoreError>> + Send;
+
     // ---------------------------------------------------------------------------------------
     // Retention
 
     /// Up to `limit` finished runs, not archived, that ended longer ago than their tenant's
-    /// `retention.journal`, at `now`.
+    /// `retention.journal`, at `now`, and whose feed items are all applied: the read model, the
+    /// traces and the webhooks still read the history of a run with items left.
     fn runs_to_archive(
         &self,
         now: Timestamp,
@@ -507,7 +544,7 @@ pub trait JournalStore: Send + Sync {
 
     /// Removes the history of a finished run whose journal document is archived under
     /// `document`, and keeps its record and payload references. Returns `false` for a run that
-    /// does not exist or has not ended.
+    /// does not exist, has not ended, or still has feed items to apply.
     fn archive_run(
         &self,
         run: &RunRef,

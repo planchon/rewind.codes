@@ -120,6 +120,11 @@ pub struct NewToolTask {
     pub server_concurrency: Option<u32>,
 }
 
+/// How long a cleanup may take to delete the blobs of the payloads it started deleting
+/// (`JournalStore::forget_payloads`): it deletes them within this time, or it stopped. Past it,
+/// another cleanup starts their deletion again.
+pub const PAYLOAD_DELETION_TIMEOUT: Duration = Duration::from_secs(3_600);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NewTimer {
     pub seq: Seq,
