@@ -131,7 +131,7 @@ The responsibilities are split by layer:
 | `ptc-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
 | `ptc-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the `payloads` table with the commit, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
 | `ptc-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
-| `ptc-blob` | **Where** large values live: `{tenant}/sha256/{digest}` on S3, `.ptc/blobs/sha256/ab/<digest>` on disk (atomic writes). |
+| `ptc-blob` | **Where** large values live: `{tenant}/sha256/{digest}` on S3, `.ptc/blobs/{tenant}/sha256/ab/<digest>` on disk (atomic writes); workers keep a local cache in front of S3. |
 
 Consequences:
 

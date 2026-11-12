@@ -1,0 +1,24 @@
+[package]
+name = "ptc-blob"
+description = "BlobStore adapters of ai-ptc: local files, S3, and the workers' local cache."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ptc-core.workspace = true
+ptc-engine.workspace = true
+object_store.workspace = true
+quick_cache.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+ptc-engine = { workspace = true, features = ["conformance"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true
