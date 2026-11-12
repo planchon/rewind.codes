@@ -21,15 +21,16 @@ The TypeScript SDK and the dashboard generate their types from this file with
 [`openapi-typescript`](https://openapi-ts.dev) 7. From the root of the repository:
 
 ```sh
-npx openapi-typescript@7 api/openapi.json -o sdk/typescript/src/generated/api.ts
-npx openapi-typescript@7 api/openapi.json -o dashboard/src/generated/api.ts
+npx openapi-typescript@7 --empty-objects-unknown api/openapi.json -o sdk/typescript/src/generated/api.ts
+npx openapi-typescript@7 --empty-objects-unknown api/openapi.json -o dashboard/src/generated/api.ts
 ```
 
 `openapi-typescript` 7 prints its output through the TypeScript 5 compiler API, so it needs
 `typescript@5` installed next to it, even in a package compiled with TypeScript 7. The output
 has `paths` (one entry per operation, with its parameters, body and answers), `components`
 (every DTO, under its Rust name) and `webhooks` (the outbound lifecycle events). It pairs with
-`openapi-fetch` for a typed client.
+`openapi-fetch` for a typed client. `--empty-objects-unknown` is required: without it every
+`{"type": "object"}` schema (input schemas, cassettes, journals) becomes `Record<string, never>`.
 
 Each package runs that command in a `generate:api` script and commits the output, so that a
 change of the API shows in its diff.

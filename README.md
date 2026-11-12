@@ -9,6 +9,7 @@ The journal gives durable execution (`await sleep("10d")`, signals), replay, tes
 against recorded runs, and observability.
 
 - Architecture: [archi/](archi/README.md), the specification the code follows.
+- TypeScript SDK: [sdk/typescript/](sdk/typescript/README.md), the client, the host-tool worker and the agent tools.
 
 ## Crates
 

@@ -1,0 +1,43 @@
+{
+  "name": "@ai-ptc/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK of ai-ptc: the API client, the host-tool worker and the agent tools.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "generate:api": "pnpm dlx --package openapi-typescript@7.13.0 --package typescript@5.9.3 openapi-typescript ../../api/openapi.json --empty-objects-unknown -o src/generated/api.ts",
+    "check": "prettier --check . && tsc -p tsconfig.json && vitest run",
+    "format": "prettier --write .",
+    "check:api": "pnpm generate:api && git diff --exit-code -- src/generated/api.ts"
+  },
+  "dependencies": {
+    "eventsource-parser": "4.1.3",
+    "openapi-fetch": "0.17.0",
+    "standardwebhooks": "1.1.1"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "1.8.0",
+    "@types/node": "22.20.5",
+    "openai": "7.55.0",
+    "prettier": "^3.10.0",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "packageManager": "pnpm@10.15.0"
+}

@@ -76,7 +76,7 @@ const toolset = await ptc.toolsets.create({
     name: "ask_user",
     description: "Ask the end user a question and return their answer.",
     inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
-    policy: { retry: "never" },
+    policy: { onInterruption: "at_most_once" },
   }],
 });
 
