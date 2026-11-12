@@ -236,8 +236,9 @@ pub(crate) struct Directive {
 
 /// Blanks the triple-slash reference directives of a file, keeping every other character, so
 /// positions do not move. TypeScript reads them only in the file's prologue, the comments
-/// before its first token, and only there are they looked for. Returns the text and the
-/// directives it held.
+/// before its first token, and only there are they looked for, as TypeScript reads them: the
+/// name in any case, after any whitespace TypeScript skips. Returns the text and the directives
+/// it held.
 pub(crate) fn blank_directives(text: &str) -> (Cow<'_, str>, Vec<Directive>) {
     let mut directives = Vec::new();
     let mut blanked: Vec<(usize, usize)> = Vec::new();
@@ -250,7 +251,7 @@ pub(crate) fn blank_directives(text: &str) -> (Cow<'_, str>, Vec<Directive>) {
     }
     loop {
         let rest = &text[at..];
-        let trimmed = rest.trim_start();
+        let trimmed = rest.trim_start_matches(is_whitespace);
         at += rest.len() - trimmed.len();
         if trimmed.starts_with("//") {
             let end = line_end(text, at);
@@ -283,6 +284,12 @@ pub(crate) fn blank_directives(text: &str) -> (Cow<'_, str>, Vec<Directive>) {
     (Cow::Owned(result), directives)
 }
 
+/// Whitespace as TypeScript's scanner skips it: Unicode's, with the zero-width space and the
+/// byte order mark.
+fn is_whitespace(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{200b}' | '\u{feff}')
+}
+
 /// The offset of the end of the line holding `at`, before its terminator.
 fn line_end(text: &str, at: usize) -> usize {
     text[at..]
@@ -290,15 +297,21 @@ fn line_end(text: &str, at: usize) -> usize {
         .map_or(text.len(), |end| at + end)
 }
 
-/// Reads `<reference kind="value" />`, the text of a comment after `///`.
+/// Reads `<reference kind="value" />`, the text of a comment after `///`. TypeScript reads the
+/// name in any case.
 fn reference(comment: &str) -> Option<Directive> {
-    let rest = comment.trim_start().strip_prefix("<reference")?;
-    if !rest.starts_with(|c: char| c.is_whitespace() || c == '/' || c == '>') {
+    const TAG: &str = "<reference";
+    let comment = comment.trim_start_matches(is_whitespace);
+    let rest = comment
+        .get(..TAG.len())
+        .filter(|tag| tag.eq_ignore_ascii_case(TAG))
+        .map(|_| &comment[TAG.len()..])?;
+    if !rest.starts_with(|c: char| is_whitespace(c) || c == '/' || c == '>') {
         return None;
     }
-    let rest = rest.trim_start();
+    let rest = rest.trim_start_matches(is_whitespace);
     let (kind, rest) = rest.split_once('=')?;
-    let rest = rest.trim_start();
+    let rest = rest.trim_start_matches(is_whitespace);
     let quote = rest.chars().next().filter(|&c| c == '"' || c == '\'')?;
     let (value, _) = rest[1..].split_once(quote)?;
     Some(Directive {
@@ -431,5 +444,25 @@ mod tests {
             blank_directives("// <reference lib=\"dom\" />\nlet x;"),
             (Cow::Borrowed(_), ref found) if found.is_empty()
         ));
+    }
+
+    /// As TypeScript reads them: the name in any case, after the whitespace it skips.
+    #[test]
+    fn directives_are_read_as_typescript_reads_them() {
+        for source in [
+            "/// <REFERENCE lib=\"dom\" />\nlet x;",
+            "/// <Reference lib=\"dom\" />\nlet x;",
+            "// a\n\u{feff}/// <reference lib=\"dom\" />\nlet x;",
+            "\u{200b}///\u{200b}<reference\u{200b}lib=\"dom\" />\nlet x;",
+        ] {
+            let (blanked, directives) = blank_directives(source);
+            assert_eq!(directives.len(), 1, "{source:?}");
+            assert!(!blanked.contains("dom"), "{source:?}");
+        }
+        assert!(
+            blank_directives("/// <referenced lib=\"dom\" />")
+                .1
+                .is_empty()
+        );
     }
 }
