@@ -20,6 +20,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
 use ptc_engine::ports::{Retention, TenantId, TenantScope};
 use ptc_engine::{CacheConfig, EngineConfig};
+use ptc_mcp::{InternalAllowList, McpEgress};
 
 use crate::wiring::blobs::{BlobLocation, S3Options};
 use crate::wiring::store::StoreLocation;
@@ -156,6 +157,18 @@ pub struct ServerArgs {
     /// server always does.
     #[arg(long, env = "PTC_ALLOW_STDIO")]
     pub allow_stdio: bool,
+
+    /// An internal host or network whose MCP servers toolsets may name: a host name
+    /// (`mcp.internal.example`), its subdomains (`*.svc.cluster.local`), an address or a CIDR
+    /// network (`10.20.0.0/16`). Repeat, or separate with commas. Without it, a server reaches
+    /// MCP servers only at public addresses: private, loopback, link-local and cloud-metadata
+    /// addresses are refused. The embedded server reaches any address.
+    #[arg(
+        long = "allow-internal-mcp",
+        env = "PTC_ALLOW_INTERNAL_MCP",
+        value_delimiter = ','
+    )]
+    pub allow_internal_mcp: Vec<String>,
 
     /// Send lifecycle webhooks to private, loopback and link-local addresses too, over
     /// `http://` or `https://`: for a harness on the same trusted network. Without it, a server
@@ -294,6 +307,9 @@ pub(crate) struct Config {
     pub(crate) dispatches: usize,
     pub(crate) run_quota: Option<u32>,
     pub(crate) allow_stdio: bool,
+    /// Where MCP servers may be: anywhere for the embedded server; public addresses and the
+    /// internal hosts of `--allow-internal-mcp` for a deployed one.
+    pub(crate) mcp_egress: McpEgress,
     /// Lifecycle webhooks may go to the private network, over `http://` too.
     pub(crate) allow_private_webhooks: bool,
     /// `Some(true)`: switch to virtual time; `Some(false)`: to real time; `None`: as the store
@@ -412,6 +428,12 @@ impl ServerArgs {
                      apply to it",
                 ));
             }
+            if !self.allow_internal_mcp.is_empty() {
+                return Err(ConfigError::new(
+                    "the embedded server reaches MCP servers at any address: \
+                     --allow-internal-mcp does not apply to it",
+                ));
+            }
             let dir = self.dir.clone();
             return Ok(Config {
                 store: StoreLocation::Turso(dir.join("journal.db")),
@@ -431,6 +453,7 @@ impl ServerArgs {
                 dispatches: self.dispatches,
                 run_quota: None,
                 allow_stdio: true,
+                mcp_egress: McpEgress::open(),
                 allow_private_webhooks: true,
                 virtual_time,
                 idle_timeout: self.idle_timeout,
@@ -446,6 +469,8 @@ impl ServerArgs {
         if !api && !worker {
             return Err(ConfigError::new("--role takes api, worker, or both"));
         }
+        let internal_mcp = InternalAllowList::parse(&self.allow_internal_mcp)
+            .map_err(|error| ConfigError::new(format!("--allow-internal-mcp: {error}")))?;
         let store_text = self.store.clone().ok_or_else(|| {
             ConfigError::new(
                 "--store is required (turso:<path>), or run the embedded server with --embedded",
@@ -507,6 +532,7 @@ impl ServerArgs {
             dispatches: self.dispatches,
             run_quota: self.run_quota,
             allow_stdio: self.allow_stdio,
+            mcp_egress: McpEgress::checked(internal_mcp),
             allow_private_webhooks: self.allow_private_webhooks,
             virtual_time,
             idle_timeout: self.idle_timeout,
@@ -671,5 +697,36 @@ mod tests {
         assert!(parse_bytes("4GB").is_err());
         assert!(parse_bytes("GiB").is_err());
         assert!(parse_bytes("99999999999999GiB").is_err());
+    }
+
+    #[test]
+    fn only_a_deployed_server_checks_where_its_mcp_servers_are() {
+        let key = BASE64.encode([7u8; 32]);
+        let deployed = |extra: &[&str]| {
+            let mut args = vec!["--store", "turso:/tmp/j.db", "--master-key", &key];
+            args.extend_from_slice(extra);
+            parse(&args)
+        };
+        let checked = deployed(&[]).unwrap_or_else(|error| panic!("{error}"));
+        assert!(!checked.mcp_egress.is_open());
+        let allowed = deployed(&[
+            "--allow-internal-mcp",
+            "mcp.internal.example,10.20.0.0/16",
+            "--allow-internal-mcp",
+            "*.svc.cluster.local",
+        ])
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(!allowed.mcp_egress.is_open());
+        let invalid = deployed(&["--allow-internal-mcp", "10.0.0.0/33"]).unwrap_err();
+        assert!(
+            invalid
+                .to_string()
+                .starts_with("--allow-internal-mcp: \"10.0.0.0/33\""),
+            "{invalid}"
+        );
+
+        let embedded = parse(&["--embedded"]).unwrap_or_else(|error| panic!("{error}"));
+        assert!(embedded.mcp_egress.is_open());
+        assert!(parse(&["--embedded", "--allow-internal-mcp", "10.0.0.0/8"]).is_err());
     }
 }

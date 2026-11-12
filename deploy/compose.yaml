@@ -39,6 +39,9 @@ x-ptc-env: &ptc-env
   PTC_LOG: ${PTC_LOG:-info}
   PTC_DEFAULT_TTL: ${PTC_DEFAULT_TTL:-30d}
   PTC_MAX_TTL: ${PTC_MAX_TTL:-365d}
+  # MCP servers at private addresses the servers may reach (names, *.domain, CIDR networks):
+  # `loadgen` is the load generator's fake MCP server (profile load).
+  PTC_ALLOW_INTERNAL_MCP: ${PTC_ALLOW_INTERNAL_MCP:-loadgen}
 
 x-worker: &worker
   <<: *ptc

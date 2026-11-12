@@ -263,7 +263,8 @@ impl Drop for Server {
     }
 }
 
-/// Serves the fixture over streamable HTTP at `/mcp`, on a free port of 127.0.0.1.
+/// Serves the fixture over streamable HTTP at `/mcp`, on a free port of 127.0.0.1; `/moved`
+/// redirects there with a 307.
 pub(crate) async fn serve_http(fixture: Fixture, auth: Auth) -> Server {
     let stop = CancellationToken::new();
     let sessions = fixture.clone();
@@ -273,12 +274,20 @@ pub(crate) async fn serve_http(fixture: Fixture, auth: Auth) -> Server {
             Ok(sessions.clone())
         },
         Arc::new(LocalSessionManager::default()),
+        // The egress tests reach it under names of their own, which their resolvers answer.
         StreamableHttpServerConfig::default()
             .with_sse_keep_alive(None)
+            .disable_allowed_hosts()
             .with_cancellation_token(stop.child_token()),
     );
     let router = axum::Router::new()
         .nest_service("/mcp", service)
+        .route(
+            "/moved",
+            axum::routing::any(|| async {
+                (StatusCode::TEMPORARY_REDIRECT, [("location", "/mcp")]).into_response()
+            }),
+        )
         .layer(middleware::from_fn_with_state(auth, check));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

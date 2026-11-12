@@ -46,6 +46,8 @@ flate2 = "1"
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hmac = "0.13"
+# The networks of the internal MCP servers an operator allows (`--allow-internal-mcp 10.0.0.0/8`).
+ipnet = "2"
 # Timestamps of the HTTP API (RFC 3339).
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
 # Args of tool calls are validated against the pinned JSON Schema inside the op. Pinned exactly: its

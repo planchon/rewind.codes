@@ -1296,6 +1296,10 @@ export interface components {
             description: string;
             /** @description JSON Schema of the arguments. Arguments are validated against it before the call. */
             inputSchema: Record<string, unknown>;
+            /**
+             * @description `group.tool` puts the tool in a group, the namespace `ptc:tools` exports it under. The
+             *     group, and a name without a dot, may not be a reserved word of JavaScript.
+             */
             name: string;
             /** @description JSON Schema of the result, for the declarations. Results are not validated. */
             outputSchema?: Record<string, unknown> | null;
@@ -1379,7 +1383,10 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
-            /** @description The namespace of its tools in `ptc:tools`: an identifier. */
+            /**
+             * @description The namespace of its tools in `ptc:tools`: an identifier that is not a reserved word of
+             *     JavaScript (`default`, `delete`, `let`…).
+             */
             name: string;
             /**
              * @description Policies of its tools, by tool name as the server defines it. Tools not listed get the
@@ -1388,7 +1395,10 @@ export interface components {
             policies?: {
                 [key: string]: components["schemas"]["ToolPolicy"];
             };
-            /** @description The URL of a streamable HTTP server. */
+            /**
+             * @description The URL of a streamable HTTP server. A server of a deployment reaches it only at a public
+             *     address, unless its configuration allows the internal host.
+             */
             url?: string | null;
         };
         /** @enum {string} */

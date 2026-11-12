@@ -1178,6 +1178,7 @@
             "type": "object"
           },
           "name": {
+            "description": "`group.tool` puts the tool in a group, the namespace `ptc:tools` exports it under. The\ngroup, and a name without a dot, may not be a reserved word of JavaScript.",
             "type": "string"
           },
           "outputSchema": {
@@ -1412,7 +1413,7 @@
             "type": "object"
           },
           "name": {
-            "description": "The namespace of its tools in `ptc:tools`: an identifier.",
+            "description": "The namespace of its tools in `ptc:tools`: an identifier that is not a reserved word of\nJavaScript (`default`, `delete`, `let`…).",
             "type": "string"
           },
           "policies": {
@@ -1426,7 +1427,7 @@
             "type": "object"
           },
           "url": {
-            "description": "The URL of a streamable HTTP server.",
+            "description": "The URL of a streamable HTTP server. A server of a deployment reaches it only at a public\naddress, unless its configuration allows the internal host.",
             "type": [
               "string",
               "null"

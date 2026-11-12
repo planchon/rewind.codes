@@ -8,6 +8,11 @@
 //! | The server cannot be reached, the connection or the process closed, HTTP 429 or 5xx, JSON-RPC internal error (-32603), a session that could not be recovered | transient: `unavailable` |
 //! | No answer within the execution timeout | transient: `timeout` |
 //! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, another HTTP 4xx, a command that does not exist | failed |
+//! | The egress checks refuse the server's address, a redirect elsewhere than the server's origin | failed: `unavailable` |
+//!
+//! A failure quotes what the server answered (a body, a challenge), cut at 2,000 characters,
+//! unless the connection reached an internal server ([`Answers::Withheld`]): it then says only
+//! the HTTP status and what ai-ptc saw itself, such as a connection refused.
 
 use std::error::Error;
 use std::time::Duration;
@@ -24,9 +29,23 @@ use rmcp::transport::streamable_http_client::{
 use serde_json::Value;
 
 use crate::McpError;
+use crate::http::Egress;
 
 /// Characters of a message from a server kept in a failure: the script and the model read it.
 const MESSAGE: usize = 2000;
+
+/// Whether a failure may quote what the server answered over HTTP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answers {
+    /// A public server, a stdio server, or any server of the embedded server.
+    Quoted,
+    /// A server reached at an address only the operator's allow-list lets through: a tenant
+    /// must not read an internal service through the messages of a toolset that points at it.
+    Withheld,
+}
+
+/// Ends a message whose detail is withheld.
+const WITHHELD: &str = "the answer of an internal server is not quoted";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Failure {
@@ -109,8 +128,9 @@ pub(crate) fn bounded(message: &str) -> String {
 }
 
 /// A failed request on an open connection. The second value says whether the connection is
-/// broken and must be dropped.
-pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) {
+/// broken and must be dropped. The errors of the JSON-RPC protocol are what an MCP server says
+/// to its clients, and are quoted whatever `answers` says.
+pub(crate) fn of_service(server: &str, error: &ServiceError, answers: Answers) -> (Failure, bool) {
     match error {
         ServiceError::McpError(data) => {
             let message = format!("{server} answered with an error: {}", data.message);
@@ -121,7 +141,7 @@ pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) 
             };
             (failure, false)
         }
-        ServiceError::TransportSend(transport) => (of_transport(server, transport), true),
+        ServiceError::TransportSend(transport) => (of_transport(server, transport, answers), true),
         ServiceError::TransportClosed => (
             Failure::transient(
                 ToolFailureKind::Unavailable,
@@ -157,9 +177,13 @@ pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) 
 }
 
 /// A connection that could not be opened.
-pub(crate) fn of_initialize(server: &str, error: &ClientInitializeError) -> Failure {
+pub(crate) fn of_initialize(
+    server: &str,
+    error: &ClientInitializeError,
+    answers: Answers,
+) -> Failure {
     if let Some(transport) = transport_error(error) {
-        return of_transport(server, transport);
+        return of_transport(server, transport, answers);
     }
     match error {
         ClientInitializeError::NoCompatibleProtocolVersion {
@@ -178,7 +202,12 @@ pub(crate) fn of_initialize(server: &str, error: &ClientInitializeError) -> Fail
         ),
         other => Failure::transient(
             ToolFailureKind::Unavailable,
-            format!("{server} could not be reached: {}", chain(other)),
+            match answers {
+                Answers::Quoted => format!("{server} could not be reached: {}", chain(other)),
+                Answers::Withheld => {
+                    format!("{server} did not answer as an MCP server; {WITHHELD}")
+                }
+            },
         ),
     }
 }
@@ -197,25 +226,74 @@ fn transport_error(error: &ClientInitializeError) -> Option<&DynamicTransportErr
 
 /// A failure of the transport, sorted by the HTTP status it carries, if any: 401 parks the
 /// call, 408, 429 and 5xx are transient, another 4xx will not change by retrying (a wrong URL,
-/// a forbidden request); without a status, the server could not be reached.
-fn of_transport(server: &str, error: &(dyn Error + 'static)) -> Failure {
-    match http_status(error) {
-        Some((401, detail)) => Failure::Unauthorized(unauthorized_message(server, &detail)),
+/// a forbidden request); without a status, the server could not be reached. An address the
+/// egress checks refuse, or a redirect the client does not follow, fails for good.
+fn of_transport(server: &str, error: &(dyn Error + 'static), answers: Answers) -> Failure {
+    if let Some(reason) = refusal(error) {
+        return Failure::permanent(
+            ToolFailureKind::Unavailable,
+            format!("{server} cannot be reached: {reason}"),
+            None,
+        );
+    }
+    let status = http_status(error);
+    // What follows the status, or the place of one: the error's text, or for an internal
+    // server, only the client's own error.
+    let detail = match (answers, client_error(error)) {
+        (Answers::Quoted, _) => format!(": {}", chain(error)),
+        (Answers::Withheld, Some(client)) if status.is_none() => format!(": {}", chain(client)),
+        (Answers::Withheld, _) => format!("; {WITHHELD}"),
+    };
+    match status {
+        Some((401, challenge)) => {
+            let challenge = match answers {
+                Answers::Quoted => challenge,
+                Answers::Withheld => "authorization required".to_owned(),
+            };
+            Failure::Unauthorized(unauthorized_message(server, &challenge))
+        }
         Some((status, _)) if (400..500).contains(&status) && !matches!(status, 408 | 429) => {
             Failure::permanent(
                 ToolFailureKind::Unavailable,
-                format!(
-                    "{server} refused the request (HTTP {status}): {}",
-                    chain(error)
-                ),
+                format!("{server} refused the request (HTTP {status}){detail}"),
                 None,
             )
         }
+        Some((status, _)) if answers == Answers::Withheld => Failure::transient(
+            ToolFailureKind::Unavailable,
+            format!("{server} could not be reached (HTTP {status}){detail}"),
+        ),
         _ => Failure::transient(
             ToolFailureKind::Unavailable,
-            format!("{server} could not be reached: {}", chain(error)),
+            format!("{server} could not be reached{detail}"),
         ),
     }
+}
+
+/// The client's own error somewhere in the error's sources: what ai-ptc saw (no connection, a
+/// timeout, a refusal), never what the server answered. rmcp keeps it in a variant that is not
+/// a source.
+fn client_error<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a reqwest::Error> {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if let Some(client) = current.downcast_ref::<reqwest::Error>() {
+            return Some(client);
+        }
+        if let Some(StreamableHttpError::Client(client)) =
+            current.downcast_ref::<StreamableHttpError<reqwest::Error>>()
+        {
+            return Some(client);
+        }
+        source = current.source();
+    }
+    None
+}
+
+/// Why the client refused to go where the request led: an address the egress checks refuse, or
+/// a redirect it does not follow.
+fn refusal(error: &(dyn Error + 'static)) -> Option<String> {
+    Egress::refusal_of(error)
+        .or_else(|| client_error(error).and_then(|client| Egress::refusal_of(client)))
 }
 
 /// A stdio server that could not be started. A missing or forbidden program will not appear
@@ -342,7 +420,7 @@ mod tests {
                 "HTTP 401 Unauthorized: token expired".into(),
             )),
         ] {
-            let (failure, broken) = of_service("github", &transport(error));
+            let (failure, broken) = of_service("github", &transport(error), Answers::Quoted);
             assert!(broken);
             let Failure::Unauthorized(message) = failure else {
                 panic!("a 401 parks the call: {failure:?}");
@@ -359,6 +437,7 @@ mod tests {
                 &transport(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
                     message.into(),
                 ))),
+                Answers::Quoted,
             );
             assert!(
                 matches!(failure, Failure::Permanent(ref f) if f.kind == ToolFailureKind::Unavailable),
@@ -370,6 +449,7 @@ mod tests {
             &transport(StreamableHttpError::HttpStatus(HttpStatusError::new(
                 429, None,
             ))),
+            Answers::Quoted,
         );
         assert!(matches!(failure, Failure::Transient(_)));
     }
@@ -381,6 +461,7 @@ mod tests {
             &transport(StreamableHttpError::HttpStatus(HttpStatusError::new(
                 503, None,
             ))),
+            Answers::Quoted,
         );
         assert!(broken);
         assert!(
@@ -390,6 +471,7 @@ mod tests {
         let (failure, broken) = of_service(
             "github",
             &ServiceError::McpError(ErrorData::internal_error("database down", None)),
+            Answers::Quoted,
         );
         assert!(!broken);
         assert!(matches!(failure, Failure::Transient(_)));
@@ -403,6 +485,7 @@ mod tests {
                 "repo is required",
                 Some(serde_json::json!({ "field": "repo" })),
             )),
+            Answers::Quoted,
         );
         assert_eq!(
             failure,
@@ -419,6 +502,73 @@ mod tests {
     }
 
     #[test]
+    fn an_internal_server_s_answers_are_not_quoted() {
+        let body = "<html>internal admin console: secret=hunter2</html>";
+        let unexpected = || {
+            transport(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                format!("HTTP 404 Not Found: {body}"),
+            )))
+        };
+        let (quoted, _) = of_service("crm", &unexpected(), Answers::Quoted);
+        assert!(format!("{quoted:?}").contains("hunter2"), "{quoted:?}");
+        let (withheld, _) = of_service("crm", &unexpected(), Answers::Withheld);
+        assert_eq!(
+            withheld,
+            Failure::permanent(
+                ToolFailureKind::Unavailable,
+                "crm refused the request (HTTP 404); the answer of an internal server is not \
+                 quoted",
+                None
+            )
+        );
+        let (withheld, _) = of_service(
+            "crm",
+            &transport(StreamableHttpError::HttpStatus(HttpStatusError::new(
+                503, None,
+            ))),
+            Answers::Withheld,
+        );
+        assert_eq!(
+            withheld,
+            Failure::transient(
+                ToolFailureKind::Unavailable,
+                "crm could not be reached (HTTP 503); the answer of an internal server is not \
+                 quoted"
+            )
+        );
+        // A body that is not JSON-RPC, after a 200.
+        let (withheld, _) = of_service(
+            "crm",
+            &transport(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                format!("could not parse JSON response as ServerJsonRpcMessage: {body}"),
+            ))),
+            Answers::Withheld,
+        );
+        assert!(!format!("{withheld:?}").contains("hunter2"), "{withheld:?}");
+        // A challenge is the server's text too.
+        let (withheld, _) = of_service(
+            "crm",
+            &transport(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                body.into(),
+            ))),
+            Answers::Withheld,
+        );
+        assert_eq!(
+            withheld,
+            Failure::Unauthorized(
+                "crm refused the credentials (HTTP 401): authorization required".into()
+            )
+        );
+        // A JSON-RPC error is what an MCP server says to its clients.
+        let (failure, _) = of_service(
+            "crm",
+            &ServiceError::McpError(ErrorData::invalid_params("repo is required", None)),
+            Answers::Withheld,
+        );
+        assert!(format!("{failure:?}").contains("repo is required"));
+    }
+
+    #[test]
     fn long_messages_are_cut() {
         let message = bounded(&"x".repeat(5000));
         assert_eq!(message.chars().count(), MESSAGE + 1);
@@ -429,6 +579,7 @@ mod tests {
             &transport(StreamableHttpError::AuthRequired(AuthRequiredError::new(
                 "x".repeat(5000),
             ))),
+            Answers::Quoted,
         );
         let Failure::Unauthorized(message) = failure else {
             panic!("a 401 parks the call: {failure:?}");

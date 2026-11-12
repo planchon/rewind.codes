@@ -4,7 +4,7 @@
 //!
 //! | Route | Dispatcher |
 //! | --- | --- |
-//! | MCP tools | `ptc-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled |
+//! | MCP tools | `ptc-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled; HTTP servers only where the configuration's `McpEgress` lets it go |
 //! | Built-ins | `ptc-mcp`'s `HttpTool` for `http`, with its egress rules; `webhook` is answered by the engine |
 //! | Host tools | none: the harness's worker claims them (`GET /v1/tasks`) |
 //!
@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use ptc_core::{Builtin, McpServer, Shape, Tool, ToolRoute, Toolset};
 use ptc_engine::adapters::{RoutingDispatcher, Unrouted};
 use ptc_engine::ports::{ServerCredentials, TenantId};
-use ptc_mcp::{HttpConfig, HttpTool, McpConfig, McpDispatcher};
+use ptc_mcp::{HttpConfig, HttpTool, McpConfig, McpDispatcher, McpEgress};
 
 /// The dispatcher of the routes ai-ptc calls itself.
 pub(crate) type Dispatcher = RoutingDispatcher<McpDispatcher, HttpTool, Unrouted>;
@@ -34,9 +34,14 @@ pub(crate) struct Tools {
 }
 
 impl Tools {
-    pub(crate) fn new() -> Result<Self, String> {
+    /// The tools of a server whose MCP servers may be where `egress` says, at discovery as at
+    /// each call.
+    pub(crate) fn new(egress: McpEgress) -> Result<Self, String> {
         Ok(Self {
-            mcp: McpDispatcher::new(McpConfig::default()),
+            mcp: McpDispatcher::new(McpConfig {
+                egress,
+                ..McpConfig::default()
+            }),
             http: HttpTool::new(HttpConfig::default()).map_err(|error| error.to_string())?,
         })
     }
