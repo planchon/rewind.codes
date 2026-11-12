@@ -230,7 +230,9 @@ The same binary takes a role at start:
 | `ptc server --role api` | HTTP API, authentication, SSE | No |
 | `ptc server --role worker` | V8, dispatcher, scheduler, projector | Yes |
 
-- Workers run under gVisor (`runsc`).
+- Workers run under gVisor (`runsc`). A sandbox runs its own network stack: it takes over the
+  network namespace it starts in, and reaches no DNS server on the host's loopback, such as
+  Docker's: a worker's DNS server stands on its network.
 - They run in pools per tenant when needed. Trusted tenants share a pool.
 - They reach the outside only through the egress proxy, and have no route to the cloud
   metadata endpoint ([egress](04-tools.md#the-http-tool-and-egress)).
