@@ -1,6 +1,6 @@
 //! Service telemetry: what the platform itself does, from the `tracing` facade, exported over
-//! OTLP. `tracing` spans become OpenTelemetry spans, and events become log records correlated
-//! with the span they happen in.
+//! OTLP. `tracing` spans become OpenTelemetry spans, events become log records correlated with
+//! the span they happen in, and measurements become metrics (see the module `metrics`).
 //!
 //! The engine and the adapters never name OpenTelemetry: a span joins a run's trace through
 //! fields it records, at creation or later with `Span::record`, before it closes:
@@ -26,12 +26,15 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity};
+use opentelemetry::metrics::MeterProvider as _;
 use opentelemetry::propagation::TextMapPropagator as _;
 use opentelemetry::trace::{
     SpanContext, SpanKind, Status, TraceContextExt as _, TraceFlags, TraceState,
 };
 use opentelemetry::{Context, InstrumentationScope, Key, KeyValue, SpanId, TraceId, Value};
 use opentelemetry_sdk::logs::{LogExporter, SdkLogRecord, SdkLogger, SdkLoggerProvider};
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{
     BatchSpanProcessor, IdGenerator as _, RandomIdGenerator, SpanData, SpanEvents, SpanExporter,
@@ -42,10 +45,11 @@ use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Event, Level, Metadata, Subscriber};
 use tracing_subscriber::Layer;
-use tracing_subscriber::filter::filter_fn;
+use tracing_subscriber::filter::{EnvFilter, FilterExt as _, filter_fn};
 use tracing_subscriber::layer::Context as LayerContext;
 use tracing_subscriber::registry::{LookupSpan, SpanRef};
 
+use crate::metrics::{self, Instruments, MetricsLayer};
 use crate::otlp::{self, OnRuntime};
 use crate::{OtelError, OtlpConfig, ServiceConfig};
 
@@ -75,17 +79,20 @@ const UNEXPORTED_TARGETS: &[&str] = &[
 ];
 
 /// Service telemetry exported over OpenTelemetry: the [`layer`](Self::layer) to add to a
-/// `tracing` subscriber, and the batch processors behind it. Spans and log records are exported
-/// in batches, from the SDK's threads.
+/// `tracing` subscriber, and the batch processors and the metric reader behind it. Spans and log
+/// records are exported in batches, and metrics periodically (`OTEL_METRIC_EXPORT_INTERVAL`,
+/// 60 s by default), from the SDK's threads.
 #[derive(Clone)]
 pub struct ServiceTelemetry {
     pipeline: Arc<Pipeline>,
+    instruments: Arc<Instruments>,
 }
 
 struct Pipeline {
     spans: BatchSpanProcessor,
     logs: SdkLoggerProvider,
     logger: SdkLogger,
+    meters: SdkMeterProvider,
     scope: InstrumentationScope,
     telemetry: TelemetryConfig,
     ids: RandomIdGenerator,
@@ -103,58 +110,95 @@ impl ServiceTelemetry {
         let runtime = otlp::runtime()?;
         Ok(Self::new(
             OnRuntime::new(otlp::span_exporter(otlp)?, runtime.clone()),
-            OnRuntime::new(otlp::log_exporter(otlp)?, runtime),
+            OnRuntime::new(otlp::log_exporter(otlp)?, runtime.clone()),
+            OnRuntime::new(otlp::metric_exporter(otlp)?, runtime),
             service,
             telemetry,
         ))
     }
 
     /// Exports through the given OpenTelemetry exporters, with `service` as their resource.
-    pub fn new<S, L>(spans: S, logs: L, service: &ServiceConfig, telemetry: TelemetryConfig) -> Self
+    pub fn new<S, L, M>(
+        spans: S,
+        logs: L,
+        metrics: M,
+        service: &ServiceConfig,
+        telemetry: TelemetryConfig,
+    ) -> Self
     where
         S: SpanExporter + 'static,
         L: LogExporter + 'static,
+        M: PushMetricExporter,
     {
         let resource = service.resource();
         let mut processor = BatchSpanProcessor::builder(spans).build();
         processor.set_resource(&resource);
         let provider = SdkLoggerProvider::builder()
-            .with_resource(resource)
+            .with_resource(resource.clone())
             .with_batch_exporter(logs)
+            .build();
+        let meters = SdkMeterProvider::builder()
+            .with_resource(resource)
+            .with_reader(PeriodicReader::builder(metrics).build())
             .build();
         let scope = InstrumentationScope::builder(SERVICE_SCOPE)
             .with_version(env!("CARGO_PKG_VERSION"))
             .build();
+        let instruments = Arc::new(Instruments::new(meters.meter_with_scope(scope.clone())));
         Self {
             pipeline: Arc::new(Pipeline {
                 spans: processor,
                 logger: provider.logger_with_scope(scope.clone()),
                 logs: provider,
+                meters,
                 scope,
                 telemetry,
                 ids: RandomIdGenerator::default(),
             }),
+            instruments,
         }
     }
 
-    /// The `tracing` layer that feeds this pipeline. It leaves out what the export itself goes
-    /// through (the OpenTelemetry SDK, the HTTP and gRPC clients).
+    /// The `tracing` layer that feeds this pipeline: spans, log records and metrics. It leaves
+    /// out what the export itself goes through (the OpenTelemetry SDK, the HTTP and gRPC
+    /// clients).
     pub fn layer<S>(&self) -> impl Layer<S> + Send + Sync
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
     {
-        ServiceLayer {
-            pipeline: Arc::clone(&self.pipeline),
-        }
-        .with_filter(filter_fn(exported))
+        self.filtered_layer(None)
     }
 
-    /// Exports what is buffered now. Blocks until the backend answered, or the SDK's timeout.
+    /// [`layer`](Self::layer), with the spans and log records it exports filtered by `filter`
+    /// too. Measurements are never filtered out.
+    pub(crate) fn filtered_layer<S>(&self, filter: Option<EnvFilter>) -> impl Layer<S> + Send + Sync
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        let traces = ServiceLayer {
+            pipeline: Arc::clone(&self.pipeline),
+        }
+        .with_filter(
+            filter_fn(exported)
+                .and(filter_fn(|metadata| !metrics::is_measurement(metadata)))
+                .and(filter),
+        );
+        let measurements = MetricsLayer {
+            instruments: Arc::clone(&self.instruments),
+        }
+        .with_filter(filter_fn(metrics::measures));
+        traces.and_then(measurements)
+    }
+
+    /// Exports what is buffered now, metrics included. Blocks until the backend answered, or
+    /// the SDK's timeout.
     pub fn flush(&self) -> Result<(), OtelError> {
         let spans = self.pipeline.spans.force_flush();
         let logs = self.pipeline.logs.force_flush();
+        let meters = self.pipeline.meters.force_flush();
         spans
             .and(logs)
+            .and(meters)
             .map_err(|error| OtelError::Flush(error.to_string()))
     }
 
@@ -164,8 +208,10 @@ impl ServiceTelemetry {
     pub fn shutdown(&self) -> Result<(), OtelError> {
         let spans = self.pipeline.spans.shutdown();
         let logs = self.pipeline.logs.shutdown();
+        let meters = self.pipeline.meters.shutdown();
         spans
             .and(logs)
+            .and(meters)
             .map_err(|error| OtelError::Shutdown(error.to_string()))
     }
 }
@@ -542,6 +588,8 @@ impl Visit for EventFields<'_> {
 #[cfg(test)]
 mod tests {
     use opentelemetry_sdk::logs::InMemoryLogExporter;
+    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+    use opentelemetry_sdk::metrics::data::{AggregatedMetrics, Metric, MetricData};
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use ptc_core::RunId;
     use ptc_engine::telemetry::{SpanKey, span_id as derived};
@@ -553,21 +601,28 @@ mod tests {
         telemetry: ServiceTelemetry,
         spans: InMemorySpanExporter,
         logs: InMemoryLogExporter,
+        metrics: InMemoryMetricExporter,
     }
+
+    /// A series of a metric: its attributes, sorted, and its value (a histogram's count).
+    type Series = Vec<(Vec<(String, String)>, f64)>;
 
     impl Backend {
         fn new(telemetry: TelemetryConfig) -> Self {
             let spans = InMemorySpanExporter::default();
             let logs = InMemoryLogExporter::default();
+            let metrics = InMemoryMetricExporter::default();
             Self {
                 telemetry: ServiceTelemetry::new(
                     spans.clone(),
                     logs.clone(),
+                    metrics.clone(),
                     &ServiceConfig::default(),
                     telemetry,
                 ),
                 spans,
                 logs,
+                metrics,
             }
         }
 
@@ -576,6 +631,61 @@ mod tests {
             let subscriber = tracing_subscriber::registry().with(self.telemetry.layer());
             tracing::subscriber::with_default(subscriber, f);
             self.telemetry.flush().expect("flush");
+        }
+
+        /// Runs `f` with this backend's layer filtered by `directives`, as `install` does.
+        fn trace_filtered(&self, directives: &str, f: impl FnOnce()) {
+            let filter = EnvFilter::try_new(directives).expect("directives");
+            let subscriber =
+                tracing_subscriber::registry().with(self.telemetry.filtered_layer(Some(filter)));
+            tracing::subscriber::with_default(subscriber, f);
+            self.telemetry.flush().expect("flush");
+        }
+
+        /// The metric as last exported: cumulative, so it holds every measurement.
+        fn metric<T>(&self, name: &str, read: impl Fn(&Metric) -> T) -> T {
+            let exports = self.metrics.get_finished_metrics().expect("metrics");
+            let metric = exports
+                .iter()
+                .rev()
+                .flat_map(|export| export.scope_metrics())
+                .find_map(|scope| scope.metrics().find(|metric| metric.name() == name))
+                .unwrap_or_else(|| panic!("no metric {name}"));
+            read(metric)
+        }
+
+        fn has_metric(&self, name: &str) -> bool {
+            let exports = self.metrics.get_finished_metrics().expect("metrics");
+            exports
+                .iter()
+                .flat_map(|export| export.scope_metrics())
+                .any(|scope| scope.metrics().any(|metric| metric.name() == name))
+        }
+
+        fn series(&self, name: &str) -> Series {
+            self.metric(name, |metric| {
+                let mut series: Series = match metric.data() {
+                    AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+                        .data_points()
+                        .map(|point| (labels(point.attributes()), point.value() as f64))
+                        .collect(),
+                    AggregatedMetrics::I64(MetricData::Sum(sum)) => sum
+                        .data_points()
+                        .map(|point| (labels(point.attributes()), point.value() as f64))
+                        .collect(),
+                    AggregatedMetrics::F64(MetricData::Gauge(gauge)) => gauge
+                        .data_points()
+                        .map(|point| (labels(point.attributes()), point.value()))
+                        .collect(),
+                    AggregatedMetrics::F64(MetricData::Histogram(histogram)) => histogram
+                        .data_points()
+                        .map(|point| (labels(point.attributes()), point.count() as f64))
+                        .collect(),
+                    other => panic!("{name}: unexpected data {other:?}"),
+                };
+                series.sort_by(|a, b| a.0.cmp(&b.0));
+                series
+            })
         }
 
         fn span(&self, name: &str) -> SpanData {
@@ -595,6 +705,18 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("no log {message}"))
         }
+    }
+
+    fn labels<'a>(attributes: impl Iterator<Item = &'a KeyValue>) -> Vec<(String, String)> {
+        let mut labels: Vec<_> = attributes
+            .map(|kv| (kv.key.to_string(), kv.value.to_string()))
+            .collect();
+        labels.sort();
+        labels
+    }
+
+    fn label(key: &str, value: &str) -> (String, String) {
+        (key.to_owned(), value.to_owned())
     }
 
     fn run() -> RunId {
@@ -796,7 +918,15 @@ mod tests {
         backend.trace(|| {
             let _suppressed = Context::enter_telemetry_suppressed_scope();
             tracing::info_span!("export").in_scope(|| tracing::info!("sent"));
+            tracing::info!(monotonic_counter.ptc.exports = 1_u64);
+            tracing::info_span!(
+                "timed",
+                histogram.ptc.export.duration = tracing::field::Empty
+            )
+            .in_scope(|| {});
         });
+        assert!(!backend.has_metric("ptc.exports"));
+        assert!(!backend.has_metric("ptc.export.duration"));
         assert!(
             backend
                 .spans
@@ -805,5 +935,148 @@ mod tests {
                 .is_empty()
         );
         assert!(backend.logs.get_emitted_logs().expect("logs").is_empty());
+    }
+
+    #[test]
+    fn measurement_events_become_metrics_and_not_logs() {
+        let backend = Backend::new(TelemetryConfig::default());
+        backend.trace(|| {
+            tracing::info_span!("activation", run = "r1").in_scope(|| {
+                for result in ["hit", "hit", "miss"] {
+                    tracing::info!(
+                        monotonic_counter.ptc.lookups = 1_u64,
+                        ptc.result = result,
+                        run = "r1",
+                        task = 7_u64,
+                    );
+                }
+                tracing::info!(histogram.ptc.inbox = 3_u64);
+                tracing::info!(histogram.ptc.inbox = 1_i64);
+                tracing::info!(counter.ptc.queued = 2_i64);
+                tracing::info!(counter.ptc.queued = -1_i64);
+                tracing::info!(gauge.ptc.heap = 0.5, ptc.worker = true);
+                // Not an integer: a counter ignores it.
+                tracing::info!(monotonic_counter.ptc.lookups = 0.5);
+                tracing::info!("a log");
+            });
+        });
+        // Only `ptc.*` fields are attributes.
+        assert_eq!(
+            backend.series("ptc.lookups"),
+            vec![
+                (vec![label("ptc.result", "hit")], 2.0),
+                (vec![label("ptc.result", "miss")], 1.0),
+            ]
+        );
+        assert_eq!(backend.series("ptc.inbox"), vec![(vec![], 2.0)]);
+        assert_eq!(backend.series("ptc.queued"), vec![(vec![], 1.0)]);
+        assert_eq!(
+            backend.series("ptc.heap"),
+            vec![(vec![label("ptc.worker", "true")], 0.5)]
+        );
+        let (unit, bounds, sum) = backend.metric("ptc.inbox", |metric| match metric.data() {
+            AggregatedMetrics::F64(MetricData::Histogram(histogram)) => {
+                let point = histogram.data_points().next().expect("a point");
+                (
+                    metric.unit().to_owned(),
+                    point.bounds().collect::<Vec<_>>(),
+                    point.sum(),
+                )
+            }
+            other => panic!("{other:?}"),
+        });
+        assert_eq!(unit, "");
+        assert_eq!(bounds.get(..4), Some(&[0.0, 1.0, 2.0, 4.0][..]));
+        assert!((sum - 4.0).abs() < f64::EPSILON);
+        let scope = backend.metrics.get_finished_metrics().expect("metrics")[0]
+            .scope_metrics()
+            .next()
+            .expect("a scope")
+            .scope()
+            .name()
+            .to_owned();
+        assert_eq!(scope, SERVICE_SCOPE);
+        // Measurements are not logs; the log is.
+        let logs = backend.logs.get_emitted_logs().expect("logs");
+        assert_eq!(logs.len(), 1, "{logs:?}");
+        backend.log("a log");
+    }
+
+    #[test]
+    fn a_span_measures_its_duration_with_the_attributes_it_records() {
+        let backend = Backend::new(TelemetryConfig::default());
+        backend.trace(|| {
+            for outcome in ["committed", "failed", "committed"] {
+                let span = tracing::info_span!(
+                    "activation",
+                    fence = 3_u64,
+                    histogram.ptc.activation.duration = tracing::field::Empty,
+                    ptc.outcome = tracing::field::Empty,
+                );
+                span.in_scope(|| std::thread::sleep(std::time::Duration::from_millis(2)));
+                span.record("ptc.outcome", outcome);
+            }
+        });
+        assert_eq!(
+            backend.series("ptc.activation.duration"),
+            vec![
+                (vec![label("ptc.outcome", "committed")], 2.0),
+                (vec![label("ptc.outcome", "failed")], 1.0),
+            ]
+        );
+        let (unit, sum, bounds) =
+            backend.metric("ptc.activation.duration", |metric| match metric.data() {
+                AggregatedMetrics::F64(MetricData::Histogram(histogram)) => {
+                    let point = histogram.data_points().next().expect("a point");
+                    (
+                        metric.unit().to_owned(),
+                        point.sum(),
+                        point.bounds().collect::<Vec<_>>(),
+                    )
+                }
+                other => panic!("{other:?}"),
+            });
+        assert_eq!(unit, "s");
+        assert!(sum >= 0.002, "{sum}");
+        assert_eq!(bounds.first(), Some(&0.001));
+        assert_eq!(bounds.last(), Some(&86_400.0));
+        // The span is still a span, with its outcome as an attribute.
+        let spans = backend.spans.get_finished_spans().expect("spans");
+        assert_eq!(spans.len(), 3);
+        assert!(
+            spans[1]
+                .attributes
+                .contains(&KeyValue::new("ptc.outcome", "failed"))
+        );
+    }
+
+    #[test]
+    fn the_filter_keeps_measurements() {
+        let backend = Backend::new(TelemetryConfig::default());
+        backend.trace_filtered("warn", || {
+            let span = tracing::info_span!(
+                "replay",
+                histogram.ptc.replay.duration = tracing::field::Empty,
+            );
+            span.in_scope(|| {
+                tracing::info!(monotonic_counter.ptc.runs.started = 1_u64);
+                tracing::info!("filtered out");
+                tracing::warn!("kept");
+            });
+        });
+        assert_eq!(backend.series("ptc.replay.duration"), vec![(vec![], 1.0)]);
+        assert_eq!(backend.series("ptc.runs.started"), vec![(vec![], 1.0)]);
+        // The span and the info log are filtered out; the warning is not.
+        assert!(
+            backend
+                .spans
+                .get_finished_spans()
+                .expect("spans")
+                .is_empty()
+        );
+        let logs = backend.logs.get_emitted_logs().expect("logs");
+        assert_eq!(logs.len(), 1);
+        backend.log("kept");
+        assert!(!backend.has_metric("ptc.unknown"));
     }
 }

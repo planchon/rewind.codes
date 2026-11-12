@@ -285,7 +285,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
 | `ptc-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `ptc:tools`, `ptc-tools.d.ts`, prompt rendering |
 | `ptc-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `ptc` binary; the checker's own rules on the swc syntax tree |
-| `ptc-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent` |
+| `ptc-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
 | `ptc-cli` | composition root | the client commands of the `ptc` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
 | `ptc-server` | composition root | `ptc server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard |
 | `ptc` | entry point | the `ptc` binary: hands `ptc server …` to `ptc-server` and every other command to `ptc-cli`, nothing else |
@@ -349,7 +349,8 @@ cache[run] ← instance                                  # sticky execution
 ```
 
 The lease is renewed about every 10 s while this runs. The activation itself is a `tracing` span
-(service telemetry), with the run's trace id and span id `H(run, fence)` recorded as fields.
+(service telemetry), with the run's trace id, span id `H(run, fence)` and parent, the run span
+`H(run, "run")`, recorded as fields.
 Nothing about the script is emitted during replay.
 
 - Script checks at start fail → `StartError::InvalidScript`, and no run is created.
@@ -368,7 +369,7 @@ Nothing about the script is emitted during replay.
 | Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
 | `ptc-store-turso`, `ptc-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |
 | `ptc-blob` | The conformance suite of `BlobStore` |
-| `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields |
+| `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
 | `ptc-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |
 

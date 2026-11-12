@@ -4,9 +4,12 @@
 //! domain's [`ReplayCursor`]: recorded completions are delivered, and every command the
 //! script emits must match the history. No tool is called and nothing is written: annotations
 //! the script emits are already recorded, so they are dropped, and nothing about the script is
-//! emitted as telemetry.
+//! emitted as telemetry. The replay itself is a span of service telemetry, timed as
+//! `ptc.replay.duration`.
 
 use std::future::Future;
+
+use tracing::Instrument as _;
 
 use ptc_core::{
     AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, Toolset,
@@ -14,11 +17,11 @@ use ptc_core::{
 
 pub use crate::payloads::{PayloadSource, StoredPayloads};
 
-use crate::payloads;
 use crate::ports::{
     BlobError, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef, ScriptExecutor,
     ScriptInstance, StartScript, StoreError,
 };
+use crate::{metrics, payloads};
 
 /// What to replay.
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +99,30 @@ where
 
 /// [`replay`], calling `heartbeat` before each call into the script.
 pub async fn replay_with_heartbeat<X, P, H>(
+    executor: &X,
+    payloads: &P,
+    heartbeat: &mut H,
+    input: ReplayInput<'_>,
+) -> Result<Rebuilt<X::Instance>, ReplayError>
+where
+    X: ScriptExecutor,
+    P: PayloadSource,
+    H: Heartbeat,
+{
+    let span = tracing::info_span!(
+        "replay",
+        entries = input.history.len() as u64,
+        histogram.ptc.replay.duration = tracing::field::Empty,
+        ptc.outcome = tracing::field::Empty,
+    );
+    let replayed = rebuild(executor, payloads, heartbeat, input)
+        .instrument(span.clone())
+        .await;
+    span.record(metrics::OUTCOME, metrics::replay_outcome(&replayed));
+    replayed
+}
+
+async fn rebuild<X, P, H>(
     executor: &X,
     payloads: &P,
     heartbeat: &mut H,

@@ -7,13 +7,14 @@
 //! | Consumer | Applies the entries to |
 //! | --- | --- |
 //! | `read_model` | the `ReadModel`: summaries and calls, never sampled |
-//! | `otel` | the `SpanExporter`: the spans that end in the range, and the logs |
+//! | `otel` | the `SpanExporter`: the spans that end in the range, and the logs; then the run metrics of [`metrics`](crate::metrics) |
 //! | `webhooks` | the `WebhookSender`: `run.completed`, `run.failed`, `run.suspended` |
 //!
 //! Delivery is at least once, and every projection is idempotent: the read model is keyed by
 //! `(run, index)`, spans have deterministic ids, and lifecycle events carry a deterministic id
 //! for receivers to deduplicate. An item that cannot be applied stays claimed until its claim
-//! expires, then it is applied again.
+//! expires, then it is applied again. Run metrics are not idempotent: they are recorded once the
+//! item is acknowledged, so an item applied again after a failure is not counted twice.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -23,6 +24,7 @@ use ptc_core::{
     ScriptError, Timestamp, ToolRoute, Toolset,
 };
 
+use crate::metrics::RunMeasurement;
 use crate::ports::{
     ExportError, FeedConsumer, FeedItem, JournalStore, PayloadRecord, ProjectedRun, ReadModel,
     ReadModelError, RunRecord, RunRef, SpanExporter, StoreError, WebhookEvent, WebhookEventKind,
@@ -138,10 +140,14 @@ where
             )
             .await?;
         let mut applied = Vec::new();
+        let mut measurements = Vec::new();
         let mut failed = 0;
         for item in &items {
             match self.apply(item).await {
-                Ok(()) => applied.push(item.id),
+                Ok(measured) => {
+                    applied.push(item.id);
+                    measurements.extend(measured);
+                }
                 Err(error) => {
                     failed += 1;
                     tracing::warn!(
@@ -154,17 +160,21 @@ where
             }
         }
         self.journal.ack_feed(&applied).await?;
+        for measurement in &measurements {
+            measurement.emit();
+        }
         Ok((applied.len(), failed))
     }
 
-    /// Applies one feed item. A run deleted or archived since has nothing left to project.
-    async fn apply(&self, item: &FeedItem) -> Result<(), ProjectorError> {
+    /// Applies one feed item, and returns the run metrics it measures. A run deleted or archived
+    /// since has nothing left to project.
+    async fn apply(&self, item: &FeedItem) -> Result<Vec<RunMeasurement>, ProjectorError> {
         let Some(record) = self.journal.get_run(&item.run).await? else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         let history = match self.journal.load_history(&item.run, 0).await {
             Ok(history) => history,
-            Err(StoreError::Archived(_) | StoreError::RunNotFound(_)) => return Ok(()),
+            Err(StoreError::Archived(_) | StoreError::RunNotFound(_)) => return Ok(Vec::new()),
             Err(err) => return Err(err.into()),
         };
         let to = usize::try_from(item.to_idx)
@@ -175,10 +185,10 @@ where
             FeedConsumer::ReadModel => {
                 self.apply_read_model(&record, &history[from..to]).await?;
             }
-            FeedConsumer::Otel => self.apply_otel(&record, &history[..to], item).await?,
+            FeedConsumer::Otel => return self.apply_otel(&record, &history[..to], item).await,
             FeedConsumer::Webhooks => self.apply_webhooks(&record, &history[..to], from).await?,
         }
-        Ok(())
+        Ok(Vec::new())
     }
 
     /// The read model gets the entries with the values of the table tier loaded, so that the
@@ -212,20 +222,26 @@ where
         Ok(())
     }
 
+    /// Exports the spans and logs of a sampled run, and returns the metrics of every run.
     async fn apply_otel(
         &self,
         record: &RunRecord,
         history: &[HistoryEntry],
         item: &FeedItem,
-    ) -> Result<(), ProjectorError> {
+    ) -> Result<Vec<RunMeasurement>, ProjectorError> {
         let payloads = self.payload_rows(&record.run, history).await?;
         let telemetry = RunTelemetry {
             record,
             config: &self.config.telemetry,
             payloads: &payloads,
         };
+        let measurements = if telemetry.measured(history) {
+            telemetry.measurements(history, item.from_idx, item.to_idx)
+        } else {
+            Vec::new()
+        };
         if !telemetry.exported(history) {
-            return Ok(());
+            return Ok(measurements);
         }
         let spans = telemetry.spans(history, item.from_idx, item.to_idx);
         if !spans.is_empty() {
@@ -235,7 +251,7 @@ where
         if !logs.is_empty() {
             self.exporter.export_logs(logs).await?;
         }
-        Ok(())
+        Ok(measurements)
     }
 
     /// The `payloads` rows of the payloads held by digest: spans show their size and preview.

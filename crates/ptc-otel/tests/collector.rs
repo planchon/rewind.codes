@@ -1,6 +1,6 @@
 //! `OtelSpanExporter` and `ServiceTelemetry` against an OpenTelemetry Collector in Docker, over
 //! gRPC and over HTTP: the conformance suite of `SpanExporter`, read back from what the
-//! collector received, and service spans joined to a run's trace.
+//! collector received, service spans joined to a run's trace, and service metrics.
 //!
 //! The collector writes what it receives as OTLP JSON to files the test reads. Each exporter the
 //! suite creates reads only what arrived after it was created. The container has a unique name
@@ -44,6 +44,9 @@ exporters:
   file/logs:
     path: /out/logs.jsonl
     flush_interval: 50ms
+  file/metrics:
+    path: /out/metrics.jsonl
+    flush_interval: 50ms
 service:
   pipelines:
     traces:
@@ -52,6 +55,9 @@ service:
     logs:
       receivers: [otlp]
       exporters: [file/logs]
+    metrics:
+      receivers: [otlp]
+      exporters: [file/metrics]
 ";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -71,7 +77,8 @@ async fn otlp_exports_reach_an_opentelemetry_collector() {
     }
 }
 
-/// Service spans and logs, through the subscriber's pipeline, in the run's trace.
+/// Service spans, logs and metrics, through the subscriber's pipeline; spans and logs in the
+/// run's trace.
 async fn service_spans_join_the_run_s_trace(collector: &OtelCollector, otlp: &OtlpConfig) {
     let files = collector.files();
     let service = ServiceConfig {
@@ -91,8 +98,20 @@ async fn service_spans_join_the_run_s_trace(collector: &OtelCollector, otlp: &Ot
             trace_id = %trace,
             span_id = %own,
             parent_span_id = %parent,
+            histogram.ptc.activation.duration = tracing::field::Empty,
+            ptc.outcome = tracing::field::Empty,
         );
-        activation.in_scope(|| tracing::info!(fence = 3_u64, "instance rebuilt"));
+        activation.in_scope(|| {
+            tracing::info!(fence = 3_u64, "instance rebuilt");
+            for result in ["hit", "hit", "miss"] {
+                tracing::info!(
+                    monotonic_counter.ptc.instance_cache.lookups = 1_u64,
+                    ptc.result = result,
+                    run = %run,
+                );
+            }
+        });
+        activation.record("ptc.outcome", "committed");
     });
     telemetry.shutdown().expect("shutdown");
 
@@ -119,6 +138,47 @@ async fn service_spans_join_the_run_s_trace(collector: &OtelCollector, otlp: &Ot
     assert_eq!(
         log.item.attributes.get("fence"),
         Some(&AttributeValue::Int(3))
+    );
+    // Measurements are not logs.
+    assert_eq!(collected.logs.len(), 1, "{:?}", collected.logs);
+
+    let metric = |name: &str| {
+        let points: Vec<&Received<Point>> = collected
+            .metrics
+            .iter()
+            .filter(|point| point.item.name == name)
+            .collect();
+        assert!(!points.is_empty(), "no metric {name}");
+        for point in &points {
+            assert_eq!(point.scope, SERVICE_SCOPE);
+        }
+        points
+    };
+    let lookups = metric("ptc.instance_cache.lookups");
+    let value = |result: &str| {
+        lookups
+            .iter()
+            .find(|point| {
+                point.item.attributes
+                    == BTreeMap::from([(
+                        "ptc.result".to_owned(),
+                        AttributeValue::String(result.to_owned()),
+                    )])
+            })
+            .map(|point| point.item.value)
+    };
+    assert_eq!(value("hit"), Some(2.0));
+    assert_eq!(value("miss"), Some(1.0));
+    let duration = metric("ptc.activation.duration");
+    assert_eq!(duration.len(), 1);
+    assert_eq!(duration[0].item.unit, "s");
+    assert_eq!(duration[0].item.value, 1.0, "one activation");
+    assert_eq!(
+        duration[0].item.attributes,
+        BTreeMap::from([(
+            "ptc.outcome".to_owned(),
+            AttributeValue::String("committed".to_owned())
+        )])
     );
 }
 
@@ -158,13 +218,24 @@ impl Collector for OverOtlp {
 struct Files {
     traces: PathBuf,
     logs: PathBuf,
-    from: (usize, usize),
+    metrics: PathBuf,
+    from: (usize, usize, usize),
 }
 
 #[derive(Debug, Default, PartialEq)]
 struct Read {
     spans: Vec<Received<Span>>,
     logs: Vec<Received<LogRecord>>,
+    metrics: Vec<Received<Point>>,
+}
+
+/// A point of a metric: the value of a sum, or the count of a histogram.
+#[derive(Debug, PartialEq)]
+struct Point {
+    name: String,
+    unit: String,
+    attributes: BTreeMap<String, AttributeValue>,
+    value: f64,
 }
 
 /// An item the collector received, with its resource's service name and its scope.
@@ -179,6 +250,7 @@ impl Files {
     fn read(&self) -> Read {
         let traces = tail(&self.traces, self.from.0);
         let logs = tail(&self.logs, self.from.1);
+        let metrics = tail(&self.metrics, self.from.2);
         Read {
             spans: lines(&traces)
                 .flat_map(|line| received(&line, "resourceSpans", "scopeSpans", "spans"))
@@ -196,6 +268,19 @@ impl Files {
                     item: parse_log(&log),
                 })
                 .collect(),
+            // Metrics are cumulative: the last export of each series holds its total.
+            metrics: last_points(
+                lines(&metrics)
+                    .flat_map(|line| received(&line, "resourceMetrics", "scopeMetrics", "metrics"))
+                    .flat_map(|(service, scope, metric)| {
+                        parse_metric(&metric).into_iter().map(move |item| Received {
+                            service: service.clone(),
+                            scope: scope.clone(),
+                            item,
+                        })
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -333,6 +418,58 @@ fn parse_span(span: &Value) -> Span {
         },
         attributes: attributes(&span["attributes"]),
     }
+}
+
+fn number(value: &Value) -> f64 {
+    match value {
+        Value::String(text) => text.parse().expect("a number"),
+        other => other.as_f64().expect("a number"),
+    }
+}
+
+/// The points of one metric of OTLP JSON: a sum's values, a histogram's counts.
+fn parse_metric(metric: &Value) -> Vec<Point> {
+    let name = metric["name"].as_str().expect("a name").to_owned();
+    let unit = metric["unit"].as_str().unwrap_or_default().to_owned();
+    let (points, value): (&Value, fn(&Value) -> f64) = if metric.get("sum").is_some() {
+        (&metric["sum"]["dataPoints"], |point| {
+            number(
+                point
+                    .get("asInt")
+                    .or(point.get("asDouble"))
+                    .expect("a value"),
+            )
+        })
+    } else if metric.get("histogram").is_some() {
+        (&metric["histogram"]["dataPoints"], |point| {
+            number(&point["count"])
+        })
+    } else {
+        panic!("a metric ai-ptc does not record: {metric}")
+    };
+    points
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|point| Point {
+            name: name.clone(),
+            unit: unit.clone(),
+            attributes: attributes(&point["attributes"]),
+            value: value(point),
+        })
+        .collect()
+}
+
+/// The last point of each series.
+fn last_points(points: Vec<Received<Point>>) -> Vec<Received<Point>> {
+    let mut last: Vec<Received<Point>> = Vec::new();
+    for point in points {
+        last.retain(|known| {
+            (&known.item.name, &known.item.attributes) != (&point.item.name, &point.item.attributes)
+        });
+        last.push(point);
+    }
+    last
 }
 
 fn parse_log(log: &Value) -> LogRecord {
@@ -481,17 +618,23 @@ impl OtelCollector {
         let out = self.dir.path().join("out");
         let traces = out.join("traces.jsonl");
         let logs = out.join("logs.jsonl");
+        let metrics = out.join("metrics.jsonl");
         let len = |path: &Path| fs::metadata(path).map_or(0, |meta| meta.len() as usize);
-        let mut from = (len(&traces), len(&logs));
+        let mut from = (len(&traces), len(&logs), len(&metrics));
         loop {
             std::thread::sleep(Duration::from_millis(200));
-            let now = (len(&traces), len(&logs));
+            let now = (len(&traces), len(&logs), len(&metrics));
             if now == from {
                 break;
             }
             from = now;
         }
-        Files { traces, logs, from }
+        Files {
+            traces,
+            logs,
+            metrics,
+            from,
+        }
     }
 }
 
