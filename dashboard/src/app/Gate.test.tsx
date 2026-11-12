@@ -80,7 +80,7 @@ describe("Gate", () => {
     expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
     expect(screen.queryByText("c-42")).toBeNull();
     release();
-    expect(await screen.findByText("No run matches these filters.")).toBeInTheDocument();
+    expect(await screen.findByText("No run yet.")).toBeInTheDocument();
     expect(screen.queryByText("c-42")).toBeNull();
   });
 });

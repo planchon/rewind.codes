@@ -13,7 +13,7 @@ import {
   useNow,
 } from "../components/bits";
 import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
-import { formatCount, formatDuration } from "../model/format";
+import { formatCount, formatDuration, formatRelative } from "../model/format";
 
 export interface RunTableProps {
   query: UseInfiniteQueryResult<InfiniteData<RunPage>>;
@@ -49,6 +49,8 @@ export function RunTable({
   if (query.isError) return <ProblemView error={query.error} title="The runs could not be read" />;
 
   const runs = query.data.pages.flatMap((p) => p.runs);
+  const showError = runs.some((r) => r.error);
+  const showWakes = runs.some((r) => r.wakesAt);
   return (
     <div className="table-wrap">
       <table className="grid">
@@ -69,6 +71,8 @@ export function RunTable({
             <th className="right" title="Journal entries">
               Entries
             </th>
+            {showWakes && <th title="When a waiting run wakes by itself">Wakes</th>}
+            {showError && <th>Error</th>}
           </tr>
         </thead>
         <tbody>
@@ -84,7 +88,6 @@ export function RunTable({
               <td>
                 <span className="labels">
                   <StatusBadge status={run.status} />
-                  {run.error && <span className="mono run-error">{run.error}</span>}
                   {run.quarantined && <QuarantineTag />}
                 </span>
               </td>
@@ -130,6 +133,24 @@ export function RunTable({
                 {formatCount(run.errors)}
               </td>
               <td className="right num dim">{formatCount(run.historyLen)}</td>
+              {showWakes && (
+                <td className="num dim" title={run.wakesAt ?? undefined}>
+                  {run.wakesAt ? formatRelative(Date.parse(run.wakesAt), now) : ""}
+                </td>
+              )}
+              {showError && (
+                <td className="error-cell">
+                  {run.error && (
+                    <span
+                      className="error-text"
+                      title={`${run.error}${run.errorMessage ? `: ${run.errorMessage}` : ""}${run.errorLine ? ` (line ${run.errorLine})` : ""}`}
+                    >
+                      <span className="mono run-error">{run.error}</span>
+                      {run.errorMessage && <span className="dim">{run.errorMessage}</span>}
+                    </span>
+                  )}
+                </td>
+              )}
             </tr>
           ))}
         </tbody>

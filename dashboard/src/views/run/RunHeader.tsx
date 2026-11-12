@@ -15,6 +15,7 @@ import {
   StatusBadge,
 } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
+import { labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
 
 function LiveState({ state }: { state: JournalState }) {
@@ -106,7 +107,7 @@ export function RunHeader({
           <LiveState state={state} />
           <Link
             className="btn ghost"
-            to={`/runs?parent=${run.id}`}
+            to={queryLink("/runs", `parent:${run.id}`)}
             title="Runs forked from this one"
           >
             Forks
@@ -188,7 +189,10 @@ export function RunHeader({
       <div className="run-labels">
         <LabelList
           labels={run.labels}
-          onPick={(pair) => navigate(`/runs?label=${encodeURIComponent(pair)}`)}
+          onPick={(pair) => {
+            const at = pair.indexOf(":");
+            navigate(queryLink("/runs", labelTerm(pair.slice(0, at), pair.slice(at + 1))));
+          }}
         />
       </div>
     </header>

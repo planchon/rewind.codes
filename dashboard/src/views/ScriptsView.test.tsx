@@ -9,7 +9,7 @@ describe("ScriptsView", () => {
     renderApp("/scripts");
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     const forecast = rows.find((r) =>
       within(r).queryByText("// One-shot lookup started by the support agent."),
     );
@@ -17,7 +17,7 @@ describe("ScriptsView", () => {
     const row = within(forecast as HTMLElement);
     expect(row.getByRole("link", { name: "64" })).toHaveAttribute(
       "href",
-      `/runs?script=${SCRIPTS.FORECAST.digest}`,
+      `/runs?q=script%3A${SCRIPTS.FORECAST.digest}`,
     );
     expect(row.getByRole("button", { name: "weather.forecast" })).toBeInTheDocument();
     expect(row.getByTitle(/\d+ completed, \d+ failed/)).toBeInTheDocument();
@@ -41,6 +41,7 @@ describe("ScriptsView", () => {
     renderApp(`/scripts/${SCRIPTS.ONBOARDING.digest}`);
     expect(await screen.findByText(/No account for/)).toBeInTheDocument();
     const table = await screen.findByRole("table");
-    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(5));
+    // Its header and its five runs.
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(6));
   });
 });

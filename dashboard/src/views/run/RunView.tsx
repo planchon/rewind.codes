@@ -1,8 +1,9 @@
 // Run: the source with each tool call, timer, signal wait and log next to the line that caused
 // it; the timeline; the journal; payloads on demand. Live through the event stream while the run
-// goes on.
+// goes on. A time cursor steps through the history: the source, its notes and the timeline show
+// the run as it was after a step, and hovering a call or a variable shows its value then.
 import { FileCode, MessageSquareText } from "lucide-react";
-import { type ReactNode, useCallback, useMemo } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../../api/client";
 import { useRun, useRunJournal, useScript } from "../../api/queries";
@@ -12,11 +13,14 @@ import { CodeView, type LineMark } from "../../components/CodeView";
 import { OutcomeGlyph } from "../../components/Status";
 import { formatDuration, formatRelative } from "../../model/format";
 import { type Activity, buildRunModel, type RunModel } from "../../model/run";
+import { gutterMarks, markMeaning, markSymbol } from "../../model/steps";
+import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
 import { activityOutcome } from "./describe";
 import { Inspector, type Selection } from "./Inspector";
 import { JournalPanel } from "./JournalPanel";
 import { RunBanners, RunHeader } from "./RunHeader";
 import { Timeline } from "./Timeline";
+import { buildTargets, sourceIndex } from "./targets";
 
 function readSelection(params: URLSearchParams): Selection {
   const entry = params.get("entry");
@@ -198,6 +202,61 @@ export function RunView() {
   const live = run.data ? !isEnded(run.data.status) && journal.state !== "ended" : false;
   const now = useNow(live ? 5_000 : 60_000);
 
+  // The time cursor: the run as it was after a step. At the head, the run as it is.
+  const cursor = useTimeCursor(journal.entries);
+  useCursorKeys(cursor);
+  const atCursor = useMemo(
+    () => (cursor.atHead ? model : buildRunModel(journal.entries.slice(0, cursor.cursor + 1))),
+    [cursor.atHead, cursor.cursor, journal.entries, model],
+  );
+  const index = useMemo(
+    () => (script.data ? sourceIndex(script.data.source) : null),
+    [script.data],
+  );
+  const targets = useMemo(() => (index ? buildTargets(index, model) : null), [index, model]);
+  const lastStep = cursor.steps[cursor.steps.length - 1];
+  const failedStep =
+    lastStep && (lastStep.ends === "failed" || lastStep.ends === "aborted")
+      ? cursor.steps.length - 1
+      : null;
+  const marks = useMemo(
+    () =>
+      cursor.atHead || cursor.n < 0
+        ? null
+        : gutterMarks(model, cursor.steps, cursor.n, targets?.startLine ?? null, null),
+    [cursor.atHead, cursor.n, cursor.steps, model, targets],
+  );
+
+  // Watches and the value under the pointer.
+  const [watches, setWatches] = useState<string[]>([]);
+  const [hover, setHover] = useState<{ key: string; rect: DOMRect } | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const keepHover = useCallback(() => clearTimeout(hideTimer.current), []);
+  const dropHover = useCallback(() => {
+    clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setHover(null), 160);
+  }, []);
+  useEffect(() => {
+    const close = () => setHover(null);
+    window.addEventListener("scroll", close, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", close);
+      clearTimeout(hideTimer.current);
+    };
+  }, []);
+  const targetEvents = useMemo(
+    () => ({
+      enter: (key: string, element: HTMLElement) => {
+        clearTimeout(hideTimer.current);
+        setHover({ key, rect: element.getBoundingClientRect() });
+      },
+      leave: dropHover,
+      pick: (key: string) =>
+        setWatches((w) => (w.includes(key) ? w.filter((k) => k !== key) : [...w, key])),
+    }),
+    [dropHover],
+  );
+
   const selection = readSelection(params);
   const select = useCallback(
     (next: Selection) => {
@@ -217,19 +276,19 @@ export function RunView() {
   const selectedActivity = selectedIdx !== null ? model.byIdx.get(selectedIdx) : undefined;
   const selectedLine =
     selection?.kind === "line" ? selection.line : (selectedActivity?.callsite?.line ?? null);
-  const errorLine = run.data?.error?.location?.line ?? null;
+  const errorLine = cursor.atHead ? (run.data?.error?.location?.line ?? null) : null;
 
   const mark = useCallback(
     (line: number): LineMark | null => {
       if (line === errorLine) return "error";
-      const activities = model.byLine.get(line);
+      const activities = atCursor.byLine.get(line);
       if (!activities) return null;
       const outcome = worst(activities);
       if (outcome === "failed") return "failed";
       if (outcome === "open") return "open";
       return "activity";
     },
-    [model, errorLine],
+    [atCursor, errorLine],
   );
 
   if (run.isPending) return <Loading>Loading the run…</Loading>;
@@ -250,6 +309,14 @@ export function RunView() {
 
   const r = run.data;
   const unattributed = model.unattributed.filter((a) => a.kind !== "timer" || a.timeoutOf === null);
+  const ctx = {
+    model,
+    steps: cursor.steps,
+    cursor: cursor.cursor,
+    runId: r.id,
+    input: model.start?.event.input ?? null,
+  };
+  const hovered = hover ? targets?.byKey.get(hover.key) : undefined;
   return (
     <div className="page run-page">
       <RunHeader run={r} model={model} state={journal.state} />
@@ -257,6 +324,7 @@ export function RunView() {
         <ProblemView error={journal.error} title="The journal could not be read" />
       )}
       <RunBanners run={r} model={model} onSelectEntry={selectEntry} onSelectLine={selectLine} />
+      <CursorBar cursor={cursor} live={live} failedStep={failedStep} t0={model.firstAt} />
 
       <section className="panel" aria-label="Timeline">
         <header className="panel-head">
@@ -276,6 +344,13 @@ export function RunView() {
             now={live ? now : null}
             selected={selectedIdx}
             onSelect={selectEntry}
+            cursor={{
+              steps: cursor.steps,
+              n: cursor.n,
+              last: cursor.cursor,
+              atHead: cursor.atHead,
+              onSeek: cursor.go,
+            }}
           />
         )}
       </section>
@@ -286,7 +361,24 @@ export function RunView() {
             <h2>
               <FileCode size={13} aria-hidden="true" style={{ verticalAlign: -2 }} /> script.ts
             </h2>
-            <span className="muted">each line with what it caused</span>
+            {marks ? (
+              <span className="mark-legend muted">
+                <span>
+                  <b className="mk resumed">▸</b> resumed
+                </span>
+                <span>
+                  <b className="mk issued">①</b> issued
+                </span>
+                <span>
+                  <b className="mk paused">‖</b> paused
+                </span>
+                <span>
+                  <b className="mk done">✓</b> done
+                </span>
+              </span>
+            ) : (
+              <span className="muted">each line with what it caused</span>
+            )}
             {unattributed.length > 0 && (
               <span className="end muted" title="Activities recorded without a callsite">
                 {unattributed.length} without a line
@@ -305,7 +397,7 @@ export function RunView() {
               notesTitle="What each line caused"
               notes={(line) => (
                 <Notes
-                  model={model}
+                  model={atCursor}
                   line={line}
                   selected={selectedIdx}
                   now={now}
@@ -314,21 +406,64 @@ export function RunView() {
                 />
               )}
               mark={mark}
+              gutter={
+                marks
+                  ? (line) => {
+                      const m = marks.get(line);
+                      return m ? (
+                        <span className={`mk ${m.kind}`} title={markMeaning(m)}>
+                          {markSymbol(m)}
+                        </span>
+                      ) : (
+                        <span className="mk" />
+                      );
+                    }
+                  : undefined
+              }
+              targets={targets ? (line) => targets.byLine.get(line) ?? [] : undefined}
+              targetClass={(key) =>
+                `${watches.includes(key) ? "pinned" : ""}${hover?.key === key ? " hovered" : ""}`.trim()
+              }
+              targetEvents={targets ? targetEvents : undefined}
               selectedLine={selectedLine}
               focusLine={selectedLine}
               onLineClick={selectLine}
             />
           )}
         </section>
-        <Inspector
-          run={r}
-          model={model}
-          selection={selection}
-          onSelectEntry={selectEntry}
-          onSelectLine={selectLine}
-          onClear={() => select(null)}
-        />
+        <div className="run-side">
+          <StepPanel
+            cursor={cursor}
+            model={model}
+            watches={watches}
+            targets={targets?.byKey ?? new Map()}
+            ctx={ctx}
+            onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
+            onSelectLine={selectLine}
+            onSelectEntry={selectEntry}
+          />
+          <Inspector
+            run={r}
+            model={model}
+            selection={selection}
+            onSelectEntry={selectEntry}
+            onSelectLine={selectLine}
+            onClear={() => select(null)}
+            steps={cursor.steps}
+            onGoStep={cursor.go}
+          />
+        </div>
       </div>
+      {hover && hovered && (
+        <ValuePopover
+          target={hovered}
+          anchor={hover.rect}
+          ctx={ctx}
+          pinned={watches.includes(hover.key)}
+          onEnter={keepHover}
+          onLeave={dropHover}
+        />
+      )}
 
       <JournalPanel
         runId={r.id}
