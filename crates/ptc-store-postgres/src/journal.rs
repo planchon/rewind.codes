@@ -77,7 +77,7 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels::text, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at"
+         ended_at, archive_document, archived_at, parent_at, attempts"
     };
 }
 
@@ -154,6 +154,7 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
         history_len: row.u64(7)?,
         quarantine,
         failures: row.u32(12)?,
+        attempts: row.u32(25)?,
         sticky_worker: row.opt_text(13)?,
         metadata: RunMetadata {
             labels: decode_labels(&row.text(14)?)?,
@@ -510,11 +511,12 @@ impl<'q, O> Bind<'q>
     }
 }
 
-/// Leases the run `pick` selects (`tenant, id` of one run locked with `SKIP LOCKED`), its fence
-/// incremented: `$1` is the owner and `$2` the lease's end.
+/// Leases the run `pick` selects (`tenant, id` of one run locked with `SKIP LOCKED`) to activate
+/// it, its fence and its attempts incremented: `$1` is the owner and `$2` the lease's end.
 fn lease_statement(pick: &str) -> String {
     format!(
-        "UPDATE runs SET fence = fence + 1, lease_owner = $1, lease_until = $2 \
+        "UPDATE runs SET fence = fence + 1, lease_owner = $1, lease_until = $2, \
+             attempts = attempts + 1 \
          WHERE (tenant, id) = ({pick}) RETURNING tenant, id, fence"
     )
 }
@@ -727,7 +729,7 @@ impl PostgresStore {
              consumed AS (DELETE FROM inbox WHERE run_id = $1 AND id = ANY($10)), \
              head AS (SELECT id, received_at FROM inbox \
                       WHERE run_id = $1 AND NOT (id = ANY($10)) ORDER BY id LIMIT 1) \
-             UPDATE runs SET history_len = $8, status = $11, failures = 0, \
+             UPDATE runs SET history_len = $8, status = $11, failures = 0, attempts = 0, \
                  updated_at = COALESCE($12, updated_at), ended_at = COALESCE($13, ended_at), \
                  sticky_worker = COALESCE($14, sticky_worker), \
                  inbox_head = (SELECT id FROM head), runnable_at = (SELECT received_at FROM head) \
@@ -2379,7 +2381,8 @@ impl JournalStore for PostgresStore {
     async fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
         now: Timestamp,
     ) -> Result<(), StoreError> {
         let quarantined = sqlx::query(
@@ -2390,8 +2393,8 @@ impl JournalStore for PostgresStore {
         .bind(tenant(&lease.run.tenant))
         .bind(uuid(lease.run.id))
         .bind(int(lease.fence))
-        .bind(codec::quarantine_kind(QuarantineKind::NonDeterminism))
-        .bind(mismatch)
+        .bind(codec::quarantine_kind(kind))
+        .bind(reason)
         .bind(ts(now))
         .execute(&self.pool)
         .await
@@ -2406,8 +2409,8 @@ impl JournalStore for PostgresStore {
         let was: Option<bool> = sqlx::query_scalar(
             "WITH old AS (SELECT quarantine_kind IS NOT NULL AS quarantined FROM runs \
                           WHERE tenant = $1 AND id = $2 FOR NO KEY UPDATE) \
-             UPDATE runs SET failures = 0, quarantine_kind = NULL, quarantine_reason = NULL, \
-                 quarantine_since = NULL, quarantine_retried_by = NULL \
+             UPDATE runs SET failures = 0, attempts = 0, quarantine_kind = NULL, \
+                 quarantine_reason = NULL, quarantine_since = NULL, quarantine_retried_by = NULL \
              FROM old WHERE tenant = $1 AND id = $2 RETURNING old.quarantined",
         )
         .bind(tenant(&run.tenant))

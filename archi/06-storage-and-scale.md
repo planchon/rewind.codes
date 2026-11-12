@@ -24,7 +24,8 @@ api_keys   (hash PK, tenant, role, allowed_labels, revoked_at)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
 runs       (tenant, id, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
-            expires_at, quarantine, failures, lease_owner, lease_until, fence, sticky_worker,
+            expires_at, quarantine, failures, attempts, lease_owner, lease_until, fence,
+            sticky_worker,
             parent, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
             archive)
             PK (tenant, id), UNIQUE (tenant, idempotency_key)
@@ -58,8 +59,9 @@ tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, out
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
 `quarantine` holds why a run is
 [quarantined](03-execution.md#non-determinism-and-quarantine) (non-determinism or repeated
-failures, the reason, and the last build that retried it), and `failures` counts its
-activations that failed in a row. A tool task keeps the route and policy of its tool, copied from
+failures, the reason, and the last build that retried it), `failures` counts its
+activations that failed in a row, and `attempts` the activations started since its last
+commit: those that neither committed nor failed never finished, because their worker died. A tool task keeps the route and policy of its tool, copied from
 the pinned toolset: the claim enforces the concurrency limits from them. `archive` points to the
 journal document of an archived run, in the `BlobStore`.
 

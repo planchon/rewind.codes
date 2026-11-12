@@ -22,6 +22,11 @@
 //! and what the script emitted in response to it is dropped. A replay mismatch commits
 //! nothing: the run is quarantined. Any other failure commits nothing and keeps the lease until
 //! it expires; the fifth in a row quarantines the run.
+//!
+//! An activation whose worker dies (the script crashed the process, the container was killed
+//! for its memory) records nothing at all. The store counts the activations started since the
+//! run's last commit: when the run is leased again after 5 of them, it is quarantined instead
+//! of activated, and the script that kills its workers does not run again.
 
 use std::cmp::max;
 use std::collections::BTreeSet;
@@ -37,9 +42,9 @@ use crate::cache::Cached;
 use crate::engine::{ActivationOutcome, ActivationReport, Adapters, Engine, EngineError, Limits};
 use crate::ports::{
     AcquireRunnable, Activation, BlobStore, Clock, Emitted, Entropy, ExecutorError, Failures,
-    JournalStore, Lease, NewTimer, NewToolTask, QuarantineKind, RunRef, STICKY_GRACE,
-    ScriptExecutor, ScriptInstance, SecretStore, StartScript, StoreError, ToolDispatcher, Trigger,
-    WebhookSender,
+    JournalStore, Lease, NewTimer, NewToolTask, QUARANTINE_AFTER_FAILURES, QuarantineKind,
+    RunRecord, RunRef, STICKY_GRACE, ScriptExecutor, ScriptInstance, SecretStore, StartScript,
+    StoreError, ToolDispatcher, Trigger, WebhookSender,
 };
 use crate::replay::{self, Heartbeat, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::telemetry::{SpanKey, span_id, trace_of};
@@ -199,6 +204,15 @@ where
         }
 
         let record = self.run_record(run).await?;
+        // A run whose last activations never finished kills the workers that run it: it is set
+        // aside before its script runs again.
+        if purpose == Purpose::Runnable
+            && let Some(reason) = unfinished_activations(&record)
+        {
+            return self
+                .quarantine(lease, QuarantineKind::Failures, reason)
+                .await;
+        }
         let (trace, _) = trace_of(&record);
         let current = tracing::Span::current();
         current.record("trace_id", tracing::field::display(trace));
@@ -261,7 +275,13 @@ where
                         // a fault of the platform, never of the script. The run waits for a
                         // fix.
                         Err(ReplayError::NonDeterminism(mismatch)) => {
-                            return self.quarantine(lease, mismatch.to_string()).await;
+                            return self
+                                .quarantine(
+                                    lease,
+                                    QuarantineKind::NonDeterminism,
+                                    mismatch.to_string(),
+                                )
+                                .await;
                         }
                         // A script that loaded before and no longer does, or an epoch no
                         // longer supported, is a fault of the platform: the run waits for a
@@ -271,7 +291,11 @@ where
                             | ExecutorError::UnsupportedEpoch(_)),
                         )) => {
                             return self
-                                .quarantine(lease, format!("the replay could not go on: {err}"))
+                                .quarantine(
+                                    lease,
+                                    QuarantineKind::NonDeterminism,
+                                    format!("the replay could not go on: {err}"),
+                                )
                                 .await;
                         }
                         // A limit hit under load, an internal error: worth retrying later.
@@ -429,21 +453,28 @@ where
         .map_err(|error| EngineError::CorruptHistory { run_id, error })
     }
 
+    /// Quarantines the leased run without committing anything: after a replay mismatch
+    /// (`NonDeterminism`), or when its last activations never finished (`Failures`).
     async fn quarantine(
         &self,
         lease: &Lease,
-        mismatch: String,
+        kind: QuarantineKind,
+        reason: String,
     ) -> Result<ActivationOutcome, EngineError> {
-        tracing::error!(%mismatch, "replay mismatch: run quarantined");
-        let mismatch = text::storable(mismatch);
+        match kind {
+            QuarantineKind::NonDeterminism => {
+                tracing::error!(%reason, "replay mismatch: run quarantined");
+            }
+            QuarantineKind::Failures => {
+                tracing::error!(%reason, "the run's activations never finish: run quarantined");
+            }
+        }
+        let reason = text::storable(reason);
         self.journal
-            .quarantine(lease, mismatch.clone(), self.clock.now())
+            .quarantine(lease, kind, reason.clone(), self.clock.now())
             .await?;
         self.forget_instance(&lease.run).await;
-        Ok(ActivationOutcome::Quarantined {
-            kind: QuarantineKind::NonDeterminism,
-            reason: mismatch,
-        })
+        Ok(ActivationOutcome::Quarantined { kind, reason })
     }
 
     /// An activation failed and committed nothing. Unless the lease was lost, the failure is
@@ -521,6 +552,29 @@ where
             tracing::warn!(%run, error = %err, "the sticky priority could not be given up");
         }
     }
+}
+
+/// Why a run is quarantined instead of activated: at least [`QUARANTINE_AFTER_FAILURES`]
+/// activations started since its last commit, before the current one, and some of them never
+/// finished, since none recorded the fifth failure. `None` otherwise.
+fn unfinished_activations(record: &RunRecord) -> Option<String> {
+    let previous = record.attempts.saturating_sub(1);
+    if previous < QUARANTINE_AFTER_FAILURES {
+        return None;
+    }
+    let never_finished = previous.saturating_sub(record.failures);
+    let failed = previous - never_finished;
+    let why = "the worker running it stopped during it, as when the script crashes the worker's \
+               process or the worker is killed for the memory it uses";
+    let reason = if failed == 0 {
+        format!("the activation of this run never finished {never_finished} times in a row: {why}")
+    } else {
+        format!(
+            "{previous} activations of this run in a row committed nothing: {never_finished} never \
+             finished ({why}), and {failed} failed"
+        )
+    };
+    Some(reason)
 }
 
 /// Renews a lease about every `every`, between the steps of an activation: each call into the

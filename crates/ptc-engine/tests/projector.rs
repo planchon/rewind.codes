@@ -11,8 +11,8 @@ use ptc_core::{RunMode, RunStatus, Seq};
 use ptc_engine::DriveOptions;
 use ptc_engine::adapters::{MemoryReadModel, MemorySpanExporter, MemoryWebhooks};
 use ptc_engine::ports::{
-    Delivery, FeedConsumer, JournalStore, ReadModel, RunMetadata, RunRef, RunSearch, Secret,
-    SpanId, SpanStatus, Subscription, TraceContext, TraceId, WebhookEventKind,
+    Delivery, FeedConsumer, JournalStore, QuarantineKind, ReadModel, RunMetadata, RunRef,
+    RunSearch, Secret, SpanId, SpanStatus, Subscription, TraceContext, TraceId, WebhookEventKind,
 };
 use ptc_engine::projector::{Projector, ProjectorConfig};
 use ptc_engine::telemetry::{SpanKey, span_id};
@@ -317,7 +317,12 @@ async fn a_quarantined_run_is_reported_to_the_harness() {
         .unwrap();
     engine
         .journal()
-        .quarantine(&lease, "history entry 1 is …".into(), now(&engine))
+        .quarantine(
+            &lease,
+            QuarantineKind::NonDeterminism,
+            "history entry 1 is …".into(),
+            now(&engine),
+        )
         .await
         .unwrap();
     projector.notify_quarantined(&run).await.unwrap();

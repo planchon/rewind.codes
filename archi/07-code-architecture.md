@@ -123,7 +123,7 @@ load_history(run, from)            take_inbox(lease)
 commit_activation(lease, Activation { entries, consumed, payloads, tool_calls, timers, cancelled_timers, status }, now)
 release(lease)                     forget_sticky(run, owner)
 record_failure(lease, error, now) -> Failures { count, quarantined }
-quarantine(lease, mismatch, now)   release_quarantine(run)
+quarantine(lease, kind, reason, now)   release_quarantine(run)
 fire_due_timers(now, limit)        next_timer()
 expire_due_runs(now, limit) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
 claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, toolset, tools }}, now, limit)
@@ -175,15 +175,22 @@ Contracts, all covered by the conformance suite:
   worker. `acquire_runnable` gives a runnable run to its sticky worker first, and to the other
   workers only once its oldest inbox item has waited `sticky_grace` (5 s). `forget_sticky` drops
   the priority when the worker evicts the instance
-  ([sticky execution](03-execution.md#sticky-execution)).
+  ([sticky execution](03-execution.md#sticky-execution)). Only a commit makes a worker sticky: a
+  worker that dies during an activation holds the run until its lease expires, and its priority
+  adds nothing after that, since the run's oldest inbox item has waited longer than the grace.
 - `renew` extends a lease whose fence still matches. A worker calls it about every 10 s while
   it holds the run ([leases](06-storage-and-scale.md#leases-fencing-workers)).
 - `record_failure` counts the run's activations that failed in a row and keeps the lease. The
   fifth quarantines the run with that error as its reason (kind `failures`) and releases the
   lease. A successful `commit_activation` and `release_quarantine` reset the count
   ([activations](03-execution.md#activations)).
-- `quarantine` releases the lease without committing anything and records the mismatch (kind
-  `non_determinism`); `release_quarantine` makes the run runnable again; `acquire_quarantined`
+- `acquire_runnable` counts the activation it leases the run for, in the run's `attempts`; a
+  successful `commit_activation` and `release_quarantine` reset the count. `acquire_run` and
+  `acquire_quarantined` do not count. An activation that neither committed nor recorded a
+  failure never finished: its worker died.
+- `quarantine` releases the lease without committing anything and records its kind and reason:
+  the mismatch (kind `non_determinism`), or the activations that never finished (kind
+  `failures`); `release_quarantine` makes the run runnable again; `acquire_quarantined`
   hands each quarantined run of the given epochs and tenants to one worker of a new build, once;
   a run of a tenant out of scope is left to a worker of its own pool
   ([execution](03-execution.md#non-determinism-and-quarantine)).
@@ -370,7 +377,9 @@ Nothing about the script is emitted during replay.
   store with a NUL character → `StartError::NulCharacter` (a signal's key:
   `EngineError::NulCharacter`), before anything is stored.
 - Executor start errors (top-level exception) → `run_aborted { invalid_script }`.
-- Replay mismatch → nothing is committed; `journal.quarantine(lease, mismatch)`.
+- The run's last 5 activations committed nothing (`attempts` above 5) → the script is not run;
+  `journal.quarantine(lease, failures, reason)`, the reason saying how many never finished.
+- Replay mismatch → nothing is committed; `journal.quarantine(lease, non_determinism, mismatch)`.
 - Any other failure → nothing is committed; `journal.record_failure(lease, error, now)`.
 
 ## Tests
@@ -379,7 +388,7 @@ Nothing about the script is emitted during replay.
 | --- | --- |
 | `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `ptc-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
-| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine and failure counts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine, failure counts and attempts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
 | `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
 | `ptc-store-turso`, `ptc-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |

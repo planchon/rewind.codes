@@ -88,6 +88,7 @@ CREATE TABLE runs (
     quarantine_since INTEGER,
     quarantine_retried_by TEXT,
     failures INTEGER NOT NULL,
+    attempts INTEGER NOT NULL,
     lease_owner TEXT,
     lease_until INTEGER,
     fence INTEGER NOT NULL,
