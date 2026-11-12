@@ -21,6 +21,40 @@ export interface Deployment {
   stop(): Promise<void>;
 }
 
+/** One `ptc server` with both roles, on Turso and local files in `dir`, over TCP. */
+export async function startServer(dir: string): Promise<{ url: string; adminKey: string; admin: Ptc; stop(): Promise<void> }> {
+  const processes = new Processes(dir);
+  const adminKey = `ptc_sk_${randomBytes(24).toString("hex")}`;
+  const port = await freePort();
+  const url = `http://127.0.0.1:${port}`;
+  const child = processes.start("server", ptcBinary(), [
+    "server",
+    "--store",
+    `turso:${dir}/journal.db`,
+    "--blobs",
+    `${dir}/blobs`,
+    "--master-key",
+    randomBytes(32).toString("base64"),
+    "--admin-key",
+    adminKey,
+    "--admin-tenant",
+    "acme",
+    "--listen",
+    `127.0.0.1:${port}`,
+  ]);
+  try {
+    await eventually("the server listens", async () => {
+      if (child.exitCode !== null) throw new Error(`the server exited with ${child.exitCode}: see ${dir}/server.log`);
+      const response = await fetch(`${url}/v1/server`, { headers: { authorization: `Bearer ${adminKey}` } });
+      return response.ok ? true : undefined;
+    });
+  } catch (error) {
+    await processes.stopAll();
+    throw error;
+  }
+  return { url, adminKey, admin: new Ptc({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
+}
+
 export async function startDeployment(dir: string, options: { workers?: number } = {}): Promise<Deployment> {
   const containers = new Containers();
   const processes = new Processes(dir);
