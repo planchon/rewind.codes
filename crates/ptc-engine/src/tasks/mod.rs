@@ -114,6 +114,19 @@ pub(crate) struct ToolTasks {
     retries: Mutex<BTreeSet<Timestamp>>,
 }
 
+/// While it lives, the engine renews the claim of a call being dispatched.
+#[derive(Debug)]
+struct Dispatching<'a> {
+    tasks: &'a ToolTasks,
+    token: &'a TaskToken,
+}
+
+impl Drop for Dispatching<'_> {
+    fn drop(&mut self) {
+        self.tasks.dispatched(self.token);
+    }
+}
+
 /// A call being dispatched, under a claim the engine renews.
 #[derive(Debug, Clone, Copy)]
 struct InFlight {
@@ -135,8 +148,11 @@ impl ToolTasks {
         self.retries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn dispatching(&self, token: &TaskToken, call: InFlight) {
+    /// Registers a call being dispatched until the returned guard is dropped: when the
+    /// dispatcher answers, or when the dispatch is abandoned (its future dropped).
+    fn dispatching<'a>(&'a self, token: &'a TaskToken, call: InFlight) -> Dispatching<'a> {
         self.in_flight().insert(token.clone(), call);
+        Dispatching { tasks: self, token }
     }
 
     fn dispatched(&self, token: &TaskToken) {
@@ -221,7 +237,7 @@ mod tests {
     fn claims_are_renewed_until_their_execution_deadline() {
         let tasks = ToolTasks::default();
         let token = TaskToken("t".into());
-        tasks.dispatching(
+        let dispatching = tasks.dispatching(
             &token,
             InFlight {
                 heartbeat_timeout: Duration::from_secs(60),
@@ -244,8 +260,11 @@ mod tests {
             tasks.due_heartbeats(Timestamp(100_000)).is_empty(),
             "past its execution timeout, the claim is left to expire"
         );
-        tasks.dispatched(&token);
-        assert!(tasks.due_heartbeats(Timestamp(50_000)).is_empty());
+        drop(dispatching);
+        assert!(
+            tasks.due_heartbeats(Timestamp(50_000)).is_empty(),
+            "an answered or abandoned call is no longer renewed"
+        );
     }
 
     #[test]

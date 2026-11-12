@@ -37,6 +37,8 @@ struct Prepared {
     record: RunRecord,
     call: ToolCall,
     credentials: Option<Credentials>,
+    /// The engine answers the call itself: the `webhook` built-in of a live run.
+    engine_webhook: bool,
 }
 
 impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
@@ -104,8 +106,9 @@ where
             record,
             call,
             credentials,
+            engine_webhook,
         } = prepared;
-        let dispatched = if self.is_engine_webhook(&task, &call).await? {
+        let dispatched = if engine_webhook {
             self.webhook_builtin(&call).await
         } else {
             let in_flight = InFlight {
@@ -116,10 +119,8 @@ where
                     .execution_timeout
                     .map(|timeout| now.saturating_add(timeout)),
             };
-            self.tool_tasks.dispatching(&token, in_flight);
-            let dispatched = self.dispatcher.dispatch(call, credentials).await;
-            self.tool_tasks.dispatched(&token);
-            dispatched
+            let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
+            self.dispatcher.dispatch(call, credentials).await
         };
         self.settle(&task, &token, &record, dispatched).await
     }
@@ -352,10 +353,12 @@ where
             token: token.clone(),
             trace_context: Self::call_trace_context(&record),
         };
+        let engine_webhook = self.is_engine_webhook(task, &call).await?;
         Ok(Some(Prepared {
             record,
             call,
             credentials,
+            engine_webhook,
         }))
     }
 
