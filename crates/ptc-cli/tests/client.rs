@@ -319,6 +319,11 @@ async fn list(
             errors: 0,
             history_len: run.history_len,
             error: None,
+            error_message: None,
+            error_line: None,
+            fingerprint: None,
+            waiting_for: Vec::new(),
+            wakes_at: None,
             parent: None,
         })
         .collect();
@@ -708,6 +713,17 @@ async fn status_runs_trace_fork_and_release() {
     assert_eq!(exit, Exit::Success);
     let page: RunPage = serde_json::from_str(&out).unwrap();
     assert_eq!(page.runs.len(), 1);
+
+    let (exit, _, _) = server
+        .ptc(&["runs", "@agent:triage -status:failed", "--sort", "wakes"])
+        .await;
+    assert_eq!(exit, Exit::Success);
+    let list = server.requests().last().unwrap().clone();
+    assert_eq!(
+        list.query.get("q").map(String::as_str),
+        Some("@agent:triage -status:failed")
+    );
+    assert_eq!(list.query.get("sort").map(String::as_str), Some("wakes"));
 
     let (exit, out, _) = server.ptc(&["trace", "run-1"]).await;
     assert_eq!(exit, Exit::Success);

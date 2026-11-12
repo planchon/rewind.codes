@@ -119,6 +119,7 @@ fn api_exit(error: &ptc_api::Error) -> Exit {
             ) => Exit::Refused,
             Some(
                 ProblemType::InvalidRequest
+                | ProblemType::InvalidQuery
                 | ProblemType::UnsupportedMediaType
                 | ProblemType::PayloadTooLarge
                 | ProblemType::InvalidToolset,

@@ -536,7 +536,7 @@ Commands:
 | `ptc replay <run> [--script fixed.ts]` | Replays locally and checks determinism; `<run>` is a run id or an exported journal |
 | `ptc fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a [fork](03-execution.md#forks) |
 | `ptc trace <run> [--entry n]` | LLM-readable trace |
-| `ptc runs` | Lists runs |
+| `ptc runs` | Lists runs: a query of the [query language](05-testing-and-observability.md#query-language) (`ptc runs '@agent:triage status:failed'`), filters, `--sort` |
 | `ptc release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
 | `ptc status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
 | `ptc export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |

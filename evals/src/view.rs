@@ -16,7 +16,7 @@ use ptc_api::common::{
 };
 use ptc_api::runs::{
     FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
-    Waiting,
+    RunWait, WaitKind, Waiting,
 };
 use ptc_api::scripts::{CheckResult, Diagnostic, Location, Severity};
 use ptc_api::tasks::{ParkedReason, TaskState};
@@ -260,11 +260,30 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
             _ => {}
         }
     }
-    let error = match state.as_ref().and_then(RunState::outcome) {
-        Some(RunOutcome::Failed { error }) => Some(error.name.clone()),
-        Some(RunOutcome::Aborted { reason }) => Some(reason.kind.as_str().to_owned()),
-        _ => None,
-    };
+    let ending = state
+        .as_ref()
+        .and_then(RunState::outcome)
+        .and_then(ptc_engine::failures::ending);
+    let toolset = world
+        .engine
+        .journal()
+        .get_toolset(&run.tenant, record.toolset)
+        .await?
+        .map(|stored| stored.toolset);
+    let snapshot = ptc_engine::projector::run_snapshot(&history, toolset.as_ref());
+    let waiting_for: Vec<RunWait> = snapshot
+        .waits
+        .iter()
+        .map(|wait| RunWait {
+            kind: wait_kind(wait.waiting_for()),
+            seq: wait.seq.map(|seq| seq.0),
+            name: wait.name.clone(),
+            since: timestamp(wait.since),
+            until: wait.until.map(timestamp),
+            callsite: wait.callsite.map(Into::into),
+        })
+        .collect();
+    let wakes_at = snapshot.waits.iter().filter_map(|wait| wait.until).min();
     let headline = world
         .engine
         .journal()
@@ -286,9 +305,28 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
         tool_calls,
         errors,
         history_len: record.history_len,
-        error,
+        error: ending.as_ref().map(|ending| ending.error.clone()),
+        error_message: ending.as_ref().map(|ending| ending.message.clone()),
+        error_line: ending.as_ref().and_then(|ending| ending.line),
+        fingerprint: ending.map(|ending| ending.fingerprint),
+        waiting_for,
+        wakes_at: wakes_at.map(timestamp),
         parent: record.metadata.parent.map(|parent| parent.run.to_string()),
     })
+}
+
+/// What a wait is, as the API names it.
+fn wait_kind(waiting: ptc_engine::ports::WaitingFor) -> WaitKind {
+    use ptc_engine::ports::WaitingFor;
+    match waiting {
+        WaitingFor::Signal => WaitKind::Signal,
+        WaitingFor::Timer => WaitKind::Timer,
+        WaitingFor::Call => WaitKind::Call,
+        WaitingFor::Host => WaitKind::Host,
+        WaitingFor::Approval => WaitKind::Approval,
+        WaitingFor::Parked => WaitKind::Parked,
+        WaitingFor::Deferred => WaitKind::Deferred,
+    }
 }
 
 /// How the script failed, with where: the first position in `script.ts` of its stack, else of
