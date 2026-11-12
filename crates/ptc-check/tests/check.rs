@@ -618,3 +618,25 @@ async fn latency() {
         started.elapsed() / 64
     );
 }
+
+/// A script with errors everywhere gets the first of them by position, not all: their number,
+/// and tsgo's output, are bounded whatever the size of the script.
+#[tokio::test]
+async fn the_diagnostics_of_a_script_are_bounded() {
+    let body = "x;\nfetch;\n".repeat(100_000);
+    let script = format!("export default async function main() {{\n{body}}}\n");
+    let diagnostics = check(&script).await;
+    assert_eq!(diagnostics.len(), TsgoChecker::MAX_DIAGNOSTICS);
+    let lines: Vec<u32> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.line)
+        .collect();
+    assert!(lines.is_sorted(), "{lines:?}");
+    assert_eq!((lines[0], lines[1]), (2, 3));
+    assert_eq!(
+        sources(&diagnostics[..2]),
+        ["TS2304", "absent-global"],
+        "{:?}",
+        &diagnostics[..2]
+    );
+}

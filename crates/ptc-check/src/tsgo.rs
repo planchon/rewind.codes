@@ -14,6 +14,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use flate2::read::GzDecoder;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 use crate::error::CheckError;
 
@@ -24,6 +25,15 @@ const MARKER: &str = ".integrity";
 
 /// The executable, in the extracted directory.
 const EXECUTABLE: &str = "lib/tsc";
+
+/// What is read of tsgo's standard output at most: well above the diagnostics a check returns
+/// ([`TsgoChecker::MAX_DIAGNOSTICS`](crate::TsgoChecker::MAX_DIAGNOSTICS)). Past it, tsgo is
+/// stopped and its last line dropped: a script of 2 MiB with an error on each line made tsgo
+/// print 700,000 diagnostics.
+const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+
+/// What is kept of tsgo's standard error, for the error of a check that failed.
+const MAX_ERRORS: usize = 64 * 1024;
 
 /// Extracts tsgo into `cache_dir` unless it is there already, and returns the executable.
 pub(crate) fn install(cache_dir: &Path) -> Result<PathBuf, CheckError> {
@@ -131,6 +141,9 @@ pub(crate) struct Reported {
 /// - `--singleThreaded`, `--locale en` and an empty environment: the diagnostics depend on
 ///   nothing but the files.
 /// - `--pretty false`: one diagnostic per line, its chained messages indented below it.
+///
+/// At most [`MAX_OUTPUT`] bytes of diagnostics are read: past them, tsgo is stopped, and the
+/// diagnostics are those of the complete lines read.
 pub(crate) async fn run(
     executable: &Path,
     dir: &Path,
@@ -154,26 +167,68 @@ pub(crate) async fn run(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let output = tokio::time::timeout(timeout, command.output())
+    // Dropped at the timeout: tsgo is killed with it.
+    let ran = async {
+        let mut child = command.spawn()?;
+        let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take())
+        else {
+            return Err(io::Error::other("tsgo's output is not piped"));
+        };
+        let read_stdout = async {
+            let mut output = Vec::new();
+            (&mut stdout)
+                .take(u64::try_from(MAX_OUTPUT).unwrap_or(u64::MAX) + 1)
+                .read_to_end(&mut output)
+                .await?;
+            let truncated = output.len() > MAX_OUTPUT;
+            if truncated {
+                // Enough was read: the rest would only be dropped.
+                child.start_kill()?;
+                let complete = output.iter().rposition(|&byte| byte == b'\n');
+                output.truncate(complete.map_or(0, |end| end + 1));
+            }
+            Ok::<_, io::Error>((output, truncated))
+        };
+        let ((stdout, truncated), stderr) =
+            tokio::try_join!(read_stdout, read_kept(&mut stderr, MAX_ERRORS))?;
+        let status = child.wait().await?;
+        Ok((stdout, truncated, stderr, status))
+    };
+    let (stdout, truncated, stderr, status) = tokio::time::timeout(timeout, ran)
         .await
         .map_err(|_| CheckError::Timeout(timeout))?
         .map_err(CheckError::Start)?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout);
     let diagnostics = parse(&stdout);
-    // 0: no diagnostics; 1 and 2: diagnostics.
-    let expected = match output.status.code() {
+    // 0: no diagnostics; 1 and 2: diagnostics; stopped once enough was read.
+    let expected = match status.code() {
+        _ if truncated => !diagnostics.is_empty(),
         Some(0) => true,
         Some(1 | 2) => !diagnostics.is_empty(),
         _ => false,
     };
     if !expected {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = String::from_utf8_lossy(&stderr);
         return Err(CheckError::Failed {
-            status: output.status.to_string(),
+            status: status.to_string(),
             output: format!("{}{}", stdout.trim(), stderr.trim()),
         });
     }
     Ok(Output { diagnostics })
+}
+
+/// Reads a stream to its end, keeping its first `limit` bytes: the writer is never blocked.
+async fn read_kept(reader: &mut (impl AsyncRead + Unpin), limit: usize) -> io::Result<Vec<u8>> {
+    let mut kept = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            return Ok(kept);
+        }
+        let room = limit.saturating_sub(kept.len());
+        kept.extend_from_slice(&buffer[..read.min(room)]);
+    }
 }
 
 /// Reads the output of `--pretty false`:
