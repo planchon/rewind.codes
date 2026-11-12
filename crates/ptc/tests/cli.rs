@@ -263,6 +263,155 @@ fn a_signal_from_another_process_ends_a_waiting_run() {
     assert_eq!(ran.code, 6, "{ran:?}");
 }
 
+/// A first Ctrl-C abandons the wait of `ptc run`: the run it started goes on, and the command
+/// reports it as still waiting (07, "Embedded server and CLI").
+#[test]
+fn a_first_ctrl_c_stops_waiting_and_reports_the_run() {
+    let project = Project::new();
+    project.write(
+        "approval.ts",
+        "import { signal } from \"ptc\";\nexport default async function main() {\n  return await signal(\"approval\");\n}\n",
+    );
+    let mut waiting: Child = project
+        .command(&["run", "approval.ts", "--wait", "60s"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = waiting.stderr.take().unwrap();
+    let mut lines = std::io::BufRead::lines(std::io::BufReader::new(stderr));
+    let id = loop {
+        let line = lines.next().expect("ptc run printed its run").unwrap();
+        if let Some(id) = line.strip_prefix("started run ") {
+            break id.to_owned();
+        }
+    };
+    let interrupted = Instant::now();
+    let status = Command::new("kill")
+        .args(["-INT", &waiting.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let output = waiting.wait_with_output().unwrap();
+    assert!(
+        interrupted.elapsed() < Duration::from_secs(10),
+        "the wait is abandoned at once"
+    );
+    assert_eq!(output.status.code(), Some(4), "still waiting");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(&format!("run {id}")), "{stdout}");
+    let rest: Vec<String> = lines.map_while(Result::ok).collect();
+    assert!(
+        rest.iter().any(|line| line.starts_with("interrupted")),
+        "{rest:?}"
+    );
+
+    // The run goes on: a signal from another process ends it.
+    let ran = project.ptc(&["signal", &id, "approval", "1"]);
+    assert_eq!(ran.code, 0, "{ran:?}");
+    let (code, run) = project.json(&["status", &id, "--wait", "30s"]);
+    assert_eq!(code, 0, "{run}");
+}
+
+/// A server for `--url` that answers the registration of a toolset only once released, and
+/// records the requests it gets: `(method and path, …)`.
+fn slow_registration_server() -> (
+    String,
+    std::sync::mpsc::Receiver<String>,
+    std::sync::mpsc::Sender<()>,
+) {
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (seen, requests) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            if reader.read_line(&mut request).is_err() {
+                continue;
+            }
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':')
+                    && name.eq_ignore_ascii_case("content-length")
+                {
+                    length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = reader.read_exact(&mut body);
+            let line: Vec<&str> = request.split_whitespace().take(2).collect();
+            let what = line.join(" ");
+            let _ = seen.send(what.clone());
+            let (status, body) = if what == "POST /v1/toolsets" {
+                let _ = released.recv();
+                let id = "a".repeat(64);
+                (
+                    "201 Created",
+                    format!(
+                        r#"{{"id":"{id}","servers":[],"tools":[],"declarations":{{"dts":"","prompt":""}}}}"#
+                    ),
+                )
+            } else {
+                (
+                    "500 Internal Server Error",
+                    r#"{"type":"urn:ptc:problem:internal","title":"Internal error","status":500,"detail":"stub"}"#.to_owned(),
+                )
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (url, requests, release)
+}
+
+/// A first Ctrl-C while `ptc run` registers its toolset: the registration finishes, and no run
+/// is started.
+#[test]
+fn a_first_ctrl_c_before_the_start_starts_no_run() {
+    let project = Project::new();
+    project.write("script.ts", "export default async () => 1;\n");
+    project.write("toolset.json", "{}");
+    let (url, requests, release) = slow_registration_server();
+    let mut running: Child = project
+        .command(&["--url", &url, "run", "script.ts", "--toolset", "toolset.json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert_eq!(
+        requests.recv_timeout(Duration::from_secs(30)).unwrap(),
+        "POST /v1/toolsets"
+    );
+    let status = Command::new("kill")
+        .args(["-INT", &running.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    // The CLI has seen the Ctrl-C before the registration is answered.
+    std::thread::sleep(Duration::from_millis(500));
+    release.send(()).unwrap();
+    let output = running.wait_with_output().unwrap();
+    let after: Vec<String> = requests.try_iter().collect();
+    assert!(
+        after.is_empty(),
+        "nothing is sent after the call in flight: {after:?}, {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.status.code(), Some(130), "interrupted");
+}
+
 /// `kill -9` of the embedded server while an activation runs: nothing of it was committed,
 /// and the run is taken again once its lease expires.
 #[test]

@@ -39,6 +39,9 @@ pub enum CliError {
     /// A fault of the CLI or of an adapter it runs in process.
     #[error("{0}")]
     Internal(String),
+    /// A first Ctrl-C came before a call that changes something: the command did not send it.
+    #[error("interrupted: {0}")]
+    Interrupted(String),
 }
 
 impl CliError {
@@ -64,6 +67,7 @@ impl CliError {
             CliError::ScriptRefused { .. } => Exit::ScriptRefused,
             CliError::Refused(_) => Exit::Refused,
             CliError::Server(_) | CliError::Internal(_) => Exit::Internal,
+            CliError::Interrupted(_) => Exit::Interrupted,
             CliError::Api(error) => api_exit(error),
         }
     }
@@ -81,6 +85,7 @@ impl CliError {
                 let kind = match other.exit() {
                     Exit::Usage => ProblemType::InvalidRequest,
                     Exit::Refused => ProblemType::NotFound,
+                    Exit::Interrupted => ProblemType::Unavailable,
                     _ => ProblemType::Internal,
                 };
                 Problem::new(kind, other.to_string())
