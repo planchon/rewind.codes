@@ -13,6 +13,10 @@
 //! Each connection keeps the server's tool list, to check calls against it
 //! ([`crate::schema`]), for [`McpConfig::tools_ttl`], or until the server says its list changed
 //! (`notifications/tools/list_changed`).
+//!
+//! A connection over streamable HTTP has its own client, which goes only where
+//! [`McpConfig::egress`] lets it ([`crate::transport`]); one that reached an internal server
+//! never quotes the server's answers in its failures.
 
 use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
@@ -37,7 +41,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::OnceCell;
 
 use crate::McpConfig;
-use crate::failure::{self, Failure, bounded};
+use crate::failure::{self, Answers, Failure, bounded};
+use crate::transport::{self, Internal};
 
 /// Pages of `tools/list` read at most: a server whose list never ends is refused, instead of
 /// being read until the timeout.
@@ -256,6 +261,8 @@ pub(crate) struct Connection {
     listed: tokio::sync::Mutex<Option<Listed>>,
     changed: Arc<AtomicBool>,
     tools_ttl: Duration,
+    /// Whether the session reached an internal server.
+    internal: Internal,
 }
 
 #[derive(Debug)]
@@ -275,6 +282,11 @@ impl std::fmt::Debug for Connection {
 impl Connection {
     fn is_closed(&self) -> bool {
         self.client.is_closed()
+    }
+
+    /// Whether failures may quote what the server answered.
+    pub(crate) fn answers(&self) -> Answers {
+        self.internal.answers()
     }
 
     /// The server's tools, by name, as it lists them now. A failure says whether the connection
@@ -323,7 +335,7 @@ impl Connection {
                 .peer()
                 .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
                 .await
-                .map_err(|error| failure::of_service(server, &error))?;
+                .map_err(|error| failure::of_service(server, &error, self.answers()))?;
             tools.extend(page.tools);
             if tools.len() > MAX_TOOLS {
                 break;
@@ -385,16 +397,19 @@ async fn connect(
         changed: changed.clone(),
     };
     let name = server.name.as_str();
+    let internal = Internal::default();
     let client = match &server.transport {
         McpTransport::Http { url } => {
             let headers = headers(name, credentials)?;
-            let transport = StreamableHttpClientTransport::from_config(
+            let http = transport::client(name, url, &config.egress, &internal)?;
+            let transport = StreamableHttpClientTransport::with_client(
+                http,
                 StreamableHttpClientTransportConfig::with_uri(url.as_str()).custom_headers(headers),
             );
             handler
                 .serve(transport)
                 .await
-                .map_err(|error| failure::of_initialize(name, &error))?
+                .map_err(|error| failure::of_initialize(name, &error, internal.answers()))?
         }
         McpTransport::Stdio { command, args, env } => {
             let mut process = tokio::process::Command::new(command);
@@ -432,7 +447,7 @@ async fn connect(
             handler
                 .serve(transport)
                 .await
-                .map_err(|error| failure::of_initialize(name, &error))?
+                .map_err(|error| failure::of_initialize(name, &error, Answers::Quoted))?
         }
     };
     tracing::debug!(server = name, "MCP session opened");
@@ -441,6 +456,7 @@ async fn connect(
         listed: tokio::sync::Mutex::new(None),
         changed,
         tools_ttl: config.tools_ttl,
+        internal,
     })
 }
 

@@ -236,3 +236,86 @@ async fn the_golden_declarations_of_codegen_check() {
     }
     assert!(checked >= 4, "the golden cases of ptc-codegen are missing");
 }
+
+/// A toolset in which `name` is a server, a host-tool group or a host tool without a group,
+/// each tool taking `{ q: string }` and returning `{ id: string }`; and a script that calls it.
+fn named(name: &str) -> Vec<(Toolset, String)> {
+    let input = json!({
+        "type": "object",
+        "properties": { "q": { "type": "string" } },
+        "required": ["q"],
+    });
+    let tool = |tool: String, route: ToolRoute| {
+        let mut tool = Tool::new(tool, route, input.clone());
+        tool.output_schema = Some(json!({
+            "type": "object",
+            "properties": { "id": { "type": "string" } },
+            "required": ["id"],
+        }));
+        tool
+    };
+    let server = McpServer::new(
+        name,
+        McpTransport::Http {
+            url: "https://mcp.example.com/mcp".into(),
+        },
+    );
+    let call = |imported: &str, called: &str| {
+        format!(
+            "import {{ {imported} as tools }} from \"ptc:tools\";\n\n\
+             export default async function main() {{\n  \
+             const found: {{ id: string }} = await {called}({{ q: \"x\" }});\n  \
+             return found.id;\n}}\n"
+        )
+    };
+    let mcp = ToolRoute::Mcp {
+        server: name.to_owned(),
+    };
+    let group = ToolRoute::Host {
+        group: Some(name.to_owned()),
+    };
+    vec![
+        (
+            Toolset::new([server], [tool(format!("{name}.find"), mcp)]).unwrap(),
+            call(name, "tools.find"),
+        ),
+        (
+            Toolset::new([], [tool(format!("{name}.ask"), group)]).unwrap(),
+            call(name, "tools.ask"),
+        ),
+        (
+            Toolset::new([], [tool(name.to_owned(), ToolRoute::Host { group: None })]).unwrap(),
+            call(name, "tools"),
+        ),
+    ]
+}
+
+/// Names that are keywords somewhere, globals, or the declarations' own types, but not
+/// reserved words: a toolset takes them, the checker accepts a script that imports them, and
+/// the runtime starts it. The reserved words are refused by the toolset (`ptc-core`).
+#[tokio::test]
+async fn names_that_are_not_reserved_words_check_and_start() {
+    for name in [
+        "async",
+        "of",
+        "type",
+        "namespace",
+        "global",
+        "declare",
+        "string",
+        "unknown",
+        "undefined",
+        "globalThis",
+        "NaN",
+        "require",
+        "constructor",
+        "ToolContent",
+        "Promise",
+    ] {
+        for (toolset, script) in named(name) {
+            let diagnostics = summary(&check(&script, &toolset).await);
+            assert_eq!(diagnostics, [], "{name}:\n{script}");
+            assert_eq!(compile(&script, &toolset), Ok(()), "{name}:\n{script}");
+        }
+    }
+}

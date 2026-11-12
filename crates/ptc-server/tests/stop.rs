@@ -73,6 +73,9 @@ impl ServerHandler for Slow {
     }
 }
 
+/// The MCP server listens on 127.0.0.1, which a deployed server reaches only when allowed.
+const INTERNAL_MCP: &[&str] = &["--allow-internal-mcp", "127.0.0.1"];
+
 /// Serves `slow` over streamable HTTP on 127.0.0.1; returns its URL.
 async fn serve(slow: Slow) -> String {
     let service = StreamableHttpService::new(
@@ -109,7 +112,8 @@ async fn a_call_in_flight_finishes_and_commits_before_the_server_stops() {
             .build()
             .unwrap();
         runtime.block_on(async move {
-            let server = TestServer::start_in(&path, &first_store, &first_blobs, &[]).await;
+            let server =
+                TestServer::start_in(&path, &first_store, &first_blobs, INTERNAL_MCP).await;
             let harness = server.key(ptc_api::admin::Role::Harness, &[]).await;
             // At most once: a call abandoned by the stop ends with its outcome unknown once its
             // claim expires, and the script fails with a ToolError.
@@ -157,7 +161,7 @@ export default async function main() {
 
     // Another server on the same store finishes the run with the call's result, without
     // calling the tool again.
-    let server = TestServer::start_in(dir.path(), &store, &blobs, &[]).await;
+    let server = TestServer::start_in(dir.path(), &store, &blobs, INTERNAL_MCP).await;
     let harness = server.key(ptc_api::admin::Role::Harness, &[]).await;
     let ended = harness.get_run(&run, wait("30s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Completed, "{:?}", ended.error);

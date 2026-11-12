@@ -24,7 +24,7 @@ use ptc_engine::ports::{
     Clock, JournalStore, RunFilter, RunRef, TenantId, ToolDeclarations, VirtualTime, WebhookToken,
 };
 use ptc_engine::{Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartRun};
-use ptc_mcp::{McpConfig, McpDispatcher};
+use ptc_mcp::{McpConfig, McpDispatcher, McpEgress};
 use ptc_runtime::{SandboxLimits, V8Executor};
 use serde_json::Value;
 
@@ -180,7 +180,11 @@ impl World {
             servers.push(fake::serve(service, clock.clone()).await?);
         }
 
-        let mcp = McpDispatcher::new(McpConfig::default());
+        // The fake servers listen on 127.0.0.1, as a developer's would for the embedded server.
+        let mcp = McpDispatcher::new(McpConfig {
+            egress: McpEgress::open(),
+            ..McpConfig::default()
+        });
         let tenant = TenantId::local();
         let mut pinned_servers = Vec::new();
         let mut tools: Vec<Tool> = Vec::new();

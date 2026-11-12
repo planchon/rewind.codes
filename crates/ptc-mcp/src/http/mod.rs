@@ -31,12 +31,13 @@ use reqwest::header::{self, HeaderName};
 use reqwest::{Method, StatusCode};
 use url::Url;
 
-pub use egress::{Egress, NameResolver, Resolving, SystemResolver};
+pub use egress::{Egress, InternalAllowList, NameResolver, Resolving, SystemResolver};
 pub use wire::{http_input_schema, http_output_schema};
 
 use crate::McpError;
 use crate::failure::{Failure, human};
-use egress::{AllowList, CheckedResolver, HTTP_TOOL, Policy, Refused};
+use egress::{AllowList, CheckedResolver, HTTP_TOOL, Policy, Rules};
+pub(crate) use egress::{Reach, Refused};
 use wire::Request;
 
 /// The bounds of the `http` tool.
@@ -114,8 +115,8 @@ impl HttpTool {
             .no_proxy()
             .dns_resolver(Arc::new(CheckedResolver {
                 resolver,
-                policy,
-                refusal: HTTP_TOOL,
+                rules: Rules::strict(policy, HTTP_TOOL),
+                reached_internal: None,
             }))
             .user_agent(config.user_agent.as_str())
             .connect_timeout(config.timeout)

@@ -11,7 +11,8 @@
 //! Redirects go through all of them again (`super`).
 //!
 //! [`Egress`] lends steps 2 to 4 to the other requests a deployment sends where a tenant says:
-//! the server's lifecycle webhooks.
+//! the server's lifecycle webhooks, and its MCP servers. For MCP servers only, an operator may
+//! let some internal hosts and networks through ([`InternalAllowList`]).
 
 use std::error::Error;
 use std::fmt;
@@ -19,8 +20,11 @@ use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use ipnet::IpNet;
 use url::{Host, Url};
 
 /// A refused request: the reason, written for the model.
@@ -57,25 +61,91 @@ pub(crate) type Policy = fn(IpAddr) -> Option<&'static str>;
 /// How the `http` tool ends the reason of a refusal.
 pub(crate) const HTTP_TOOL: &str = "the http tool does not reach it";
 
+/// What may be reached: the addresses `policy` does not refuse, and those `internal` lets
+/// through. `refusal` ends the reason of a refusal: who does not go there.
+#[derive(Debug, Clone)]
+pub(crate) struct Rules {
+    pub(crate) policy: Policy,
+    pub(crate) internal: Arc<InternalAllowList>,
+    pub(crate) refusal: &'static str,
+}
+
+/// An address that may be reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// The policy does not refuse it.
+    Public,
+    /// The policy refuses it, and the operator's allow-list lets it through.
+    Internal,
+}
+
+impl Rules {
+    /// The rules of the `http` tool: `policy`, without exceptions.
+    pub(crate) fn strict(policy: Policy, refusal: &'static str) -> Self {
+        Self {
+            policy,
+            internal: Arc::new(InternalAllowList::default()),
+            refusal,
+        }
+    }
+
+    /// Whether `address`, an address of the name `host` or given as such, may be reached; the
+    /// reason when it may not.
+    fn judge(&self, host: Option<&str>, address: IpAddr) -> Result<Reach, String> {
+        let Some(reason) = (self.policy)(address) else {
+            return Ok(Reach::Public);
+        };
+        if host.is_some_and(|host| self.internal.allows_name(host))
+            || self.internal.allows_address(address)
+        {
+            return Ok(Reach::Internal);
+        }
+        Err(match host {
+            Some(host) => format!(
+                "{host} resolves to {address}, a {reason} address: {}",
+                self.refusal
+            ),
+            None => format!("{address} is a {reason} address: {}", self.refusal),
+        })
+    }
+
+    /// Checks the host of `url` when it is an address. A name is checked when it is resolved.
+    fn judge_url(&self, url: &Url) -> Result<Reach, String> {
+        let address = match url.host() {
+            Some(Host::Ipv4(address)) => IpAddr::V4(address),
+            Some(Host::Ipv6(address)) => IpAddr::V6(address),
+            Some(Host::Domain(_)) => return Ok(Reach::Public),
+            None => return Err(format!("{url} has no host")),
+        };
+        self.judge(None, address)
+    }
+}
+
 /// The client's resolver: resolves once, refuses the name if any of its addresses is refused,
 /// and hands the connector exactly the addresses it checked.
 #[derive(Debug)]
 pub(crate) struct CheckedResolver {
     pub(crate) resolver: Arc<dyn NameResolver>,
-    pub(crate) policy: Policy,
-    /// Ends the reason of a refusal: who does not go there.
-    pub(crate) refusal: &'static str,
+    pub(crate) rules: Rules,
+    /// Set once the resolver hands out an address only the operator's allow-list lets through.
+    pub(crate) reached_internal: Option<Arc<AtomicBool>>,
 }
 
 impl reqwest::dns::Resolve for CheckedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
         let resolver = self.resolver.clone();
-        let (policy, refusal) = (self.policy, self.refusal);
+        let rules = self.rules.clone();
+        let reached_internal = self.reached_internal.clone();
         Box::pin(async move {
-            let addresses = resolve(resolver.as_ref(), &host, policy, refusal)
+            let (addresses, reach) = resolve(resolver.as_ref(), &host, &rules)
                 .await
                 .map_err(|error| error.into_boxed())?;
+            if reach == Reach::Internal
+                && let Some(reached) = &reached_internal
+            {
+                reached.store(true, Ordering::SeqCst);
+            }
             let addresses: reqwest::dns::Addrs = Box::new(
                 addresses
                     .into_iter()
@@ -104,13 +174,13 @@ impl Unresolved {
     }
 }
 
-/// Resolves `host` once and checks every address it has.
+/// Resolves `host` once and checks every address it has: [`Reach::Internal`] when any of them
+/// is reached only through the operator's allow-list.
 async fn resolve(
     resolver: &dyn NameResolver,
     host: &str,
-    policy: Policy,
-    refusal: &str,
-) -> Result<Vec<IpAddr>, Unresolved> {
+    rules: &Rules,
+) -> Result<(Vec<IpAddr>, Reach), Unresolved> {
     let addresses = resolver.resolve(host).await.map_err(|error| {
         Unresolved::Failed(io::Error::new(
             error.kind(),
@@ -122,26 +192,29 @@ async fn resolve(
             "{host} has no address"
         ))));
     }
+    let mut reach = Reach::Public;
     for address in &addresses {
-        if let Some(reason) = policy(*address) {
-            return Err(Unresolved::Refused(Refused(format!(
-                "{host} resolves to {address}, a {reason} address: {refusal}"
-            ))));
+        if rules
+            .judge(Some(host), *address)
+            .map_err(|reason| Unresolved::Refused(Refused(reason)))?
+            == Reach::Internal
+        {
+            reach = Reach::Internal;
         }
     }
-    Ok(addresses)
+    Ok((addresses, reach))
 }
 
 /// The egress checks of the `http` tool, without its allow-list, for the other requests a
-/// deployment sends to a place a tenant chose: the server's lifecycle webhooks. A name is
-/// resolved once, a name with any private, loopback, link-local or cloud-metadata address is
-/// refused, and the connection goes to the addresses that were checked. A URL whose host is an
-/// address is checked before the request.
+/// deployment sends to a place a tenant chose: the server's lifecycle webhooks and its MCP
+/// servers. A name is resolved once, a name with any private, loopback, link-local or
+/// cloud-metadata address is refused, and the connection goes to the addresses that were
+/// checked. A URL whose host is an address is checked before the request. The internal hosts
+/// and networks of an [`InternalAllowList`] are let through, when one is given.
 #[derive(Debug, Clone)]
 pub struct Egress {
     resolver: Arc<dyn NameResolver>,
-    policy: Policy,
-    refusal: &'static str,
+    rules: Rules,
 }
 
 impl Egress {
@@ -150,34 +223,45 @@ impl Egress {
     pub fn new(resolver: Arc<dyn NameResolver>, refusal: &'static str) -> Self {
         Self {
             resolver,
-            policy: forbidden,
-            refusal,
+            rules: Rules::strict(forbidden, refusal),
         }
+    }
+
+    /// The same checks, which let through the internal hosts and networks of `internal`.
+    pub fn allowing(mut self, internal: InternalAllowList) -> Self {
+        self.rules.internal = Arc::new(internal);
+        self
     }
 
     /// `builder` with the checked resolver as its only resolver, and without proxies: a proxy
     /// would resolve the names itself.
     pub fn apply(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        self.apply_noting(builder, None)
+    }
+
+    /// [`Egress::apply`], noting in `reached_internal` when a name resolves to an address only
+    /// the allow-list lets through.
+    pub(crate) fn apply_noting(
+        &self,
+        builder: reqwest::ClientBuilder,
+        reached_internal: Option<Arc<AtomicBool>>,
+    ) -> reqwest::ClientBuilder {
         builder.no_proxy().dns_resolver(Arc::new(CheckedResolver {
             resolver: self.resolver.clone(),
-            policy: self.policy,
-            refusal: self.refusal,
+            rules: self.rules.clone(),
+            reached_internal,
         }))
     }
 
     /// Checks the host of `url` when it is an address: the reason when it is refused. A name is
     /// checked when it is resolved.
     pub fn check_url(&self, url: &Url) -> Result<(), String> {
-        let address = match url.host() {
-            Some(Host::Ipv4(address)) => IpAddr::V4(address),
-            Some(Host::Ipv6(address)) => IpAddr::V6(address),
-            Some(Host::Domain(_)) => return Ok(()),
-            None => return Err(format!("{url} has no host")),
-        };
-        match (self.policy)(address) {
-            Some(reason) => Err(format!("{address} is a {reason} address: {}", self.refusal)),
-            None => Ok(()),
-        }
+        self.rules.judge_url(url).map(drop)
+    }
+
+    /// [`Egress::check_url`], saying whether the address is reached only through the allow-list.
+    pub(crate) fn judge_url(&self, url: &Url) -> Result<Reach, String> {
+        self.rules.judge_url(url)
     }
 
     /// Checks `url` as a request to it would be: its host when it is an address, otherwise
@@ -186,15 +270,13 @@ impl Egress {
     pub async fn check(&self, url: &Url) -> Result<(), String> {
         self.check_url(url)?;
         match url.host() {
-            Some(Host::Domain(name)) => {
-                resolve(self.resolver.as_ref(), name, self.policy, self.refusal)
-                    .await
-                    .map(drop)
-                    .map_err(|error| match error {
-                        Unresolved::Failed(error) => error.to_string(),
-                        Unresolved::Refused(Refused(reason)) => reason,
-                    })
-            }
+            Some(Host::Domain(name)) => resolve(self.resolver.as_ref(), name, &self.rules)
+                .await
+                .map(drop)
+                .map_err(|error| match error {
+                    Unresolved::Failed(error) => error.to_string(),
+                    Unresolved::Refused(Refused(reason)) => reason,
+                }),
             _ => Ok(()),
         }
     }
@@ -210,6 +292,86 @@ impl Egress {
         }
         None
     }
+}
+
+/// The internal hosts and networks an operator lets a deployment's MCP servers be reached at,
+/// despite the egress checks: names (`mcp.internal.example`), the subdomains of a name
+/// (`*.svc.cluster.local`, not the name itself), addresses (`10.0.0.7`, `fd00::7`) and networks
+/// in CIDR notation (`10.20.0.0/16`, `fd00::/8`). A name lets through every address it resolves
+/// to; an address or a network lets through any name that resolves into it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InternalAllowList {
+    names: Vec<String>,
+    subdomains: Vec<String>,
+    networks: Vec<IpNet>,
+}
+
+impl InternalAllowList {
+    /// Reads the entries of the list; the first one that is neither a name, a `*.` wildcard,
+    /// an address nor a network is refused.
+    pub fn parse<S: AsRef<str>>(entries: &[S]) -> Result<Self, String> {
+        let mut list = Self::default();
+        for entry in entries {
+            let entry = entry.as_ref().trim();
+            let invalid = || {
+                format!(
+                    "{entry:?} is not a host name, a *.domain wildcard, an IP address or a CIDR \
+                     network"
+                )
+            };
+            if let Ok(network) = IpNet::from_str(entry) {
+                list.networks.push(network.trunc());
+                continue;
+            }
+            let bare = entry.trim_start_matches('[').trim_end_matches(']');
+            if let Ok(address) = bare.parse::<IpAddr>() {
+                list.networks.push(IpNet::from(address));
+                continue;
+            }
+            let name = entry.trim_end_matches('.');
+            if let Some(parent) = name.strip_prefix("*.") {
+                list.subdomains.push(domain(parent).ok_or_else(invalid)?);
+                continue;
+            }
+            if name.contains(['/', '*', ':']) {
+                return Err(invalid());
+            }
+            list.names.push(domain(name).ok_or_else(invalid)?);
+        }
+        Ok(list)
+    }
+
+    /// Whether the list has no entry.
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty() && self.subdomains.is_empty() && self.networks.is_empty()
+    }
+
+    fn allows_name(&self, host: &str) -> bool {
+        let host = host.trim_end_matches('.').to_ascii_lowercase();
+        self.names.contains(&host)
+            || self
+                .subdomains
+                .iter()
+                .any(|parent| is_subdomain(&host, parent))
+    }
+
+    fn allows_address(&self, address: IpAddr) -> bool {
+        // An IPv4 address mapped into IPv6 is the IPv4 address.
+        let address = match address {
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(address, IpAddr::V4),
+            IpAddr::V4(_) => address,
+        };
+        self.networks
+            .iter()
+            .any(|network| network.contains(&address))
+    }
+}
+
+/// Whether `name` is a subdomain of `parent`, both lowercase: `a.example.org` of `example.org`,
+/// not `example.org` itself nor `evilexample.org`.
+fn is_subdomain(name: &str, parent: &str) -> bool {
+    name.strip_suffix(parent)
+        .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.'))
 }
 
 /// The hosts of a toolset's allow-list: names (`api.example.com`), wildcards for the subdomains
@@ -260,9 +422,7 @@ impl AllowList {
                 let name = name.trim_end_matches('.').to_ascii_lowercase();
                 self.entries.iter().any(|entry| match entry {
                     Entry::Name(allowed) => *allowed == name,
-                    Entry::Subdomains(parent) => name
-                        .strip_suffix(parent.as_str())
-                        .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.')),
+                    Entry::Subdomains(parent) => is_subdomain(&name, parent),
                     Entry::Address(_) => false,
                 })
             }
@@ -551,6 +711,96 @@ mod tests {
         let system = Egress::new(Arc::new(SystemResolver), "webhooks are not sent there");
         let refused = system.check(&url("https://localhost/x")).await.unwrap_err();
         assert!(refused.starts_with("localhost resolves to"), "{refused}");
+    }
+
+    #[test]
+    fn the_internal_allow_list_reads_names_wildcards_addresses_and_networks() {
+        let list = InternalAllowList::parse(&[
+            "MCP.Internal.example.",
+            "*.svc.cluster.local",
+            "10.20.0.0/16",
+            "10.9.9.9",
+            "[fd00::7]",
+            "fc00::/7",
+        ])
+        .unwrap();
+        assert!(list.allows_name("mcp.internal.example"));
+        assert!(list.allows_name("MCP.INTERNAL.EXAMPLE."));
+        assert!(!list.allows_name("other.internal.example"));
+        assert!(list.allows_name("crm.tools.svc.cluster.local"));
+        assert!(!list.allows_name("svc.cluster.local"));
+        assert!(!list.allows_name("evilsvc.cluster.local"));
+        let address = |text: &str| text.parse::<IpAddr>().unwrap();
+        assert!(list.allows_address(address("10.20.3.4")));
+        assert!(!list.allows_address(address("10.21.0.1")));
+        assert!(list.allows_address(address("10.9.9.9")));
+        assert!(!list.allows_address(address("10.9.9.8")));
+        assert!(list.allows_address(address("::ffff:10.20.0.1")));
+        assert!(list.allows_address(address("fd00::7")));
+        assert!(list.allows_address(address("fdff::1")));
+        assert!(!list.allows_address(address("169.254.169.254")));
+        assert!(InternalAllowList::default().is_empty());
+        assert!(!list.is_empty());
+
+        for invalid in [
+            "",
+            "10.0.0.0/33",
+            "mcp.internal:8080",
+            "*.",
+            "http://x",
+            "a b",
+        ] {
+            let error = InternalAllowList::parse(&[invalid]).unwrap_err();
+            assert!(error.contains("is not a host name"), "{invalid}: {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_internal_allow_list_lets_its_hosts_through_and_nothing_else() {
+        let url = |text: &str| Url::parse(text).unwrap();
+        let list = InternalAllowList::parse(&["mcp.internal", "10.20.0.0/16"]).unwrap();
+        let rules = Rules {
+            policy: forbidden,
+            internal: Arc::new(list.clone()),
+            refusal: "MCP servers are not reached there",
+        };
+        assert_eq!(
+            rules.judge(Some("mcp.internal"), IpAddr::from([10, 0, 0, 1])),
+            Ok(Reach::Internal)
+        );
+        assert_eq!(
+            rules.judge(Some("crm.example"), IpAddr::from([10, 20, 0, 1])),
+            Ok(Reach::Internal)
+        );
+        assert_eq!(
+            rules.judge(Some("crm.example"), IpAddr::from([93, 184, 215, 14])),
+            Ok(Reach::Public)
+        );
+        assert_eq!(
+            rules.judge(Some("crm.example"), IpAddr::from([10, 0, 0, 1])),
+            Err("crm.example resolves to 10.0.0.1, a private address: MCP servers are not reached there".into())
+        );
+        assert_eq!(
+            rules.judge_url(&url("http://10.20.1.1:8080/mcp")),
+            Ok(Reach::Internal)
+        );
+        assert_eq!(
+            rules.judge_url(&url("http://169.254.169.254/latest")),
+            Err("169.254.169.254 is a link-local (cloud metadata) address: MCP servers are not reached there".into())
+        );
+
+        // A name with an address the list lets through and one it does not is refused.
+        let mixed = egress(&["10.20.0.1", "10.0.0.1"]).allowing(list.clone());
+        assert!(mixed.check(&url("https://crm.example/mcp")).await.is_err());
+        let inside = egress(&["10.20.0.1"]).allowing(list);
+        assert_eq!(inside.check(&url("https://crm.example/mcp")).await, Ok(()));
+        // Without the list, the same name is refused.
+        assert!(
+            egress(&["10.20.0.1"])
+                .check(&url("https://crm.example/mcp"))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

@@ -17,7 +17,7 @@ use ptc_core::{
     Builtin, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
 };
 use ptc_engine::ports::{Secret, ServerCredentials, TenantId};
-use ptc_mcp::McpDispatcher;
+use ptc_mcp::{McpConfig, McpDispatcher, McpEgress};
 use serde_json::json;
 
 use crate::error::CliError;
@@ -36,7 +36,11 @@ pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
     let mut servers = Vec::new();
     let mut tools = Vec::new();
     if !create.mcp.is_empty() {
-        let discovery = McpDispatcher::default();
+        // As the embedded server: the developer's own servers, at any address.
+        let discovery = McpDispatcher::new(McpConfig {
+            egress: McpEgress::open(),
+            ..McpConfig::default()
+        });
         let pinned = discover(&discovery, create, &mut servers, &mut tools).await;
         discovery.close();
         pinned?;

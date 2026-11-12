@@ -8,6 +8,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod egress;
 mod fixture;
 
 use std::collections::BTreeMap;
@@ -23,7 +24,7 @@ use ptc_engine::ports::{
     Credentials, Dispatched, ParkKind, RunRef, Secret, ServerCredentials, TaskToken, TenantId,
     ToolCall, ToolDispatcher, TraceContext,
 };
-use ptc_mcp::{IDEMPOTENCY_KEY_META, McpConfig, McpDispatcher, McpError};
+use ptc_mcp::{IDEMPOTENCY_KEY_META, McpConfig, McpDispatcher, McpEgress, McpError};
 use serde_json::{Value, json};
 
 fn main() -> std::process::ExitCode {
@@ -81,6 +82,22 @@ fn main() -> std::process::ExitCode {
             "a_missing_stdio_command_fails_for_good",
             a_missing_stdio_command_fails_for_good(),
         ),
+        test(
+            "egress::a_local_server_is_refused_by_a_deployed_server",
+            egress::a_local_server_is_refused_by_a_deployed_server(),
+        ),
+        test(
+            "egress::an_allowed_internal_server_is_reached",
+            egress::an_allowed_internal_server_is_reached(),
+        ),
+        test(
+            "egress::an_internal_server_s_answers_are_not_quoted",
+            egress::an_internal_server_s_answers_are_not_quoted(),
+        ),
+        test(
+            "egress::redirects_go_nowhere_else",
+            egress::redirects_go_nowhere_else(),
+        ),
     ];
     let reference = std::env::var("PTC_MCP_REFERENCE_SERVER").ok();
     trials.push(
@@ -107,6 +124,20 @@ where
 
 // -------------------------------------------------------------------------------------------
 // Helpers
+
+/// The configuration of the embedded server: the fixture servers listen on 127.0.0.1, which a
+/// deployment's checks refuse (`egress.rs`). Stdio servers are left to the default checks,
+/// which do not concern them.
+fn open_config() -> McpConfig {
+    McpConfig {
+        egress: McpEgress::open(),
+        ..McpConfig::default()
+    }
+}
+
+fn open() -> McpDispatcher {
+    McpDispatcher::new(open_config())
+}
 
 fn http_server(url: &str) -> McpServer {
     McpServer::new(
@@ -214,7 +245,7 @@ fn transient(dispatched: Dispatched) -> ToolFailure {
 
 async fn discovery_pins_the_server_tools() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = dispatcher.list_tools(&tenant(), &mcp, None).await.unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
@@ -255,7 +286,7 @@ async fn a_tool_list_without_end_is_refused() {
     // Listing went on until the timeout, the connection's list locked meanwhile.
     let dispatcher = McpDispatcher::new(McpConfig {
         connect_timeout: Duration::from_secs(20),
-        ..McpConfig::default()
+        ..open_config()
     });
     let started = Instant::now();
     let error = dispatcher
@@ -291,7 +322,7 @@ async fn a_tool_list_without_end_is_refused() {
 
 async fn content_and_structured_results() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
 
@@ -318,7 +349,7 @@ async fn content_and_structured_results() {
 async fn idempotency_key_and_trace_context_in_meta() {
     let fixture = Fixture::new();
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
     let mut meta_call = call(&mcp, &tools["meta"], json!({}));
@@ -346,7 +377,7 @@ async fn idempotency_key_and_trace_context_in_meta() {
 
 async fn errors_are_mapped() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
 
@@ -393,7 +424,7 @@ async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
     *auth.token.lock().unwrap() = Some("first".into());
     let fixture = Fixture::new();
     let server = fixture::serve_http(fixture.clone(), auth.clone()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
 
     // Without credentials, discovery is refused.
@@ -449,7 +480,7 @@ async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
 async fn the_execution_timeout_cancels_the_call() {
     let fixture = Fixture::new();
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
     let mut slow = tools["slow"].clone();
@@ -480,7 +511,7 @@ async fn a_schema_change_parks_the_call() {
     // The tool list is listed again before each call.
     let dispatcher = McpDispatcher::new(McpConfig {
         tools_ttl: Duration::ZERO,
-        ..McpConfig::default()
+        ..open_config()
     });
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
@@ -556,7 +587,7 @@ async fn connections_are_shared_and_replaced() {
     let fixture = Fixture::new();
     let auth = Auth::default();
     let server = fixture::serve_http(fixture.clone(), auth).await;
-    let dispatcher = McpDispatcher::default();
+    let dispatcher = open();
     let mcp = http_server(&server.url);
     let tools = pin(&dispatcher, &mcp, None).await;
     let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
@@ -594,7 +625,7 @@ async fn an_unreachable_server_is_transient() {
     };
     let dispatcher = McpDispatcher::new(McpConfig {
         connect_timeout: Duration::from_secs(5),
-        ..McpConfig::default()
+        ..open_config()
     });
     let mcp = http_server(&format!("http://127.0.0.1:{port}/mcp"));
     let error = dispatcher
