@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 ptc-api = { path = "crates/ptc-api" }
+ptc-codegen = { path = "crates/ptc-codegen" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }

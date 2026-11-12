@@ -1,0 +1,105 @@
+{
+  "description": "An MCP server in the style of GitHub's: named types in $defs shared by several tools, enums, defaults and formats, an output schema, a tool without one, and a tool name that is not an identifier.",
+  "servers": ["github"],
+  "tools": [
+    {
+      "name": "github.list_issues",
+      "route": "mcp",
+      "description": "List the issues of a repository.\n\nResults are paginated: pass `page` to read the next ones.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string", "description": "The repository, as `owner/name`.", "pattern": "^[^/]+/[^/]+$" },
+          "state": { "type": "string", "enum": ["open", "closed", "all"], "default": "open" },
+          "labels": { "type": "array", "items": { "type": "string" }, "description": "Only issues with all of these labels." },
+          "since": { "type": "string", "format": "date-time" },
+          "page": { "type": "integer", "minimum": 1 }
+        },
+        "required": ["repo"]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "issues": { "type": "array", "items": { "$ref": "#/$defs/Issue" } },
+          "next_page": { "type": ["integer", "null"] }
+        },
+        "required": ["issues", "next_page"],
+        "$defs": {
+          "Issue": {
+            "type": "object",
+            "description": "An issue of a repository.",
+            "properties": {
+              "number": { "type": "integer" },
+              "title": { "type": "string" },
+              "state": { "type": "string", "enum": ["open", "closed"] },
+              "author": { "$ref": "#/$defs/User" },
+              "updated_at": { "type": "string", "format": "date-time" }
+            },
+            "required": ["number", "title", "state", "author", "updated_at"]
+          },
+          "User": {
+            "type": "object",
+            "properties": { "login": { "type": "string" }, "site_admin": { "type": "boolean" } },
+            "required": ["login"]
+          }
+        }
+      }
+    },
+    {
+      "name": "github.get_issue",
+      "route": "mcp",
+      "description": "Get one issue.",
+      "input": {
+        "type": "object",
+        "properties": { "repo": { "type": "string" }, "number": { "type": "integer" } },
+        "required": ["repo", "number"]
+      },
+      "output": {
+        "type": "object",
+        "properties": { "issue": { "$ref": "#/$defs/Issue" } },
+        "required": ["issue"],
+        "$defs": {
+          "Issue": {
+            "type": "object",
+            "description": "An issue of a repository.",
+            "properties": {
+              "number": { "type": "integer" },
+              "title": { "type": "string" },
+              "state": { "type": "string", "enum": ["open", "closed"] },
+              "author": { "$ref": "#/$defs/User" },
+              "updated_at": { "type": "string", "format": "date-time" }
+            },
+            "required": ["number", "title", "state", "author", "updated_at"]
+          },
+          "User": {
+            "type": "object",
+            "properties": { "login": { "type": "string" }, "site_admin": { "type": "boolean" } },
+            "required": ["login"]
+          }
+        }
+      }
+    },
+    {
+      "name": "github.close-issue",
+      "route": "mcp",
+      "description": "Close an issue, with an optional comment.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "repo": { "type": "string" },
+          "number": { "type": "integer" },
+          "comment": { "type": "string", "maxLength": 65536 },
+          "reason": { "type": "string", "enum": ["completed", "not_planned"] }
+        },
+        "required": ["repo", "number"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "github.whoami",
+      "route": "mcp",
+      "description": "The authenticated user.",
+      "input": { "type": "object" }
+    }
+  ]
+}

@@ -1994,6 +1994,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptc-codegen"
+version = "0.1.0"
+dependencies = [
+ "deno_ast",
+ "ptc-core",
+ "serde_json",
+]
+
+[[package]]
 name = "ptc-core"
 version = "0.1.0"
 dependencies = [
