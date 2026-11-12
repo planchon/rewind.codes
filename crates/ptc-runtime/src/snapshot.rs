@@ -60,3 +60,62 @@ pub(crate) fn build(glue: &'static Glue) -> Result<&'static [u8], ExecutorError>
 fn internal(message: String) -> ExecutorError {
     ExecutorError::Internal(message)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use deno_core::JsRuntime;
+
+    use super::*;
+    use crate::epochs;
+
+    fn average(runs: u32, mut start: impl FnMut()) -> Duration {
+        start(); // warm-up
+        let begin = Instant::now();
+        for _ in 0..runs {
+            start();
+        }
+        begin.elapsed() / runs
+    }
+
+    /// What the snapshot saves each new instance: creating an isolate and running the bootstrap,
+    /// against creating it from the snapshot.
+    /// `cargo test -p ptc-runtime --release --lib -- --ignored --nocapture startup`
+    #[test]
+    #[ignore = "a measurement, not a check"]
+    fn startup_with_and_without_the_snapshot() {
+        let glue = epochs::latest();
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let _context = tokio.enter();
+        crate::executor::init_v8();
+        let begin = Instant::now();
+        let snapshot = of(glue).unwrap();
+        let built = begin.elapsed();
+        let fresh = average(20, || {
+            let mut runtime = JsRuntime::new(RuntimeOptions {
+                extensions: ops::extensions(),
+                ..Default::default()
+            });
+            runtime
+                .execute_script("ptc:bootstrap", glue.bootstrap)
+                .unwrap();
+        });
+        let restored = average(20, || {
+            JsRuntime::new(RuntimeOptions {
+                extensions: ops::extensions(),
+                startup_snapshot: Some(snapshot),
+                ..Default::default()
+            });
+        });
+        eprintln!(
+            "snapshot of {}: {} KiB, built once in {built:?}; a new isolate: {fresh:?} without \
+             it, {restored:?} from it",
+            glue.epoch,
+            snapshot.len() / 1024
+        );
+    }
+}

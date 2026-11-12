@@ -202,6 +202,37 @@ mod tests {
         }
     }
 
+    /// A call is stopped once it has used its budget of CPU time, not once its budget of
+    /// wall-clock time has passed: time the thread spends off the CPU does not count.
+    #[test]
+    fn the_budget_is_cpu_time_of_the_isolate_thread() {
+        crate::executor::init_v8();
+        let tokio = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let _context = tokio.enter();
+        let mut runtime = deno_core::JsRuntime::new(deno_core::RuntimeOptions::default());
+        let watchdog = Watchdog::spawn(runtime.v8_isolate().thread_safe_handle()).unwrap();
+
+        // Three budgets of wall-clock time off the CPU, then a little work: within budget.
+        watchdog.arm(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(300));
+        runtime
+            .execute_script("work", "let x = 0; for (let i = 0; i < 1e5; i++) x += i; x")
+            .unwrap();
+        assert!(!watchdog.disarm());
+
+        // An endless loop is stopped once it has used its budget.
+        watchdog.arm(Duration::from_millis(100));
+        let start = thread_cpu_time();
+        assert!(runtime.execute_script("loop", "for (;;) {}").is_err());
+        let used = thread_cpu_time() - start;
+        assert!(watchdog.disarm());
+        assert!(used >= Duration::from_millis(100), "{used:?}");
+        assert!(used < Duration::from_secs(2), "{used:?}");
+    }
+
     /// The clock is the thread's CPU time: sleeping does not move it, working does.
     #[test]
     fn the_clock_counts_cpu_time_not_wall_clock_time() {

@@ -1,0 +1,4 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"e1f95cbac7e49d053e916cdb919acfd8dcd66dd2b78e63e07e9ecf8f412d3392","toolset":"c682144ff3b041d1516cb06df8a108dfc4764c189e147efb7f88363a73e6637f","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"TypeError","message":"invalid arguments for slack.post_message: args.text: 42 is not of type \"string\"","stack":"TypeError: invalid arguments for slack.post_message: args.text: 42 is not of type \"string\"\n    at main (file:///script.ts:4:15)"}}}
+]}

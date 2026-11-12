@@ -1,0 +1,20 @@
+{
+  "description": "The CPU budget applies to each call into the script, on the CPU clock of the isolate's thread: a run reacting to many triggers, and waiting days between them, stays within a small budget.",
+  "tools": {
+    "audit.record": {
+      "ok": true
+    }
+  },
+  "limits": {
+    "cpu_per_trigger_ms": 250
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "sums": 6
+    },
+    "calls": {
+      "audit.record": 6
+    }
+  }
+}

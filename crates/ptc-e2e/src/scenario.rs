@@ -14,9 +14,17 @@ pub struct Scenario {
     /// The run's input.
     #[serde(default = "empty_object")]
     pub input: Value,
-    /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]).
+    /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]). A tool is a
+    /// host tool (`group.tool` puts it in a group), except `http` and `webhook`, the built-ins.
     #[serde(default)]
     pub tools: BTreeMap<String, Value>,
+    /// The pinned input schema of some tools, by name. The other host tools accept any
+    /// arguments; the built-ins get the schemas of `ptc_runtime::builtins`.
+    #[serde(default)]
+    pub schemas: BTreeMap<String, Value>,
+    /// The hosts the built-in `http` tool allows, when `tools` has it.
+    #[serde(default)]
+    pub http_hosts: Vec<String>,
     /// The order in which tool calls answer.
     #[serde(default)]
     pub tool_order: ToolOrder,

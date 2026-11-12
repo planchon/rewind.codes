@@ -1,0 +1,42 @@
+{
+  "description": "With the built-in http tool, fetch exists: each request is a journaled call of the http tool, sent by the dispatcher, and its result becomes a Response. A status outside 2xx is a response, not a failure.",
+  "tools": {
+    "http": {
+      "$sequence": [
+        {
+          "status": 201,
+          "statusText": "Created",
+          "url": "https://api.example.com/v1/items",
+          "headers": [["content-type", "application/json"], ["location", "/v1/items/7"]],
+          "body": { "text": "{\"id\":7,\"name\":\"widget\"}" }
+        },
+        {
+          "status": 404,
+          "statusText": "Not Found",
+          "url": "https://api.example.com/v1/items/404",
+          "headers": [["content-type", "text/plain"]],
+          "body": { "text": "no such item" }
+        },
+        {
+          "status": 200,
+          "statusText": "OK",
+          "url": "https://api.example.com/logo.png",
+          "headers": [["content-type", "image/png"]],
+          "body": { "base64": "iVBORw==" }
+        }
+      ]
+    }
+  },
+  "http_hosts": ["api.example.com"],
+  "expect": {
+    "status": "completed",
+    "output": {
+      "created": [201, true, "/v1/items/7", 7],
+      "missing": [404, false, "Not Found", "no such item"],
+      "logo": ["image/png", [137, 80, 78, 71]]
+    },
+    "calls": {
+      "http": 3
+    }
+  }
+}

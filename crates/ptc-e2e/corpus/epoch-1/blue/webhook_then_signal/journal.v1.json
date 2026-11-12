@@ -1,0 +1,10 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"70d8760e7e43535b8328818a7c98e42b961851603f255e1c73e6ca91d948c5cc","toolset":"da1df46be08a5c44e6811286f62a661bf86d7272af41568faf9d4cd5440a250b","input":{"value":{"repo":"acme/api"}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"webhook","args":{"value":{"name":"pr_merged"}},"callsite":{"line":5,"column":22}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"url":"https://ptc.example.com/hooks/whk_8f3a"}}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":2,"tool":"github.create_webhook","args":{"value":{"repo":"acme/api","url":"https://ptc.example.com/hooks/whk_8f3a"}},"callsite":{"line":6,"column":16}}},
+{"index":4,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":2,"result":{"value":{"repo":"acme/api","url":"https://ptc.example.com/hooks/whk_8f3a"}}}},
+{"index":5,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"pr_merged","callsite":{"line":7,"column":23}}},
+{"index":6,"recorded_at":1767225600000,"event":{"type":"signal_received","name":"pr_merged","payload":{"value":{"pr":42}}}},
+{"index":7,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":{"merged":42,"url":"https://ptc.example.com/hooks/whk_8f3a"}}}}
+]}

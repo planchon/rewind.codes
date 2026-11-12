@@ -33,8 +33,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ptc_core::{
-    Command, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunOutcome, RunState, Script,
-    Timestamp, Toolset, parse_duration,
+    Builtin, Command, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunOutcome, RunState, Script,
+    Timestamp, Tool, ToolRoute, Toolset, parse_duration,
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
 use ptc_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId, VirtualTime};
@@ -127,7 +127,7 @@ impl Case {
             script,
         };
         case.check_color()?;
-        Toolset::from_host_tools(case.scenario.tools.keys())
+        case.try_toolset()
             .map_err(|err| format!("{name}/scenario.json: tools: {err}"))?;
         Ok(case)
     }
@@ -136,11 +136,46 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools, as host tools with the default policy: in mock mode every call
-    /// goes to the scenario's responses, whatever its route.
+    /// The scenario's tools, with the default policy: host tools, and the built-ins `http`
+    /// and `webhook`. In mock mode every call goes to the scenario's responses, whatever its
+    /// route.
     pub fn toolset(&self) -> Toolset {
-        Toolset::from_host_tools(self.scenario.tools.keys())
+        self.try_toolset()
             .expect("the tools were checked when the case was loaded")
+    }
+
+    fn try_toolset(&self) -> Result<Toolset, String> {
+        let scenario = &self.scenario;
+        let tools = scenario.tools.keys().map(|name| {
+            let (route, schema) = match name.as_str() {
+                "http" => (
+                    ToolRoute::Builtin(Builtin::Http {
+                        allowed_hosts: scenario.http_hosts.clone(),
+                    }),
+                    ptc_runtime::builtins::http_input_schema(),
+                ),
+                "webhook" => (
+                    ToolRoute::Builtin(Builtin::Webhook),
+                    ptc_runtime::builtins::webhook_input_schema(),
+                ),
+                _ => (
+                    ToolRoute::Host {
+                        group: name.split_once('.').map(|(group, _)| group.to_owned()),
+                    },
+                    Value::Object(serde_json::Map::new()),
+                ),
+            };
+            let schema = scenario.schemas.get(name).cloned().unwrap_or(schema);
+            Tool::new(name.clone(), route, schema)
+        });
+        if let Some(unknown) = scenario
+            .schemas
+            .keys()
+            .find(|name| !scenario.tools.contains_key(*name))
+        {
+            return Err(format!("schemas: {unknown} is not a tool of the scenario"));
+        }
+        Toolset::new([], tools).map_err(|err| err.to_string())
     }
 
     /// The run's id: the first id of the scenario's entropy.

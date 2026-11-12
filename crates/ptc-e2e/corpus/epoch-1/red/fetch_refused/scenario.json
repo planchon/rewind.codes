@@ -1,0 +1,19 @@
+{
+  "description": "A request the dispatcher refuses (a host outside the allow-list, a private address) fails the call: fetch rejects with a ToolError, which fails the run when uncaught.",
+  "tools": {
+    "http": {
+      "$error": "metadata.internal is not in the toolset's allow-list"
+    }
+  },
+  "http_hosts": ["api.example.com"],
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ToolError",
+      "message": "http failed: metadata.internal is not in the toolset's allow-list"
+    },
+    "calls": {
+      "http": 1
+    }
+  }
+}
