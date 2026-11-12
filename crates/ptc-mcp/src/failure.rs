@@ -7,9 +7,8 @@
 //! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_expired` |
 //! | The server cannot be reached, the connection or the process closed, HTTP 429 or 5xx, JSON-RPC internal error (-32603), a session that could not be recovered | transient: `unavailable` |
 //! | No answer within the execution timeout | transient: `timeout` |
-//! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, a command that does not exist | failed |
+//! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, another HTTP 4xx, a command that does not exist | failed |
 
-use std::borrow::Cow;
 use std::error::Error;
 use std::time::Duration;
 
@@ -18,8 +17,9 @@ use ptc_engine::ports::{Dispatched, ParkKind, ParkReason};
 use rmcp::ServiceError;
 use rmcp::model::ErrorCode;
 use rmcp::service::ClientInitializeError;
+use rmcp::transport::DynamicTransportError;
 use rmcp::transport::streamable_http_client::{
-    AuthRequiredError, HttpStatusError, StreamableHttpError,
+    AuthRequiredError, HttpStatusError, InsufficientScopeError, StreamableHttpError,
 };
 use serde_json::Value;
 
@@ -121,21 +121,7 @@ pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) 
             };
             (failure, false)
         }
-        ServiceError::TransportSend(transport) => {
-            if let Some(message) = unauthorized(transport) {
-                return (
-                    Failure::Unauthorized(unauthorized_message(server, &message)),
-                    true,
-                );
-            }
-            (
-                Failure::transient(
-                    ToolFailureKind::Unavailable,
-                    format!("{server} could not be reached: {}", chain(transport)),
-                ),
-                true,
-            )
-        }
+        ServiceError::TransportSend(transport) => (of_transport(server, transport), true),
         ServiceError::TransportClosed => (
             Failure::transient(
                 ToolFailureKind::Unavailable,
@@ -172,8 +158,8 @@ pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) 
 
 /// A connection that could not be opened.
 pub(crate) fn of_initialize(server: &str, error: &ClientInitializeError) -> Failure {
-    if let Some(message) = initialize_unauthorized(error) {
-        return Failure::Unauthorized(unauthorized_message(server, &message));
+    if let Some(transport) = transport_error(error) {
+        return of_transport(server, transport);
     }
     match error {
         ClientInitializeError::NoCompatibleProtocolVersion {
@@ -193,6 +179,41 @@ pub(crate) fn of_initialize(server: &str, error: &ClientInitializeError) -> Fail
         other => Failure::transient(
             ToolFailureKind::Unavailable,
             format!("{server} could not be reached: {}", chain(other)),
+        ),
+    }
+}
+
+/// The transport's error that stopped the initialization: a field of the variant, not its
+/// source. After a failed discovery and a failed fallback, the fallback's, else the discovery's.
+fn transport_error(error: &ClientInitializeError) -> Option<&DynamicTransportError> {
+    match error {
+        ClientInitializeError::TransportError { error, .. } => Some(error),
+        ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
+            transport_error(fallback).or_else(|| transport_error(discover))
+        }
+        _ => None,
+    }
+}
+
+/// A failure of the transport, sorted by the HTTP status it carries, if any: 401 parks the
+/// call, 408, 429 and 5xx are transient, another 4xx will not change by retrying (a wrong URL,
+/// a forbidden request); without a status, the server could not be reached.
+fn of_transport(server: &str, error: &(dyn Error + 'static)) -> Failure {
+    match http_status(error) {
+        Some((401, detail)) => Failure::Unauthorized(unauthorized_message(server, &detail)),
+        Some((status, _)) if (400..500).contains(&status) && !matches!(status, 408 | 429) => {
+            Failure::permanent(
+                ToolFailureKind::Unavailable,
+                format!(
+                    "{server} refused the request (HTTP {status}): {}",
+                    chain(error)
+                ),
+                None,
+            )
+        }
+        _ => Failure::transient(
+            ToolFailureKind::Unavailable,
+            format!("{server} could not be reached: {}", chain(error)),
         ),
     }
 }
@@ -232,54 +253,40 @@ fn unauthorized_message(server: &str, detail: &str) -> String {
     format!("{server} refused the credentials (HTTP 401): {detail}")
 }
 
-/// The detail of an HTTP 401 that stopped the initialization. The transport's error is a field
-/// of the variant, not its source.
-fn initialize_unauthorized(error: &ClientInitializeError) -> Option<String> {
-    match error {
-        ClientInitializeError::TransportError { error, .. } => unauthorized(error),
-        ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
-            initialize_unauthorized(fallback).or_else(|| initialize_unauthorized(discover))
-        }
-        other => unauthorized(other),
-    }
-}
-
-/// The detail of an HTTP 401 somewhere in the error's sources, if there is one.
-fn unauthorized(error: &(dyn Error + 'static)) -> Option<String> {
+/// The HTTP status somewhere in the error's sources, with its detail, if there is one.
+fn http_status(error: &(dyn Error + 'static)) -> Option<(u16, String)> {
     let mut source = Some(error);
     while let Some(current) = source {
         if let Some(required) = current.downcast_ref::<AuthRequiredError>() {
-            return Some(format!(
-                "authorization required: {}",
-                required.www_authenticate_header
-            ));
+            return Some((401, challenge(&required.www_authenticate_header)));
         }
-        if let Some(status) = current.downcast_ref::<HttpStatusError>()
-            && status.status == 401
-        {
-            return Some("unauthorized".to_owned());
+        if current.is::<InsufficientScopeError>() {
+            return Some((403, "insufficient scope".to_owned()));
+        }
+        if let Some(status) = current.downcast_ref::<HttpStatusError>() {
+            return Some((status.status, format!("HTTP {}", status.status)));
         }
         if let Some(http) = current.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
             match http {
                 StreamableHttpError::AuthRequired(required) => {
-                    return Some(format!(
-                        "authorization required: {}",
-                        required.www_authenticate_header
-                    ));
+                    return Some((401, challenge(&required.www_authenticate_header)));
                 }
-                // A 401 without a challenge keeps its status in the message.
-                StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(message))
-                    if message.starts_with("HTTP 401") =>
-                {
-                    return Some((*message).to_owned());
+                StreamableHttpError::InsufficientScope(_) => {
+                    return Some((403, "insufficient scope".to_owned()));
                 }
-                StreamableHttpError::UnexpectedServerResponse(Cow::Owned(message))
-                    if message.starts_with("HTTP 401") =>
-                {
-                    return Some(message.clone());
+                StreamableHttpError::HttpStatus(status) => {
+                    return Some((status.status, format!("HTTP {}", status.status)));
                 }
-                StreamableHttpError::HttpStatus(status) if status.status == 401 => {
-                    return Some("unauthorized".to_owned());
+                // A status without a JSON-RPC body keeps its code in the message.
+                StreamableHttpError::UnexpectedServerResponse(message) => {
+                    let message: &str = message;
+                    if let Some(status) = message
+                        .strip_prefix("HTTP ")
+                        .and_then(|rest| rest.get(..3))
+                        .and_then(|code| code.parse::<u16>().ok())
+                    {
+                        return Some((status, message.to_owned()));
+                    }
                 }
                 _ => {}
             }
@@ -287,6 +294,10 @@ fn unauthorized(error: &(dyn Error + 'static)) -> Option<String> {
         source = current.source();
     }
     None
+}
+
+fn challenge(header: &str) -> String {
+    format!("authorization required: {header}")
 }
 
 /// The error and its sources, as one line.
@@ -306,9 +317,9 @@ pub(crate) fn chain(error: &(dyn Error + 'static)) -> String {
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
+    use std::borrow::Cow;
 
     use rmcp::model::ErrorData;
-    use rmcp::transport::DynamicTransportError;
 
     use super::*;
 
@@ -335,6 +346,29 @@ mod tests {
             };
             assert!(message.starts_with("github refused the credentials (HTTP 401)"));
         }
+    }
+
+    #[test]
+    fn other_client_errors_are_not_retried() {
+        for message in ["HTTP 403 Forbidden: no", "HTTP 404 Not Found: wrong path"] {
+            let (failure, _) = of_service(
+                "github",
+                &transport(StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                    message.into(),
+                ))),
+            );
+            assert!(
+                matches!(failure, Failure::Permanent(ref f) if f.kind == ToolFailureKind::Unavailable),
+                "{failure:?}"
+            );
+        }
+        let (failure, _) = of_service(
+            "github",
+            &transport(StreamableHttpError::HttpStatus(HttpStatusError::new(
+                429, None,
+            ))),
+        );
+        assert!(matches!(failure, Failure::Transient(_)));
     }
 
     #[test]
