@@ -17,13 +17,19 @@
 use ptc_core::{Tool, canonical_json};
 use serde_json::Value;
 
+use crate::failure::bounded;
+
 /// Why the call no longer matches the tool, written for the harness developer and the model;
-/// `None` when it still does.
+/// `None` when it still does. Cut at 2,000 characters: a refused argument is quoted in it.
 pub(crate) fn mismatch(
     pinned: &Tool,
     current: Option<&rmcp::model::Tool>,
     args: &Value,
 ) -> Option<String> {
+    changed(pinned, current, args).map(|message| bounded(&message))
+}
+
+fn changed(pinned: &Tool, current: Option<&rmcp::model::Tool>, args: &Value) -> Option<String> {
     let name = &pinned.name;
     let Some(current) = current else {
         return Some(format!(
@@ -171,6 +177,20 @@ mod tests {
             ),
             "{refused}"
         );
+    }
+
+    #[test]
+    fn the_message_holds_a_bounded_part_of_the_args() {
+        let tool = pinned(schema(&["open"]), None);
+        let mut narrower = schema(&["open"]);
+        narrower["properties"]["repo"]["maxLength"] = json!(3);
+        let message = mismatch(
+            &tool,
+            Some(&current(narrower, None)),
+            &json!({ "repo": "x".repeat(100_000) }),
+        )
+        .unwrap();
+        assert!(message.chars().count() <= 2001, "{}", message.len());
     }
 
     #[test]

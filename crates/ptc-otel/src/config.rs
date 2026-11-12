@@ -68,8 +68,9 @@ pub enum OtlpProtocol {
 }
 
 /// Where telemetry is sent over OTLP. What is left unset follows the standard
-/// `OTEL_EXPORTER_OTLP_*` environment variables, then OpenTelemetry's defaults.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// `OTEL_EXPORTER_OTLP_*` environment variables, then OpenTelemetry's defaults. Its `Debug`
+/// output names the headers, not their values.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct OtlpConfig {
     /// The transport. Unset: `OTEL_EXPORTER_OTLP_PROTOCOL` (`grpc` or `http/protobuf`), else
     /// HTTP with protobuf, OpenTelemetry's default.
@@ -83,6 +84,17 @@ pub struct OtlpConfig {
     pub headers: BTreeMap<String, String>,
     /// How long one export may take. Unset: `OTEL_EXPORTER_OTLP_*TIMEOUT`, else 10 s.
     pub timeout: Option<Duration>,
+}
+
+impl std::fmt::Debug for OtlpConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OtlpConfig")
+            .field("protocol", &self.protocol)
+            .field("endpoint", &self.endpoint)
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl OtlpConfig {
@@ -131,6 +143,17 @@ mod tests {
         assert_eq!(get("service.version").as_deref(), Some("0.1.0"));
         assert_eq!(get("deployment.environment.name").as_deref(), Some("test"));
         assert_eq!(get("telemetry.sdk.language").as_deref(), Some("rust"));
+    }
+
+    #[test]
+    fn debug_output_names_headers_but_not_their_values() {
+        let config = OtlpConfig {
+            headers: BTreeMap::from([("x-api-key".into(), "secret-1234".into())]),
+            ..OtlpConfig::default()
+        };
+        let debug = format!("{config:?}");
+        assert!(debug.contains("x-api-key"), "{debug}");
+        assert!(!debug.contains("secret-1234"), "{debug}");
     }
 
     #[test]

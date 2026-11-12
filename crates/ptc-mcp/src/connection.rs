@@ -52,12 +52,23 @@ pub(crate) struct Pool {
     entries: Mutex<HashMap<Key, Entry>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
     tenant: String,
     server: String,
     /// SHA-256 of the transport and the credentials. The secrets themselves are not kept.
     fingerprint: [u8; 32],
+}
+
+/// Without the fingerprint: an unsalted digest of a short secret can be reversed by trying
+/// every secret.
+impl std::fmt::Debug for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Key")
+            .field("tenant", &self.tenant)
+            .field("server", &self.server)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -456,4 +467,30 @@ fn headers(
         headers.insert(header, value);
     }
     Ok(headers)
+}
+
+#[cfg(test)]
+mod tests {
+    use ptc_engine::ports::Secret;
+
+    use super::*;
+
+    #[test]
+    fn a_pool_s_debug_output_holds_no_digest_of_credentials() {
+        let server = McpServer::new(
+            "crm",
+            McpTransport::Http {
+                url: "https://mcp.example.com".into(),
+            },
+        );
+        let credentials = ServerCredentials {
+            headers: BTreeMap::from([("authorization".into(), Secret::new("Bearer 1234"))]),
+            env: BTreeMap::new(),
+        };
+        let key = Key::new(&TenantId::new("acme").unwrap(), &server, Some(&credentials));
+        let debug = format!("{key:?}");
+        // An unsalted digest of a short secret can be reversed by trying them all.
+        assert!(!debug.contains(&format!("{:?}", key.fingerprint)), "{debug}");
+        assert!(debug.contains("acme") && debug.contains("crm"), "{debug}");
+    }
 }
