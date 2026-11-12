@@ -364,7 +364,12 @@ async fn replay_reports_compatibility_with_a_corrected_script() {
     );
 
     let run = ptc(&["replay", dir.path().join("missing.json").to_str().unwrap()]).await;
-    assert_ne!(run.exit, Exit::Success);
+    assert_eq!(
+        run.exit,
+        Exit::Usage,
+        "a missing file starts no server: {}",
+        run.err
+    );
 }
 
 // -------------------------------------------------------------------------------------------

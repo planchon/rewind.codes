@@ -504,8 +504,8 @@ async fn run_starts_a_run_and_waits_for_it() {
     assert_eq!(start.idempotency_key.as_deref(), Some("start-1"));
     assert_eq!(start.authorization, None, "the socket takes no API key");
     assert_eq!(start.body["labels"], json!({"agent": "triage"}));
-    // A wait above 50 s is split: the start waits 50 s, and so does each read.
-    assert_eq!(start.body["wait"], "50s");
+    // The start answers at once; a wait above 50 s is split into reads of 50 s at most.
+    assert_eq!(start.body.get("wait"), None);
     assert!(requests[1..].iter().all(|seen| seen.what == "get run-1"));
     for read in &requests[1..] {
         let wait: ptc_api::common::Duration = read.query["wait"].parse().unwrap();
@@ -540,16 +540,20 @@ async fn run_exits_with_the_runs_outcome() {
     assert_eq!(exit, Exit::Waiting);
     let run: Run = serde_json::from_str(&out).unwrap();
     assert_eq!(run.status, RunStatus::Active);
-    let starts: Vec<Seen> = server
+    let reads = server
         .requests()
         .into_iter()
-        .filter(|seen| seen.what == "start")
-        .collect();
-    assert_eq!(
-        starts.last().unwrap().body.get("wait"),
-        None,
-        "--wait 0 does not wait"
-    );
+        .filter(|seen| seen.what.starts_with("get"))
+        .count();
+    let (_, _, _) = server
+        .ptc(&["run", waits.to_str().unwrap(), "--wait", "0"])
+        .await;
+    let after = server
+        .requests()
+        .into_iter()
+        .filter(|seen| seen.what.starts_with("get"))
+        .count();
+    assert_eq!(after, reads, "--wait 0 does not wait");
 }
 
 #[tokio::test(flavor = "multi_thread")]

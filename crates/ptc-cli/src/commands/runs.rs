@@ -38,7 +38,6 @@ pub(super) async fn run(
     }
     start.labels = input::labels(&args.start.labels)?;
     start.ttl = args.start.ttl;
-    start.wait = first_wait(args.start.wait);
     if args.start.no_check {
         start.check = Some(false);
     }
@@ -56,6 +55,7 @@ pub(super) async fn run(
             Some(client.create_toolset(&create).await?.id)
         }
     };
+    // Answered as soon as the run exists, so that its id is known at once; the wait follows.
     let run = client.start_run(&start, key.as_ref()).await?;
     started(console, &run);
     let run = wait_for_end(&client, run, deadline).await?;
@@ -79,13 +79,13 @@ pub(super) async fn fork(
         fork.labels = Some(input::labels(&args.start.labels)?);
     }
     fork.ttl = args.start.ttl;
-    fork.wait = first_wait(args.start.wait);
     if args.start.no_check {
         fork.check = Some(false);
     }
     let key = idempotency_key(args.start.key.as_deref())?;
     let client = server.client().await?;
     let deadline = Instant::now() + args.start.wait.get();
+    // Answered as soon as the fork exists; the wait follows.
     let run = client.fork_run(&args.run, &fork, key.as_ref()).await?;
     started(console, &run);
     let run = wait_for_end(&client, run, deadline).await?;
@@ -287,7 +287,7 @@ fn idempotency_key(key: Option<&str>) -> Result<Option<IdempotencyKey>, CliError
     .transpose()
 }
 
-/// The wait of the request that starts a run: the first chunk of `--wait`.
+/// The wait of a first request: the first chunk of `--wait`.
 fn first_wait(wait: Duration) -> Option<Duration> {
     let wait = wait.get().min(WAIT_CHUNK);
     (!wait.is_zero()).then(|| Duration::from(wait))

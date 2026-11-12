@@ -479,6 +479,9 @@ Commands:
 | `ptc trace <run> [--entry n]` | LLM-readable trace |
 | `ptc runs` | Lists runs |
 | `ptc release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
+| `ptc status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
+| `ptc export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
+| `ptc toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
 | `ptc server [--embedded] [--role api\|worker] [--virtual-time]` | Runs the server in the foreground |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a

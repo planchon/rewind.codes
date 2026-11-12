@@ -79,7 +79,13 @@ pub(super) async fn replay(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let path = Path::new(&args.run);
-    let journal = if path.is_file() {
+    // A run id is a UUID: what looks like a path is a file, which must exist.
+    let is_file = path.is_file()
+        || args.run.contains(std::path::MAIN_SEPARATOR)
+        || path
+            .extension()
+            .is_some_and(|extension| extension == "json");
+    let journal = if is_file {
         let text = input::read_text(path)?;
         ptc_format::decode_journal(&text)
             .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?
