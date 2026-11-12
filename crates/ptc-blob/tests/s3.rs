@@ -26,7 +26,7 @@ const MC_IMAGE: &str = "cgr.dev/chainguard/minio-client:latest";
 const USER: &str = "ptcblob";
 const PASSWORD: &str = "ptcblob-secret";
 /// One bucket per store the suites create, and one for the corruption test.
-const BUCKETS: usize = 11;
+const BUCKETS: usize = 13;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_blobs_pass_the_conformance_suite_on_minio() {

@@ -817,6 +817,9 @@ impl JournalStore for TursoStore {
         let rows = sql::query_dynamic(&connection, &query, params).await?;
         let mut runs = Vec::new();
         for row in &rows {
+            if filter.limit.is_some_and(|max| runs.len() >= max) {
+                break;
+            }
             let record = record_from_row(row)?;
             let labelled = filter
                 .labels
@@ -824,9 +827,6 @@ impl JournalStore for TursoStore {
                 .all(|(key, value)| record.metadata.labels.get(key) == Some(value));
             if labelled {
                 runs.push(record);
-            }
-            if filter.limit.is_some_and(|max| runs.len() >= max) {
-                break;
             }
         }
         Ok(runs)

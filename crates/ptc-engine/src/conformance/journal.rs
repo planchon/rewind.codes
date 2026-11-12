@@ -2988,7 +2988,9 @@ pub async fn list_runs_filters_and_pages<S: JournalStore>(store: &S) {
     assert_eq!(list(RunFilter::new(acme())).await, [id(1), id(2), id(3)]);
     let mut filter = RunFilter::new(acme());
     filter.labels = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
-    assert_eq!(list(filter).await, [id(1)]);
+    assert_eq!(list(filter.clone()).await, [id(1)]);
+    filter.limit = Some(0);
+    assert!(list(filter).await.is_empty(), "a limit of 0 lists nothing");
     let mut filter = RunFilter::new(acme());
     filter.status = Some(RunStatus::Active);
     assert_eq!(list(filter).await, [id(2)]);
