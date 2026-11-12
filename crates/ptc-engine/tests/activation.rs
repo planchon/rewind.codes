@@ -378,8 +378,10 @@ async fn a_sticky_worker_that_dies_mid_activation_delays_the_others_by_its_lease
             }
         },
     );
-    let mut config = EngineConfig::default();
-    config.worker = "w1".into();
+    let config = EngineConfig {
+        worker: "w1".into(),
+        ..EngineConfig::default()
+    };
     let engine = engine_with(programs, RecordingDispatcher::echo(), config);
     let run = engine
         .start_run(request("waits", json!({})))
@@ -398,8 +400,10 @@ async fn a_sticky_worker_that_dies_mid_activation_delays_the_others_by_its_lease
 
     // w2 takes the run over the moment the lease expires: the sticky priority of the dead
     // worker adds nothing to it.
-    let mut config = EngineConfig::default();
-    config.worker = "w2".into();
+    let config = EngineConfig {
+        worker: "w2".into(),
+        ..EngineConfig::default()
+    };
     let engine = ptc_engine::Engine::new(engine.into_adapters(), config);
     let expiry = signalled.saturating_add(engine.config().lease_duration);
     engine.clock().advance_to(ptc_core::Timestamp(expiry.0 - 1));
