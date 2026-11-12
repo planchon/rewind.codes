@@ -1,4 +1,5 @@
-//! The conformance suites of the ports with state (feature `conformance`).
+//! The conformance suites of the ports (feature `conformance`): `JournalStore`, `BlobStore`,
+//! `ReadModel`, `SecretStore`, and `SpanExporter`.
 //!
 //! Every adapter of a port passes its suite: they check the contract of the port, not a table
 //! layout. Each suite is deterministic: time is always passed in, never read, and the only
@@ -12,6 +13,9 @@
 //! }
 //! ```
 //!
+//! A span exporter has no read side: its suite also reads the exporter's backend, through a
+//! [`spans::Collector`] the adapter's test provides.
+//!
 //! `run_all` prints the name of each check before running it, so a failure names its check.
 //! Each check is also public, to run one alone while debugging.
 
@@ -19,6 +23,7 @@ pub mod blobs;
 pub mod journal;
 pub mod read_model;
 pub mod secrets;
+pub mod spans;
 
 use ptc_core::Timestamp;
 

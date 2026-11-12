@@ -80,11 +80,12 @@ Dependencies only point down. Adapters never depend on each other.
 
 All ports are declared in `ptc-engine` (`crates/ptc-engine/src/ports/`), each with an in-memory
 adapter in `ptc-engine` that is the reference implementation of its contract. The ports with
-state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, have a conformance suite in
-`ptc-engine` (feature `conformance`, modules `conformance::journal`, `::blobs`, `::read_model`,
-`::secrets`), and every adapter of the port passes it. The contracts of the other ports are not
-observable through the port alone (a span exported twice, an HMAC signature, the egress rules):
-their adapters test them.
+state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` have a
+conformance suite in `ptc-engine` (feature `conformance`, modules `conformance::journal`,
+`::blobs`, `::read_model`, `::secrets`, `::spans`), and every adapter of the port passes it.
+`SpanExporter` has no read side: its suite reads the backend through a collector the adapter's
+test provides. The contracts of the other ports are not observable through the port alone (an
+HMAC signature, the egress rules): their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
@@ -270,7 +271,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | Crate | Layer | Contents |
 | --- | --- | --- |
 | `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
-| `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state (feature `conformance`) |
+| `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
 | `ptc-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `ptc-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `ptc-server` and `ptc-cli` |
 | `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog and heap limit, `V8Executor`; the TypeScript mock dispatcher |
@@ -280,7 +281,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
 | `ptc-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `ptc:tools`, `ptc-tools.d.ts`, prompt rendering |
 | `ptc-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `ptc` binary; the checker's own rules on the swc syntax tree |
-| `ptc-otel` | adapter | OpenTelemetry SDK and OTLP export: `SpanExporter`, and the `tracing` subscriber the composition roots install |
+| `ptc-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent` |
 | `ptc-cli` | composition root | the client commands of the `ptc` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
 | `ptc-server` | composition root | `ptc server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard |
 | `ptc` | entry point | the `ptc` binary: hands `ptc server …` to `ptc-server` and every other command to `ptc-cli`, nothing else |
@@ -352,11 +353,12 @@ Nothing about the script is emitted during replay.
 | --- | --- |
 | `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `ptc-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
-| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine and failure counts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine and failure counts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
 | `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
 | `ptc-store-turso`, `ptc-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |
 | `ptc-blob` | The conformance suite of `BlobStore` |
+| `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields |
 | `ptc-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
 | `ptc-architecture-tests` | Dependency rules, telemetry rules included |
 

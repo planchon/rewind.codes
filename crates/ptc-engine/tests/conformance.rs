@@ -1,7 +1,9 @@
 //! The in-memory adapters pass the conformance suites of their ports: they are the reference
 //! implementations of the contracts.
 
-use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets};
+use ptc_engine::adapters::{
+    MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter,
+};
 use ptc_engine::conformance;
 
 #[tokio::test]
@@ -22,4 +24,9 @@ async fn memory_read_model_conforms() {
 #[tokio::test]
 async fn memory_secrets_conform() {
     conformance::secrets::run_all(MemorySecrets::new).await;
+}
+
+#[tokio::test]
+async fn memory_span_exporter_conforms() {
+    conformance::spans::run_all(MemorySpanExporter::new).await;
 }
