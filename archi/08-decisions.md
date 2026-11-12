@@ -475,3 +475,10 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | A tool's calls are counted from the MCP server's side: the toolset starts `server-everything` behind `sh -c 'tee -a "$MCP_CALL_LOG" \| npx …'`, so every JSON-RPC message it receives is in a file | Counting on the client's side; an MCP server of our own with a log | "Not repeated" has to be seen by the real server, and the reference server keeps no log of its own. |
 | The evals' criterion is proven with two scripted models (`scripted:<file>`), one right at the first try and one refused by the check then fixed, on the three renderings | Waiting for API keys | The report's shape and each measure are the harness's; only the numbers depend on the model. |
 
+
+### Taken while reviewing the core, the format and the engine (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| `retry_quarantined` hands a quarantined run of a tenant the worker does not serve back at once, without running it | Retrying every tenant's quarantined runs | A worker of one tenant's pool must never run another tenant's script. `acquire_quarantined` takes no tenants, so that build's retry of the run is spent; the port should take the worker's `TenantScope`, as `acquire_runnable` does (a change of the three stores). |
+| Giving up a run quarantined before its first commit commits its `run_started`, from the inbox, with `run_aborted` | `run_aborted` alone | A history always starts with `run_started`; a fork whose parent was erased fails before its first commit. |

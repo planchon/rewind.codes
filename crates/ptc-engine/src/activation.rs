@@ -95,6 +95,10 @@ where
     /// (`archi/03-execution.md`, "Non-determinism and quarantine"). A run whose replay matches
     /// again leaves quarantine and goes on; a replay that fails again commits nothing and
     /// leaves the run quarantined.
+    ///
+    /// A run of a tenant this worker does not serve is never activated here: its script must
+    /// not run outside its tenant's pool. `acquire_quarantined` does not filter by tenant, so
+    /// such a run is handed back at once.
     pub async fn retry_quarantined(&self) -> Result<Vec<ActivationReport>, EngineError> {
         let mut reports = Vec::new();
         while let Some(lease) = self
@@ -108,6 +112,14 @@ where
             )
             .await?
         {
+            if !self.config.tenants.contains(&lease.run.tenant) {
+                tracing::warn!(
+                    run = %lease.run,
+                    "a quarantined run of a tenant this worker does not serve: not retried"
+                );
+                self.journal.release(&lease).await?;
+                continue;
+            }
             let outcome = self.activate_leased(&lease, Purpose::QuarantineRetry).await;
             reports.push(ActivationReport {
                 run: lease.run,
