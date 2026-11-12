@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { renderApp, search } from "../test/app";
@@ -58,6 +58,20 @@ describe("RunsView", () => {
     expect(
       screen.getByRole("button", { name: "Remove the tool filter github.close_issue" }),
     ).toBeInTheDocument();
+  });
+
+  it("applies two changes made before the view renders again", async () => {
+    const { router } = renderApp("/runs?tool=github.close_issue&error=timeout");
+    await screen.findByRole("table");
+    // Both in one task: the second comes before the URL shows the first.
+    act(() => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Remove the tool filter github.close_issue" }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Remove the error filter timeout" }));
+    });
+    await waitFor(() => expect(search(router).toString()).toBe(""));
+    expect(screen.queryByRole("button", { name: /^Remove the / })).toBeNull();
   });
 
   it("refuses a label filter that is not key:value", async () => {

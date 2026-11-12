@@ -1544,6 +1544,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "evals"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "ptc-api",
+ "ptc-check",
+ "ptc-codegen",
+ "ptc-core",
+ "ptc-engine",
+ "ptc-mcp",
+ "ptc-runtime",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "event-listener"
 version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3723,6 +3747,26 @@ dependencies = [
 [[package]]
 name = "ptc-cli"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "libtest-mimic",
+ "ptc-api",
+ "ptc-check",
+ "ptc-codegen",
+ "ptc-core",
+ "ptc-engine",
+ "ptc-format",
+ "ptc-mcp",
+ "ptc-otel",
+ "ptc-runtime",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "ptc-codegen"
