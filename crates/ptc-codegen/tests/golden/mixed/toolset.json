@@ -1,0 +1,310 @@
+{
+  "description": "Every route: an MCP server with observed and unobserved content results, recursion, tuples, discriminated unions and clashing type names; host tools, bare and grouped, one observed; a bare host tool that cannot be imported; the built-ins.",
+  "servers": [
+    "crm"
+  ],
+  "tools": [
+    {
+      "name": "crm.lookup",
+      "route": "mcp",
+      "description": "Find a customer by id.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    {
+      "name": "crm.export",
+      "route": "mcp",
+      "description": "Export every customer as CSV.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      }
+    },
+    {
+      "name": "crm.tree",
+      "route": "mcp",
+      "description": "The organization chart below a node.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "filter": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "team"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "level"
+                  },
+                  "max": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          },
+          "item": {
+            "$ref": "#/$defs/Item"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "$defs": {
+          "Item": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "minItems": 2,
+            "items": false
+          },
+          "children": {
+            "type": "array",
+            "items": {
+              "$ref": "#"
+            }
+          },
+          "attributes": {
+            "type": "object",
+            "patternProperties": {
+              "^x-": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "item": {
+            "$ref": "#/$defs/Item"
+          }
+        },
+        "required": [
+          "name",
+          "children"
+        ],
+        "$defs": {
+          "Item": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "crm.update",
+      "route": "mcp",
+      "description": "Update a customer, by id or by email.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "fields": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "id"
+            ]
+          },
+          {
+            "required": [
+              "email"
+            ]
+          }
+        ],
+        "required": [
+          "fields"
+        ]
+      }
+    },
+    {
+      "name": "ask_user",
+      "route": "host",
+      "description": "Ask the end user a question and return their answer.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "question"
+        ]
+      }
+    },
+    {
+      "name": "harness.notify",
+      "route": "host",
+      "description": "Send a notification to the team.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "urgent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "delivered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "delivered"
+        ]
+      }
+    },
+    {
+      "name": "harness.log",
+      "route": "host",
+      "input": {}
+    },
+    {
+      "name": "not-importable",
+      "route": "host",
+      "input": {}
+    },
+    {
+      "name": "http",
+      "route": "http",
+      "hosts": [
+        "api.example.com",
+        "*.example.org"
+      ]
+    },
+    {
+      "name": "webhook",
+      "route": "webhook"
+    }
+  ],
+  "observed": {
+    "crm.lookup": [
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"name\":\"Ada\"}"
+          }
+        ],
+        "structuredContent": {
+          "name": "Ada",
+          "email": "ada@example.com"
+        }
+      },
+      {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"name\":\"Grace\"}"
+          }
+        ],
+        "structuredContent": {
+          "name": "Grace",
+          "vip": true
+        }
+      }
+    ],
+    "ask_user": [
+      {
+        "answer": "yes",
+        "at": 1700000000000
+      },
+      {
+        "answer": "no"
+      }
+    ]
+  }
+}

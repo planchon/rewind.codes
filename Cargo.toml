@@ -12,9 +12,11 @@ publish = false
 ptc-api = { path = "crates/ptc-api" }
 ptc-blob = { path = "crates/ptc-blob" }
 ptc-check = { path = "crates/ptc-check" }
+ptc-codegen = { path = "crates/ptc-codegen" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
+ptc-mcp = { path = "crates/ptc-mcp" }
 ptc-runtime = { path = "crates/ptc-runtime" }
 
 axum = "0.8"
@@ -40,12 +42,16 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 # messages reach scripts, so a new version is a change of the determinism epoch. No default
 # features: a schema never loads a remote or local `$ref`.
 jsonschema = { version = "=0.61.1", default-features = false }
+# Test harness of ptc-mcp's integration tests, whose binary is also the stdio fixture server.
+libtest-mimic = "0.8"
 # The S3 backend of ptc-blob, without the local-file backend (ptc-blob writes its own files).
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
 # The workers' blob cache in ptc-blob: concurrent, bounded by weight (bytes).
 quick_cache = "0.7"
 # The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
+# The MCP SDK: clients in ptc-mcp, servers in its tests.
+rmcp = { version = "3.9", default-features = false }
 # The CPU clock of the isolate's thread (`CLOCK_THREAD_CPUTIME_ID`), without unsafe code.
 rustix = { version = "1", default-features = false, features = ["std"] }
 ryu-js = "1"
@@ -61,7 +67,9 @@ tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
+tokio-util = "0.7"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
 # ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
