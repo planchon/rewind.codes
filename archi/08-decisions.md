@@ -82,6 +82,17 @@ Answers to the questions raised once the layering was done.
 | **Out of 0.1** | `ptc replay --inspect`; `continueAsNew` (a run that reaches the history cap of 50k entries is aborted with `limit_exceeded`; closes question 6); a columnar read model; sharding over several Postgres clusters. |
 | **Type-checking uses tsgo (TypeScript 7), driven as a CLI** | TypeScript 7.0 has no programmatic API. The tsgo binary is embedded in the `ptc` binary and extracted to a cache directory at first launch, so ai-ptc stays a single binary. The checker's own rules run on the swc syntax tree that start already parses: syntactic, and slightly less precise than rules based on types ([tools](04-tools.md#type-checking)). |
 
+### Taken for the dashboard's debugger and search (November 2026)
+
+| Decision | Notes |
+| --- | --- |
+| **The debugger is a time cursor on the Run page** | At the last step it is the Run page as before; stepping back changes what the source, the notes and the timeline show. Not a separate page ([05](05-testing-and-observability.md#dashboard)). |
+| **A hover shows only what crossed the journal** | Inputs, arguments, results, signal payloads, the output, and the variables bound directly to an awaited call. No replay debugger evaluating any expression: it would be an endpoint that executes code, which a `reader` key should not reach. |
+| **A label is written `@key:value` in a query** | Short, and never confused with a field as fields are added ([05](05-testing-and-observability.md#query-language)). |
+| **A query is terms joined by "and", "or" inside a term, "not" per term** | No parentheses and no "or" between terms: each term is a typed predicate that an index serves. |
+| **Free text searches error messages, scripts' first lines, label values and run ids** | Logs and payloads are never indexed: payloads may hold sensitive data, and the spec already keeps their values out of OpenTelemetry. |
+| **Saved searches are kept in the browser** | The dashboard keeps sending only `GET`, so a `reader` key is enough. |
+
 ## Architecture (approved for 0.1)
 
 | Decision | Why |
@@ -597,3 +608,17 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Under gVisor, `check-walls.sh` checks from `walls`, a gVisor sandbox with the workers' runtime and `resolv.conf` (`x-gvisor`) in a holder of its own, both started for the check and removed after; it picks by the runtime of the worker in the holder's namespace, and checks from the holder under runc as before | Checking from the holder; probing from the worker's sandbox | The sandbox took the holder's addresses, so its checks failed, and nothing else can run in that namespace. The worker's image has no tools, and should keep none. |
 | The previous epoch's pool under gVisor is the profile `previous-epoch-gvisor`, instead of `PTC_PREVIOUS_RUNTIME` | A runtime variable | A pool under gVisor also needs the relay and the wait for its holder, which a variable cannot add. |
 | CI loads the deployment a second time, with 100 KiB payloads | One load without payloads | Only payloads above 64 KiB reach S3: without them the workers' way to MinIO goes unchecked. |
+
+### Taken while designing the dashboard's debugger and search (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The projector folds the history it already loads into a snapshot of the run (status, open waits, how it ended), and the read model keeps the one with the highest history length | Folding entries into the read model one by one; a query that reads journals | A wait opens and closes across entries, which a read model applying items in any order cannot fold. The history is already in memory. |
+| A task's state reaches the read model from whoever changes it (claims, deferral, approval, parking, renewed credentials), read back from the store; each call keeps its furthest state, ordered by attempt, then approval or claim, parked or deferred, ready | Reading the tasks at query time; recording each transition with a time | The state machine of a task only moves forward in that order, so records can arrive in any order, as with attempts. Waiting runs can then be filtered and counted by approval, parked or deferred. |
+| The fingerprint is the first 16 hexadecimal digits of the SHA-256 of the signature: the error's name and message (an abort: its kind and message), with UUIDs, ISO times, hexadecimal ids of 8 digits and more, numbers and double-quoted strings replaced, whitespace collapsed, at most 200 characters. Single-quoted words are kept | Grouping by script; by message | Models write a new script for most conversations, so groups by script hold one run. V8 quotes property names in single quotes (`reading 'id'`), which tell failures apart. |
+| The query is parsed in `ptc-api` with `winnow`; `ptc-server` turns it into the engine's typed terms, resolving `now` with its clock | A parser per client; strings down to the adapters | One grammar and one set of errors for every client; the adapters receive predicates, never text to parse. |
+| Postgres keeps a lowercase `search_text` per run (first line, error, label values, id) with a `pg_trgm` index; Turso uses `LIKE` over the tenant's rows | Postgres full-text search | Text is matched as a substring, ids and fragments of words included, which full-text search does not do. `pg_trgm` is a trusted extension since Postgres 13. |
+| Turso's schema 1 and Postgres's migration 1 are changed in place | A schema 2 and a migration 2 | No database was written by a release. |
+| The dashboard's charts are SVG components like the timeline | A chart library | A few bars, lines and sparklines, in the dashboard's tokens and themes. |
+| Waiting and Overview poll every 10 seconds | A stream across runs | The event stream is per run; a tenant-wide stream would be a new contract for two views. |
+| The dashboard finds what a callsite points at with Lezer's syntax tree: the callee's name leads to its call expression, the hover target, and to the declaration that binds its result | Positions recorded by the runtime | Each entry already records the callee's position; Lezer is already bundled for highlighting. |

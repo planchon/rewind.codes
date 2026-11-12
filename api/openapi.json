@@ -522,6 +522,44 @@
           }
         ]
       },
+      "DurationStats": {
+        "description": "Nearest-rank percentiles, in milliseconds.",
+        "properties": {
+          "count": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p50": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p95": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "p99": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "p50",
+          "p95",
+          "p99",
+          "max"
+        ],
+        "type": "object"
+      },
       "Entry": {
         "description": "One journal entry.",
         "properties": {
@@ -996,6 +1034,84 @@
         ],
         "type": "object"
       },
+      "FacetValue": {
+        "properties": {
+          "runs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "runs"
+        ],
+        "type": "object"
+      },
+      "Facets": {
+        "description": "The most frequent values among the runs, most frequent first: what to suggest in a query\nbar, and the counts beside a list.",
+        "properties": {
+          "errors": {
+            "description": "Errors the runs ended with (names and abort kinds), and kinds their calls failed with.",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "labels": {
+            "description": "The most frequent label keys, each with its most frequent values.",
+            "items": {
+              "$ref": "#/components/schemas/LabelFacet"
+            },
+            "type": "array"
+          },
+          "scripts": {
+            "description": "Script digests.",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "signals": {
+            "description": "Signals waited for.",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "statuses": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "statuses",
+          "labels",
+          "tools",
+          "errors",
+          "scripts",
+          "waiting",
+          "signals"
+        ],
+        "type": "object"
+      },
       "FailTask": {
         "additionalProperties": false,
         "description": "`POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the\nfailure is retryable and the tool's policy is `retry`: the call is then made again, with\nbackoff.",
@@ -1049,6 +1165,149 @@
           "tool",
           "args",
           "error"
+        ],
+        "type": "object"
+      },
+      "FailureGroup": {
+        "description": "The runs that ended the same way: the same error name, and the same message once numbers,\nids, times and double-quoted strings are set aside.",
+        "properties": {
+          "error": {
+            "description": "The error's name, or the abort's kind.",
+            "type": "string"
+          },
+          "fingerprint": {
+            "description": "16 hexadecimal digits: `fingerprint:` in a query.",
+            "type": "string"
+          },
+          "firstEndedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "labels": {
+            "description": "Its runs' most frequent labels, as `key:value`.",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "lastEndedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/FailureSample",
+            "description": "The run that ended last."
+          },
+          "line": {
+            "description": "The line of `script.ts` most of its runs ended at.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "runs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scripts": {
+            "description": "Distinct scripts.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "series": {
+            "description": "One count per bucket from `since`: the runs that ended in it.",
+            "items": {
+              "format": "int64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "signature": {
+            "description": "The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,\n`<str>`) where they vary.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fingerprint",
+          "signature",
+          "error",
+          "runs",
+          "scripts",
+          "firstEndedAt",
+          "lastEndedAt",
+          "labels",
+          "latest"
+        ],
+        "type": "object"
+      },
+      "FailureGroupPage": {
+        "properties": {
+          "bucket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "groups": {
+            "description": "The most runs first, then the latest ending first.",
+            "items": {
+              "$ref": "#/components/schemas/FailureGroup"
+            },
+            "type": "array"
+          },
+          "runs": {
+            "description": "Runs in every group.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "since": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalGroups": {
+            "description": "Groups in all, beyond `limit` included.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "until",
+          "runs",
+          "totalGroups",
+          "groups"
+        ],
+        "type": "object"
+      },
+      "FailureSample": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "message"
         ],
         "type": "object"
       },
@@ -1258,6 +1517,31 @@
           "tenant",
           "role",
           "allowedLabels"
+        ],
+        "type": "object"
+      },
+      "LabelFacet": {
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "runs": {
+            "description": "Runs carrying the key.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "runs",
+          "values"
         ],
         "type": "object"
       },
@@ -1517,6 +1801,17 @@
               "null"
             ]
           },
+          "query": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QuerySpan",
+                "description": "With `invalid-query`: where the term at fault is in the query."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "description": "The HTTP status code.",
             "format": "int32",
@@ -1563,6 +1858,26 @@
           "repeated_failures"
         ],
         "type": "string"
+      },
+      "QuerySpan": {
+        "description": "A position in a query, in characters (Unicode scalar values) from 0, `end` excluded.",
+        "properties": {
+          "end": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "type": "object"
       },
       "RejectTask": {
         "additionalProperties": false,
@@ -1899,6 +2214,76 @@
         ],
         "type": "object"
       },
+      "RunStats": {
+        "description": "The runs a query matches. Counts, series, durations and facets are over the runs started\nin the window; `waiting` and `quarantined` are over the runs that match the query now,\nwhenever they started.",
+        "properties": {
+          "bucket": {
+            "description": "The width of the series' buckets, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "durations": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DurationStats",
+                "description": "From start to end, in milliseconds, over the runs that ended."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "facets": {
+            "$ref": "#/components/schemas/Facets"
+          },
+          "quarantined": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "runs": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "series": {
+            "description": "One bucket per `bucket` from `since`, the runs started in it by status.",
+            "items": {
+              "$ref": "#/components/schemas/SeriesBucket"
+            },
+            "type": "array"
+          },
+          "since": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "statuses": {
+            "$ref": "#/components/schemas/StatusCounts"
+          },
+          "until": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/WaitCounts",
+            "description": "Waiting runs by what they wait for; a run waiting for several kinds counts in each."
+          }
+        },
+        "required": [
+          "until",
+          "runs",
+          "statuses",
+          "waiting",
+          "quarantined",
+          "facets"
+        ],
+        "type": "object"
+      },
       "RunStatus": {
         "description": "The status of a run, a function of its journal (`archi/02-journal.md`, \"Run state\").\nQuarantine is not a status: see `Run.quarantine`.",
         "enum": [
@@ -1928,11 +2313,34 @@
               "null"
             ]
           },
+          "errorLine": {
+            "description": "With `error`: the innermost line of `script.ts` in the error's stack, if any.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "errorMessage": {
+            "description": "With `error`: the error's or the abort's message.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "errors": {
             "description": "Tool calls that failed.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
+          },
+          "fingerprint": {
+            "description": "With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "headline": {
             "description": "The first line of the script that is not blank, for display.",
@@ -1979,6 +2387,21 @@
           },
           "toolset": {
             "type": "string"
+          },
+          "waitingFor": {
+            "description": "With `active`: what the run waits for.",
+            "items": {
+              "$ref": "#/components/schemas/RunWait"
+            },
+            "type": "array"
+          },
+          "wakesAt": {
+            "description": "With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -1994,6 +2417,58 @@
           "toolCalls",
           "errors",
           "historyLen"
+        ],
+        "type": "object"
+      },
+      "RunWait": {
+        "description": "Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`).",
+        "properties": {
+          "callsite": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Callsite"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WaitKind"
+          },
+          "name": {
+            "description": "The signal's name, or the call's tool.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seq": {
+            "description": "The timer's or the call's seq.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "since": {
+            "description": "When the wait began.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "until": {
+            "description": "When the wait ends by itself: a timer's due time, a signal's timeout.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "since"
         ],
         "type": "object"
       },
@@ -2162,6 +2637,23 @@
           "lastRunAt",
           "runs",
           "tools"
+        ],
+        "type": "object"
+      },
+      "SeriesBucket": {
+        "properties": {
+          "at": {
+            "description": "The bucket's start.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "statuses": {
+            "$ref": "#/components/schemas/StatusCounts"
+          }
+        },
+        "required": [
+          "at",
+          "statuses"
         ],
         "type": "object"
       },
@@ -2378,6 +2870,49 @@
         },
         "required": [
           "script"
+        ],
+        "type": "object"
+      },
+      "StatusCounts": {
+        "properties": {
+          "aborted": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "active": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cancelled": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "completed": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "failed": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pending": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pending",
+          "active",
+          "completed",
+          "failed",
+          "cancelled",
+          "aborted"
         ],
         "type": "object"
       },
@@ -3094,6 +3629,68 @@
       "TraceFormat": {
         "enum": [
           "llm"
+        ],
+        "type": "string"
+      },
+      "WaitCounts": {
+        "properties": {
+          "approval": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "call": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "deferred": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "host": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "parked": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "signal": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timer": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "signal",
+          "timer",
+          "call",
+          "host",
+          "approval",
+          "parked",
+          "deferred"
+        ],
+        "type": "object"
+      },
+      "WaitKind": {
+        "description": "What a waiting run waits for (`archi/05-testing-and-observability.md`, \"Read model\").",
+        "enum": [
+          "signal",
+          "timer",
+          "call",
+          "host",
+          "approval",
+          "parked",
+          "deferred"
         ],
         "type": "string"
       },
@@ -3929,6 +4526,30 @@
         "operationId": "listRuns",
         "parameters": [
           {
+            "description": "A query (`archi/05-testing-and-observability.md`, \"Query language\"): terms separated by\nspaces, all of which must hold, as `@agent:triage status:failed,aborted -@env:test\n\"rate limit\"`. Joined to the other parameters by \"and\". A query that cannot be read is\nrefused with `invalid-query`, which says where the term at fault is.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`started` by default.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "description": "The order of `GET /v1/runs`.",
+              "enum": [
+                "started",
+                "activity",
+                "wakes"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "in": "query",
             "name": "status",
             "required": false,
@@ -4052,7 +4673,7 @@
                 }
               }
             },
-            "description": "A page of runs, most recently started first."
+            "description": "A page of runs, in the order of `sort`."
           },
           "400": {
             "content": {
@@ -4062,7 +4683,7 @@
                 }
               }
             },
-            "description": "The request is malformed (`invalid-request`)."
+            "description": "`q` cannot be read (`invalid-query`, with `query`), or another parameter is invalid."
           },
           "401": {
             "content": {
@@ -4250,6 +4871,252 @@
           }
         },
         "summary": "Start a run (`run_script`)",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/failures": {
+      "get": {
+        "description": "The failed, cancelled and aborted runs a query matches, ended in the window, grouped\nby fingerprint: across scripts, the runs that ended with the same error.",
+        "operationId": "listRunFailures",
+        "parameters": [
+          {
+            "description": "A query, as in `GET /v1/runs`.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs ended at or after this time. No lower bound by default.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs ended before this time. Now by default.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The width of each group's series' buckets, from `since`, which it requires; 500\nbuckets at most.",
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Groups at most (50 by default, 500 at most).",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureGroupPage"
+                }
+              }
+            },
+            "description": "The groups, the largest first."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Failures grouped by cause",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/stats": {
+      "get": {
+        "description": "Counts by status, a series over time, durations and facets of the runs started in the\nwindow; the runs waiting now by what they wait for, and the quarantined ones.",
+        "operationId": "getRunStats",
+        "parameters": [
+          {
+            "description": "A query, as in `GET /v1/runs`.",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs started at or after this time. No lower bound by default.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs started before this time. Now by default.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The width of the series' buckets (`\"1h\"`), from `since`, which it requires; 500 buckets\nat most. No series without it.",
+            "in": "query",
+            "name": "bucket",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Values per facet (10 by default, 50 at most).",
+            "in": "query",
+            "name": "top",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStats"
+                }
+              }
+            },
+            "description": "The statistics."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Statistics of the runs a query matches",
         "tags": [
           "runs"
         ]

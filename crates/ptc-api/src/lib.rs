@@ -9,6 +9,7 @@
 //!   table: [`toolsets`], [`scripts`], [`runs`] (with [`events`], the journal entries and the
 //!   event stream), [`tasks`], [`webhooks`], [`reading`] and [`admin`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
+//! - the query language of the run lists ([`query`]);
 //! - the headers ([`headers`]): the API key, `Idempotency-Key`, the webhook signature;
 //! - the paths ([`routes`]);
 //! - the OpenAPI 3.1 document generated from the DTOs ([`openapi`]), committed at
@@ -34,6 +35,7 @@ pub mod events;
 pub mod headers;
 pub mod openapi;
 pub mod problem;
+pub mod query;
 pub mod reading;
 pub mod routes;
 pub mod runs;

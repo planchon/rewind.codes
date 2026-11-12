@@ -14,6 +14,7 @@ use crate::common::{
     AbortReason, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus, Timestamp,
     ToolFailure,
 };
+pub use crate::query::WaitKind;
 use crate::tasks::{ParkedReason, TaskState};
 use crate::toolsets::Credentials;
 
@@ -280,12 +281,22 @@ pub struct GetRunQuery {
     pub wait: Option<Duration>,
 }
 
-/// `GET /v1/runs`: runs, most recently started first. A key limited to labels only sees runs
-/// carrying them.
+/// `GET /v1/runs`: runs, most recently started first unless `sort` says otherwise. A key
+/// limited to labels only sees runs carrying them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct RunFilter {
+    /// A query (`archi/05-testing-and-observability.md`, "Query language"): terms separated by
+    /// spaces, all of which must hold, as `@agent:triage status:failed,aborted -@env:test
+    /// "rate limit"`. Joined to the other parameters by "and". A query that cannot be read is
+    /// refused with `invalid-query`, which says where the term at fault is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// `started` by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(inline)]
+    pub sort: Option<RunSort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(inline)]
     pub status: Option<RunStatus>,
@@ -337,6 +348,30 @@ pub struct RunPage {
     pub next_cursor: Option<String>,
 }
 
+/// The order of `GET /v1/runs`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunSort {
+    /// The most recently started first.
+    #[default]
+    Started,
+    /// The most recent activity first.
+    Activity,
+    /// The soonest to wake by itself first (a timer, a signal's timeout); the runs that do not
+    /// wake by themselves last.
+    Wakes,
+}
+
+impl RunSort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunSort::Started => "started",
+            RunSort::Activity => "activity",
+            RunSort::Wakes => "wakes",
+        }
+    }
+}
+
 /// A run in a list, from the read model.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -360,8 +395,253 @@ pub struct RunSummary {
     /// With `failed` or `cancelled`: the error's name. With `aborted`: the abort's kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// With `error`: the error's or the abort's message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_message: Option<String>,
+    /// With `error`: the innermost line of `script.ts` in the error's stack, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_line: Option<u32>,
+    /// With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    /// With `active`: what the run waits for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_for: Vec<RunWait>,
+    /// With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wakes_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+}
+
+/// Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunWait {
+    pub kind: WaitKind,
+    /// The timer's or the call's seq.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u32>,
+    /// The signal's name, or the call's tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// When the wait began.
+    pub since: Timestamp,
+    /// When the wait ends by itself: a timer's due time, a signal's timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub callsite: Option<Callsite>,
+}
+
+/// `GET /v1/runs/stats`: the runs a query matches, started in a window.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct RunStatsQuery {
+    /// A query, as in `GET /v1/runs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// Runs started at or after this time. No lower bound by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub since: Option<Timestamp>,
+    /// Runs started before this time. Now by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub until: Option<Timestamp>,
+    /// The width of the series' buckets (`"1h"`), from `since`, which it requires; 500 buckets
+    /// at most. No series without it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>)]
+    pub bucket: Option<Duration>,
+    /// Values per facet (10 by default, 50 at most).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top: Option<u32>,
+}
+
+/// The runs a query matches. Counts, series, durations and facets are over the runs started
+/// in the window; `waiting` and `quarantined` are over the runs that match the query now,
+/// whenever they started.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunStats {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<Timestamp>,
+    pub until: Timestamp,
+    /// The width of the series' buckets, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub bucket: Option<Duration>,
+    pub runs: u64,
+    pub statuses: StatusCounts,
+    /// One bucket per `bucket` from `since`, the runs started in it by status.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<SeriesBucket>,
+    /// From start to end, in milliseconds, over the runs that ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub durations: Option<DurationStats>,
+    /// Waiting runs by what they wait for; a run waiting for several kinds counts in each.
+    pub waiting: WaitCounts,
+    pub quarantined: u64,
+    pub facets: Facets,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusCounts {
+    pub pending: u64,
+    pub active: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub cancelled: u64,
+    pub aborted: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitCounts {
+    pub signal: u64,
+    pub timer: u64,
+    pub call: u64,
+    pub host: u64,
+    pub approval: u64,
+    pub parked: u64,
+    pub deferred: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SeriesBucket {
+    /// The bucket's start.
+    pub at: Timestamp,
+    pub statuses: StatusCounts,
+}
+
+/// Nearest-rank percentiles, in milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DurationStats {
+    pub count: u64,
+    pub p50: u64,
+    pub p95: u64,
+    pub p99: u64,
+    pub max: u64,
+}
+
+/// The most frequent values among the runs, most frequent first: what to suggest in a query
+/// bar, and the counts beside a list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Facets {
+    pub statuses: Vec<FacetValue>,
+    /// The most frequent label keys, each with its most frequent values.
+    pub labels: Vec<LabelFacet>,
+    pub tools: Vec<FacetValue>,
+    /// Errors the runs ended with (names and abort kinds), and kinds their calls failed with.
+    pub errors: Vec<FacetValue>,
+    /// Script digests.
+    pub scripts: Vec<FacetValue>,
+    pub waiting: Vec<FacetValue>,
+    /// Signals waited for.
+    pub signals: Vec<FacetValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FacetValue {
+    pub value: String,
+    pub runs: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelFacet {
+    pub key: String,
+    /// Runs carrying the key.
+    pub runs: u64,
+    pub values: Vec<FacetValue>,
+}
+
+/// `GET /v1/runs/failures`: the failed, cancelled and aborted runs a query matches, ended in a
+/// window, grouped by fingerprint.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct FailureQuery {
+    /// A query, as in `GET /v1/runs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// Runs ended at or after this time. No lower bound by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub since: Option<Timestamp>,
+    /// Runs ended before this time. Now by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub until: Option<Timestamp>,
+    /// The width of each group's series' buckets, from `since`, which it requires; 500
+    /// buckets at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>)]
+    pub bucket: Option<Duration>,
+    /// Groups at most (50 by default, 500 at most).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureGroupPage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<Timestamp>,
+    pub until: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<String>)]
+    pub bucket: Option<Duration>,
+    /// Runs in every group.
+    pub runs: u64,
+    /// Groups in all, beyond `limit` included.
+    pub total_groups: u64,
+    /// The most runs first, then the latest ending first.
+    pub groups: Vec<FailureGroup>,
+}
+
+/// The runs that ended the same way: the same error name, and the same message once numbers,
+/// ids, times and double-quoted strings are set aside.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureGroup {
+    /// 16 hexadecimal digits: `fingerprint:` in a query.
+    pub fingerprint: String,
+    /// The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,
+    /// `<str>`) where they vary.
+    pub signature: String,
+    /// The error's name, or the abort's kind.
+    pub error: String,
+    pub runs: u64,
+    /// One count per bucket from `since`: the runs that ended in it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub series: Vec<u64>,
+    /// Distinct scripts.
+    pub scripts: u64,
+    pub first_ended_at: Timestamp,
+    pub last_ended_at: Timestamp,
+    /// The line of `script.ts` most of its runs ended at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// Its runs' most frequent labels, as `key:value`.
+    pub labels: Vec<FacetValue>,
+    /// The run that ended last.
+    pub latest: FailureSample,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FailureSample {
+    pub id: String,
+    pub status: RunStatus,
+    pub message: String,
 }
 
 /// `POST /v1/runs/{id}/signals/{name}`: the signal was put in the run's mailbox.

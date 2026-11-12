@@ -15,6 +15,8 @@ pub const SCRIPTS: &str = "/v1/scripts";
 pub const SCRIPT: &str = "/v1/scripts/{digest}";
 
 pub const RUNS: &str = "/v1/runs";
+pub const RUN_STATS: &str = "/v1/runs/stats";
+pub const RUN_FAILURES: &str = "/v1/runs/failures";
 pub const RUN: &str = "/v1/runs/{id}";
 pub const RUN_TRACE: &str = "/v1/runs/{id}/trace";
 pub const RUN_ENTRY: &str = "/v1/runs/{id}/entries/{idx}";
@@ -49,7 +51,7 @@ pub const SERVER: &str = "/v1/server";
 pub const SERVER_STOP: &str = "/v1/server/stop";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 41] = [
+pub const OPERATIONS: [(&str, &str); 43] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -61,6 +63,8 @@ pub const OPERATIONS: [(&str, &str); 41] = [
     ("GET", SCRIPT),
     ("POST", RUNS),
     ("GET", RUNS),
+    ("GET", RUN_STATS),
+    ("GET", RUN_FAILURES),
     ("GET", RUN),
     ("DELETE", RUN),
     ("GET", RUN_TRACE),

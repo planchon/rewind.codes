@@ -42,7 +42,7 @@ change of the API shows in its diff.
 | Authentication | `Authorization: Bearer ptc_sk_…` on every request; none over the embedded server's socket (`.ptc/server.sock`) or to `POST /hooks/{token}` |
 | JSON | camelCase fields, snake_case enumerated values, RFC 3339 times, durations `"30s"`, `"1h30m"` or a number of milliseconds |
 | Idempotency | `Idempotency-Key` on `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}` |
-| Errors | `application/problem+json`: `type` is `urn:ptc:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics` |
+| Errors | `application/problem+json`: `type` is `urn:ptc:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics`, `invalid-query` adds `query` |
 | Query strings | lists repeat their key: `?label=agent:triage&label=conversation:c-42`, `?tool=a&tool=b` |
 | Event stream | `GET /v1/runs/{id}/events` is server-sent events: `event` is the `type` of the `StreamEvent` in `data`, `id` is the entry's index |
 | Payloads | `{ digest, bytes, preview, value? }`; `value` is left out above 256 KiB, read it with `GET /v1/payloads/{digest}?run=<id>` (`run` is required with a key limited to labels) |
@@ -53,6 +53,7 @@ The problem types:
 | Slug | Status | When |
 | --- | --- | --- |
 | `invalid-request` | 400 | A missing or invalid field, header or parameter; a webhook URL the server does not send to |
+| `invalid-query` | 400 | A query (`q`) that cannot be read; `query` gives the position of the term at fault |
 | `unauthorized` | 401 | No API key, or an unknown or revoked one |
 | `forbidden` | 403 | The key's role or allowed labels do not cover the request |
 | `not-found` | 404 | No such run, toolset, script, task, payload, subscription or key |

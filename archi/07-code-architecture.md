@@ -266,13 +266,18 @@ Contracts, all covered by the conformance suite:
   Diagnostics are written for a model, with a location in `script.ts`, a severity, their source
   (a TypeScript code or one of the checker's own rules), a hint and a code frame
   ([type-checking](04-tools.md#type-checking)).
-- **`ReadModel`**: `apply(run, entries)`, idempotent and order-independent, keyed by `(run,
-  index)`. `search_runs(search)`, `scripts(filter)`, `tool_stats(filter)`,
-  `observed_shapes(tenant, tools)`. `record_attempt(run, seq, attempt)` keeps the highest
-  attempt of a call, recorded by whoever claims its task (attempts are not in the journal), and
-  `attempts(run)` reads them back; they give `tool_stats` its retries. `purge(ended_before,
-  tenants)` and `delete_run(run)` serve
-  [retention](06-storage-and-scale.md#retention-and-deletion).
+- **`ReadModel`**: `apply(run, entries, snapshot)`, idempotent and order-independent, keyed by
+  `(run, index)`; of the snapshots of a run, the one with the highest history length wins
+  ([read model](05-testing-and-observability.md#read-model)). `search_runs(query, order,
+  page)` takes the typed terms of the [query language](05-testing-and-observability.md#query-language)
+  (each negatable, all joined by "and"), `run_stats(query, window)` the counts, series,
+  durations and facets of the runs a query matches, `failure_groups(query, window)` its runs
+  grouped by fingerprint; `scripts(filter)`, `tool_stats(filter)`, `observed_shapes(tenant,
+  tools)`. Service state comes from whoever changes it: `record_tasks(run, tasks)` keeps the
+  furthest state of each call's task (its attempt, and whether it waits for an approval, is
+  parked or deferred), and `attempts(run)` reads the attempts back for `tool_stats`' retries;
+  `record_quarantine(run, quarantine, at)` keeps the latest. `purge(ended_before, tenants)`
+  and `delete_run(run)` serve [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
 - **`SecretStore`**: `put(tenant, owner, credentials)`, where the owner is a toolset or a
@@ -438,7 +443,9 @@ Conventions:
 | Scripts | `POST /v1/check` | Type-check only |
 | | `POST /v1/test` | Runs a scenario in mock mode, in virtual time |
 | Runs | `POST /v1/runs` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl` |
-| | `GET /v1/runs` | Lists runs, filtered by labels, status, tool |
+| | `GET /v1/runs` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
+| | `GET /v1/runs/stats` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
+| | `GET /v1/runs/failures` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
 | | `GET /v1/runs/{id}` | The run's state |
 | | `GET /v1/runs/{id}/trace?format=llm` | The LLM trace |
 | | `GET /v1/runs/{id}/entries/{idx}` | One journal entry in full |

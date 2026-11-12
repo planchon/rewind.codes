@@ -80,17 +80,17 @@ The five were approved in November 2026.
 | Workstream | Crates | What remains | Depends on (contracts) |
 | --- | --- | --- | --- |
 | Domain and format | `ptc-core`, `ptc-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
-| Engine | `ptc-engine` | Nothing beyond what `ptc-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
+| Engine | `ptc-engine` | The read model of the debugger and search: snapshots, fingerprints, the typed query, stats and failure groups, task states and quarantine, in the port, the in-memory adapter and the conformance suite | Engine ports, stored format v1, pinned toolset |
 | Runtime (V8) | `ptc-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
-| Stores | `ptc-store-turso`, `ptc-store-postgres` | Nothing: both pass every conformance suite | Engine ports, stored format v1 |
+| Stores | `ptc-store-turso`, `ptc-store-postgres` | The read model of the debugger and search: `run_labels`, `run_waits`, the new columns, the query, stats and failure groups | Engine ports, stored format v1 |
 | Blobs | `ptc-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `ptc-codegen`, `ptc-mcp` | `ptc-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `ptc-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `ptc-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `ptc-otel` | Nothing beyond what `ptc-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `ptc-server`, `ptc-api` | Nothing | Engine ports, HTTP API `/v1` |
+| Server | `ptc-server`, `ptc-api` | The query language and `invalid-query`; `q` and `sort` on `GET /v1/runs`, `GET /v1/runs/stats`, `GET /v1/runs/failures`; task states and quarantine recorded in the read model | Engine ports, HTTP API `/v1` |
 | CLI | `ptc-cli` | Client of the embedded or a remote server, through `ptc-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
-| Dashboard | `dashboard` | Scripts, Runs, Run and Tools views over the public API | HTTP API `/v1` |
+| Dashboard | `dashboard` | Overview, Waiting and Failures; the query bar and facets on Runs; the time cursor, hovers and watches on Run | HTTP API `/v1` |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Operations | `Dockerfile`, `deploy/`, CI, `ptc-load` | Nothing | Engine ports, HTTP API `/v1` |
 
@@ -119,6 +119,8 @@ specified.
   ([04](04-tools.md#toolsets-and-code-generation)).
 - **The dashboard**: a React SPA served by `ptc-server`
   ([05](05-testing-and-observability.md#dashboard)).
+- **The dashboard's debugger and search**: the time cursor, the waiting runs, failure groups,
+  the query language ([05](05-testing-and-observability.md#query-language)).
 - **Evals**: the models, run on demand ([05](05-testing-and-observability.md#evals)).
 
 ## Out of 0.1
@@ -143,7 +145,8 @@ specified.
   with a corrected script without repeating its recorded calls.
 - Load tests and limit tests pass.
 - An operator finds any run by label, tool or error in the dashboard, and sees its code next
-  to its trace.
+  to its trace. They step through a run, see the runs that wait and what for, and the
+  failures grouped by cause.
 
 ### Acceptance status (November 2026)
 

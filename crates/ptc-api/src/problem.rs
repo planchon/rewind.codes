@@ -9,6 +9,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::query::{QueryError, QuerySpan};
 use crate::scripts::Diagnostic;
 
 /// The media type of every error response.
@@ -19,6 +20,8 @@ pub const CONTENT_TYPE: &str = "application/problem+json";
 pub enum ProblemType {
     /// 400: the request is malformed: a missing or invalid field, header or parameter.
     InvalidRequest,
+    /// 400: a query (`q`) cannot be read; `query` says where the term at fault is.
+    InvalidQuery,
     /// 401: no API key, or an unknown or revoked one.
     Unauthorized,
     /// 403: the key's role or its allowed labels do not cover this request.
@@ -55,8 +58,9 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 16] = [
+    pub const ALL: [ProblemType; 17] = [
         ProblemType::InvalidRequest,
+        ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
         ProblemType::Forbidden,
         ProblemType::NotFound,
@@ -78,6 +82,7 @@ impl ProblemType {
     pub fn uri(self) -> &'static str {
         match self {
             ProblemType::InvalidRequest => "urn:ptc:problem:invalid-request",
+            ProblemType::InvalidQuery => "urn:ptc:problem:invalid-query",
             ProblemType::Unauthorized => "urn:ptc:problem:unauthorized",
             ProblemType::Forbidden => "urn:ptc:problem:forbidden",
             ProblemType::NotFound => "urn:ptc:problem:not-found",
@@ -99,7 +104,7 @@ impl ProblemType {
     /// The HTTP status the API answers this problem with.
     pub fn status(self) -> u16 {
         match self {
-            ProblemType::InvalidRequest => 400,
+            ProblemType::InvalidRequest | ProblemType::InvalidQuery => 400,
             ProblemType::Unauthorized => 401,
             ProblemType::Forbidden => 403,
             ProblemType::NotFound => 404,
@@ -121,6 +126,7 @@ impl ProblemType {
     pub fn title(self) -> &'static str {
         match self {
             ProblemType::InvalidRequest => "Invalid request",
+            ProblemType::InvalidQuery => "The query cannot be read",
             ProblemType::Unauthorized => "Missing or invalid API key",
             ProblemType::Forbidden => "Not allowed for this API key",
             ProblemType::NotFound => "Not found",
@@ -174,6 +180,9 @@ pub struct Problem {
     /// With `invalid-script`: why the script was refused, with locations in `script.ts`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Diagnostic>,
+    /// With `invalid-query`: where the term at fault is in the query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<QuerySpan>,
 }
 
 impl Problem {
@@ -185,6 +194,7 @@ impl Problem {
             detail: detail.into(),
             instance: None,
             diagnostics: Vec::new(),
+            query: None,
         }
     }
 
@@ -196,6 +206,19 @@ impl Problem {
     pub fn with_diagnostics(mut self, diagnostics: Vec<Diagnostic>) -> Self {
         self.diagnostics = diagnostics;
         self
+    }
+
+    /// The `invalid-query` problem of a query that cannot be read.
+    pub fn invalid_query(error: &QueryError) -> Self {
+        let mut problem = Self::new(
+            ProblemType::InvalidQuery,
+            format!(
+                "q: {} (characters {} to {} of the query)",
+                error.message, error.span.start, error.span.end
+            ),
+        );
+        problem.query = Some(error.span);
+        problem
     }
 
     /// The kind of problem, if this build knows it.

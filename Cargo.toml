@@ -87,6 +87,7 @@ tokio-util = "0.7"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
+winnow = "1"
 # ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").

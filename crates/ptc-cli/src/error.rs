@@ -170,6 +170,7 @@ mod tests {
                 detail: "detail".into(),
                 instance: None,
                 diagnostics: Vec::new(),
+                query: None,
             }
             .into(),
         );
