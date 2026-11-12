@@ -1041,6 +1041,135 @@ async fn a_memory_bomb_exceeds_the_heap_limit() {
     assert!(message.contains("64 MiB of heap"), "{message}");
 }
 
+/// What a script emits is kept outside V8's heap until the call ends: a flood of logs, of tool
+/// arguments or of signal names is stopped once one trigger's response holds more than its
+/// bound, and nothing of it is recorded.
+#[tokio::test]
+async fn what_one_trigger_emits_is_bounded_in_bytes() {
+    let harness = harness_with(
+        SandboxLimits {
+            emitted_bytes_per_trigger: 4 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    for flood in [
+        "for (let i = 0; i < 100; i++) console.log(big);",
+        "for (let i = 0; i < 100; i++) void audit.record({ big });",
+        "for (let i = 0; i < 100; i++) void signal(big);",
+        "throw new Error(big + big + big + big + big);",
+        "return [big, big, big, big, big];",
+    ] {
+        let run = harness
+            .run(
+                &format!(
+                    "import {{ signal }} from \"ptc\";\nimport {{ audit }} from \"ptc:tools\";\n\
+                     export default async function main() {{\n  \
+                       const big = \"x\".repeat(1 << 20);\n  {flood}\n}}"
+                ),
+                json!({}),
+            )
+            .await;
+        let (kind, message) = run.abort();
+        assert_eq!(kind, AbortKind::LimitExceeded, "{flood}");
+        assert_eq!(
+            message,
+            "the script emitted more than 4 MiB of commands and logs reacting to one trigger",
+            "{flood}"
+        );
+        assert_eq!(run.events(), ["run_started", "run_aborted"], "{flood}");
+    }
+}
+
+#[tokio::test]
+async fn what_one_trigger_emits_is_bounded_in_number() {
+    let harness = harness_with(
+        SandboxLimits {
+            emitted_per_trigger: 100,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    let run = harness
+        .run(
+            "export default async function main() { for (;;) console.log(1); }",
+            json!({}),
+        )
+        .await;
+    let (kind, message) = run.abort();
+    assert_eq!(kind, AbortKind::LimitExceeded);
+    assert_eq!(
+        message,
+        "the script emitted more than 100 commands and logs reacting to one trigger"
+    );
+}
+
+/// A string longer than what is left is never copied out of V8: a rope of 2^27 characters
+/// would take 384 MiB as UTF-8.
+#[tokio::test]
+async fn a_long_string_is_refused_before_it_leaves_v8() {
+    let harness = harness();
+    let run = harness
+        .run(
+            "export default async function main() { let s = \"\u{20ac}\"; for (let i = 0; i < 27; i++) s += s; console.log(s); }",
+            json!({}),
+        )
+        .await;
+    let (kind, message) = run.abort();
+    assert_eq!(kind, AbortKind::LimitExceeded);
+    assert!(
+        message.contains("more than 64 MiB of commands and logs"),
+        "{message}"
+    );
+}
+
+/// The bound is per trigger: a run may emit more than it over several, and what its top-level
+/// code emits counts with `main(input)`'s response.
+#[tokio::test]
+async fn the_bound_on_what_is_emitted_is_per_trigger() {
+    let harness = harness_with(
+        SandboxLimits {
+            emitted_bytes_per_trigger: 4 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    let run = harness
+        .run(
+            r#"
+import { sleep } from "ptc";
+const big = "x".repeat(1 << 20);
+for (let i = 0; i < 2; i++) console.log(big);
+export default async function main() {
+  console.log(big);
+  await sleep(1000);
+  for (let i = 0; i < 3; i++) console.log(big);
+  return "done";
+}
+"#,
+            json!({}),
+        )
+        .await;
+    assert_eq!(run.output(), &json!("done"));
+
+    let run = harness
+        .run(
+            r#"
+const big = "x".repeat(1 << 20);
+for (let i = 0; i < 3; i++) console.log(big);
+export default async function main() {
+  console.log(big);
+  console.log(big);
+}
+"#,
+            json!({}),
+        )
+        .await;
+    let (kind, message) = run.abort();
+    assert_eq!(kind, AbortKind::LimitExceeded);
+    assert!(message.contains("more than 4 MiB"), "{message}");
+}
+
 // ---------------------------------------------------------------------------------------------
 // Boundaries
 

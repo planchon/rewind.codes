@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chacha20::ChaCha20;
 use chacha20::cipher::{KeyIvInit, StreamCipher};
-use deno_core::{OpState, extension, op2};
+use deno_core::{OpState, extension, op2, v8};
 use deno_error::JsErrorBox;
 use ptc_core::{
     Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId, ScriptError, Seed, Seq,
@@ -18,6 +18,8 @@ use ptc_core::{
 use ptc_engine::ports::Emitted;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
+
+use crate::isolate::SandboxLimits;
 
 /// The state of one isolate, kept in deno_core's `OpState`.
 pub(crate) struct ExecState {
@@ -28,6 +30,15 @@ pub(crate) struct ExecState {
     toolset: Toolset,
     next_seq: Option<Seq>,
     emitted: Vec<Emitted>,
+    /// The bytes of text `emitted` holds.
+    emitted_bytes: usize,
+    /// Bounds on `emitted`, which lives outside V8's heap until the call ends.
+    max_emitted: usize,
+    max_emitted_bytes: usize,
+    /// Why the execution was terminated, once the script emitted more than the bounds allow.
+    overflow: Option<String>,
+    /// Terminates the execution from an op.
+    isolate: Option<v8::IsolateHandle>,
     /// State of `Math.random` (sfc32), derived from the seed.
     math_random_state: [u32; 4],
     /// The keystream behind `crypto` (ChaCha20, RFC 8439), keyed by the seed.
@@ -50,6 +61,7 @@ impl ExecState {
             ])
         });
         let key = derive_key(b"ai-ptc/epoch-1/crypto", seed);
+        let limits = SandboxLimits::default();
         Self {
             now: started_at,
             started_at,
@@ -57,6 +69,11 @@ impl ExecState {
             toolset,
             next_seq: Some(Seq::FIRST),
             emitted: Vec::new(),
+            emitted_bytes: 0,
+            max_emitted: limits.emitted_per_trigger,
+            max_emitted_bytes: limits.emitted_bytes_per_trigger,
+            overflow: None,
+            isolate: None,
             math_random_state,
             crypto: ChaCha20::new(&key.into(), &[0u8; 12].into()),
             validators: BTreeMap::new(),
@@ -75,8 +92,67 @@ impl ExecState {
         })
     }
 
+    /// Bounds what the script may emit reacting to one trigger, in the isolate `isolate`.
+    pub(crate) fn bound(&mut self, limits: &SandboxLimits, isolate: v8::IsolateHandle) {
+        self.max_emitted = limits.emitted_per_trigger;
+        self.max_emitted_bytes = limits.emitted_bytes_per_trigger;
+        self.isolate = Some(isolate);
+    }
+
     pub(crate) fn take_emitted(&mut self) -> Vec<Emitted> {
+        self.emitted_bytes = 0;
         std::mem::take(&mut self.emitted)
+    }
+
+    /// Why the execution was terminated, if the script emitted more than the bounds allow.
+    pub(crate) fn overflow(&mut self) -> Option<String> {
+        self.overflow.clone()
+    }
+
+    /// Makes room for one more command or annotation carrying `bytes` of text. Past the bounds,
+    /// nothing more is kept and the execution is terminated: the call ends with a limit
+    /// exceeded, and whatever the script runs before the termination takes effect is dropped.
+    fn admit(&mut self, bytes: usize) -> bool {
+        if self.overflow.is_some() {
+            return false;
+        }
+        let total = self.emitted_bytes.saturating_add(bytes);
+        let exceeded = if self.emitted.len() >= self.max_emitted {
+            format!("{} commands and logs", self.max_emitted)
+        } else if total > self.max_emitted_bytes {
+            format!("{} of commands and logs", size(self.max_emitted_bytes))
+        } else {
+            self.emitted_bytes = total;
+            return true;
+        };
+        self.overflow = Some(format!(
+            "the script emitted more than {exceeded} reacting to one trigger"
+        ));
+        if let Some(isolate) = &self.isolate {
+            isolate.terminate_execution();
+        }
+        false
+    }
+
+    /// Copies strings out of V8 for one command or annotation, and admits it. Strings whose
+    /// UTF-16 length alone is above what is left are never copied: their UTF-8 form has at least
+    /// as many bytes, and a string built by concatenation can be far larger than the heap.
+    fn admit_strings<const N: usize>(
+        &mut self,
+        scope: &mut v8::PinScope,
+        strings: [v8::Local<v8::String>; N],
+    ) -> Option<[String; N]> {
+        let length = strings
+            .iter()
+            .fold(0usize, |sum, string| sum.saturating_add(string.length()));
+        let left = self.max_emitted_bytes.saturating_sub(self.emitted_bytes);
+        if length > left {
+            self.admit(length);
+            return None;
+        }
+        let strings = strings.map(|string| string.to_rust_string_lossy(scope));
+        let bytes = strings.iter().map(String::len).sum();
+        self.admit(bytes).then_some(strings)
     }
 
     fn take_seq(&mut self) -> Result<Seq, JsErrorBox> {
@@ -123,6 +199,16 @@ fn derive_key(domain: &[u8], seed: &Seed) -> [u8; 32] {
     hasher.update(domain);
     hasher.update(seed.as_bytes());
     hasher.finalize().into()
+}
+
+/// A number of bytes as a limit is written: in MiB when it is a whole number of them.
+fn size(bytes: usize) -> String {
+    const MIB: usize = 1024 * 1024;
+    if bytes > 0 && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 /// A tool's pinned input schema, compiled once per instance.
@@ -263,6 +349,10 @@ fn op_ptc_call_tool(
     column: u32,
 ) -> Result<u32, JsErrorBox> {
     let state = state.borrow_mut::<ExecState>();
+    // Before parsing: the arguments as values take more memory than as text.
+    if !state.admit(tool.len().saturating_add(args.len())) {
+        return Err(over_bound());
+    }
     let args = parse_json(args, "the arguments")?;
     state
         .check_call(tool, &args)
@@ -286,6 +376,9 @@ fn op_ptc_start_timer(
 ) -> Result<u32, JsErrorBox> {
     let duration = parse_script_duration(duration)?;
     let state = state.borrow_mut::<ExecState>();
+    if !state.admit(0) {
+        return Err(over_bound());
+    }
     let seq = state.take_seq()?;
     state.command(Command::StartTimer {
         seq,
@@ -296,18 +389,27 @@ fn op_ptc_start_timer(
     Ok(seq.0)
 }
 
-#[op2(fast)]
-fn op_ptc_cancel_timer(state: &mut OpState, seq: u32) {
-    state
-        .borrow_mut::<ExecState>()
-        .command(Command::CancelTimer { seq: Seq(seq) });
+/// The error of an op whose command was dropped: the execution is already terminating, so the
+/// script never sees it.
+fn over_bound() -> JsErrorBox {
+    JsErrorBox::range_error("the script emitted more than one trigger's response may hold")
 }
 
 #[op2(fast)]
+fn op_ptc_cancel_timer(state: &mut OpState, seq: u32) {
+    let state = state.borrow_mut::<ExecState>();
+    if state.admit(0) {
+        state.command(Command::CancelTimer { seq: Seq(seq) });
+    }
+}
+
+// Not a fast call: copying a string built by concatenation flattens it on the V8 heap.
+#[op2(nofast)]
 fn op_ptc_log(
+    scope: &mut v8::PinScope,
     state: &mut OpState,
     #[string] level: &str,
-    #[string] message: String,
+    message: v8::Local<v8::String>,
     line: u32,
     column: u32,
 ) {
@@ -317,56 +419,70 @@ fn op_ptc_log(
         "error" => LogLevel::Error,
         _ => LogLevel::Info,
     };
-    state.borrow_mut::<ExecState>().annotation(Annotation::Log {
-        level,
-        message,
-        callsite: callsite(line, column),
-    });
+    let state = state.borrow_mut::<ExecState>();
+    if let Some([message]) = state.admit_strings(scope, [message]) {
+        state.annotation(Annotation::Log {
+            level,
+            message,
+            callsite: callsite(line, column),
+        });
+    }
 }
 
+// Not a fast call: copying a string built by concatenation flattens it on the V8 heap.
 /// `timeout` is the `seq` of the timeout's timer, 0 for none.
-#[op2(fast)]
+#[op2(nofast)]
 fn op_ptc_signal_awaited(
+    scope: &mut v8::PinScope,
     state: &mut OpState,
-    #[string] name: String,
+    name: v8::Local<v8::String>,
     timeout: u32,
     line: u32,
     column: u32,
 ) {
-    state
-        .borrow_mut::<ExecState>()
-        .annotation(Annotation::SignalAwaited {
+    let state = state.borrow_mut::<ExecState>();
+    if let Some([name]) = state.admit_strings(scope, [name]) {
+        state.annotation(Annotation::SignalAwaited {
             name,
             timeout: (timeout > 0).then_some(Seq(timeout)),
             callsite: callsite(line, column),
         });
+    }
 }
 
 #[op2(fast)]
 fn op_ptc_complete(state: &mut OpState, #[string] output: &str) -> Result<(), JsErrorBox> {
+    let state = state.borrow_mut::<ExecState>();
+    // Before parsing: the output as a value takes more memory than as text.
+    if !state.admit(output.len()) {
+        return Err(over_bound());
+    }
     let output = parse_json(output, "the output of main")?;
-    state
-        .borrow_mut::<ExecState>()
-        .command(Command::CompleteRun {
-            output: Payload::Value(output),
-        });
+    state.command(Command::CompleteRun {
+        output: Payload::Value(output),
+    });
     Ok(())
 }
 
-#[op2(fast)]
+// Not a fast call: copying a string built by concatenation flattens it on the V8 heap.
+#[op2(nofast)]
 fn op_ptc_fail(
+    scope: &mut v8::PinScope,
     state: &mut OpState,
-    #[string] name: String,
-    #[string] message: String,
-    #[string] stack: String,
+    name: v8::Local<v8::String>,
+    message: v8::Local<v8::String>,
+    stack: v8::Local<v8::String>,
 ) {
-    state.borrow_mut::<ExecState>().command(Command::FailRun {
-        error: ScriptError {
-            name,
-            message,
-            stack: (!stack.is_empty()).then_some(stack),
-        },
-    });
+    let state = state.borrow_mut::<ExecState>();
+    if let Some([name, message, stack]) = state.admit_strings(scope, [name, message, stack]) {
+        state.command(Command::FailRun {
+            error: ScriptError {
+                name,
+                message,
+                stack: (!stack.is_empty()).then_some(stack),
+            },
+        });
+    }
 }
 
 extension!(
