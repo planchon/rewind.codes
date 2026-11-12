@@ -518,8 +518,9 @@ fn check(expect: &Expectations, report: &mut TestReport) {
     report.failures.extend(failures);
 }
 
-/// `actual` contains `expected`: equal, or for objects, every expected key is in `actual` with a
-/// value that contains the expected one.
+/// `actual` contains `expected`: for objects, every expected key is in `actual` with a value
+/// that contains the expected one; otherwise the same value as JavaScript sees it, compared by
+/// canonical form (`2` and `2.0` are the same number).
 fn contains(actual: &JsonValue, expected: &JsonValue) -> bool {
     match (actual, expected) {
         (JsonValue::Object(actual), JsonValue::Object(expected)) => {
@@ -529,7 +530,7 @@ fn contains(actual: &JsonValue, expected: &JsonValue) -> bool {
                     .is_some_and(|actual| contains(actual, value))
             })
         }
-        _ => actual == expected,
+        _ => ptc_core::canonical_json(actual) == ptc_core::canonical_json(expected),
     }
 }
 
@@ -577,6 +578,21 @@ mod tests {
             }],
             matching,
         }
+    }
+
+    #[test]
+    fn expected_values_are_compared_as_javascript_values() {
+        // A script's `4 / 2` is the number 2, whether the scenario writes 2 or 2.0.
+        assert!(contains(&json!({ "ratio": 2 }), &json!({ "ratio": 2.0 })));
+        assert!(contains(
+            &json!([1, { "b": 2.0, "a": 1 }]),
+            &json!([1.0, { "a": 1, "b": 2 }])
+        ));
+        assert!(contains(&json!(-0.0), &json!(0)));
+        assert!(!contains(&json!({ "ratio": 2 }), &json!({ "ratio": 2.5 })));
+        assert!(!contains(&json!([1, 2]), &json!([1])));
+        // Objects are compared key by key; the run's output may hold more.
+        assert!(contains(&json!({ "a": 1, "b": 2 }), &json!({ "a": 1.0 })));
     }
 
     #[test]

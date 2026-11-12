@@ -258,3 +258,44 @@ async fn a_worker_of_a_new_build_retries_each_quarantined_run_once() {
     assert_eq!(record.quarantine, None);
     assert_eq!(record.status, RunStatus::Completed);
 }
+
+#[tokio::test]
+async fn a_worker_never_retries_the_quarantined_runs_of_tenants_it_does_not_serve() {
+    use std::collections::BTreeSet;
+
+    use ptc_engine::ports::{TenantId, TenantScope};
+
+    let broken = Arc::new(AtomicBool::new(true));
+    let mut config = replaying();
+    config.build = "build-1".into();
+    let engine = engine_with(fragile(broken.clone()), RecordingDispatcher::echo(), config);
+    let acme = TenantId::new("acme").unwrap();
+    let mut started = request("fragile", json!({}));
+    started.tenant = acme.clone();
+    let run = engine.start_run(started).await.unwrap().run;
+    drive(&engine).await;
+    engine.signal(&run, "go", json!(1), None).await.unwrap();
+    for _ in 0..5 {
+        engine.activate_next().await.unwrap();
+        let later = engine
+            .clock()
+            .now()
+            .saturating_add(std::time::Duration::from_secs(31));
+        engine.clock().advance_to(later);
+    }
+    let quarantine = engine.get_run(&run).await.unwrap().unwrap().quarantine;
+    assert!(quarantine.is_some());
+    broken.store(false, Ordering::SeqCst);
+
+    // A worker of a new build in another tenant's pool: the run's script never runs there.
+    let mut config = replaying();
+    config.build = "build-2".into();
+    config.tenants = TenantScope::Only(BTreeSet::from([TenantId::new("globex").unwrap()]));
+    let engine = ptc_engine::Engine::new(engine.into_adapters(), config);
+    let reports = engine.retry_quarantined().await.unwrap();
+    assert!(reports.is_empty(), "{reports:?}");
+    let record = engine.get_run(&run).await.unwrap().unwrap();
+    assert!(record.quarantine.is_some(), "still quarantined");
+    assert_eq!(record.status, RunStatus::Active);
+    assert_eq!(engine.cached_instances(), 0, "no instance of acme's script");
+}

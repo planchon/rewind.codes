@@ -19,7 +19,7 @@ use crate::ports::{
     Diagnostic, Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun,
     QuarantineKind, RunFilter, RunMetadata, RunRecord, RunRef, ScriptExecutor, SecretError,
     SecretOwner, SecretStore, Severity, StoreError, StoredScript, StoredToolset, TaskFilter,
-    TenantId, TenantScope, ToolDeclarations, ToolDispatcher, TypeChecker, WebhookSender,
+    TenantId, TenantScope, ToolDeclarations, ToolDispatcher, Trigger, TypeChecker, WebhookSender,
 };
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
@@ -568,25 +568,43 @@ where
             let recorded_at = state
                 .updated_at()
                 .map_or(self.clock.now(), |last| last.max(self.clock.now()));
-            let entry = HistoryEntry {
-                index: state.history_len(),
-                recorded_at,
-                event: Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
-                    kind: match quarantine.kind {
-                        QuarantineKind::NonDeterminism => AbortKind::NonDeterminism,
-                        QuarantineKind::Failures => AbortKind::Internal,
-                    },
-                    message: quarantine.reason,
-                })),
-            };
-            let consumed = self
-                .journal
-                .take_inbox(&lease)
-                .await?
-                .into_iter()
-                .map(|item| item.id)
+            let inbox = self.journal.take_inbox(&lease).await?;
+            let mut events = Vec::with_capacity(2);
+            // A run quarantined before its first commit (a fork whose parent is gone) has an
+            // empty history: `run_started` is committed with `run_aborted`, so that the history
+            // still starts with it.
+            if history.is_empty() {
+                let started = inbox.iter().find_map(|item| match &item.trigger {
+                    Trigger::RunStarted(started) => Some(started.clone()),
+                    Trigger::Completion(_) => None,
+                });
+                let started = started.ok_or_else(|| EngineError::CorruptInbox {
+                    run_id,
+                    message: "a run that has not started has no run_started".into(),
+                })?;
+                events.push(Event::Lifecycle(Lifecycle::RunStarted(started)));
+            }
+            events.push(Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
+                kind: match quarantine.kind {
+                    QuarantineKind::NonDeterminism => AbortKind::NonDeterminism,
+                    QuarantineKind::Failures => AbortKind::Internal,
+                },
+                message: quarantine.reason,
+            })));
+            let mut entries: Vec<HistoryEntry> = (state.history_len()..)
+                .zip(events)
+                .map(|(index, event)| HistoryEntry {
+                    index,
+                    recorded_at,
+                    event,
+                })
                 .collect();
-            let activation = Activation::new(vec![entry], consumed, RunStatus::Aborted);
+            let payloads =
+                payloads::offload(&self.blobs, &run.tenant, &mut entries, self.config.payloads)
+                    .await?;
+            let consumed = inbox.into_iter().map(|item| item.id).collect();
+            let mut activation = Activation::new(entries, consumed, RunStatus::Aborted);
+            activation.payloads = payloads;
             self.journal
                 .commit_activation(&lease, activation, self.clock.now())
                 .await?;

@@ -190,7 +190,9 @@ pub(crate) enum CancelReasonV1 {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         message: Option<String>,
     },
-    Ttl,
+    // A struct variant, not a unit one: serde ignores unknown fields next to the tag of a unit
+    // variant, and a reader refuses them.
+    Ttl {},
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
@@ -318,7 +320,7 @@ impl From<&Completion> for EventV1 {
                     CancelReason::Requested(message) => CancelReasonV1::Requested {
                         message: message.clone(),
                     },
-                    CancelReason::Ttl => CancelReasonV1::Ttl,
+                    CancelReason::Ttl => CancelReasonV1::Ttl {},
                 },
             },
         }
@@ -511,7 +513,7 @@ impl TryFrom<EventV1> for Event {
             EventV1::CancelRequested { reason } => Event::Completion(Completion::CancelRequested {
                 reason: match reason {
                     CancelReasonV1::Requested { message } => CancelReason::Requested(message),
-                    CancelReasonV1::Ttl => CancelReason::Ttl,
+                    CancelReasonV1::Ttl {} => CancelReason::Ttl,
                 },
             }),
             EventV1::Log {
