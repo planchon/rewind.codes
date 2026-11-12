@@ -156,6 +156,13 @@ pub struct ServerArgs {
     #[arg(long, env = "PTC_ALLOW_STDIO")]
     pub allow_stdio: bool,
 
+    /// Send lifecycle webhooks to private, loopback and link-local addresses too, over
+    /// `http://` or `https://`: for a harness on the same trusted network. Without it, a server
+    /// sends them only to `https://` URLs with public addresses. The embedded server always
+    /// does.
+    #[arg(long, env = "PTC_ALLOW_PRIVATE_WEBHOOKS")]
+    pub allow_private_webhooks: bool,
+
     /// Where tsgo, the type-checker, is extracted. The user's cache directory by default.
     #[arg(long, env = "PTC_TSGO_CACHE")]
     pub tsgo_cache: Option<PathBuf>,
@@ -221,6 +228,8 @@ pub(crate) struct Config {
     pub(crate) dispatches: usize,
     pub(crate) run_quota: Option<u32>,
     pub(crate) allow_stdio: bool,
+    /// Lifecycle webhooks may go to the private network, over `http://` too.
+    pub(crate) allow_private_webhooks: bool,
     /// `Some(true)`: switch to virtual time; `Some(false)`: to real time; `None`: as the store
     /// says.
     pub(crate) virtual_time: Option<bool>,
@@ -329,6 +338,7 @@ impl ServerArgs {
                 dispatches: self.dispatches,
                 run_quota: None,
                 allow_stdio: true,
+                allow_private_webhooks: true,
                 virtual_time,
                 idle_timeout: self.idle_timeout,
                 tsgo_cache: self.tsgo_cache,
@@ -400,6 +410,7 @@ impl ServerArgs {
             dispatches: self.dispatches,
             run_quota: self.run_quota,
             allow_stdio: self.allow_stdio,
+            allow_private_webhooks: self.allow_private_webhooks,
             virtual_time,
             idle_timeout: self.idle_timeout,
             tsgo_cache: self.tsgo_cache,

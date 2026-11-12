@@ -9,9 +9,11 @@ use std::time::Duration;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use ptc_api::ProblemType;
 use ptc_api::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, Task, TaskBatch, TaskQuery,
 };
+use ptc_core::canonical_json;
 use ptc_engine::ports::{JournalStore, TaskToken};
 use ptc_engine::{HostClaim, HostFailure, HostTask};
 
@@ -23,6 +25,11 @@ use crate::http::runs::check_payload_size;
 use crate::http::toolsets::parse_digest;
 use crate::views::{parse_task_id, task_id};
 use crate::wake::{POLL, wait};
+
+/// The most a failure holds: its message and its data as canonical JSON, together. A failure
+/// stays in its journal entry, which never moves a value to the payload tiers: it is bounded by
+/// the largest value a row holds next to a digest (08).
+const FAILURE_LIMIT: usize = 64 * 1024;
 
 /// How long a claim waits for a task by default, and at most.
 const WAIT: Duration = Duration::from_secs(30);
@@ -149,6 +156,7 @@ pub(super) async fn fail(
     Body(request): Body<FailTask>,
 ) -> Result<StatusCode, ApiError> {
     caller.allow(Access::Tasks)?;
+    check_failure_size(&request.message, request.data.as_ref())?;
     let failure = HostFailure {
         message: request.message,
         data: request.data,
@@ -182,10 +190,29 @@ pub(super) async fn reject(
     OptionalBody(request): OptionalBody<RejectTask>,
 ) -> Result<StatusCode, ApiError> {
     caller.allow(Access::Write)?;
+    if let Some(message) = &request.message {
+        check_failure_size(message, None)?;
+    }
     let task = task(&app, &caller, &id).await?;
     app.engine.reject_task(&task, request.message).await?;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Refuses a failure above [`FAILURE_LIMIT`].
+fn check_failure_size(message: &str, data: Option<&serde_json::Value>) -> Result<(), ApiError> {
+    let size = message.len() + data.map_or(0, |data| canonical_json(data).len());
+    if size > FAILURE_LIMIT {
+        return Err(ApiError::new(
+            ProblemType::PayloadTooLarge,
+            format!(
+                "the failure is {size} bytes (its message, and its data as canonical JSON), above \
+                 the limit of {FAILURE_LIMIT}: a failure stays in its journal entry; give large \
+                 details as a result"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// A task of a run the caller sees.

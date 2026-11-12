@@ -2428,7 +2428,13 @@ export interface operations {
     };
     getPayload: {
         parameters: {
-            query?: never;
+            query?: {
+                /**
+                 * @description A run whose journal holds the payload. Required with a key limited to labels, which
+                 *     reads only the payloads of the runs it sees; checked whenever it is given.
+                 */
+                run?: string;
+            };
             header?: never;
             path: {
                 /** @description SHA-256 of the canonical JSON, lowercase hex. */
@@ -2465,7 +2471,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run. */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -2474,7 +2480,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such payload for this tenant. */
+            /** @description No such payload for this tenant, or not in the journal of the run given. */
             404: {
                 headers: {
                     [name: string]: unknown;

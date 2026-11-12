@@ -3836,6 +3836,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "A run whose journal holds the payload. Required with a key limited to labels, which\nreads only the payloads of the runs it sees; checked whenever it is given.",
+            "in": "query",
+            "name": "run",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -3875,7 +3884,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run."
           },
           "404": {
             "content": {
@@ -3885,7 +3894,7 @@
                 }
               }
             },
-            "description": "No such payload for this tenant."
+            "description": "No such payload for this tenant, or not in the journal of the run given."
           },
           "500": {
             "content": {

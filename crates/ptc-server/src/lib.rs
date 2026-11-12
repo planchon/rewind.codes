@@ -4,7 +4,8 @@
 //!   scopes, tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
 //!   of a run (server-sent events); host-tool tasks long-polled by the harness's worker; inbound
 //!   webhooks that become signals; outbound lifecycle webhooks signed following Standard
-//!   Webhooks.
+//!   Webhooks, sent concurrently and bounded per subscription (`deliveries`), never to the
+//!   private network of a deployed server.
 //! - The worker role: activations with the sticky cache, tool dispatch, the scheduler of timers
 //!   and deadlines, the projector, the retention jobs (`worker`).
 //! - The embedded server of a `.ptc/` directory: its lock, its unix socket, its idle stop
@@ -19,6 +20,7 @@
 mod app;
 mod auth;
 mod config;
+mod deliveries;
 mod embedded;
 mod error;
 mod extract;

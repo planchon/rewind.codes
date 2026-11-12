@@ -155,7 +155,9 @@ key has a tenant and a scope:
 
 - a role, which says which endpoints the key may call;
 - optionally, allowed labels. The key then only sees the runs carrying these labels: the
-  agent tools of one conversation only see that conversation's runs.
+  agent tools of one conversation only see that conversation's runs, the scripts they ran and
+  the payloads of their journals, and set the credentials of those runs only
+  ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-webhooks-and-the-key-scopes-november-2026)).
 
 The tenant is part of every storage key:
 

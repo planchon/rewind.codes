@@ -16,7 +16,15 @@ export {
   type StartRunParams,
 } from "./resources/runs.js";
 export { Tasks, type ClaimParams, type TaskFailure } from "./resources/tasks.js";
-export { ApiKeys, Payloads, Server, Subscriptions, Tools, type ToolStatsParams } from "./resources/admin.js";
+export {
+  ApiKeys,
+  type PayloadOptions,
+  Payloads,
+  Server,
+  Subscriptions,
+  Tools,
+  type ToolStatsParams,
+} from "./resources/admin.js";
 
 export {
   HostToolError,

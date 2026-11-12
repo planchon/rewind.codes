@@ -335,6 +335,9 @@ describe("the client", () => {
     expect((await ptc.runs.entry(RUN_ID, 7)).idx).toBe(7);
     expect(await ptc.runs.journal(RUN_ID, { as: "cassette" })).toEqual({ version: 1, kind: "cassette" });
     expect(await ptc.payloads.get("ab")).toEqual({ big: true });
+    expect(await ptc.payloads.get("ab", { run: RUN_ID })).toEqual({ big: true });
+    const reads = server.calls("GET", "/v1/payloads/ab");
+    expect(reads.map((read) => read.query.get("run"))).toEqual([null, RUN_ID]);
   });
 
   it("checks and tests scripts, and reads the scripts executed", async () => {

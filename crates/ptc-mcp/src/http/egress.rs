@@ -9,6 +9,9 @@
 //!
 //! A URL whose host is an IP address is checked against the same rules before the request.
 //! Redirects go through all of them again (`super`).
+//!
+//! [`Egress`] lends steps 2 to 4 to the other requests a deployment sends where a tenant says:
+//! the server's lifecycle webhooks.
 
 use std::error::Error;
 use std::fmt;
@@ -51,38 +54,28 @@ impl NameResolver for SystemResolver {
 /// Says whether an address is refused, and why.
 pub(crate) type Policy = fn(IpAddr) -> Option<&'static str>;
 
+/// How the `http` tool ends the reason of a refusal.
+pub(crate) const HTTP_TOOL: &str = "the http tool does not reach it";
+
 /// The client's resolver: resolves once, refuses the name if any of its addresses is refused,
 /// and hands the connector exactly the addresses it checked.
 #[derive(Debug)]
 pub(crate) struct CheckedResolver {
     pub(crate) resolver: Arc<dyn NameResolver>,
     pub(crate) policy: Policy,
+    /// Ends the reason of a refusal: who does not go there.
+    pub(crate) refusal: &'static str,
 }
 
 impl reqwest::dns::Resolve for CheckedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
         let resolver = self.resolver.clone();
-        let policy = self.policy;
+        let (policy, refusal) = (self.policy, self.refusal);
         Box::pin(async move {
-            let addresses = resolver.resolve(&host).await.map_err(|error| {
-                Box::new(io::Error::new(
-                    error.kind(),
-                    format!("{host} could not be resolved: {error}"),
-                )) as Box<dyn Error + Send + Sync>
-            })?;
-            if addresses.is_empty() {
-                return Err(Box::new(io::Error::other(format!("{host} has no address")))
-                    as Box<dyn Error + Send + Sync>);
-            }
-            for address in &addresses {
-                if let Some(reason) = policy(*address) {
-                    return Err(Box::new(Refused(format!(
-                        "{host} resolves to {address}, a {reason} address: the http tool does \
-                         not reach it"
-                    ))) as Box<dyn Error + Send + Sync>);
-                }
-            }
+            let addresses = resolve(resolver.as_ref(), &host, policy, refusal)
+                .await
+                .map_err(|error| error.into_boxed())?;
             let addresses: reqwest::dns::Addrs = Box::new(
                 addresses
                     .into_iter()
@@ -90,6 +83,132 @@ impl reqwest::dns::Resolve for CheckedResolver {
             );
             Ok(addresses)
         })
+    }
+}
+
+/// Why a name gives no address to connect to.
+#[derive(Debug)]
+enum Unresolved {
+    /// The resolver failed, or found nothing.
+    Failed(io::Error),
+    /// An address of the name is refused.
+    Refused(Refused),
+}
+
+impl Unresolved {
+    fn into_boxed(self) -> Box<dyn Error + Send + Sync> {
+        match self {
+            Unresolved::Failed(error) => Box::new(error),
+            Unresolved::Refused(refused) => Box::new(refused),
+        }
+    }
+}
+
+/// Resolves `host` once and checks every address it has.
+async fn resolve(
+    resolver: &dyn NameResolver,
+    host: &str,
+    policy: Policy,
+    refusal: &str,
+) -> Result<Vec<IpAddr>, Unresolved> {
+    let addresses = resolver.resolve(host).await.map_err(|error| {
+        Unresolved::Failed(io::Error::new(
+            error.kind(),
+            format!("{host} could not be resolved: {error}"),
+        ))
+    })?;
+    if addresses.is_empty() {
+        return Err(Unresolved::Failed(io::Error::other(format!(
+            "{host} has no address"
+        ))));
+    }
+    for address in &addresses {
+        if let Some(reason) = policy(*address) {
+            return Err(Unresolved::Refused(Refused(format!(
+                "{host} resolves to {address}, a {reason} address: {refusal}"
+            ))));
+        }
+    }
+    Ok(addresses)
+}
+
+/// The egress checks of the `http` tool, without its allow-list, for the other requests a
+/// deployment sends to a place a tenant chose: the server's lifecycle webhooks. A name is
+/// resolved once, a name with any private, loopback, link-local or cloud-metadata address is
+/// refused, and the connection goes to the addresses that were checked. A URL whose host is an
+/// address is checked before the request.
+#[derive(Debug, Clone)]
+pub struct Egress {
+    resolver: Arc<dyn NameResolver>,
+    policy: Policy,
+    refusal: &'static str,
+}
+
+impl Egress {
+    /// The checks, resolving names with `resolver`. `refusal` ends the reason of a refusal,
+    /// such as "webhooks are not sent there".
+    pub fn new(resolver: Arc<dyn NameResolver>, refusal: &'static str) -> Self {
+        Self {
+            resolver,
+            policy: forbidden,
+            refusal,
+        }
+    }
+
+    /// `builder` with the checked resolver as its only resolver, and without proxies: a proxy
+    /// would resolve the names itself.
+    pub fn apply(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        builder.no_proxy().dns_resolver(Arc::new(CheckedResolver {
+            resolver: self.resolver.clone(),
+            policy: self.policy,
+            refusal: self.refusal,
+        }))
+    }
+
+    /// Checks the host of `url` when it is an address: the reason when it is refused. A name is
+    /// checked when it is resolved.
+    pub fn check_url(&self, url: &Url) -> Result<(), String> {
+        let address = match url.host() {
+            Some(Host::Ipv4(address)) => IpAddr::V4(address),
+            Some(Host::Ipv6(address)) => IpAddr::V6(address),
+            Some(Host::Domain(_)) => return Ok(()),
+            None => return Err(format!("{url} has no host")),
+        };
+        match (self.policy)(address) {
+            Some(reason) => Err(format!("{address} is a {reason} address: {}", self.refusal)),
+            None => Ok(()),
+        }
+    }
+
+    /// Checks `url` as a request to it would be: its host when it is an address, otherwise
+    /// every address its name resolves to now. The reason when it is refused or cannot be
+    /// resolved.
+    pub async fn check(&self, url: &Url) -> Result<(), String> {
+        self.check_url(url)?;
+        match url.host() {
+            Some(Host::Domain(name)) => {
+                resolve(self.resolver.as_ref(), name, self.policy, self.refusal)
+                    .await
+                    .map(drop)
+                    .map_err(|error| match error {
+                        Unresolved::Failed(error) => error.to_string(),
+                        Unresolved::Refused(Refused(reason)) => reason,
+                    })
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The reason, when a request failed because these checks refused its address.
+    pub fn refusal_of(error: &(dyn Error + 'static)) -> Option<String> {
+        let mut source = Some(error);
+        while let Some(current) = source {
+            if let Some(Refused(reason)) = current.downcast_ref::<Refused>() {
+                return Some(reason.clone());
+            }
+            source = current.source();
+        }
+        None
     }
 }
 
@@ -189,7 +308,7 @@ pub(crate) fn check(url: &Url, allowed: &AllowList, policy: Policy) -> Result<()
         && let Some(reason) = policy(address)
     {
         return Err(Refused(format!(
-            "{address} is a {reason} address: the http tool does not reach it"
+            "{address} is a {reason} address: {HTTP_TOOL}"
         )));
     }
     Ok(())
@@ -369,5 +488,87 @@ mod tests {
             error.0,
             "internal.example is not in the toolset's allow-list of the http tool (127.0.0.1, localhost)"
         );
+    }
+
+    /// Answers every name with the same addresses.
+    #[derive(Debug)]
+    struct Fixed(Vec<IpAddr>);
+
+    impl NameResolver for Fixed {
+        fn resolve(&self, _host: &str) -> Resolving {
+            let addresses = self.0.clone();
+            Box::pin(async move { Ok(addresses) })
+        }
+    }
+
+    fn egress(addresses: &[&str]) -> Egress {
+        let addresses = addresses.iter().map(|a| a.parse().unwrap()).collect();
+        Egress::new(Arc::new(Fixed(addresses)), "webhooks are not sent there")
+    }
+
+    #[tokio::test]
+    async fn other_requests_get_the_same_checks_without_an_allow_list() {
+        let public = egress(&["93.184.215.14"]);
+        let url = |text: &str| Url::parse(text).unwrap();
+        assert_eq!(
+            public.check(&url("https://hooks.example.com/x")).await,
+            Ok(())
+        );
+        assert_eq!(public.check(&url("https://93.184.215.14/x")).await, Ok(()));
+        assert_eq!(
+            public.check(&url("https://[::1]/x")).await,
+            Err("::1 is a loopback address: webhooks are not sent there".into())
+        );
+        assert_eq!(
+            public.check_url(&url("https://169.254.169.254/latest")),
+            Err(
+                "169.254.169.254 is a link-local (cloud metadata) address: webhooks are not \
+                 sent there"
+                    .into()
+            )
+        );
+        let internal = egress(&["93.184.215.14", "10.0.0.7"]);
+        assert_eq!(
+            internal.check(&url("https://hooks.example.com/x")).await,
+            Err(
+                "hooks.example.com resolves to 10.0.0.7, a private address: webhooks are not \
+                 sent there"
+                    .into()
+            )
+        );
+        let nothing = egress(&[]);
+        assert_eq!(
+            nothing.check(&url("https://gone.example.com/x")).await,
+            Err("gone.example.com has no address".into())
+        );
+        let system = Egress::new(Arc::new(SystemResolver), "webhooks are not sent there");
+        let refused = system.check(&url("https://localhost/x")).await.unwrap_err();
+        assert!(refused.starts_with("localhost resolves to"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_client_built_with_the_checks_refuses_internal_addresses() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = egress(&["127.0.0.1"])
+            .apply(reqwest::Client::builder())
+            .build()
+            .unwrap();
+        let error = client
+            .post(format!("http://rebound.test:{port}/x"))
+            .send()
+            .await
+            .unwrap_err();
+        assert_eq!(
+            Egress::refusal_of(&error),
+            Some(
+                "rebound.test resolves to 127.0.0.1, a loopback address: webhooks are not sent \
+                 there"
+                    .into()
+            )
+        );
+        let accepted =
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept()).await;
+        assert!(accepted.is_err(), "nothing connected");
     }
 }
