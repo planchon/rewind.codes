@@ -103,6 +103,10 @@ describe("approvals", () => {
     const [first, second] = pending;
     expect(await ptc.approvals.args(first!)).toEqual({ repo: "acme/api" });
     expect(await ptc.approvals.args(second!)).toEqual({ big: 1 });
+    // Read through the run, as a key limited to labels must.
+    expect(
+      server.calls("GET", "/v1/payloads/{digest}".replace("{digest}", second!.payload.digest))[0]?.query.get("run"),
+    ).toBe(second!.runId);
     await ptc.approvals.approve(first!);
     await ptc.approvals.reject(second!, "not now");
     expect(server.calls("POST", "/v1/tasks/t-approval/approve")).toHaveLength(1);

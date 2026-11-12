@@ -41,6 +41,9 @@ pub(super) async fn create(
     Body(request): Body<CreateToolset>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
+    if request.credentials.is_some() {
+        refuse_scoped_credentials(&caller)?;
+    }
     let credentials = request.credentials.clone();
     let toolset = pin(&app, &caller.tenant, request).await?;
     let names: Vec<String> = toolset
@@ -204,12 +207,25 @@ pub(super) async fn credentials(
     Body(credentials): Body<Credentials>,
 ) -> Result<StatusCode, ApiError> {
     caller.allow(Access::Write)?;
+    refuse_scoped_credentials(&caller)?;
     let digest = parse_digest(&id)?;
     app.engine
         .set_toolset_credentials(&caller.tenant, digest, &secrets(credentials))
         .await?;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A toolset's credentials serve every run of the tenant that has none of its own: a key
+/// limited to labels sets only those of its runs.
+fn refuse_scoped_credentials(caller: &Caller) -> Result<(), ApiError> {
+    if caller.scoped() {
+        return Err(ApiError::forbidden(
+            "a toolset's credentials serve every run of the tenant: a key limited to labels sets \
+             the credentials of its own runs (PUT /v1/runs/{id}/credentials)",
+        ));
+    }
+    Ok(())
 }
 
 fn server_secrets(credentials: ptc_api::toolsets::ServerCredentials) -> ServerCredentials {

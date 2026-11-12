@@ -646,7 +646,8 @@ async fn silent_receiver() -> (String, Arc<Mutex<usize>>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
-    let server = TestServer::start(&[]).await;
+    // The receivers listen on 127.0.0.1.
+    let server = TestServer::start(&["--allow-private-webhooks"]).await;
     let stranger = server.key_of("other", Role::Harness, &[]).await;
     let (url, accepted) = silent_receiver().await;
     stranger
@@ -689,7 +690,8 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
-    let server = TestServer::start(&[]).await;
+    // The receivers listen on 127.0.0.1.
+    let server = TestServer::start(&["--allow-private-webhooks"]).await;
     let harness = server.key(Role::Harness, &[]).await;
     let (url, received) = receiver().await;
     let subscription = harness
@@ -1032,4 +1034,314 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     );
     assert_eq!(empty.kind(), Some(ProblemType::InvalidToolset));
     server.stop().await;
+}
+
+/// A script that waits for a signal, its input unused: a run that stays active.
+fn waiting_run(marker: &str, text: &str) -> StartRun {
+    let mut request = start(&format!("// {marker}\n{SIGNAL}"));
+    request.input = json!({ "text": text });
+    request
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let reader = server.key(Role::Reader, &[]).await;
+    let scoped = server.key(Role::Harness, &[("conversation", "c-1")]).await;
+
+    // Inputs above 1 KiB are held by their digest, in the payloads table.
+    let mut theirs = waiting_run("theirs", &"t".repeat(2048));
+    theirs.labels = Labels::from_iter([("conversation", "c-2")]);
+    let theirs = harness.start_run(&theirs, None).await.unwrap();
+    let mine = scoped
+        .start_run(&waiting_run("mine", &"m".repeat(2048)), None)
+        .await
+        .unwrap();
+    let input = |client: &ptc_api::Client, run: String| {
+        let client = client.clone();
+        async move {
+            eventually(|| async {
+                client
+                    .get_run(&run, None)
+                    .await
+                    .unwrap()
+                    .input
+                    .map(|input| input.digest)
+            })
+            .await
+        }
+    };
+    let their_input = input(&harness, theirs.id.clone()).await;
+    let my_input = input(&scoped, mine.id.clone()).await;
+
+    // Scripts: only those of the runs the key sees.
+    eventually(|| async { scoped.get_script(&mine.script).await.ok() }).await;
+    assert_eq!(
+        problem(scoped.get_script(&theirs.script).await.unwrap_err()).kind(),
+        Some(ProblemType::NotFound),
+        "the script of a run the key does not see"
+    );
+    reader.get_script(&theirs.script).await.unwrap();
+
+    // Payloads: through a run the key sees, which references them.
+    assert_eq!(
+        scoped.get_payload(&my_input, Some(&mine.id)).await.unwrap(),
+        json!({ "text": "m".repeat(2048) })
+    );
+    assert_eq!(
+        problem(scoped.get_payload(&my_input, None).await.unwrap_err()).kind(),
+        Some(ProblemType::Forbidden),
+        "a key limited to labels names the run"
+    );
+    for (digest, run) in [
+        (&their_input, &theirs.id),
+        (&their_input, &mine.id),
+        (&my_input, &theirs.id),
+    ] {
+        assert_eq!(
+            problem(scoped.get_payload(digest, Some(run)).await.unwrap_err()).kind(),
+            Some(ProblemType::NotFound),
+            "{digest} through {run}"
+        );
+    }
+    assert_eq!(
+        reader.get_payload(&their_input, None).await.unwrap(),
+        json!({ "text": "t".repeat(2048) })
+    );
+    assert_eq!(
+        problem(
+            reader
+                .get_payload(&their_input, Some(&mine.id))
+                .await
+                .unwrap_err()
+        )
+        .kind(),
+        Some(ProblemType::NotFound),
+        "a run given is checked for every key"
+    );
+
+    // Credentials: those of its own runs only, never a toolset's.
+    let credentials = ptc_api::toolsets::Credentials::default();
+    scoped
+        .set_run_credentials(&mine.id, &credentials)
+        .await
+        .unwrap();
+    assert_eq!(
+        problem(
+            scoped
+                .set_run_credentials(&theirs.id, &credentials)
+                .await
+                .unwrap_err()
+        )
+        .kind(),
+        Some(ProblemType::NotFound)
+    );
+    let toolset = harness
+        .create_toolset(&ask_toolset(ToolPolicy::default()))
+        .await
+        .unwrap();
+    assert_eq!(
+        problem(
+            scoped
+                .set_toolset_credentials(&toolset.id, &credentials)
+                .await
+                .unwrap_err()
+        )
+        .kind(),
+        Some(ProblemType::Forbidden)
+    );
+    let mut with_credentials = ask_toolset(ToolPolicy::default());
+    with_credentials.credentials = Some(credentials.clone());
+    assert_eq!(
+        problem(scoped.create_toolset(&with_credentials).await.unwrap_err()).kind(),
+        Some(ProblemType::Forbidden),
+        "registering a toolset with credentials sets the toolset's credentials"
+    );
+    scoped
+        .create_toolset(&ask_toolset(ToolPolicy::default()))
+        .await
+        .unwrap();
+    harness
+        .set_toolset_credentials(&toolset.id, &credentials)
+        .await
+        .unwrap();
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_tool_failures_are_bounded_like_results() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let toolset = harness
+        .create_toolset(&ask_toolset(ToolPolicy::default()))
+        .await
+        .unwrap();
+    let mut request = start(ASK);
+    request.toolset = Some(toolset.id.clone());
+    let run = harness.start_run(&request, None).await.unwrap();
+    let task = harness
+        .claim_tasks(&TaskQuery {
+            wait: Some("10s".parse().unwrap()),
+            ..TaskQuery::default()
+        })
+        .await
+        .unwrap()
+        .tasks
+        .remove(0);
+    harness
+        .defer_task(&task.token, &DeferTask::default())
+        .await
+        .unwrap();
+
+    // A failure stays in its journal entry: message and data together hold 64 KiB at most.
+    let large = 64 * 1024;
+    for failure in [
+        FailTask {
+            message: "m".repeat(large + 1),
+            data: None,
+            retryable: false,
+        },
+        FailTask {
+            message: "the user is away".into(),
+            data: Some(json!("d".repeat(large))),
+            retryable: false,
+        },
+        FailTask {
+            message: "m".repeat(large / 2),
+            data: Some(json!("d".repeat(large / 2))),
+            retryable: true,
+        },
+    ] {
+        let refused = problem(harness.fail_task(&task.token, &failure).await.unwrap_err());
+        assert_eq!(
+            refused.kind(),
+            Some(ProblemType::PayloadTooLarge),
+            "{refused}"
+        );
+    }
+    harness
+        .fail_task(
+            &task.token,
+            &FailTask {
+                message: "m".repeat(large / 2),
+                data: Some(json!({ "reason": "away" })),
+                retryable: false,
+            },
+        )
+        .await
+        .unwrap();
+    let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
+    assert_eq!(ended.status, RunStatus::Failed);
+    assert_eq!(ended.error.unwrap().name, "ToolError");
+
+    // A rejection's message is a failure's message.
+    let approved = harness
+        .create_toolset(&ask_toolset(ToolPolicy {
+            approval: Some(true),
+            ..ToolPolicy::default()
+        }))
+        .await
+        .unwrap();
+    request.toolset = Some(approved.id.clone());
+    let run = harness.start_run(&request, None).await.unwrap();
+    let task_id = eventually(|| async {
+        let state = harness.get_run(&run.id, None).await.unwrap();
+        state
+            .waiting_for
+            .into_iter()
+            .find_map(|waiting| match waiting {
+                Waiting::ToolCall { task_id, .. } => Some(task_id),
+                _ => None,
+            })
+    })
+    .await;
+    let refused = problem(
+        harness
+            .reject_task(
+                &task_id,
+                &RejectTask {
+                    message: Some("r".repeat(large + 1)),
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(
+        refused.kind(),
+        Some(ProblemType::PayloadTooLarge),
+        "{refused}"
+    );
+    harness
+        .reject_task(
+            &task_id,
+            &RejectTask {
+                message: Some("not now".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        harness.get_run(&run.id, wait("20s")).await.unwrap().status,
+        RunStatus::Failed
+    );
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let subscribe = |url: &str| {
+        let harness = harness.clone();
+        let request = CreateSubscription {
+            url: url.into(),
+            events: Vec::new(),
+            labels: Labels::new(),
+        };
+        async move { harness.create_subscription(&request).await }
+    };
+    for url in [
+        "http://example.com/hook",
+        "http://localhost:8080/hook",
+        "http://127.0.0.1:8080/hook",
+        "https://localhost/hook",
+        "https://127.0.0.1/hook",
+        "https://[::1]/hook",
+        "https://10.1.2.3/hook",
+        "https://192.168.1.1/hook",
+        "https://169.254.169.254/latest/meta-data",
+        "https://[fd00:ec2::254]/hook",
+        "https://[::ffff:127.0.0.1]/hook",
+    ] {
+        let refused = problem(subscribe(url).await.unwrap_err());
+        assert_eq!(
+            refused.kind(),
+            Some(ProblemType::InvalidRequest),
+            "{url}: {refused}"
+        );
+    }
+    assert!(
+        harness
+            .list_subscriptions()
+            .await
+            .unwrap()
+            .subscriptions
+            .is_empty()
+    );
+    subscribe("https://93.184.215.14/hook").await.unwrap();
+    server.stop().await;
+
+    // An operator may allow them, on a trusted network.
+    let trusted = TestServer::start(&["--allow-private-webhooks"]).await;
+    let harness = trusted.key(Role::Harness, &[]).await;
+    harness
+        .create_subscription(&CreateSubscription {
+            url: "http://127.0.0.1:8080/hook".into(),
+            events: Vec::new(),
+            labels: Labels::new(),
+        })
+        .await
+        .unwrap();
+    trusted.stop().await;
 }

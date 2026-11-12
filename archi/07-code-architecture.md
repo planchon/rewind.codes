@@ -431,7 +431,7 @@ Conventions:
 | Reading (dashboard) | `GET /v1/scripts` | Every distinct script, its runs, its tools |
 | | `GET /v1/scripts/{digest}` | One script's source |
 | | `GET /v1/tools/stats` | Latency, errors, retries |
-| | `GET /v1/payloads/{digest}` | A payload, on demand |
+| | `GET /v1/payloads/{digest}` | A payload, on demand, through a run that holds it (`run`, required with a key limited to labels) |
 | Administration | `POST /v1/api-keys` | Creates an API key for a tenant, with its scope; keys are revocable |
 | | `DELETE /v1/api-keys/{id}` | Revokes a key |
 | | `GET /v1/whoami` | The key's tenant, role and allowed labels |

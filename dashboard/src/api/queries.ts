@@ -64,11 +64,12 @@ export function useToolStats(key: string, makeQuery: () => ToolStatsQuery) {
   });
 }
 
-export function usePayloadValue(digest: string, enabled: boolean) {
+export function usePayloadValue(digest: string, run: string, enabled: boolean) {
   const api = useApi();
   return useQuery({
+    // A digest names one value, whichever run it is read through.
     queryKey: ["payload", digest],
-    queryFn: ({ signal }) => api.payload(digest, signal),
+    queryFn: ({ signal }) => api.payload(digest, run, signal),
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
   });

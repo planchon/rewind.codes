@@ -290,6 +290,10 @@ export class HostToolWorker {
           current = { failure: { message: `the result of ${task.tool} is too large: ${error.detail}` } };
           continue;
         }
+        if ("failure" in current && isProblem(error, "payload-too-large") && !isCut(current.failure)) {
+          current = { failure: cut(current.failure) };
+          continue;
+        }
         if ((error instanceof PtcApiError && error.status < 500) || attempt >= 4) {
           throw error;
         }
@@ -396,6 +400,20 @@ function failureOf(error: unknown): TaskFailure {
     return { message: error.name === "Error" ? message : `${error.name}: ${message}` };
   }
   return { message: String(error) };
+}
+
+/** Characters of a failure's message kept when the server refuses the failure as too large. */
+const FAILURE_MESSAGE = 2_000;
+
+/** The failure without its data, its message cut: what the server accepts of a large failure. */
+function cut(failure: TaskFailure): TaskFailure {
+  const message =
+    failure.message.length > FAILURE_MESSAGE ? `${failure.message.slice(0, FAILURE_MESSAGE)}…` : failure.message;
+  return { message, retryable: failure.retryable };
+}
+
+function isCut(failure: TaskFailure): boolean {
+  return failure.data === undefined && failure.message.length <= FAILURE_MESSAGE + 1;
 }
 
 /** An outcome whose values JSON can carry; otherwise a failure saying why. */

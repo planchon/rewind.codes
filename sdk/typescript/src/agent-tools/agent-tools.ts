@@ -417,7 +417,8 @@ export class AgentTools {
     if (payload === null || payload === undefined) {
       return "null";
     }
-    const value = "value" in payload ? payload.value : await this.client.payloads.get(payload.digest, { signal });
+    const value =
+      "value" in payload ? payload.value : await this.client.payloads.get(payload.digest, { run: run.id, signal });
     return json(value);
   }
 

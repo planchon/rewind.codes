@@ -55,7 +55,7 @@ export class Approvals {
    */
   async args(approval: PendingApproval, options: { signal?: AbortSignal } = {}): Promise<unknown> {
     const { payload } = approval;
-    return "value" in payload ? payload.value : this.payloads.get(payload.digest, options);
+    return "value" in payload ? payload.value : this.payloads.get(payload.digest, { ...options, run: approval.runId });
   }
 }
 

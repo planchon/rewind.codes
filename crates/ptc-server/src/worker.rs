@@ -17,6 +17,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 use crate::app::App;
+use crate::deliveries::Outbox;
 use crate::wake::{POLL, wait};
 
 /// How often the claims of the calls in flight are renewed.
@@ -104,6 +105,7 @@ async fn activate_one(app: &App) -> Result<bool, ()> {
     match &report.outcome {
         ActivationOutcome::Quarantined { kind, reason } => {
             tracing::warn!(run = %report.run, ?kind, %reason, "run quarantined");
+            // Queued: the engine's sender delivers in the background.
             if let Err(error) = app.projector().notify_quarantined(&report.run).await {
                 tracing::warn!(run = %report.run, %error, "run.quarantined was not sent");
             }
@@ -243,27 +245,18 @@ async fn projector(app: Arc<App>) {
     }
 }
 
-/// Sends the lifecycle webhooks of the feed. A delivery retries with backoff for minutes: when
-/// the server stops, the batch in progress is left unacknowledged, and sent again (with the same
-/// `webhook-id`) by the next server.
+/// Sends the lifecycle webhooks of the feed, concurrently and a few at a time per subscription
+/// (`deliveries`). When the server stops, the deliveries in progress are left unacknowledged,
+/// and sent again (with the same `webhook-id`) once their claims expire.
 async fn webhooks(app: Arc<App>) {
-    let mut changes = app.wake.subscribe();
-    let mut stop = app.stop.subscribe();
-    while !app.stopping() {
-        let projector = app.projector();
-        let projected = tokio::select! {
-            projected = projector.project_consumer(FeedConsumer::Webhooks, app.now()) => projected,
-            _ = stop.wait_for(|stop| *stop) => return,
-        };
-        match projected {
-            Ok((0, _)) => wait(&mut changes, POLL * 4, None).await,
-            Ok(_) => {}
-            Err(error) => {
-                tracing::error!(%error, "the lifecycle webhooks failed");
-                tokio::time::sleep(BACKOFF).await;
-            }
-        }
-    }
+    let outbox = Outbox {
+        journal: &app.store,
+        clock: app.engine.clock(),
+        deliveries: app.deliveries.clone(),
+        owner: app.settings.projector.owner.clone(),
+        batch: app.settings.projector.batch,
+    };
+    outbox.run(app.wake.subscribe(), app.stop.subscribe()).await;
 }
 
 /// Archives, deletes and cleans up, as each tenant's retention says.

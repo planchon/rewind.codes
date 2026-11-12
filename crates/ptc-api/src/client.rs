@@ -19,7 +19,7 @@ use crate::common::Duration;
 use crate::events::{Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey};
 use crate::problem::Problem;
-use crate::reading::{ToolStatsFilter, ToolStatsPage};
+use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
 use crate::routes;
 use crate::runs::{
     CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
@@ -437,9 +437,13 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/payloads/{digest}`: the value itself.
-    pub async fn get_payload(&self, digest: &str) -> Result<Value, Error> {
-        let request = self.request(Method::GET, routes::PAYLOAD, &[digest])?;
+    /// `GET /v1/payloads/{digest}`: the value itself, read through `run` when given (a key
+    /// limited to labels must give it).
+    pub async fn get_payload(&self, digest: &str, run: Option<&str>) -> Result<Value, Error> {
+        let query = PayloadQuery {
+            run: run.map(str::to_owned),
+        };
+        let request = self.request_with(Method::GET, routes::PAYLOAD, &[digest], &query)?;
         self.json(request).await
     }
 

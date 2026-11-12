@@ -177,9 +177,13 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/tools/stats", { params: { query }, signal }));
   }
 
-  async payload(digest: string, signal?: AbortSignal): Promise<unknown> {
+  /** A payload's value, read through the run whose journal holds it: a key limited to labels must. */
+  async payload(digest: string, run: string, signal?: AbortSignal): Promise<unknown> {
     return this.unwrap(
-      await this.client.GET("/v1/payloads/{digest}", { params: { path: { digest } }, signal }),
+      await this.client.GET("/v1/payloads/{digest}", {
+        params: { path: { digest }, query: { run } },
+        signal,
+      }),
     );
   }
 

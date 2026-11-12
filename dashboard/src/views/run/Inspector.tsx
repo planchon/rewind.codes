@@ -204,9 +204,9 @@ function ActivityDetail({
         </dd>
       </dl>
       {a.kind === "log" && <pre className="log-message">{a.message}</pre>}
-      {a.kind === "tool_call" && <PayloadView name="args" payload={a.args} />}
+      {a.kind === "tool_call" && <PayloadView runId={run.id} name="args" payload={a.args} />}
       {a.kind === "tool_call" && a.end?.outcome === "ok" && (
-        <PayloadView name="result" payload={a.end.result} />
+        <PayloadView runId={run.id} name="result" payload={a.end.result} />
       )}
       {a.kind === "tool_call" && a.end?.outcome === "failed" && (
         <section className="failure">
@@ -221,7 +221,7 @@ function ActivityDetail({
         </section>
       )}
       {a.kind === "signal" && a.end?.outcome === "received" && (
-        <PayloadView name="payload" payload={a.end.payload} />
+        <PayloadView runId={run.id} name="payload" payload={a.end.payload} />
       )}
     </div>
   );
@@ -247,9 +247,11 @@ function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: 
           <RawEntry runId={run.id} idx={entry.idx} />
         </dd>
       </dl>
-      {e.type === "run_started" && <PayloadView name="input" payload={e.input} />}
-      {e.type === "complete_run" && <PayloadView name="output" payload={e.output} />}
-      {e.type === "signal_received" && <PayloadView name="payload" payload={e.payload} />}
+      {e.type === "run_started" && <PayloadView runId={run.id} name="input" payload={e.input} />}
+      {e.type === "complete_run" && <PayloadView runId={run.id} name="output" payload={e.output} />}
+      {e.type === "signal_received" && (
+        <PayloadView runId={run.id} name="payload" payload={e.payload} />
+      )}
       {e.type === "fail_run" && e.error.stack && <pre className="frame">{e.error.stack}</pre>}
     </div>
   );
@@ -302,8 +304,8 @@ function Overview({ run }: { run: Run }) {
       <p className="muted" style={{ margin: 0 }}>
         Select a line, a note beside it, a span of the timeline or a journal entry.
       </p>
-      {run.input && <PayloadView name="input" payload={run.input} />}
-      {run.output && <PayloadView name="output" payload={run.output} />}
+      {run.input && <PayloadView runId={run.id} name="input" payload={run.input} />}
+      {run.output && <PayloadView runId={run.id} name="output" payload={run.output} />}
     </div>
   );
 }
