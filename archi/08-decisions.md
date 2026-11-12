@@ -168,6 +168,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | After a cancellation, a script that nothing can wake fails with `CancelledError`, not `DeadlockError` | `DeadlockError` | Cancelling a wait built on `setTimeout` drops the timer: the run must still end `cancelled`. Found by review. |
 | Lone surrogates become U+FFFD when a value leaves the script | Refusing the value | A string cut in the middle of an emoji is common in generated code; no host string can hold half of a pair. Found by review. |
 
+
 ### Taken while freezing the HTTP API and the sandbox lib (November 2026)
 
 | Decision | Alternative rejected | Why |
@@ -474,6 +475,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The acceptance suite is one Playwright Test project in `acceptance/` (TypeScript, pnpm), every criterion a spec run one at a time against the real binary; `acceptance/run.sh` builds what it needs, runs `crates/ptc/tests/cli.rs` for the part of criterion 2 it already proves, runs the specs, and writes each criterion's status from Playwright's JSON report. Containers carry the label `ptc-acceptance`, by which `run.sh` removes leftovers | vitest for the specs and Playwright for the dashboard; a Rust test crate | The harness of criterion 1 must be the TypeScript SDK and criterion 7 needs a browser: one runner serves both, and every other criterion is a process to drive. |
 | A tool's calls are counted from the MCP server's side: the toolset starts `server-everything` behind `sh -c 'tee -a "$MCP_CALL_LOG" \| npx …'`, so every JSON-RPC message it receives is in a file | Counting on the client's side; an MCP server of our own with a log | "Not repeated" has to be seen by the real server, and the reference server keeps no log of its own. |
 | The evals' criterion is proven with two scripted models (`scripted:<file>`), one right at the first try and one refused by the check then fixed, on the three renderings | Waiting for API keys | The report's shape and each measure are the harness's; only the numbers depend on the model. |
+
 
 ### Taken while reviewing the core, the format and the engine (November 2026)
 
