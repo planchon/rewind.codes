@@ -140,7 +140,8 @@ the server's current schema at dispatch. A call that no longer matches is not fa
 silently: its task is `parked`, and the harness gets the webhook `tool.schema_changed`. The
 agent or the developer decides what happens to the run:
 
-- continue against the new schema: `approve`, and the task is `ready` again;
+- continue against the new schema: `approve`, and the task is `ready` again; the dispatcher
+  then sends it without checking the schema again;
 - [fork](03-execution.md#forks) it with a corrected script;
 - cancel it, or `reject` the call, which fails with a `ToolError`.
 

@@ -1081,3 +1081,67 @@ async fn credentials_given_at_start_are_kept_only_for_a_new_run() {
         Err(EngineError::RunNotFound(unknown.id))
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// Concurrency
+
+/// Calls the tool named in its input three times at once, and waits.
+fn three_calls() -> FakeExecutor {
+    FakeExecutor::new().with(
+        "three_calls",
+        |run| {
+            let tool = run.input["tool"].as_str().unwrap().to_owned();
+            for n in 0..3 {
+                run.call(&tool, json!({ "n": n }));
+            }
+        },
+        |_, _| {},
+    )
+}
+
+#[tokio::test]
+async fn claims_respect_the_tools_and_the_servers_concurrency() {
+    let engine = engine(three_calls(), RecordingDispatcher::echo());
+    let serialized = toolset(|policy| policy.concurrency = 1);
+    let mut request = calling(ISSUE, serialized);
+    request.script = Script::new("three_calls");
+    engine.start_run(request).await.unwrap();
+
+    // Another server, which takes two calls at once from each worker.
+    let server = McpServer {
+        concurrency: 2,
+        ..McpServer::new(
+            "gitlab",
+            McpTransport::Http {
+                url: "https://mcp.example.com/gitlab".into(),
+            },
+        )
+    };
+    let issue = Tool::new(
+        "gitlab.get_issue",
+        ToolRoute::Mcp {
+            server: "gitlab".into(),
+        },
+        json!({}),
+    );
+    let mut request = calling("gitlab.get_issue", Toolset::new([server], [issue]).unwrap());
+    request.script = Script::new("three_calls");
+    engine.start_run(request).await.unwrap();
+    engine.activate_next().await.unwrap();
+    engine.activate_next().await.unwrap();
+
+    // One call of the serialized tool, two calls to the server of the other run.
+    let claimed = engine.claim_tool_tasks(10).await.unwrap();
+    assert_eq!(claimed.len(), 3, "{claimed:?}");
+    assert!(engine.claim_tool_tasks(10).await.unwrap().is_empty());
+
+    // Answered calls free their slots: the serialized tool goes one call at a time.
+    let mut claimed = claimed;
+    for expected in [2, 1, 0] {
+        for task in claimed {
+            engine.run_tool_task(task).await.unwrap();
+        }
+        claimed = engine.claim_tool_tasks(10).await.unwrap();
+        assert_eq!(claimed.len(), expected);
+    }
+}

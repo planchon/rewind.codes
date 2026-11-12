@@ -1,0 +1,19 @@
+{
+  "description": "Transient failures are retried after a backoff, with the same idempotency key: the script sees one call and its answer, later in logical time.",
+  "input": { "city": "Lyon" },
+  "tools": {
+    "weather.forecast": {
+      "$sequence": [
+        { "$transient": "overloaded", "$kind": "unavailable" },
+        { "$transient": "overloaded", "$kind": "unavailable" },
+        { "temp": 21 }
+      ]
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": { "forecast": { "temp": 21 }, "waited": true },
+    "calls": { "weather.forecast": 1 },
+    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "complete_run"]
+  }
+}

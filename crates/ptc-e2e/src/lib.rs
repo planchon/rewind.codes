@@ -27,29 +27,33 @@
 pub mod scenario;
 pub mod tools;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ptc_core::{
-    Command, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunOutcome, RunState, Script,
-    Timestamp, Toolset, parse_duration,
+    Command, Event, HistoryEntry, Interruption, Lifecycle, RunId, RunMode, RunOutcome, RunState,
+    Script, Timestamp, Toolset, parse_duration,
 };
 use ptc_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
-use ptc_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId, VirtualTime};
+use ptc_engine::ports::{
+    Credentials, Entropy, RunRef, ScriptExecutor, Secret, ServerCredentials, TaskFilter, TaskRef,
+    TaskState, TenantId, TenantScope, VirtualTime,
+};
 use ptc_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use ptc_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, Limits, ReplayVerdict, StartRun, ToolOrder,
+    Adapters, DriveOptions, Engine, EngineConfig, HostClaim, HostFailure, Limits, ReplayVerdict,
+    StartRun, ToolOrder,
 };
 use ptc_runtime::V8Executor;
 use serde_json::Value;
 
 pub use scenario::Scenario;
 use scenario::{ReplayCheck, Step};
-use tools::ScenarioTools;
+use tools::{Answer, ScenarioTools};
 
 /// Every run of the corpus starts at 2026-01-01T00:00:00Z, in virtual time.
 pub const T0: Timestamp = Timestamp(1_767_225_600_000);
@@ -129,8 +133,7 @@ impl Case {
             script,
         };
         case.check_color()?;
-        Toolset::from_host_tools(case.scenario.tools.keys())
-            .map_err(|err| format!("{name}/scenario.json: tools: {err}"))?;
+        scenario_toolset(&case.scenario).map_err(|err| format!("{name}/scenario.json: {err}"))?;
         Ok(case)
     }
 
@@ -138,11 +141,10 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools, as host tools with the default policy: in mock mode every call
-    /// goes to the scenario's responses, whatever its route.
+    /// The scenario's tools, as host tools with the default policy unless `policies` says
+    /// otherwise: in mock mode every call goes to the scenario's responses, whatever its route.
     pub fn toolset(&self) -> Toolset {
-        Toolset::from_host_tools(self.scenario.tools.keys())
-            .expect("the tools were checked when the case was loaded")
+        scenario_toolset(&self.scenario).expect("the tools were checked when the case was loaded")
     }
 
     /// The run's id: the first id of the scenario's entropy.
@@ -188,6 +190,32 @@ impl Case {
     }
 }
 
+fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
+    let toolset =
+        Toolset::from_host_tools(scenario.tools.keys()).map_err(|err| format!("tools: {err}"))?;
+    if scenario.policies.is_empty() {
+        return Ok(toolset);
+    }
+    let mut tools = toolset.tools().to_vec();
+    for (name, policy) in &scenario.policies {
+        let tool = tools
+            .iter_mut()
+            .find(|tool| tool.name == *name)
+            .ok_or_else(|| format!("policies: {name} is not one of the tools"))?;
+        tool.policy.approval = policy.approval;
+        tool.policy.on_interruption = match policy.on_interruption.as_deref() {
+            None | Some("retry") => Interruption::Retry,
+            Some("at_most_once") => Interruption::AtMostOnce,
+            Some(other) => {
+                return Err(format!(
+                    "policies: {name}: on_interruption is retry or at_most_once, not {other:?}"
+                ));
+            }
+        };
+    }
+    Toolset::new([], tools).map_err(|err| format!("policies: {err}"))
+}
+
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))
 }
@@ -230,6 +258,12 @@ fn engine(case: &Case) -> CorpusEngine {
             .unwrap_or(defaults.max_payload_bytes),
         ..defaults
     };
+    if case.scenario.host_worker {
+        // Host tools wait for the harness's worker, as on a server.
+        config.tool_tasks = TaskFilter::Dispatched {
+            tenants: TenantScope::All,
+        };
+    }
     Engine::new(
         Adapters {
             journal: MemoryJournal::new(),
@@ -290,19 +324,34 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         let engine = &engine;
         let options = &options;
         async move {
-            let report = if virtual_time {
-                engine.run_until_idle_virtual(options).await
-            } else {
-                engine.run_until_idle(options).await
+            // With a worker, the engine and the worker take turns until neither has work: a
+            // turn of the engine follows every turn of the worker, which may have answered.
+            let mut idle_turns = 0;
+            loop {
+                let report = if virtual_time {
+                    engine.run_until_idle_virtual(options).await
+                } else {
+                    engine.run_until_idle(options).await
+                }
+                .map_err(|err| err.to_string())?;
+                if let Some((run, error)) = report.failures.first() {
+                    return Err(format!("an activation of run {} failed: {error}", run.id));
+                }
+                if report.interrupted {
+                    return Err(format!("the run never became idle: {report:?}"));
+                }
+                if !case.scenario.host_worker {
+                    return Ok::<(), String>(());
+                }
+                if work(engine).await? > 0 {
+                    idle_turns = 0;
+                } else {
+                    idle_turns += 1;
+                    if idle_turns == 2 {
+                        return Ok(());
+                    }
+                }
             }
-            .map_err(|err| err.to_string())?;
-            if let Some((run, error)) = report.failures.first() {
-                return Err(format!("an activation of run {} failed: {error}", run.id));
-            }
-            if report.interrupted {
-                return Err(format!("the run never became idle: {report:?}"));
-            }
-            Ok::<(), String>(())
         }
     };
     let fail = |err: ptc_engine::EngineError| err.to_string();
@@ -323,6 +372,34 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
                 let now = ptc_engine::ports::Clock::now(engine.clock());
                 engine.clock().advance_to(now.saturating_add(by));
             }
+            Step::Approve(tool) => {
+                let task = waiting_task(&engine, &run, tool).await?;
+                engine.approve_task(&task).await.map_err(fail)?;
+            }
+            Step::Reject { tool, message } => {
+                let task = waiting_task(&engine, &run, tool).await?;
+                engine
+                    .reject_task(&task, message.clone())
+                    .await
+                    .map_err(fail)?;
+            }
+            Step::Credentials(servers) => {
+                let servers = servers
+                    .iter()
+                    .map(|(server, headers)| {
+                        let headers = headers
+                            .iter()
+                            .map(|(name, value)| (name.clone(), Secret::new(value.clone())))
+                            .collect();
+                        let env = BTreeMap::new();
+                        (server.clone(), ServerCredentials { headers, env })
+                    })
+                    .collect();
+                engine
+                    .set_run_credentials(&run, &Credentials { servers })
+                    .await
+                    .map_err(fail)?;
+            }
         }
         drive(false).await?;
     }
@@ -341,6 +418,69 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         history,
         state,
     })))
+}
+
+/// The call of `tool` that waits for the harness.
+async fn waiting_task(engine: &CorpusEngine, run: &RunRef, tool: &str) -> Result<TaskRef, String> {
+    let tasks = engine
+        .tool_tasks(run)
+        .await
+        .map_err(|err| err.to_string())?;
+    tasks
+        .into_iter()
+        .find(|task| {
+            task.tool == tool && matches!(task.state, TaskState::Approval | TaskState::Parked(_))
+        })
+        .map(|task| task.task)
+        .ok_or_else(|| format!("no call of {tool} waits for the harness"))
+}
+
+/// One turn of the harness's worker: claims the host-tool tasks that are ready, and answers
+/// each from the scenario's tools through its token. Returns how many it claimed.
+async fn work(engine: &CorpusEngine) -> Result<usize, String> {
+    let tenant = TenantId::local();
+    let claim = HostClaim {
+        tenant: tenant.clone(),
+        toolset: None,
+        tools: BTreeSet::new(),
+        limit: 100,
+    };
+    let tasks = engine
+        .claim_host_tasks(&claim)
+        .await
+        .map_err(|err| err.to_string())?;
+    for task in &tasks {
+        let token = &task.token;
+        let failed = |failure: ptc_core::ToolFailure, retryable| HostFailure {
+            message: failure.message,
+            data: failure.data,
+            retryable,
+        };
+        let answered = match engine.dispatcher().answer(&task.tool, &task.args) {
+            Answer::Result(result) => engine.complete_task(&tenant, token, result).await,
+            Answer::Failed(failure) => {
+                engine
+                    .fail_task(&tenant, token, failed(failure, false))
+                    .await
+            }
+            Answer::Transient(failure) => {
+                engine
+                    .fail_task(&tenant, token, failed(failure, true))
+                    .await
+            }
+            Answer::Unauthorized(_) => {
+                return Err(format!(
+                    "{}: a host tool's worker cannot answer $unauthorized; only a dispatched \
+                     call is parked",
+                    task.tool
+                ));
+            }
+            // The worker dies with the call: no heartbeat, no answer.
+            Answer::Crash => Ok(()),
+        };
+        answered.map_err(|err| err.to_string())?;
+    }
+    Ok(tasks.len())
 }
 
 /// How replaying a journal ended.

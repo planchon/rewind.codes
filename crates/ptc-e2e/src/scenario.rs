@@ -17,6 +17,14 @@ pub struct Scenario {
     /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]).
     #[serde(default)]
     pub tools: BTreeMap<String, Value>,
+    /// The policies that differ from the default, by tool.
+    #[serde(default)]
+    pub policies: BTreeMap<String, Policy>,
+    /// The tools are host tools answered by a harness's worker, which claims them through the
+    /// engine's host-tool use cases, instead of mocks called by the engine. A `$crash` response
+    /// is a worker that dies with the call.
+    #[serde(default)]
+    pub host_worker: bool,
     /// The order in which tool calls answer.
     #[serde(default)]
     pub tool_order: ToolOrder,
@@ -45,6 +53,18 @@ fn empty_object() -> Value {
 
 fn default_seed() -> u64 {
     1
+}
+
+/// A tool's policy, where it differs from the default (`archi/04-tools.md`, "Policies").
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Policy {
+    /// The call waits for the harness's approval (an `approve` or `reject` step).
+    #[serde(default)]
+    pub approval: bool,
+    /// `retry` (the default) or `at_most_once`.
+    #[serde(default)]
+    pub on_interruption: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -82,6 +102,16 @@ pub enum Step {
     },
     /// Moves the virtual clock forward, such as `"2h"`.
     Advance(String),
+    /// The harness approves the call of this tool that waits for it.
+    Approve(String),
+    /// The harness rejects the call of this tool that waits for it.
+    Reject {
+        tool: String,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    /// The harness renews the run's credentials: headers by MCP server.
+    Credentials(BTreeMap<String, BTreeMap<String, String>>),
 }
 
 /// What must be true once the run is driven. Everything not given is not checked.
