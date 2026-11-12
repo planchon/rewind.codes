@@ -81,8 +81,8 @@ pub struct ServerArgs {
     #[arg(long, env = "PTC_LISTEN", default_value = "127.0.0.1:8080")]
     pub listen: SocketAddr,
 
-    /// The store: `turso:<path>`.
-    #[arg(long, env = "PTC_STORE")]
+    /// The store: `turso:<path>`, or `postgres://…` for a deployment.
+    #[arg(long, env = "PTC_STORE", hide_env_values = true)]
     pub store: Option<String>,
 
     /// Large payloads and archives: a directory, or `s3://<bucket>`. Next to a Turso database
@@ -163,6 +163,21 @@ pub struct ServerArgs {
     /// What is logged on standard error, as `RUST_LOG` writes it.
     #[arg(long, env = "PTC_LOG", default_value = "info")]
     pub log: String,
+
+    /// Sends service and run telemetry over OTLP to this collector, such as
+    /// `http://localhost:4318`. The `OTEL_EXPORTER_OTLP_*` variables work too.
+    #[arg(long, env = "PTC_OTLP_ENDPOINT")]
+    pub otlp_endpoint: Option<String>,
+
+    /// The OTLP transport: `grpc`, or `http` (protobuf over HTTP, the default).
+    #[arg(long, value_enum, env = "PTC_OTLP_PROTOCOL")]
+    pub otlp_protocol: Option<OtlpArg>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum OtlpArg {
+    Grpc,
+    Http,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -211,6 +226,8 @@ pub(crate) struct Config {
     pub(crate) virtual_time: Option<bool>,
     pub(crate) idle_timeout: Option<Duration>,
     pub(crate) tsgo_cache: Option<PathBuf>,
+    /// Run telemetry over OTLP, when configured.
+    pub(crate) otlp: Option<ptc_otel::OtlpConfig>,
 }
 
 impl Config {
@@ -264,6 +281,7 @@ impl ServerArgs {
             None
         };
         let worker_name = self.worker_name.clone().unwrap_or_else(default_worker_name);
+        let otlp = crate::wiring::telemetry::otlp(&self);
         let activations = self
             .activations
             .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, usize::from));
@@ -314,6 +332,7 @@ impl ServerArgs {
                 virtual_time,
                 idle_timeout: self.idle_timeout,
                 tsgo_cache: self.tsgo_cache,
+                otlp,
             });
         }
 
@@ -333,8 +352,20 @@ impl ServerArgs {
                     path.parent()
                         .map_or_else(|| PathBuf::from("blobs"), |dir| dir.join("blobs")),
                 ),
+                StoreLocation::Postgres(_) => {
+                    return Err(ConfigError::new(
+                        "--blobs is required with Postgres: s3://<bucket>, or a directory every \
+                         worker shares",
+                    ));
+                }
             },
         };
+        if matches!(store, StoreLocation::Postgres(_)) && virtual_time == Some(true) {
+            return Err(ConfigError::new(
+                "--virtual-time is for a Turso store: a shared Postgres database runs in real \
+                 time",
+            ));
+        }
         let master_key = self.master_key.as_deref().ok_or_else(|| {
             ConfigError::new(
                 "--master-key (PTC_MASTER_KEY) is required: 32 random bytes in base64, which \
@@ -372,6 +403,7 @@ impl ServerArgs {
             virtual_time,
             idle_timeout: self.idle_timeout,
             tsgo_cache: self.tsgo_cache,
+            otlp,
         })
     }
 }
@@ -389,7 +421,7 @@ pub(crate) fn parse_master_key(text: &str) -> Result<[u8; 32], ConfigError> {
     })
 }
 
-fn default_worker_name() -> String {
+pub(crate) fn default_worker_name() -> String {
     let host = std::env::var("HOSTNAME")
         .ok()
         .filter(|host| !host.is_empty())
@@ -444,7 +476,21 @@ mod tests {
         .unwrap_or_else(|error| panic!("{error}"));
         assert!(config.api && !config.worker);
         assert_eq!(config.master_key, Some([7u8; 32]));
-        assert!(parse(&["--store", "postgres://x", "--master-key", &key]).is_err());
+        assert!(
+            parse(&["--store", "postgres://x", "--master-key", &key]).is_err(),
+            "Postgres needs --blobs"
+        );
+        let postgres = parse(&[
+            "--store",
+            "postgres://u:p@localhost/ptc",
+            "--blobs",
+            "s3://payloads",
+            "--master-key",
+            &key,
+        ])
+        .unwrap_or_else(|error| panic!("{error}"));
+        assert!(matches!(postgres.store, StoreLocation::Postgres(_)));
+        assert!(parse(&["--store", "mysql://x", "--master-key", &key]).is_err());
         assert!(parse(&["--store", "turso:/tmp/j.db", "--master-key", "short"]).is_err());
     }
 }

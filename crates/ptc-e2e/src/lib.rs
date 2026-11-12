@@ -38,8 +38,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ptc_core::{
-    Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle, RunId,
-    RunMode, RunOutcome, RunState, Script, Timestamp, Tool, ToolRoute, Toolset, parse_duration,
+    Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle, McpServer,
+    McpTransport, RunId, RunMode, RunOutcome, RunState, Script, Timestamp, Tool, ToolRoute,
+    Toolset, parse_duration,
 };
 use ptc_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
@@ -153,9 +154,10 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools: host tools, and the built-ins `http` and `webhook`, with the
-    /// pinned schemas of `schemas` and the policies of `policies` (the default otherwise). In
-    /// mock mode every call goes to the scenario's responses, whatever its route.
+    /// The scenario's tools: host tools, MCP tools, and the built-ins `http` and `webhook`, with
+    /// the pinned schemas of `schemas` and `output_schemas` and the policies of `policies` (the
+    /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
+    /// its route.
     pub fn toolset(&self) -> Toolset {
         scenario_toolset(&self.scenario).expect("the tools were checked when the case was loaded")
     }
@@ -215,9 +217,11 @@ impl Case {
     }
 }
 
-/// The scenario's tools: host tools, and the built-ins `http` and `webhook` with the schemas
-/// of `ptc_runtime::builtins`; `schemas` pins the input schema of some tools, and `policies`
-/// changes the default policy of some.
+/// The scenario's tools: host tools, the tools of its MCP servers, and the built-ins: `http`
+/// as `ptc_mcp::http_tool` pins it, `webhook` with the schema of `ptc_runtime::builtins`.
+/// `schemas` pins the input schema of some tools, `output_schemas` the output schema of some
+/// MCP tools, and `policies` changes the default policy of some. The responses of `http` and of
+/// the MCP tools must be in the format their dispatcher returns.
 fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
     if let Some(unknown) = scenario
         .schemas
@@ -226,32 +230,70 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
     {
         return Err(format!("schemas: {unknown} is not a tool of the scenario"));
     }
-    let mut tools: Vec<Tool> = scenario
-        .tools
-        .keys()
-        .map(|name| {
-            let (route, schema) = match name.as_str() {
-                "http" => (
-                    ToolRoute::Builtin(Builtin::Http {
-                        allowed_hosts: scenario.http_hosts.clone(),
-                    }),
-                    ptc_runtime::builtins::http_input_schema(),
-                ),
-                "webhook" => (
-                    ToolRoute::Builtin(Builtin::Webhook),
-                    ptc_runtime::builtins::webhook_input_schema(),
-                ),
-                _ => (
-                    ToolRoute::Host {
-                        group: name.split_once('.').map(|(group, _)| group.to_owned()),
-                    },
-                    Value::Object(serde_json::Map::new()),
-                ),
-            };
-            let schema = scenario.schemas.get(name).cloned().unwrap_or(schema);
-            Tool::new(name.clone(), route, schema)
+    let servers: Vec<McpServer> = scenario
+        .mcp_servers
+        .iter()
+        .map(|server| {
+            McpServer::new(
+                server.clone(),
+                McpTransport::Http {
+                    url: format!("https://mcp.example.com/{server}"),
+                },
+            )
         })
         .collect();
+    let mut tools = Vec::new();
+    for (name, response) in &scenario.tools {
+        let server = name
+            .split_once('.')
+            .map(|(namespace, _)| namespace)
+            .filter(|namespace| {
+                scenario
+                    .mcp_servers
+                    .iter()
+                    .any(|server| server == namespace)
+            });
+        let mut tool = match (name.as_str(), server) {
+            ("http", _) => ptc_mcp::http_tool(scenario.http_hosts.clone()),
+            ("webhook", _) => Tool::new(
+                "webhook",
+                ToolRoute::Builtin(Builtin::Webhook),
+                ptc_runtime::builtins::webhook_input_schema(),
+            ),
+            (_, Some(server)) => {
+                let mut tool = Tool::new(
+                    name.clone(),
+                    ToolRoute::Mcp {
+                        server: server.to_owned(),
+                    },
+                    Value::Object(serde_json::Map::new()),
+                );
+                tool.output_schema = scenario.output_schemas.get(name).cloned();
+                tool
+            }
+            _ => Tool::new(
+                name.clone(),
+                ToolRoute::Host {
+                    group: name.split_once('.').map(|(group, _)| group.to_owned()),
+                },
+                Value::Object(serde_json::Map::new()),
+            ),
+        };
+        if let Some(schema) = scenario.schemas.get(name) {
+            tool.input_schema = schema.clone();
+        }
+        check_responses(&tool, response)?;
+        tools.push(tool);
+    }
+    if let Some(unknown) = scenario.output_schemas.keys().find(|name| {
+        !tools
+            .iter()
+            .any(|tool| &tool.name == *name && matches!(tool.route, ToolRoute::Mcp { .. }))
+    }) {
+        return Err(format!(
+            "output_schemas: {unknown} is not an MCP tool of the scenario"
+        ));
+    }
     for (name, policy) in &scenario.policies {
         let tool = tools
             .iter_mut()
@@ -268,7 +310,54 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
             }
         };
     }
-    Toolset::new([], tools).map_err(|err| format!("tools: {err}"))
+    Toolset::new(servers, tools).map_err(|err| format!("tools: {err}"))
+}
+
+/// The responses of a tool that are values are in the format its dispatcher returns: the
+/// result of the `http` tool of `ptc-mcp`, or the content of an MCP tool pinned without an
+/// output schema.
+fn check_responses(tool: &Tool, response: &Value) -> Result<(), String> {
+    let responses = match response.get("$sequence") {
+        Some(Value::Array(sequence)) => sequence.iter().collect(),
+        _ => vec![response],
+    };
+    let values = responses.into_iter().filter(|response| {
+        !response
+            .as_object()
+            .is_some_and(|fields| fields.keys().any(|key| key.starts_with('$')))
+    });
+    for value in values {
+        match &tool.route {
+            ToolRoute::Builtin(Builtin::Http { .. }) => {
+                let schema = ptc_mcp::http_output_schema();
+                let validator = jsonschema::validator_for(&schema)
+                    .map_err(|err| format!("the output schema of http: {err}"))?;
+                if let Some(error) = validator.iter_errors(value).next() {
+                    return Err(format!(
+                        "tools: http: {value} is not a result of the http tool: {error} at {}",
+                        error.instance_path()
+                    ));
+                }
+            }
+            ToolRoute::Mcp { .. } if tool.output_schema.is_none() => {
+                let content = value.as_object().is_some_and(|fields| {
+                    fields.get("content").is_some_and(Value::is_array)
+                        && fields
+                            .keys()
+                            .all(|key| key == "content" || key == "structuredContent")
+                });
+                if !content {
+                    return Err(format!(
+                        "tools: {}: {value} is not MCP content, {{\"content\": [blocks], \
+                         \"structuredContent\"?: value}}",
+                        tool.name
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn read(path: &Path) -> Result<String, String> {

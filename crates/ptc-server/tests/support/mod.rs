@@ -22,15 +22,29 @@ pub(crate) struct TestServer {
 }
 
 impl TestServer {
-    /// A server with both roles and these extra options.
+    /// A server with both roles and these extra options, on Turso.
     pub(crate) async fn start(extra: &[&str]) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let store = format!("turso:{}", dir.path().join("journal.db").display());
+        let blobs = dir.path().join("blobs");
+        Self::start_on(dir, &store, &blobs, extra).await
+    }
+
+    /// A server on `store`, with its blobs in `blobs`.
+    pub(crate) async fn start_on(
+        dir: tempfile::TempDir,
+        store: &str,
+        blobs: &std::path::Path,
+        extra: &[&str],
+    ) -> Self {
         let key = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
+        let blobs = blobs.display().to_string();
         let mut args = vec![
             "ptc server",
             "--store",
-            &store,
+            store,
+            "--blobs",
+            &blobs,
             "--master-key",
             &key,
             "--admin-key",

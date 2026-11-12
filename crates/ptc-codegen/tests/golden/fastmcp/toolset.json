@@ -1,0 +1,114 @@
+{
+  "description": "Schemas as Pydantic writes them (FastMCP servers): titles everywhere, optional fields as anyOf with null, $defs, a tool without arguments, an output schema wrapping a list in `result`.",
+  "servers": ["notes"],
+  "tools": [
+    {
+      "name": "notes.search_notes",
+      "route": "mcp",
+      "description": "Search notes by text and tags.",
+      "input": {
+        "properties": {
+          "query": { "title": "Query", "type": "string" },
+          "tags": {
+            "anyOf": [{ "items": { "type": "string" }, "type": "array" }, { "type": "null" }],
+            "default": null,
+            "title": "Tags"
+          },
+          "limit": { "default": 20, "title": "Limit", "type": "integer", "maximum": 100 },
+          "sort": { "$ref": "#/$defs/Sort", "default": "relevance" }
+        },
+        "required": ["query"],
+        "title": "search_notesArguments",
+        "type": "object",
+        "$defs": {
+          "Sort": { "enum": ["relevance", "newest", "oldest"], "title": "Sort", "type": "string" }
+        }
+      },
+      "output": {
+        "$defs": {
+          "Note": {
+            "properties": {
+              "id": { "title": "Id", "type": "string" },
+              "title": { "title": "Title", "type": "string" },
+              "body": { "anyOf": [{ "type": "string" }, { "type": "null" }], "title": "Body" },
+              "tags": { "items": { "type": "string" }, "title": "Tags", "type": "array" },
+              "created": { "format": "date-time", "title": "Created", "type": "string" }
+            },
+            "required": ["id", "title", "body", "tags", "created"],
+            "title": "Note",
+            "type": "object"
+          }
+        },
+        "properties": {
+          "result": { "items": { "$ref": "#/$defs/Note" }, "title": "Result", "type": "array" }
+        },
+        "required": ["result"],
+        "title": "search_notesOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "notes.create_note",
+      "route": "mcp",
+      "description": "Create a note.",
+      "input": {
+        "properties": {
+          "note": { "$ref": "#/$defs/NewNote" }
+        },
+        "required": ["note"],
+        "title": "create_noteArguments",
+        "type": "object",
+        "$defs": {
+          "NewNote": {
+            "additionalProperties": false,
+            "properties": {
+              "title": { "title": "Title", "type": "string", "minLength": 1 },
+              "body": { "default": "", "title": "Body", "type": "string" },
+              "pinned": { "default": false, "title": "Pinned", "type": "boolean" }
+            },
+            "required": ["title"],
+            "title": "NewNote",
+            "type": "object"
+          }
+        }
+      },
+      "output": {
+        "properties": { "id": { "title": "Id", "type": "string" } },
+        "required": ["id"],
+        "title": "create_noteOutput",
+        "type": "object"
+      }
+    },
+    {
+      "name": "notes.list_tags",
+      "route": "mcp",
+      "description": "Every tag in use.",
+      "input": { "properties": {}, "title": "list_tagsArguments", "type": "object" }
+    },
+    {
+      "name": "notes.update_note",
+      "route": "mcp",
+      "description": "Change a note. Only the fields given change.",
+      "input": {
+        "properties": {
+          "id": { "title": "Id", "type": "string" },
+          "changes": {
+            "allOf": [{ "$ref": "#/$defs/NoteChanges" }],
+            "description": "What to change."
+          }
+        },
+        "required": ["id", "changes"],
+        "type": "object",
+        "$defs": {
+          "NoteChanges": {
+            "properties": {
+              "title": { "anyOf": [{ "type": "string" }, { "type": "null" }], "default": null },
+              "pinned": { "anyOf": [{ "type": "boolean" }, { "type": "null" }], "default": null }
+            },
+            "type": "object"
+          }
+        }
+      }
+    }
+  ]
+}

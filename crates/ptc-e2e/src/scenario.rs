@@ -15,9 +15,18 @@ pub struct Scenario {
     #[serde(default = "empty_object")]
     pub input: Value,
     /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]). A tool is a
-    /// host tool (`group.tool` puts it in a group), except `http` and `webhook`, the built-ins.
+    /// host tool (`group.tool` puts it in a group), except `http` and `webhook`, the built-ins,
+    /// and the tools of `mcp_servers`.
     #[serde(default)]
     pub tools: BTreeMap<String, Value>,
+    /// MCP servers: a tool `server.tool` of one of them is an MCP tool. Pinned without an output
+    /// schema (unless `output_schemas` gives one), it answers with MCP content, as `ptc-mcp`
+    /// returns it: `{"content": [blocks], "structuredContent"?: value}`.
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    /// The pinned output schema of some MCP tools, by name.
+    #[serde(default)]
+    pub output_schemas: BTreeMap<String, Value>,
     /// The policies that differ from the default, by tool.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
@@ -26,8 +35,9 @@ pub struct Scenario {
     /// is a worker that dies with the call.
     #[serde(default)]
     pub host_worker: bool,
-    /// The pinned input schema of some tools, by name. The other host tools accept any
-    /// arguments; the built-ins get the schemas of `ptc_runtime::builtins`.
+    /// The pinned input schema of some tools, by name. The other host and MCP tools accept any
+    /// arguments; the built-ins get the schemas of `ptc_mcp::http_tool` and
+    /// `ptc_runtime::builtins`.
     #[serde(default)]
     pub schemas: BTreeMap<String, Value>,
     /// The hosts the built-in `http` tool allows, when `tools` has it.

@@ -22,7 +22,7 @@ use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
 use crate::wiring::store::Store;
-use crate::wiring::telemetry::NoExport;
+use crate::wiring::telemetry::{self, Exporter};
 use crate::wiring::tools::Tools;
 use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender};
 use crate::{http, worker};
@@ -105,6 +105,9 @@ impl Running {
         if tokio::time::timeout(DRAIN, drain).await.is_err() {
             tracing::warn!("the work in flight did not finish within {DRAIN:?}");
         }
+        self.app.tools.close();
+        self.app.exporter.shutdown().await;
+        self.app.store.close().await;
         if let Some(socket) = &self.socket {
             let _ = std::fs::remove_file(socket);
         }
@@ -130,7 +133,12 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
     let clock = clock(&config, &store).await?;
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| StartupError::Setup(error.to_string()))?;
-    let tools = Tools::new();
+    let tools = Tools::new().map_err(StartupError::Setup)?;
+    let exporter = Exporter::new(
+        config.otlp.as_ref(),
+        &telemetry::service(&config.worker_name),
+    )
+    .map_err(StartupError::Setup)?;
     let webhooks = HttpWebhooks::new(
         ServerRender {
             store: store.clone(),
@@ -186,7 +194,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         blobs,
         checker::checker(config.tsgo_cache.clone()),
         tools,
-        NoExport,
+        exporter,
         settings,
     ));
     register_admin_key(&app, &config).await?;

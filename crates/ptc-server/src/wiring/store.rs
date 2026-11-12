@@ -4,6 +4,7 @@
 //! | `--store` | Backend |
 //! | --- | --- |
 //! | `turso:<path>` | `ptc-store-turso`: the embedded server, local development |
+//! | `postgres://…` | `ptc-store-postgres`: production, several workers on one database |
 //!
 //! Each method is handed to the backend as it is: the enum only picks it.
 
@@ -25,7 +26,8 @@ use ptc_engine::ports::{
     TaskRef, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolStats,
     ToolStatsFilter, ToolTask, WebhookTarget, WebhookToken,
 };
-use ptc_store_turso::{MasterKey, TursoStore};
+use ptc_store_postgres::PostgresStore;
+use ptc_store_turso::TursoStore;
 use std::collections::BTreeMap;
 
 use crate::config::ConfigError;
@@ -35,11 +37,16 @@ use crate::config::ConfigError;
 pub(crate) enum StoreLocation {
     /// A Turso database file.
     Turso(PathBuf),
+    /// A Postgres connection string.
+    Postgres(String),
 }
 
 impl StoreLocation {
-    /// Reads `--store`: `turso:<path>`.
+    /// Reads `--store`: `turso:<path>`, or `postgres://…`.
     pub(crate) fn parse(text: &str) -> Result<Self, ConfigError> {
+        if text.starts_with("postgres://") || text.starts_with("postgresql://") {
+            return Ok(Self::Postgres(text.to_owned()));
+        }
         if let Some(path) = text.strip_prefix("turso:") {
             if path.is_empty() {
                 return Err(ConfigError::new(
@@ -48,9 +55,10 @@ impl StoreLocation {
             }
             return Ok(Self::Turso(PathBuf::from(path)));
         }
-        Err(ConfigError::new(format!(
-            "--store {text:?}: expected turso:<path>"
-        )))
+        Err(ConfigError::new(
+            "--store: expected turso:<path> or postgres://… (the value is not printed: it may \
+             hold a password)",
+        ))
     }
 }
 
@@ -58,6 +66,7 @@ impl StoreLocation {
 #[derive(Debug, Clone)]
 pub(crate) enum Store {
     Turso(TursoStore),
+    Postgres(PostgresStore),
 }
 
 impl Store {
@@ -72,32 +81,52 @@ impl Store {
                         ConfigError::new(format!("cannot create {}: {error}", parent.display()))
                     })?;
                 }
-                let store = TursoStore::open(path, MasterKey::from_bytes(master_key))
-                    .await
-                    .map_err(|error| {
-                        ConfigError::new(format!("cannot open {}: {error}", path.display()))
-                    })?;
+                let master_key = ptc_store_turso::MasterKey::from_bytes(master_key);
+                let store = TursoStore::open(path, master_key).await.map_err(|error| {
+                    ConfigError::new(format!("cannot open {}: {error}", path.display()))
+                })?;
                 Ok(Self::Turso(store))
+            }
+            StoreLocation::Postgres(url) => {
+                let master_key = ptc_store_postgres::MasterKey::from_bytes(master_key);
+                let store =
+                    PostgresStore::connect(&ptc_store_postgres::Config::new(url), master_key)
+                        .await
+                        .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
+                Ok(Self::Postgres(store))
             }
         }
     }
 
-    /// The virtual time saved by a server that runs in virtual time; only Turso keeps it.
+    /// Closes the store's connections.
+    pub(crate) async fn close(&self) {
+        if let Store::Postgres(store) = self {
+            store.close().await;
+        }
+    }
+
+    /// The virtual time saved by a server that runs in virtual time; only Turso keeps it, a
+    /// shared Postgres database always runs in real time.
     pub(crate) async fn virtual_time(&self) -> Result<Option<Timestamp>, StoreError> {
         match self {
             Store::Turso(store) => store
                 .virtual_time()
                 .await
                 .map_err(|error| StoreError::Backend(error.to_string())),
+            Store::Postgres(_) => Ok(None),
         }
     }
 
     pub(crate) async fn set_virtual_time(&self, at: Option<Timestamp>) -> Result<(), StoreError> {
-        match self {
-            Store::Turso(store) => store
+        match (self, at) {
+            (Store::Turso(store), at) => store
                 .set_virtual_time(at)
                 .await
                 .map_err(|error| StoreError::Backend(error.to_string())),
+            (Store::Postgres(_), None) => Ok(()),
+            (Store::Postgres(_), Some(_)) => Err(StoreError::Backend(
+                "a server on Postgres runs in real time: virtual time is for Turso".into(),
+            )),
         }
     }
 }
@@ -106,6 +135,7 @@ macro_rules! each {
     ($self:ident, $store:ident => $call:expr) => {
         match $self {
             Store::Turso($store) => $call,
+            Store::Postgres($store) => $call,
         }
     };
 }

@@ -77,6 +77,7 @@
     "moduleResolution": "bundler",
     "moduleDetection": "force",
     "isolatedModules": true,
+    "verbatimModuleSyntax": true,
     "allowJs": false,
     "resolveJsonModule": false,
     "skipDefaultLibCheck": true

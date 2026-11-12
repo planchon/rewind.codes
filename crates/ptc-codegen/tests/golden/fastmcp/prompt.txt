@@ -1,0 +1,6 @@
+import { notes } from "ptc:tools";
+notes.create_note({ note: { title: string, body?: string, pinned?: boolean } }) → { id: string } · Create a note.
+notes.list_tags() → ToolContent · Every tag in use.
+notes.search_notes({ query: string, limit?: number, sort?: "relevance" | "newest" | "oldest", tags?: string[] | null }) → { result: { body: string | null, created: string, id: string, tags: string[], title: string }[] } · Search notes by text and tags.
+notes.update_note({ changes: { pinned?: boolean | null, title?: string | null }, id: string }) → ToolContent · Change a note. Only the fields given change.
+ToolContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP tool without an output schema returns: its content blocks (text, image, audio, resource), with helpers.

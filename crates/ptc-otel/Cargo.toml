@@ -1,0 +1,48 @@
+[package]
+name = "ptc-otel"
+description = "OpenTelemetry for ai-ptc: the SpanExporter adapter (OTLP traces and logs), and the tracing subscriber the composition roots install."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ptc-core.workspace = true
+ptc-engine.workspace = true
+# Header names and values of the gRPC metadata.
+http = "1"
+# No default features: the SDK's internal logs go through `tracing`, and would be exported again.
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "logs"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "logs"] }
+# OTLP over gRPC (tonic) and over HTTP with protobuf (async reqwest), both with TLS.
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+    "trace",
+    "logs",
+    "grpc-tonic",
+    "tls-aws-lc",
+    "tls-roots",
+    "http-proto",
+    "reqwest-client",
+    "reqwest-rustls",
+] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "std",
+    "registry",
+    "fmt",
+    "env-filter",
+    "ansi",
+    "tracing-log",
+] }
+
+[dev-dependencies]
+ptc-engine = { workspace = true, features = ["conformance"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["testing"] }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

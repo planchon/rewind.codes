@@ -8,7 +8,7 @@ use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
 /// | Route | Dispatcher |
 /// | --- | --- |
 /// | MCP tools | `mcp`: `ptc-mcp`, or mocks |
-/// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `ptc-http`, or mocks |
+/// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `ptc-mcp`'s `HttpTool`, or mocks |
 /// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are claimed by the harness's worker and never dispatched |
 ///
 /// [`Unrouted`] stands for a route without a dispatcher. Credentials go only to the dispatcher

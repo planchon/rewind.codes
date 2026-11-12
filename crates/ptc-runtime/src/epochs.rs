@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use ptc_core::{Epoch, ToolRoute, Toolset};
+use ptc_core::{Epoch, Tool, ToolRoute, Toolset};
 
 /// The glue of one epoch.
 #[derive(Debug)]
@@ -66,21 +66,21 @@ pub(crate) fn latest() -> &'static Glue {
 /// namespace per MCP server or host-tool group, and the host tools without a group by name.
 /// The built-ins are not exported: scripts reach them through `fetch` and `webhook`.
 struct ToolExportsV1<'a> {
-    namespaces: BTreeMap<&'a str, Vec<&'a str>>,
-    bare: Vec<&'a str>,
+    namespaces: BTreeMap<&'a str, Vec<&'a Tool>>,
+    bare: Vec<&'a Tool>,
 }
 
 impl<'a> ToolExportsV1<'a> {
     fn of(toolset: &'a Toolset) -> Self {
-        let mut namespaces: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+        let mut namespaces: BTreeMap<&str, Vec<&Tool>> = BTreeMap::new();
         let mut bare = Vec::new();
         for tool in toolset.tools() {
             if matches!(tool.route, ToolRoute::Builtin(_)) {
                 continue;
             }
             match tool.namespace() {
-                Some(namespace) => namespaces.entry(namespace).or_default().push(&tool.name),
-                None if is_identifier(&tool.name) => bare.push(tool.name.as_str()),
+                Some(namespace) => namespaces.entry(namespace).or_default().push(tool),
+                None if is_identifier(&tool.name) => bare.push(tool),
                 // Unreachable from a script: there is no name to import it by.
                 None => {}
             }
@@ -92,7 +92,17 @@ impl<'a> ToolExportsV1<'a> {
 fn tool_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
     let exports = ToolExportsV1::of(toolset);
     let namespaces = exports.namespaces.keys().copied();
-    namespaces.chain(exports.bare).map(str::to_owned).collect()
+    let bare = exports.bare.iter().map(|tool| tool.name.as_str());
+    namespaces.chain(bare).map(str::to_owned).collect()
+}
+
+/// The function of `ptc:internal` that calls a tool: an MCP tool pinned without an output
+/// schema returns its content, which gets the `text()` and `json()` helpers of `ToolContent`.
+fn caller(tool: &Tool) -> &'static str {
+    match tool.route {
+        ToolRoute::Mcp { .. } if tool.output_schema.is_none() => "content",
+        _ => "call",
+    }
 }
 
 /// `ptc:tools` for epoch 1: one frozen namespace object per MCP server or host-tool group, and
@@ -100,17 +110,21 @@ fn tool_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
 /// a name that is not an identifier is still reachable with brackets (`github["close-issue"]`).
 fn tools_module_v1(toolset: &Toolset) -> String {
     let ToolExportsV1 { namespaces, bare } = ToolExportsV1::of(toolset);
-    let mut module =
-        String::from("import hooks from \"ptc:internal\";\nconst call = hooks.callTool;\n");
+    let mut module = String::from(
+        "import hooks from \"ptc:internal\";\n\
+         const call = hooks.callTool;\n\
+         const content = hooks.callToolContent;\n",
+    );
     for (namespace, tools) in &namespaces {
         let _ = writeln!(module, "export const {namespace} = Object.freeze({{");
-        for full in tools {
-            let name = &full[namespace.len() + 1..];
+        for tool in tools {
+            let name = &tool.name[namespace.len() + 1..];
             let _ = writeln!(
                 module,
-                "  {}: (args) => call({}, args),",
+                "  {}: (args) => {}({}, args),",
                 js_string(name),
-                js_string(full)
+                caller(tool),
+                js_string(&tool.name)
             );
         }
         module.push_str("});\n");
@@ -118,8 +132,10 @@ fn tools_module_v1(toolset: &Toolset) -> String {
     for tool in bare {
         let _ = writeln!(
             module,
-            "export const {tool} = (args) => call({}, args);",
-            js_string(tool)
+            "export const {} = (args) => {}({}, args);",
+            tool.name,
+            caller(tool),
+            js_string(&tool.name)
         );
     }
     module
@@ -150,6 +166,7 @@ mod tests {
             module,
             "import hooks from \"ptc:internal\";\n\
              const call = hooks.callTool;\n\
+             const content = hooks.callToolContent;\n\
              export const github = Object.freeze({\n  \
                \"close-issue\": (args) => call(\"github.close-issue\", args),\n  \
                \"list_issues\": (args) => call(\"github.list_issues\", args),\n\
@@ -183,16 +200,25 @@ mod tests {
 
     #[test]
     fn built_ins_are_not_exported() {
-        use ptc_core::{Builtin, McpServer, McpTransport, Tool};
+        use ptc_core::{Builtin, McpServer, McpTransport};
         let github = McpServer::new(
             "github",
             McpTransport::Http {
                 url: "https://mcp.example.com/github".into(),
             },
         );
+        let mut get_issue = Tool::new(
+            "github.get_issue",
+            ToolRoute::Mcp {
+                server: "github".into(),
+            },
+            serde_json::json!({}),
+        );
+        get_issue.output_schema = Some(serde_json::json!({ "type": "object" }));
         let toolset = Toolset::new(
             [github],
             [
+                get_issue,
                 Tool::new(
                     "github.list_issues",
                     ToolRoute::Mcp {
@@ -219,6 +245,16 @@ mod tests {
         assert_eq!(exports, ["github"]);
         let module = tools_module_v1(&toolset);
         assert!(module.contains("export const github"), "{module}");
+        // An MCP tool without an output schema returns its content, with the helpers; with
+        // one, its structured content.
+        assert!(
+            module.contains("\"get_issue\": (args) => call(\"github.get_issue\", args),"),
+            "{module}"
+        );
+        assert!(
+            module.contains("\"list_issues\": (args) => content(\"github.list_issues\", args),"),
+            "{module}"
+        );
         assert!(
             !module.contains("\"http\"") && !module.contains("webhook"),
             "{module}"

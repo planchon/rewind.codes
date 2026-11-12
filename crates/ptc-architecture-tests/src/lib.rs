@@ -276,6 +276,10 @@ mod tests {
             ),
             ("ptc-store-turso", vec![dependency("ptc-format", None)]),
             (
+                "ptc-store-postgres",
+                vec![dependency("ptc-format", None), dependency("sqlx", None)],
+            ),
+            (
                 "ptc-e2e",
                 vec![dependency("ptc-runtime", None), dependency("anyhow", None)],
             ),
@@ -344,6 +348,11 @@ mod tests {
             (
                 "ptc-store-turso",
                 vec![dependency("ptc-blob", None)],
+                "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
+            ),
+            (
+                "ptc-store-postgres",
+                vec![dependency("ptc-store-turso", None)],
                 "adapters depend on ptc-core and ptc-engine (stores also on ptc-format), never on each other",
             ),
             (

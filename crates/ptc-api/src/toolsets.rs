@@ -38,6 +38,11 @@ pub struct CreateToolset {
     /// Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http: Option<HttpTool>,
+    /// Credentials of the MCP servers: used to list their tools, and kept as the toolset's
+    /// credentials, as `PUT /v1/toolsets/{id}/credentials` sets them. They are not part of the
+    /// toolset's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<Credentials>,
 }
 
 /// An MCP server: exactly one of `url` (streamable HTTP) and `command` (stdio).

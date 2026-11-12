@@ -41,6 +41,7 @@ pub(super) async fn create(
     Body(request): Body<CreateToolset>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
+    let credentials = request.credentials.clone();
     let toolset = pin(&app, &caller.tenant, request).await?;
     let names: Vec<String> = toolset
         .tools()
@@ -61,6 +62,11 @@ pub(super) async fn create(
     app.store
         .put_toolset(&caller.tenant, &toolset, &declarations)
         .await?;
+    if let Some(credentials) = credentials {
+        app.engine
+            .set_toolset_credentials(&caller.tenant, toolset.digest(), &secrets(credentials))
+            .await?;
+    }
     let stored = app
         .store
         .get_toolset(&caller.tenant, toolset.digest())
@@ -206,6 +212,19 @@ pub(super) async fn credentials(
     Ok(StatusCode::NO_CONTENT)
 }
 
+fn server_secrets(credentials: ptc_api::toolsets::ServerCredentials) -> ServerCredentials {
+    let secret = |values: BTreeMap<String, String>| -> BTreeMap<String, Secret> {
+        values
+            .into_iter()
+            .map(|(name, value)| (name, Secret::new(value)))
+            .collect()
+    };
+    ServerCredentials {
+        headers: secret(credentials.headers),
+        env: secret(credentials.env),
+    }
+}
+
 /// The credentials of the API, as the secret store keeps them.
 pub(crate) fn secrets(credentials: Credentials) -> ptc_engine::ports::Credentials {
     let secret = |values: BTreeMap<String, String>| -> BTreeMap<String, Secret> {
@@ -302,15 +321,18 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
             }
         };
         let pinned = McpServer::new(server.name.clone(), transport);
-        let listed =
-            app.tools
-                .discover(tenant, &pinned, None)
-                .await
-                .map_err(|error| match error {
-                    DiscoveryError::Unavailable(message) => {
-                        ApiError::new(ProblemType::ToolsetUnavailable, message)
-                    }
-                })?;
+        let credentials = request
+            .credentials
+            .as_ref()
+            .and_then(|credentials| credentials.servers.get(&server.name))
+            .map(|credentials| server_secrets(credentials.clone()));
+        let listed = app
+            .tools
+            .discover(tenant, &pinned, credentials.as_ref())
+            .await
+            .map_err(|DiscoveryError(message)| {
+                ApiError::new(ProblemType::ToolsetUnavailable, message)
+            })?;
         for unknown in server
             .policies
             .keys()

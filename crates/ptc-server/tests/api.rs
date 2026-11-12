@@ -227,9 +227,22 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
     assert!(toolset.tools.iter().any(|tool| tool.name == "webhook"));
     assert_eq!(harness.list_toolsets().await.unwrap().toolsets.len(), 1);
 
+    assert!(
+        toolset
+            .declarations
+            .dts
+            .contains("export function ask_user"),
+        "{}",
+        toolset.declarations.dts
+    );
+    let mut wrong = start(&ASK.replace("\"ready?\"", "42"));
+    wrong.toolset = Some(toolset.id.clone());
+    let refused = problem(harness.start_run(&wrong, None).await.unwrap_err());
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
+    assert_eq!(refused.diagnostics[0].code, "TS2322", "{refused}");
+
     let mut request = start(ASK);
     request.toolset = Some(toolset.id.clone());
-    request.check = Some(false);
     let run = harness.start_run(&request, None).await.unwrap();
 
     let query = TaskQuery {
@@ -343,7 +356,6 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
         .unwrap();
     let mut request = start(ASK);
     request.toolset = Some(toolset.id.clone());
-    request.check = Some(false);
 
     // Rejected: the call fails with a ToolError, and the run fails.
     let run = harness.start_run(&request, None).await.unwrap();
@@ -820,5 +832,64 @@ async fn the_server_serves_its_dashboard_and_says_what_it_is() {
         Some(ProblemType::Forbidden),
         "only the embedded server stops through the API"
     );
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_http_tool_is_pinned_with_its_allow_list_only() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let toolset = harness
+        .create_toolset(&CreateToolset {
+            http: Some(ptc_api::toolsets::HttpTool {
+                allow: vec!["api.example.com".into()],
+                policy: None,
+            }),
+            ..CreateToolset::default()
+        })
+        .await
+        .unwrap();
+    let names: Vec<&str> = toolset
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
+    assert_eq!(names, ["http", "webhook"]);
+    assert!(
+        toolset
+            .declarations
+            .dts
+            .starts_with(ptc_check::HTTP_TOOL_REFERENCE),
+        "the declarations bring fetch to the type-checker"
+    );
+    let checked = harness
+        .check(&CheckRequest {
+            script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
+            toolset: Some(toolset.id.clone()),
+        })
+        .await
+        .unwrap();
+    assert!(checked.ok, "{:?}", checked.diagnostics);
+    let without = harness
+        .check(&CheckRequest {
+            script: "export default async function main() {\n  const response = await fetch(\"https://api.example.com/x\");\n  return response.status;\n}\n".into(),
+            toolset: None,
+        })
+        .await
+        .unwrap();
+    assert!(!without.ok, "no http tool, no fetch");
+    let empty = problem(
+        harness
+            .create_toolset(&CreateToolset {
+                http: Some(ptc_api::toolsets::HttpTool {
+                    allow: Vec::new(),
+                    policy: None,
+                }),
+                ..CreateToolset::default()
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(empty.kind(), Some(ProblemType::InvalidToolset));
     server.stop().await;
 }

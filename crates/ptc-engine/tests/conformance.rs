@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemoryWebhooks,
+    MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter, MemoryWebhooks,
 };
 use ptc_engine::conformance;
 use ptc_engine::ports::{Secret, Subscription, TenantId, WebhookEventType};
@@ -65,4 +65,9 @@ async fn memory_webhooks_conform() {
         (sender.clone(), MemoryReceiver(sender))
     })
     .await;
+}
+
+#[tokio::test]
+async fn memory_span_exporter_conforms() {
+    conformance::spans::run_all(MemorySpanExporter::new).await;
 }

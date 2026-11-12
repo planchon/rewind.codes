@@ -38,11 +38,14 @@
     JSONStringify,
     NumberIsInteger,
     NumberParseInt,
+    ObjectCreate,
     ObjectDefineProperty,
     ObjectEntries,
     ObjectFreeze,
     ObjectGetOwnPropertyDescriptor,
+    ObjectPrototype,
     ObjectPrototypeIsPrototypeOf,
+    ObjectSetPrototypeOf,
     Promise,
     PromisePrototypeThen,
     PromiseReject,
@@ -367,10 +370,53 @@
     throw new TypeError(`invalid duration: ${String(duration)}`);
   }
 
+  // What an MCP tool pinned without an output schema returns, `{ content, structuredContent? }`,
+  // reaches the script with two helpers (archi/04-tools.md, "Toolsets and code generation"), as
+  // `ptc-tools.d.ts` declares them in `ToolContent`: `text()` joins the text blocks with
+  // newlines; `json()` is `structuredContent` when the tool sent it, else `text()` parsed as
+  // JSON. They live on a frozen prototype, not enumerable: the value's own keys stay the
+  // result's, what JSON.stringify and the journal see.
+  const ToolContentPrototype = ObjectFreeze(
+    ObjectCreate(ObjectPrototype, {
+      text: {
+        value: function text() {
+          const content = this.content;
+          if (!ArrayIsArray(content)) return "";
+          const texts = [];
+          for (let i = 0; i < content.length; i++) {
+            const block = content[i];
+            if (block !== null && typeof block === "object" && block.type === "text") {
+              ArrayPrototypePush(texts, String(block.text ?? ""));
+            }
+          }
+          return ArrayPrototypeJoin(texts, "\n");
+        },
+      },
+      json: {
+        value: function json() {
+          if (this.structuredContent !== undefined) return this.structuredContent;
+          return JSONParse(ReflectApply(ToolContentPrototype.text, this, []));
+        },
+      },
+    }),
+  );
+
+  function toolContent(result) {
+    if (result !== null && typeof result === "object" && !ArrayIsArray(result)) {
+      ObjectSetPrototypeOf(result, ToolContentPrototype);
+    }
+    return result;
+  }
+
+  function callToolContent(tool, args) {
+    return callTool(tool, args, true);
+  }
+
   // A tool call: the op checks the arguments against the tool's pinned input schema and
-  // records the command. A call refused before it is recorded rejects with an error whose stack
-  // starts at the script's call.
-  function callTool(tool, args) {
+  // records the command. A call without arguments sends `{}`. A call refused before it is
+  // recorded rejects with an error whose stack starts at the script's call. `content`: the
+  // result is MCP content, which gets the helpers of `ToolContent`.
+  function callTool(tool, args, content = false) {
     let json;
     try {
       json = JSONStringify(args === undefined ? {} : args);
@@ -391,7 +437,7 @@
     }
     toolsInFlight++;
     return new Promise((resolve, reject) => {
-      pending.set(seq, { kind: "tool", tool, resolve, reject });
+      pending.set(seq, { kind: "tool", tool, content, resolve, reject });
     });
   }
 
@@ -560,11 +606,14 @@
   // ---------------------------------------------------------------------------------------
   // fetch: a call of the built-in `http` tool, present only when the toolset enables it
   // (archi/04-tools.md, "The http tool and egress"). The request and the response cross the
-  // boundary as JSON (archi/08-decisions.md):
+  // boundary as JSON, in the format of the tool `ptc-mcp` implements (archi/08-decisions.md):
   //
-  //   args   { url, method, headers: [[name, value], …], body?: { text } | { base64 } }
-  //   result { status, statusText?, url?, redirected?, headers?: [[name, value], …],
-  //            body?: { text } | { base64 } }
+  //   args   { url, method, headers: [[name, value], …], body?, bodyEncoding?: "base64" }
+  //   result { status, statusText, url, redirected, headers: [[name, value], …], body,
+  //            bodyEncoding?: "base64" }
+  //
+  // A body is text, or bytes in base64 with `"bodyEncoding": "base64"`. Reading a result, only
+  // `status` is required: the other fields default to empty.
 
   const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
   const HEADER_VALUE = /^[^\0\r\n]*$/;
@@ -649,13 +698,14 @@
       }
       let contentType;
       if (typeof body === "string") {
-        request.body = { text: body };
+        request.body = body;
         contentType = "text/plain;charset=UTF-8";
       } else if (ObjectPrototypeIsPrototypeOf(URLSearchParams.prototype, body)) {
-        request.body = { text: body.toString() };
+        request.body = body.toString();
         contentType = "application/x-www-form-urlencoded;charset=UTF-8";
       } else if (ArrayBufferIsView(body) || body instanceof globalThis.ArrayBuffer) {
-        request.body = { base64: forgivingBase64Encode(bytesOf(body)) };
+        request.body = forgivingBase64Encode(bytesOf(body));
+        request.bodyEncoding = "base64";
       } else {
         throw new TypeError("a body is a string, URLSearchParams, an ArrayBuffer or a typed array");
       }
@@ -718,10 +768,18 @@
     #redirected;
     #headers;
     #body;
+    #base64;
     #used = false;
     constructor(result) {
+      const notAResponse = () =>
+        new TypeError("the http tool returned something that is not a response");
       if (result === null || typeof result !== "object" || !NumberIsInteger(result.status)) {
-        throw new TypeError("the http tool returned something that is not a response");
+        throw notAResponse();
+      }
+      const body = result.body ?? "";
+      const encoding = result.bodyEncoding ?? "utf8";
+      if (typeof body !== "string" || (encoding !== "utf8" && encoding !== "base64")) {
+        throw notAResponse();
       }
       this.#status = result.status;
       this.#statusText = String(result.statusText ?? "");
@@ -733,7 +791,8 @@
           ([name, value]) => [StringPrototypeToLowerCase(String(name)), String(value)],
         ),
       );
-      this.#body = result.body ?? { text: "" };
+      this.#body = body;
+      this.#base64 = encoding === "base64";
     }
     get ok() {
       return this.#status >= 200 && this.#status <= 299;
@@ -763,15 +822,11 @@
     }
     #bytes() {
       const body = this.#read();
-      return typeof body.base64 === "string"
-        ? forgivingBase64Decode(body.base64)
-        : new TextEncoder().encode(String(body.text ?? ""));
+      return this.#base64 ? forgivingBase64Decode(body) : new TextEncoder().encode(body);
     }
     #text() {
       const body = this.#read();
-      return typeof body.base64 === "string"
-        ? new TextDecoder().decode(forgivingBase64Decode(body.base64))
-        : String(body.text ?? "");
+      return this.#base64 ? new TextDecoder().decode(forgivingBase64Decode(body)) : body;
     }
     text() {
       return settle(() => this.#text());
@@ -868,6 +923,7 @@
 
     globalThis.__ptcHandoff = ObjectFreeze({
       callTool,
+      callToolContent,
       sleep,
       signal,
       webhook,
@@ -943,7 +999,9 @@
         const entry = take(completion.seq);
         if (entry === undefined) break;
         toolsInFlight--;
-        if (failure === undefined) entry.resolve(completion.result);
+        if (failure === undefined) {
+          entry.resolve(entry.content ? toolContent(completion.result) : completion.result);
+        }
         break;
       }
       case "tool_call_failed": {

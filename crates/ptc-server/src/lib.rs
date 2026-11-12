@@ -34,7 +34,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
-pub use config::{ConfigError, RoleArg, ServerArgs};
+pub use config::{ConfigError, OtlpArg, RoleArg, ServerArgs};
 pub use serve::{Running, StartupError, VERSION, start};
 
 /// Exit codes of `ptc server`.
@@ -61,7 +61,6 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
                 return ExitCode::from(if error.use_stderr() { exit::USAGE } else { 0 });
             }
         };
-    wiring::telemetry::install(&args.log);
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("ptc-server")
@@ -74,6 +73,13 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         }
     };
     runtime.block_on(async move {
+        let _telemetry = match wiring::telemetry::install(&args) {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("ptc server: telemetry: {error}");
+                return ExitCode::from(exit::USAGE);
+            }
+        };
         let running = match start(args).await {
             Ok(running) => running,
             Err(error) => {
