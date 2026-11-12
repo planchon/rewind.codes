@@ -37,6 +37,7 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-format` | Format v1: one event per row, journal documents, cassettes, pinned toolsets (canonical, hashing to the toolset's digest), values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
 | `ptc-engine` | The final ports of 0.1, each with an in-memory adapter; the conformance suites of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, passed by the in-memory adapters. Use cases (start with script checks, idempotency key, TTL and the tenant's quota; signal with idempotency key; cancel; activate; fire timers; expire runs; run tool tasks, an interrupted call retried with its idempotency key up to 5 attempts, or failed with `outcomeUnknown` under `at_most_once`; quarantine and give up; replay; export); activation with the commit invariant, limits and the cancellation grace; payload offload above 1 KiB, with its `payloads` rows; driver in real and virtual time; use-case tests on a fake executor. |
 | `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, started from the epoch's V8 snapshot, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, the web-standard globals of `deno_web`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), a CPU watchdog on the isolate thread's CPU clock and a heap limit; args validated against the pinned schema inside the op; `webhook()`; `fetch` with the `http` tool; `ptc:tools` generated from routes; TypeScript mock handlers as a `ToolDispatcher` (`TsMocks`). |
+| `ptc-store-turso` | `JournalStore`, `ReadModel` and `SecretStore` on Turso Database (`turso` 0.8.3): the tables of 06, events in format v1, schema version 1 with migrations embedded and a newer schema refused, settings and virtual time in `meta`, secrets encrypted with a data key per tenant under the master key. Passes the three conformance suites, each check on a new database file; `examples/load.rs` measures commit latency and throughput ([08](08-decisions.md#taken-while-building-the-embedded-store-november-2026)). |
 | `ptc-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
 | `ptc-e2e` | The epoch-1 corpus: 25 blue and 28 red cases, recorded and replayed from their journals; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
 | `ptc-api` | The HTTP API `/v1` as a contract: the DTOs of every endpoint, problem+json errors, `Idempotency-Key`, the event stream, webhook payloads signed following Standard Webhooks and their verification, the OpenAPI 3.1 document committed at `api/openapi.json` (a test fails when it is stale), and an async client over HTTP(S) and over the embedded server's unix socket. |
@@ -45,9 +46,8 @@ warnings` and `cargo test --workspace` pass.
 
 Not there yet:
 
-- The other crates: `ptc-store-turso`, `ptc-store-postgres`, `ptc-blob`, `ptc-mcp`,
-  `ptc-codegen`, `ptc-check`, `ptc-otel`, `ptc-cli`, `ptc-server` and the evals.
-- Payloads above 1 KiB all go to the `BlobStore`: the table tier is not used.
+- The other crates: `ptc-store-postgres`, `ptc-blob`, `ptc-mcp`, `ptc-codegen`, `ptc-check`,
+  `ptc-otel`, `ptc-cli`, `ptc-server` and the evals.
 - Starting a run does not type-check the script.
 - The projector, its span derivation and the in-memory read model exist, but no OpenTelemetry
   exporter (`ptc-otel`) nor a stored read model.
