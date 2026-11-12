@@ -40,6 +40,7 @@ use crate::compile;
 use crate::epochs;
 use crate::isolate::{Isolate, SandboxLimits};
 use crate::loader::{Loader, MOCKS_SPECIFIER};
+use crate::memory;
 use crate::ops::ExecState;
 
 /// The glue of the mock isolate.
@@ -94,6 +95,7 @@ impl TsMocks {
         let started_at = clock.now();
         std::thread::Builder::new()
             .name("ptc-mocks".into())
+            .stack_size(memory::ISOLATE_THREAD_STACK)
             .spawn(move || serve(compiled, limits, started_at, clock, loaded, inbox))
             .map_err(|err| MockError::Internal(format!("cannot spawn the mock thread: {err}")))?;
         let tools = tools

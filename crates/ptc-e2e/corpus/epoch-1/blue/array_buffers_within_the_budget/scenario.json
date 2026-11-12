@@ -1,0 +1,20 @@
+{
+  "description": "Array buffers share one budget per instance. A script that catches the RangeError past it goes on; dropped buffers give their bytes back first, so the refusal comes at the same point live and on replay. A resizable buffer takes its maximum length from the budget, keeps it through a transfer, and a clone takes its own.",
+  "expect": {
+    "status": "completed",
+    "output": {
+      "before": 7,
+      "after": 7,
+      "moved": [
+        1024,
+        1048576,
+        true
+      ],
+      "copy": [
+        2048,
+        true
+      ],
+      "tooLarge": "RangeError: Array buffer allocation failed"
+    }
+  }
+}

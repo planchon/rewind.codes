@@ -35,6 +35,8 @@ pub(crate) struct ExecState {
     /// Bounds on `emitted`, which lives outside V8's heap until the call ends.
     max_emitted: usize,
     max_emitted_bytes: usize,
+    /// The heap limit, which bounds the elements one built-in call may create.
+    heap_bytes: usize,
     /// Why the execution was terminated, once the script emitted more than the bounds allow.
     overflow: Option<String>,
     /// Terminates the execution from an op.
@@ -72,6 +74,7 @@ impl ExecState {
             emitted_bytes: 0,
             max_emitted: limits.emitted_per_trigger,
             max_emitted_bytes: limits.emitted_bytes_per_trigger,
+            heap_bytes: limits.heap_bytes,
             overflow: None,
             isolate: None,
             math_random_state,
@@ -89,6 +92,7 @@ impl ExecState {
             "http": self.toolset.tools().iter().any(|tool| {
                 matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. }))
             }),
+            "maxElements": max_elements(self.heap_bytes),
         })
     }
 
@@ -96,6 +100,7 @@ impl ExecState {
     pub(crate) fn bound(&mut self, limits: &SandboxLimits, isolate: v8::IsolateHandle) {
         self.max_emitted = limits.emitted_per_trigger;
         self.max_emitted_bytes = limits.emitted_bytes_per_trigger;
+        self.heap_bytes = limits.heap_bytes;
         self.isolate = Some(isolate);
     }
 
@@ -104,9 +109,20 @@ impl ExecState {
         std::mem::take(&mut self.emitted)
     }
 
-    /// Why the execution was terminated, if the script emitted more than the bounds allow.
+    /// Why the execution was terminated, if the script emitted more than the bounds allow or
+    /// asked a built-in for more than the heap holds.
     pub(crate) fn overflow(&mut self) -> Option<String> {
         self.overflow.clone()
+    }
+
+    /// Terminates the execution as the heap limit does.
+    fn exceed_heap(&mut self) {
+        if self.overflow.is_none() {
+            self.overflow = Some(heap_exceeded(self.heap_bytes));
+        }
+        if let Some(isolate) = &self.isolate {
+            isolate.terminate_execution();
+        }
     }
 
     /// Makes room for one more command or annotation carrying `bytes` of text. Past the bounds,
@@ -202,6 +218,20 @@ fn derive_key(domain: &[u8], seed: &Seed) -> [u8; 32] {
 }
 
 /// A number of bytes as a limit is written: in MiB when it is a whole number of them.
+/// How the heap limit ends a call.
+pub(crate) fn heap_exceeded(heap_bytes: usize) -> String {
+    format!(
+        "the script used more than {} MiB of heap",
+        heap_bytes / (1024 * 1024)
+    )
+}
+
+/// The most elements one call of a built-in may create: each takes at least 8 bytes of heap
+/// (pointer compression is off), and past 2^27 V8 aborts the process ("invalid size").
+fn max_elements(heap_bytes: usize) -> usize {
+    (heap_bytes / 8).min(1 << 27)
+}
+
 fn size(bytes: usize) -> String {
     const MIB: usize = 1024 * 1024;
     if bytes > 0 && bytes.is_multiple_of(MIB) {
@@ -321,6 +351,14 @@ fn parse_script_duration(text: &str) -> Result<Duration, JsErrorBox> {
     }
     parse_duration(text)
         .map_err(|err| JsErrorBox::type_error(format!("invalid duration {text:?}: {err}")))
+}
+
+/// Ends the call as the heap limit does. The glue calls it before a built-in V8 would run to
+/// its end without an interrupt check, when that built-in must create more elements than the
+/// heap holds.
+#[op2(fast)]
+fn op_ptc_heap_exceeded(state: &mut OpState) {
+    state.borrow_mut::<ExecState>().exceed_heap();
 }
 
 #[op2(fast)]
@@ -489,6 +527,7 @@ extension!(
     ptc_sandbox,
     deps = [deno_web],
     ops = [
+        op_ptc_heap_exceeded,
         op_ptc_now,
         op_ptc_random_fill,
         op_ptc_call_tool,

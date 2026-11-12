@@ -18,6 +18,15 @@ use ptc_engine::ports::ExecutorError;
 use crate::epochs::Glue;
 use crate::ops;
 
+/// deno_core shares three small buffers of its Rust state with its JavaScript (tick, immediate
+/// and timer information) as array buffers over that memory. `JsRuntimeForSnapshot::snapshot`
+/// frees the state before V8 serializes the context, so V8 read freed memory while it copied
+/// them into the snapshot. Arrays of V8's own replace them first; an isolate started from the
+/// snapshot gets buffers over its own state again.
+const DETACH_SHARED_STATE: &str = "Deno.core.__setTickInfo(new Uint8Array(2));\n\
+     Deno.core.__setImmediateInfo(new Uint32Array(3));\n\
+     Deno.core.__setTimerInfo(new Int32Array(1));";
+
 static SNAPSHOTS: LazyLock<Mutex<BTreeMap<Epoch, &'static [u8]>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
@@ -55,6 +64,9 @@ pub(crate) fn build(glue: &'static Glue) -> Result<&'static [u8], ExecutorError>
     runtime
         .execute_script("ptc:bootstrap", glue.bootstrap)
         .map_err(|err| internal(format!("the bootstrap of {} failed: {err}", glue.epoch)))?;
+    runtime
+        .execute_script("ptc:snapshot", DETACH_SHARED_STATE)
+        .map_err(|err| internal(format!("preparing the snapshot failed: {err}")))?;
     Ok(Box::leak(runtime.snapshot()))
 }
 

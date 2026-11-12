@@ -22,7 +22,9 @@
 //! sandbox has. [`builtins`] holds what the glue sends to the built-in tools. [`TsMocks`] runs
 //! TypeScript mock handlers in an isolate of their own, as the dispatcher of mock mode.
 
-#![forbid(unsafe_code)]
+// Denied, not forbidden: `memory` alone allows it, for what V8 offers only through raw
+// pointers (archi/07-code-architecture.md, "Dependency rules").
+#![deny(unsafe_code)]
 
 pub mod builtins;
 mod compile;
@@ -31,6 +33,7 @@ mod executor;
 mod instance;
 mod isolate;
 mod loader;
+mod memory;
 mod mocks;
 mod ops;
 pub mod sandbox_lib;

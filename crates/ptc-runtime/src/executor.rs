@@ -18,6 +18,7 @@ use crate::compile;
 use crate::epochs::{self, EPOCHS, Glue};
 use crate::instance::Instance;
 use crate::isolate::SandboxLimits;
+use crate::memory;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SetupError {
@@ -82,6 +83,7 @@ impl ScriptExecutor for V8Executor {
         let limits = self.limits.clone();
         std::thread::Builder::new()
             .name(format!("ptc-isolate-{}", start.run_id))
+            .stack_size(memory::ISOLATE_THREAD_STACK)
             .spawn(move || run_isolate(start, glue, limits, started, inbox))
             .map_err(|err| {
                 ExecutorError::Internal(format!("cannot spawn the isolate thread: {err}"))

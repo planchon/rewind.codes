@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::epochs::Glue;
 use crate::isolate::{Isolate, SandboxLimits, function, internal};
 use crate::loader::{ENTRY_SPECIFIER, Loader};
+use crate::memory;
 use crate::ops::ExecState;
 
 pub(crate) struct Instance {
@@ -69,6 +70,8 @@ impl Instance {
                 .load_main_es_module(&entry)
                 .await
                 .map_err(|err| invalid(&err))?;
+            // The script's top-level code runs here, as deep as V8 lets it below this frame.
+            memory::pin_stack(runtime.v8_isolate());
             let evaluation = runtime.mod_evaluate(module);
             runtime
                 .run_event_loop(PollEventLoopOptions::default())

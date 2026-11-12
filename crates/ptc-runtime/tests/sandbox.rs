@@ -1079,6 +1079,269 @@ async fn a_memory_bomb_exceeds_the_heap_limit() {
     assert!(message.contains("64 MiB of heap"), "{message}");
 }
 
+/// An array buffer past the instance's budget is V8's RangeError, never an abort of the process:
+/// `new ArrayBuffer(2 ** 36)` used to abort it, resizable or not.
+#[tokio::test]
+async fn the_process_survives_an_array_buffer_of_2_pow_36() {
+    let harness = harness();
+    for allocation in [
+        "new ArrayBuffer(2 ** 36)",
+        "new ArrayBuffer(2 ** 36, { maxByteLength: 2 ** 36 })",
+        "new ArrayBuffer(0, { maxByteLength: 2 ** 36 })",
+        "new Float64Array(2 ** 33)",
+    ] {
+        let run = harness
+            .run(
+                &format!(
+                    "export default async function main() {{ return {allocation}.byteLength; }}"
+                ),
+                json!({}),
+            )
+            .await;
+        let error = run.error();
+        assert_eq!(error.name, "RangeError", "{allocation}");
+        assert_eq!(
+            error.message, "Array buffer allocation failed",
+            "{allocation}"
+        );
+    }
+    let run = harness
+        .run(
+            "export default async function main() { return new ArrayBuffer(8).byteLength; }",
+            json!({}),
+        )
+        .await;
+    assert_eq!(run.output(), &json!(8));
+}
+
+/// The buffers an instance holds share one budget. A buffer the script dropped gives its bytes
+/// back before an allocation fails, so where it fails depends only on what the script holds:
+/// the same on replay.
+#[tokio::test]
+async fn array_buffers_share_one_budget_and_fail_where_replay_does() {
+    let harness = harness_with(
+        SandboxLimits {
+            array_buffer_bytes: 16 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    let run = harness
+        .run(
+            r#"
+import { sleep } from "ptc";
+
+function hoard(): string {
+  const kept: Uint8Array[] = [];
+  try {
+    for (;;) kept.push(new Uint8Array(1 << 20));
+  } catch (error) {
+    return `${kept.length} ${error}`;
+  }
+}
+
+export default async function main() {
+  const first = hoard();
+  await sleep(1000);
+  const again = [hoard(), hoard(), hoard()];
+  return { first, again };
+}
+"#,
+            json!({}),
+        )
+        .await;
+    let output = run.output();
+    let first = output["first"].as_str().unwrap();
+    assert!(
+        first.ends_with(" RangeError: Array buffer allocation failed"),
+        "{first}"
+    );
+    let count: usize = first.split(' ').next().unwrap().parse().unwrap();
+    assert!((14..=16).contains(&count), "{first}");
+    assert_eq!(output["again"], json!([first, first, first]));
+    harness.assert_replays(&run).await;
+}
+
+/// A resizable buffer takes its maximum length from the budget when it is created, and keeps it
+/// through a transfer; a clone takes its own; `transferToFixedLength` gives it back.
+#[tokio::test]
+async fn resizable_array_buffers_take_their_maximum_from_the_budget() {
+    let harness = harness_with(
+        SandboxLimits {
+            array_buffer_bytes: 16 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    let run = harness
+        .run(
+            r#"
+const MAX = 10 << 20;
+function attempt(make: () => unknown): string {
+  try {
+    make();
+    return "ok";
+  } catch (error) {
+    return String(error);
+  }
+}
+
+export default async function main() {
+  let a = new ArrayBuffer(16, { maxByteLength: MAX });
+  a.resize(MAX);
+  const second = attempt(() => new ArrayBuffer(0, { maxByteLength: MAX }));
+  a = a.transfer();
+  const afterTransfer = attempt(() => new ArrayBuffer(0, { maxByteLength: MAX }));
+  const clone = attempt(() => structuredClone(a));
+  const fixed = a.transferToFixedLength(16);
+  const afterFixed = attempt(() => new ArrayBuffer(0, { maxByteLength: MAX }));
+  return {
+    second,
+    afterTransfer,
+    clone,
+    afterFixed,
+    resizable: a.resizable,
+    detached: a.detached,
+    fixed: [fixed.byteLength, fixed.resizable],
+    wrapper: [
+      ArrayBuffer.name,
+      ArrayBuffer.length,
+      fixed.constructor === ArrayBuffer,
+      new Uint8Array(1).buffer instanceof ArrayBuffer,
+      ArrayBuffer.isView(new Uint8Array(1)),
+      ArrayBuffer.prototype.transfer.length,
+    ],
+  };
+}
+"#,
+            json!({}),
+        )
+        .await;
+    let refused = "RangeError: Array buffer allocation failed";
+    assert_eq!(
+        run.output(),
+        &json!({
+            "second": refused,
+            "afterTransfer": refused,
+            "clone": refused,
+            "afterFixed": "ok",
+            "resizable": true,
+            "detached": true,
+            "fixed": [16, false],
+            "wrapper": ["ArrayBuffer", 1, true, true, true, 0],
+        })
+    );
+    harness.assert_replays(&run).await;
+}
+
+/// Built-ins that V8 runs to their end without an interrupt check end the call as the heap limit
+/// does, before they start, when they must create more elements than the heap holds:
+/// `new Array(2 ** 27).fill(1.5)` used to run 18 s and take 1.9 GiB under a 64 MiB heap, and the
+/// last split made V8 abort the process.
+#[tokio::test]
+async fn built_ins_that_would_outgrow_the_heap_end_the_call_at_once() {
+    let harness = harness_with(
+        SandboxLimits {
+            heap_bytes: 64 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    for call in [
+        "new Array(2 ** 27).fill(1.5)",
+        "Array.prototype.fill.call({ length: 2 ** 32 + 5 }, 0)",
+        "Array.from({ length: 2 ** 27 })",
+        "new Array(2 ** 27).toReversed()",
+        "new Array(2 ** 27).toSorted()",
+        "new Array(2 ** 27).toSpliced(0, 0, 1)",
+        "new Array(2 ** 27).with(-1, 0)",
+        "\"x,\".repeat(2 ** 27).split(\",\")",
+        "\"x\".repeat(2 ** 28).split(\"\")",
+    ] {
+        let run = harness
+            .run(
+                &format!("export default async function main() {{ return {call}.length; }}"),
+                json!({}),
+            )
+            .await;
+        let (kind, message) = run.abort();
+        assert_eq!(kind, AbortKind::LimitExceeded, "{call}");
+        assert_eq!(
+            message, "the script used more than 64 MiB of heap",
+            "{call}"
+        );
+        assert_eq!(run.events(), ["run_started", "run_aborted"], "{call}");
+    }
+
+    // Below the bound, or with what V8 must check itself, they behave as V8's.
+    let run = harness
+        .run(
+            r#"
+function attempt(make: () => unknown): string {
+  try {
+    return String(make());
+  } catch (error) {
+    return String(error);
+  }
+}
+export default async function main() {
+  const holey = new Array(2 ** 27);
+  return [
+    holey.fill(0, 0, 3).slice(0, 4),
+    holey.toSpliced(0, 2 ** 27 - 2).length,
+    attempt(() => holey.with(2 ** 28, 0)),
+    attempt(() => new Array(2 ** 27).toSorted(1 as never)),
+    Array.from({ length: 3 }, (_, i) => i * 2),
+    [3, 1, 2].toSorted(),
+    "a,b,,c".split(",", 3),
+    "abc".split(""),
+    [1, 2].with(-1, 9),
+    [Array.prototype.fill.name, Array.prototype.fill.length, "".split.length, Array.from.length],
+  ];
+}
+"#,
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        run.output(),
+        &json!([
+            [0, 0, 0, null],
+            2,
+            "RangeError: Invalid index : 268435456",
+            "TypeError: The comparison function must be either a function or undefined: 1",
+            [0, 2, 4],
+            [1, 2, 3],
+            ["a", "b", ""],
+            ["a", "b", "c"],
+            [1, 9],
+            ["fill", 1, 2, 1],
+        ])
+    );
+}
+
+/// The heap limit is raised by V8's largest object when it is reached, so that V8 can finish the
+/// allocation in progress: raised less, V8 aborted the process on one 256 MiB string.
+#[tokio::test]
+async fn one_allocation_past_the_heap_limit_ends_the_call_not_the_process() {
+    let harness = harness_with(
+        SandboxLimits {
+            heap_bytes: 64 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+        1,
+    );
+    let run = harness
+        .run(
+            "export default async function main() { return \"ab\".repeat(2 ** 27).toUpperCase().length; }",
+            json!({}),
+        )
+        .await;
+    let (kind, message) = run.abort();
+    assert_eq!(kind, AbortKind::LimitExceeded);
+    assert_eq!(message, "the script used more than 64 MiB of heap");
+}
+
 /// What a script emits is kept outside V8's heap until the call ends: a flood of logs, of tool
 /// arguments or of signal names is stopped once one trigger's response holds more than its
 /// bound, and nothing of it is recorded.

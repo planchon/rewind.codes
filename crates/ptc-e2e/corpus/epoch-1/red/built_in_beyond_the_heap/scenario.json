@@ -1,0 +1,14 @@
+{
+  "description": "A built-in that V8 runs to its end without an interrupt check, asked for more elements than the heap holds (2^27 numbers under the default heap of 128 MiB): the call ends at once, as the heap limit ends it, and the host aborts the run. It used to run for seconds and take gigabytes.",
+  "expect": {
+    "status": "aborted",
+    "abort": {
+      "kind": "limit_exceeded",
+      "message": "the script used more than 128 MiB of heap"
+    },
+    "events": [
+      "run_started",
+      "run_aborted"
+    ]
+  }
+}

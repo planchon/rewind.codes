@@ -230,6 +230,7 @@ delivery id, it is used as the signal's idempotency key.
 | `setTimeout`, `setInterval` | Durable timers, same as `sleep`. |
 | `console.*` | Journaled as log annotations. |
 | `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic, and models use them by habit. They come from existing deno crates ([decided](08-decisions.md#taken-after-the-layering-november-2026)). |
+| `ArrayBuffer`, typed arrays | Present. Their memory is bounded per instance, 128 MiB by default: past it, an allocation throws `RangeError: Array buffer allocation failed` ([limits](03-execution.md#resource-limits)). A resizable buffer counts its maximum length. |
 | `fetch` | Absent, unless the toolset enables the built-in `http` tool with an allow-list of hosts. It is then a journaled tool call like any other, sent by the dispatcher ([egress](04-tools.md#the-http-tool-and-egress)). |
 | `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics`, `WebAssembly` | Removed (they expose GC timing or threads, or run code the sandbox cannot see the source of). |
 | File system, env, process, network, `Deno`, Node APIs | Absent. No file system, ever. |
