@@ -1,19 +1,36 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 
 use ptc_core::{
-    Command, Completion, Event, HistoryEntry, Lifecycle, Payload, RunId, RunStatus, ScriptError,
-    Seq, Shape, Timestamp, ToolFailureKind,
+    Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunId, RunStatus,
+    ScriptError, Seq, Shape, Timestamp, ToolFailureKind,
 };
 
 use crate::ports::{
-    Latency, ProjectedRun, ReadModel, ReadModelError, RunRef, RunSearch, RunSummary, ScriptFilter,
-    ScriptSummary, TenantId, TenantScope, ToolStats, ToolStatsFilter,
+    FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency, Predicate,
+    ProjectedRun, QuarantineNote, ReadModel, ReadModelError, RunOrder, RunQuery, RunRef,
+    RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor, StatsWindow,
+    TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter, Wait, WaitKind, WaitingFor,
 };
 
-/// `ReadModel` in memory: the projected entries of every run, keyed by `(run, index)`, from
-/// which every query is computed, and the attempts recorded per call. It passes the conformance
-/// suite.
+/// Every status, in the order of `RunStatus`: what `run_stats` counts, zeros included.
+const STATUSES: [RunStatus; 6] = [
+    RunStatus::Pending,
+    RunStatus::Active,
+    RunStatus::Completed,
+    RunStatus::Failed,
+    RunStatus::Cancelled,
+    RunStatus::Aborted,
+];
+
+/// Labels a failure group lists at most.
+const GROUP_LABELS: usize = 5;
+
+/// `ReadModel` in memory: the projected entries of every run, keyed by `(run, index)`, with the
+/// snapshot of the longest history; the task states and quarantine recorded per run. Every query
+/// is computed from them. It passes the conformance suite: it is the reference implementation
+/// of the contract.
 #[derive(Debug, Default)]
 pub struct MemoryReadModel {
     state: Mutex<State>,
@@ -22,15 +39,19 @@ pub struct MemoryReadModel {
 #[derive(Debug, Default)]
 struct State {
     runs: BTreeMap<RunId, Projected>,
-    /// The highest attempt recorded per call, by run: recorded before or after the run's
+    /// Per call, the record of the highest rank, by run: recorded before or after the run's
     /// entries are projected.
-    attempts: BTreeMap<RunId, BTreeMap<Seq, u32>>,
+    tasks: BTreeMap<RunId, BTreeMap<Seq, TaskProgress>>,
+    /// The latest record of each run's quarantine, with its time.
+    quarantines: BTreeMap<RunId, (Timestamp, Option<QuarantineNote>)>,
 }
 
 #[derive(Debug)]
 struct Projected {
     run: ProjectedRun,
     entries: BTreeMap<u64, HistoryEntry>,
+    /// The snapshot of the longest history, its waits without task states.
+    snapshot: RunSnapshot,
 }
 
 /// One tool call, from its `schedule_tool_call` and its completion.
@@ -42,6 +63,16 @@ struct Call {
     failed: Option<ToolFailureKind>,
     completed: bool,
     result: Option<Shape>,
+}
+
+/// A run as the queries see it: its summary and what its calls did.
+#[derive(Debug)]
+struct Row {
+    summary: RunSummary,
+    /// The tools it scheduled calls to.
+    tools: BTreeSet<String>,
+    /// The kinds its failed calls failed with.
+    failed: BTreeSet<ToolFailureKind>,
 }
 
 impl MemoryReadModel {
@@ -56,45 +87,72 @@ impl MemoryReadModel {
     }
 }
 
+fn status_of(entry: &HistoryEntry) -> Option<RunStatus> {
+    match &entry.event {
+        Event::Lifecycle(Lifecycle::RunAborted(_)) => Some(RunStatus::Aborted),
+        Event::Command(Command::CompleteRun { .. }) => Some(RunStatus::Completed),
+        Event::Command(Command::FailRun { error }) if error.name == ScriptError::CANCELLED => {
+            Some(RunStatus::Cancelled)
+        }
+        Event::Command(Command::FailRun { .. }) => Some(RunStatus::Failed),
+        _ => None,
+    }
+}
+
 impl Projected {
-    fn summary(&self) -> RunSummary {
-        let mut status = RunStatus::Active;
+    /// The terminal entry's status and `recorded_at`, once projected.
+    fn ended(&self) -> Option<(RunStatus, Timestamp)> {
+        self.entries
+            .values()
+            .find_map(|entry| status_of(entry).map(|status| (status, entry.recorded_at)))
+    }
+
+    fn summary(
+        &self,
+        tasks: Option<&BTreeMap<Seq, TaskProgress>>,
+        quarantine: Option<&QuarantineNote>,
+    ) -> RunSummary {
+        let ended = self.ended();
+        let status = ended.map_or(RunStatus::Active, |(status, _)| status);
         let mut started_at = None;
-        let mut ended_at = None;
         let mut tool_calls = 0;
         let mut errors = 0;
         for entry in self.entries.values() {
             match &entry.event {
                 Event::Lifecycle(Lifecycle::RunStarted(_)) => started_at = Some(entry.recorded_at),
-                Event::Lifecycle(Lifecycle::RunAborted(_)) => {
-                    status = RunStatus::Aborted;
-                    ended_at = Some(entry.recorded_at);
-                }
-                Event::Command(Command::CompleteRun { .. }) => {
-                    status = RunStatus::Completed;
-                    ended_at = Some(entry.recorded_at);
-                }
-                Event::Command(Command::FailRun { error }) => {
-                    status = if error.name == ScriptError::CANCELLED {
-                        RunStatus::Cancelled
-                    } else {
-                        RunStatus::Failed
-                    };
-                    ended_at = Some(entry.recorded_at);
-                }
                 Event::Command(Command::ScheduleToolCall { .. }) => tool_calls += 1,
                 Event::Completion(Completion::ToolCallFailed { .. }) => errors += 1,
                 _ => {}
             }
         }
+        let waits: Vec<Wait> = if status == RunStatus::Active {
+            self.snapshot
+                .waits
+                .iter()
+                .map(|wait| Wait {
+                    task: match (wait.kind, wait.seq) {
+                        (WaitKind::Call | WaitKind::Host, Some(seq)) => tasks
+                            .and_then(|tasks| tasks.get(&seq))
+                            .map(|task| task.phase),
+                        _ => None,
+                    },
+                    ..wait.clone()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         RunSummary {
             run: self.run.run.clone(),
             script: self.run.script,
+            headline: self.run.headline.clone(),
             toolset: self.run.toolset,
             status,
+            mode: self.snapshot.mode,
             labels: self.run.labels.clone(),
+            parent: self.run.parent,
             started_at,
-            ended_at,
+            ended_at: ended.map(|(_, at)| at),
             last_activity_at: self
                 .entries
                 .values()
@@ -104,6 +162,10 @@ impl Projected {
             tool_calls,
             errors,
             history_len: self.entries.keys().next_back().map_or(0, |last| last + 1),
+            wakes_at: waits.iter().filter_map(|wait| wait.until).min(),
+            waits,
+            ending: self.snapshot.ending.clone(),
+            quarantine: quarantine.cloned(),
         }
     }
 
@@ -136,16 +198,224 @@ impl Projected {
     }
 }
 
-fn status_of(entry: &HistoryEntry) -> Option<RunStatus> {
-    match &entry.event {
-        Event::Lifecycle(Lifecycle::RunAborted(_)) => Some(RunStatus::Aborted),
-        Event::Command(Command::CompleteRun { .. }) => Some(RunStatus::Completed),
-        Event::Command(Command::FailRun { error }) if error.name == ScriptError::CANCELLED => {
-            Some(RunStatus::Cancelled)
-        }
-        Event::Command(Command::FailRun { .. }) => Some(RunStatus::Failed),
-        _ => None,
+impl State {
+    /// Whether the run is projected under another tenant: what is recorded for it is ignored.
+    fn foreign(&self, run: &RunRef) -> bool {
+        self.runs
+            .get(&run.id)
+            .is_some_and(|projected| projected.run.run.tenant != run.tenant)
     }
+
+    fn row(&self, projected: &Projected) -> Row {
+        let id = projected.run.run.id;
+        let summary = projected.summary(
+            self.tasks.get(&id),
+            self.quarantines
+                .get(&id)
+                .and_then(|(_, note)| note.as_ref()),
+        );
+        let mut tools = BTreeSet::new();
+        let mut failed = BTreeSet::new();
+        for call in projected.calls().into_values() {
+            tools.extend(call.tool);
+            failed.extend(call.failed);
+        }
+        Row {
+            summary,
+            tools,
+            failed,
+        }
+    }
+
+    /// The tenant's runs that match every term of the query.
+    fn matching(&self, query: &RunQuery) -> Vec<Row> {
+        self.runs
+            .values()
+            .filter(|projected| projected.run.run.tenant == query.tenant)
+            .map(|projected| self.row(projected))
+            .filter(|row| {
+                query
+                    .terms
+                    .iter()
+                    .all(|term| row.holds(&term.predicate) != term.negated)
+            })
+            .collect()
+    }
+
+    fn remove(&mut self, run: RunId) {
+        self.runs.remove(&run);
+        self.tasks.remove(&run);
+        self.quarantines.remove(&run);
+    }
+}
+
+impl Row {
+    /// What the run waits for: its waits' kinds, while it is active.
+    fn waiting(&self) -> BTreeSet<WaitingFor> {
+        if self.summary.status != RunStatus::Active {
+            return BTreeSet::new();
+        }
+        self.summary.waits.iter().map(Wait::waiting_for).collect()
+    }
+
+    /// The signals the run waits for.
+    fn signals(&self) -> BTreeSet<&str> {
+        self.summary
+            .waits
+            .iter()
+            .filter(|wait| wait.kind == WaitKind::Signal)
+            .filter_map(|wait| wait.name.as_deref())
+            .collect()
+    }
+
+    /// From start to end, once ended.
+    fn duration(&self) -> Option<u64> {
+        let (started, ended) = (self.summary.started_at?, self.summary.ended_at?);
+        Some(ended.0.saturating_sub(started.0))
+    }
+
+    /// What free text is searched in.
+    fn text(&self) -> Vec<String> {
+        let summary = &self.summary;
+        let mut fields = vec![summary.run.id.to_string(), summary.headline.clone()];
+        if let Some(ending) = &summary.ending {
+            fields.push(ending.error.clone());
+            fields.push(ending.message.clone());
+        }
+        fields.extend(summary.labels.values().cloned());
+        fields
+    }
+
+    fn holds(&self, predicate: &Predicate) -> bool {
+        let summary = &self.summary;
+        let hex_prefix = |digest: &Digest, prefixes: &[String]| {
+            let hex = digest.to_hex();
+            prefixes
+                .iter()
+                .any(|prefix| hex.starts_with(prefix.as_str()))
+        };
+        match predicate {
+            Predicate::Id(prefixes) => {
+                let id = summary.run.id.to_string();
+                prefixes
+                    .iter()
+                    .any(|prefix| id.starts_with(prefix.as_str()))
+            }
+            Predicate::Status(statuses) => statuses.contains(&summary.status),
+            Predicate::Label { key, values } => summary
+                .labels
+                .get(key)
+                .is_some_and(|value| values.iter().any(|matcher| matcher.matches(value))),
+            Predicate::Script(prefixes) => hex_prefix(&summary.script, prefixes),
+            Predicate::Toolset(prefixes) => hex_prefix(&summary.toolset, prefixes),
+            Predicate::Tool(matchers) => self
+                .tools
+                .iter()
+                .any(|tool| matchers.iter().any(|matcher| matcher.matches(tool))),
+            Predicate::Error { names, kinds } => {
+                summary
+                    .ending
+                    .as_ref()
+                    .is_some_and(|ending| names.contains(&ending.error))
+                    || self.failed.iter().any(|kind| kinds.contains(kind))
+            }
+            Predicate::Waiting(kinds) => {
+                let waiting = self.waiting();
+                !waiting.is_empty()
+                    && (kinds.is_empty() || waiting.iter().any(|kind| kinds.contains(kind)))
+            }
+            Predicate::Signal(matchers) => self
+                .signals()
+                .iter()
+                .any(|name| matchers.iter().any(|matcher| matcher.matches(name))),
+            Predicate::Started(range) => summary.started_at.is_some_and(|at| range.contains(&at)),
+            Predicate::Ended(range) => summary.ended_at.is_some_and(|at| range.contains(&at)),
+            Predicate::Activity(range) => range.contains(&summary.last_activity_at),
+            Predicate::Duration(range) => self
+                .duration()
+                .is_some_and(|duration| range.contains(&duration)),
+            Predicate::Calls(range) => range.contains(&summary.tool_calls),
+            Predicate::Errors(range) => range.contains(&summary.errors),
+            Predicate::Parent(parent) => summary.parent == Some(*parent),
+            Predicate::Fingerprint(fingerprints) => summary
+                .ending
+                .as_ref()
+                .is_some_and(|ending| fingerprints.contains(&ending.fingerprint)),
+            Predicate::Quarantined => summary.quarantine.is_some(),
+            Predicate::Mode(modes) => summary.mode.is_some_and(|mode| modes.contains(&mode)),
+            Predicate::Text(text) => self
+                .text()
+                .iter()
+                .any(|field| field.to_lowercase().contains(text.as_str())),
+        }
+    }
+}
+
+/// A run's place in an order of `search_runs`: ascending is the page's order.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Position {
+    Started(Reverse<RunId>),
+    Activity(Reverse<Option<Timestamp>>, Reverse<RunId>),
+    /// The runs without a wake last, then by run id.
+    Wakes(bool, Option<Timestamp>, RunId),
+}
+
+impl Position {
+    fn of(order: RunOrder, cursor: &SearchCursor) -> Self {
+        match order {
+            RunOrder::Started => Position::Started(Reverse(cursor.run)),
+            RunOrder::Activity => Position::Activity(Reverse(cursor.key), Reverse(cursor.run)),
+            RunOrder::Wakes => Position::Wakes(cursor.key.is_none(), cursor.key, cursor.run),
+        }
+    }
+}
+
+/// The buckets of a series: from `since`, each `width` wide, up to `until`.
+#[derive(Debug, Clone, Copy)]
+struct Buckets {
+    since: Timestamp,
+    width: u64,
+    count: usize,
+}
+
+impl Buckets {
+    fn new(since: Option<Timestamp>, until: Option<Timestamp>, width: Option<u64>) -> Option<Self> {
+        let (since, until, width) = (since?, until?, width.filter(|width| *width > 0)?);
+        let count = until.0.saturating_sub(since.0).div_ceil(width);
+        Some(Self {
+            since,
+            width,
+            count: usize::try_from(count).unwrap_or(usize::MAX),
+        })
+    }
+
+    fn index(&self, at: Timestamp) -> Option<usize> {
+        let offset = at.0.checked_sub(self.since.0)?;
+        usize::try_from(offset / self.width)
+            .ok()
+            .filter(|index| *index < self.count)
+    }
+}
+
+/// Whether a time is in `[since, until)`; a missing time is in it only without bounds.
+fn in_window(at: Option<Timestamp>, since: Option<Timestamp>, until: Option<Timestamp>) -> bool {
+    since.is_none_or(|since| at.is_some_and(|at| at >= since))
+        && until.is_none_or(|until| at.is_some_and(|at| at < until))
+}
+
+fn statuses() -> BTreeMap<RunStatus, u64> {
+    STATUSES.iter().map(|status| (*status, 0)).collect()
+}
+
+/// The most frequent values first, then by value; at most `top`.
+fn ranked(counts: BTreeMap<String, u64>, top: usize) -> Vec<FacetValue> {
+    let mut values: Vec<FacetValue> = counts
+        .into_iter()
+        .map(|(value, runs)| FacetValue { value, runs })
+        .collect();
+    values.sort_by(|a, b| b.runs.cmp(&a.runs).then_with(|| a.value.cmp(&b.value)));
+    values.truncate(top);
+    values
 }
 
 /// The nearest-rank percentile `p` of sorted values.
@@ -155,79 +425,267 @@ fn percentile(sorted: &[u64], p: u64) -> u64 {
     sorted[(rank - 1) as usize]
 }
 
+fn latency(mut values: Vec<u64>) -> Option<Latency> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let count = values.len() as u64;
+    Some(Latency {
+        count,
+        mean_ms: values.iter().sum::<u64>() / count,
+        p50_ms: percentile(&values, 50),
+        p95_ms: percentile(&values, 95),
+        p99_ms: percentile(&values, 99),
+        max_ms: values[values.len() - 1],
+    })
+}
+
+fn facets(rows: &[&Row], top: usize) -> Facets {
+    let mut statuses: BTreeMap<String, u64> = BTreeMap::new();
+    let mut labels: BTreeMap<&str, (u64, BTreeMap<String, u64>)> = BTreeMap::new();
+    let mut tools: BTreeMap<String, u64> = BTreeMap::new();
+    let mut errors: BTreeMap<String, u64> = BTreeMap::new();
+    let mut scripts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut waiting: BTreeMap<String, u64> = BTreeMap::new();
+    let mut signals: BTreeMap<String, u64> = BTreeMap::new();
+    for row in rows {
+        let summary = &row.summary;
+        *statuses
+            .entry(summary.status.as_str().to_owned())
+            .or_default() += 1;
+        for (key, value) in &summary.labels {
+            let (runs, values) = labels.entry(key).or_default();
+            *runs += 1;
+            *values.entry(value.clone()).or_default() += 1;
+        }
+        for tool in &row.tools {
+            *tools.entry(tool.clone()).or_default() += 1;
+        }
+        let mut run_errors: BTreeSet<String> = row
+            .failed
+            .iter()
+            .map(|kind| kind.as_str().to_owned())
+            .collect();
+        run_errors.extend(summary.ending.as_ref().map(|ending| ending.error.clone()));
+        for error in run_errors {
+            *errors.entry(error).or_default() += 1;
+        }
+        *scripts.entry(summary.script.to_hex()).or_default() += 1;
+        for kind in row.waiting() {
+            *waiting.entry(kind.as_str().to_owned()).or_default() += 1;
+        }
+        for signal in row.signals() {
+            *signals.entry(signal.to_owned()).or_default() += 1;
+        }
+    }
+    let mut keys: Vec<(&str, u64, BTreeMap<String, u64>)> = labels
+        .into_iter()
+        .map(|(key, (runs, values))| (key, runs, values))
+        .collect();
+    keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    keys.truncate(top);
+    Facets {
+        statuses: ranked(statuses, top),
+        labels: keys
+            .into_iter()
+            .map(|(key, runs, values)| LabelFacet {
+                key: key.to_owned(),
+                runs,
+                values: ranked(values, top),
+            })
+            .collect(),
+        tools: ranked(tools, top),
+        errors: ranked(errors, top),
+        scripts: ranked(scripts, top),
+        waiting: ranked(waiting, top),
+        signals: ranked(signals, top),
+    }
+}
+
+/// One failure group, from its runs (each with an ending and an end).
+fn failure_group(rows: &[&Row], buckets: Option<Buckets>) -> Option<FailureGroup> {
+    let ended = |row: &Row| row.summary.ended_at.unwrap_or(Timestamp(0));
+    let latest = rows
+        .iter()
+        .max_by_key(|row| (ended(row), row.summary.run.id))?;
+    let ending = latest.summary.ending.as_ref()?;
+    let mut series = vec![0; buckets.map_or(0, |buckets| buckets.count)];
+    let mut lines: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut labels: BTreeMap<String, u64> = BTreeMap::new();
+    let mut scripts = BTreeSet::new();
+    for row in rows {
+        if let Some(index) = buckets.and_then(|buckets| buckets.index(ended(row))) {
+            series[index] += 1;
+        }
+        if let Some(line) = row.summary.ending.as_ref().and_then(|ending| ending.line) {
+            *lines.entry(line).or_default() += 1;
+        }
+        for (key, value) in &row.summary.labels {
+            *labels.entry(format!("{key}:{value}")).or_default() += 1;
+        }
+        scripts.insert(row.summary.script);
+    }
+    // Ascending lines: the first of the most frequent is the lowest.
+    let line = lines
+        .iter()
+        .fold(None, |best: Option<(u32, u64)>, (line, runs)| match best {
+            Some((_, most)) if most >= *runs => best,
+            _ => Some((*line, *runs)),
+        })
+        .map(|(line, _)| line);
+    Some(FailureGroup {
+        fingerprint: ending.fingerprint.clone(),
+        signature: ending.signature.clone(),
+        error: ending.error.clone(),
+        runs: rows.len() as u64,
+        series,
+        scripts: scripts.len() as u64,
+        first_ended_at: rows.iter().map(|row| ended(row)).min()?,
+        last_ended_at: ended(latest),
+        line,
+        labels: ranked(labels, GROUP_LABELS),
+        latest: latest.summary.run.id,
+        latest_status: latest.summary.status,
+        latest_message: ending.message.clone(),
+    })
+}
+
 impl ReadModel for MemoryReadModel {
     async fn apply(
         &self,
         run: &ProjectedRun,
         entries: &[HistoryEntry],
+        snapshot: &RunSnapshot,
     ) -> Result<(), ReadModelError> {
+        let mut snapshot = snapshot.clone();
+        for wait in &mut snapshot.waits {
+            wait.task = None;
+        }
         let mut state = self.lock()?;
         let projected = state.runs.entry(run.run.id).or_insert_with(|| Projected {
             run: run.clone(),
             entries: BTreeMap::new(),
+            snapshot: snapshot.clone(),
         });
         projected.run = run.clone();
+        if snapshot.history_len > projected.snapshot.history_len {
+            projected.snapshot = snapshot;
+        }
         for entry in entries {
             projected.entries.insert(entry.index, entry.clone());
         }
         Ok(())
     }
 
-    async fn search_runs(&self, search: &RunSearch) -> Result<Vec<RunSummary>, ReadModelError> {
+    async fn search_runs(
+        &self,
+        query: &RunQuery,
+        order: RunOrder,
+        after: Option<&SearchCursor>,
+        limit: usize,
+    ) -> Result<Vec<RunSummary>, ReadModelError> {
         let state = self.lock()?;
-        let mut found: Vec<RunSummary> =
-            state
-                .runs
-                .values()
-                .rev()
-                .filter(|projected| projected.run.run.tenant == search.tenant)
-                .filter(|projected| {
-                    search
-                        .before
-                        .is_none_or(|before| projected.run.run.id < before)
-                })
-                .filter(|projected| {
-                    search
-                        .script
-                        .is_none_or(|script| projected.run.script == script)
-                })
-                .filter(|projected| {
-                    search
-                        .toolset
-                        .is_none_or(|toolset| projected.run.toolset == toolset)
-                })
-                .filter(|projected| {
-                    search
-                        .labels
-                        .iter()
-                        .all(|(key, value)| projected.run.labels.get(key) == Some(value))
-                })
-                .filter(|projected| {
-                    let calls = projected.calls();
-                    search.tool.as_ref().is_none_or(|tool| {
-                        calls.values().any(|call| call.tool.as_ref() == Some(tool))
-                    }) && search
-                        .error_kind
-                        .is_none_or(|kind| calls.values().any(|call| call.failed == Some(kind)))
-                })
-                .map(Projected::summary)
-                .filter(|summary| search.status.is_none_or(|status| summary.status == status))
-                .filter(|summary| {
-                    search
-                        .started_after
-                        .is_none_or(|after| summary.started_at.is_some_and(|at| at >= after))
-                        && search
-                            .started_before
-                            .is_none_or(|before| summary.started_at.is_some_and(|at| at < before))
-                })
-                .collect();
-        found.truncate(search.limit);
-        Ok(found)
+        let after = after.map(|cursor| Position::of(order, cursor));
+        let mut found: Vec<(Position, RunSummary)> = state
+            .matching(query)
+            .into_iter()
+            .map(|row| (Position::of(order, &row.summary.cursor(order)), row.summary))
+            .filter(|(position, _)| after.as_ref().is_none_or(|after| position > after))
+            .collect();
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(found
+            .into_iter()
+            .take(limit)
+            .map(|(_, summary)| summary)
+            .collect())
+    }
+
+    async fn run_stats(
+        &self,
+        query: &RunQuery,
+        window: &StatsWindow,
+    ) -> Result<RunStats, ReadModelError> {
+        let state = self.lock()?;
+        let rows = state.matching(query);
+        let buckets = Buckets::new(window.since, window.until, window.bucket_ms);
+        let mut stats = RunStats {
+            runs: 0,
+            statuses: statuses(),
+            series: vec![statuses(); buckets.map_or(0, |buckets| buckets.count)],
+            durations: None,
+            waiting: WaitingFor::ALL.iter().map(|kind| (*kind, 0)).collect(),
+            quarantined: 0,
+            facets: Facets::default(),
+        };
+        let mut durations = Vec::new();
+        let mut windowed = Vec::new();
+        for row in &rows {
+            for kind in row.waiting() {
+                *stats.waiting.entry(kind).or_default() += 1;
+            }
+            if row.summary.quarantine.is_some() {
+                stats.quarantined += 1;
+            }
+            if !in_window(row.summary.started_at, window.since, window.until) {
+                continue;
+            }
+            stats.runs += 1;
+            *stats.statuses.entry(row.summary.status).or_default() += 1;
+            if let Some(index) = buckets
+                .zip(row.summary.started_at)
+                .and_then(|(buckets, at)| buckets.index(at))
+            {
+                *stats.series[index].entry(row.summary.status).or_default() += 1;
+            }
+            durations.extend(row.duration());
+            windowed.push(row);
+        }
+        stats.durations = latency(durations);
+        stats.facets = facets(&windowed, window.top);
+        Ok(stats)
+    }
+
+    async fn failure_groups(
+        &self,
+        query: &RunQuery,
+        window: &FailureWindow,
+    ) -> Result<FailureGroups, ReadModelError> {
+        let state = self.lock()?;
+        let rows = state.matching(query);
+        let buckets = Buckets::new(window.since, window.until, window.bucket_ms);
+        let mut groups: BTreeMap<&str, Vec<&Row>> = BTreeMap::new();
+        let mut runs = 0;
+        for row in &rows {
+            let Some(ending) = &row.summary.ending else {
+                continue;
+            };
+            if row.summary.ended_at.is_none()
+                || !in_window(row.summary.ended_at, window.since, window.until)
+            {
+                continue;
+            }
+            runs += 1;
+            groups.entry(&ending.fingerprint).or_default().push(row);
+        }
+        let mut top: Vec<FailureGroup> = groups
+            .values()
+            .filter_map(|rows| failure_group(rows, buckets))
+            .collect();
+        top.sort_by(|a, b| {
+            b.runs
+                .cmp(&a.runs)
+                .then_with(|| b.last_ended_at.cmp(&a.last_ended_at))
+                .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+        });
+        let groups = top.len() as u64;
+        top.truncate(window.limit);
+        Ok(FailureGroups { runs, groups, top })
     }
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
         let state = self.lock()?;
-        let mut scripts: BTreeMap<ptc_core::Digest, ScriptSummary> = BTreeMap::new();
+        let mut scripts: BTreeMap<Digest, ScriptSummary> = BTreeMap::new();
         for projected in state.runs.values() {
             if projected.run.run.tenant != filter.tenant
                 || filter
@@ -240,7 +698,7 @@ impl ReadModel for MemoryReadModel {
             {
                 continue;
             }
-            let summary = projected.summary();
+            let Row { summary, tools, .. } = state.row(projected);
             if let Some(since) = filter.since
                 && summary.started_at.is_none_or(|at| at < since)
             {
@@ -259,9 +717,7 @@ impl ReadModel for MemoryReadModel {
                 });
             script.runs += 1;
             *script.statuses.entry(summary.status).or_default() += 1;
-            script
-                .tools
-                .extend(projected.calls().into_values().filter_map(|call| call.tool));
+            script.tools.extend(tools);
             for (key, value) in &projected.run.labels {
                 *script.labels.entry(format!("{key}:{value}")).or_default() += 1;
             }
@@ -285,7 +741,6 @@ impl ReadModel for MemoryReadModel {
         let state = self.lock()?;
         let mut stats: BTreeMap<String, (ToolStats, Vec<u64>)> = BTreeMap::new();
         for projected in state.runs.values() {
-            let attempts = state.attempts.get(&projected.run.run.id);
             if projected.run.run.tenant != filter.tenant
                 || filter
                     .toolset
@@ -293,6 +748,7 @@ impl ReadModel for MemoryReadModel {
             {
                 continue;
             }
+            let tasks = state.tasks.get(&projected.run.run.id);
             for (seq, call) in projected.calls() {
                 let (Some(tool), Some(scheduled_at)) = (call.tool, call.scheduled_at) else {
                     continue;
@@ -315,8 +771,10 @@ impl ReadModel for MemoryReadModel {
                     (stats, Vec::new())
                 });
                 entry.calls += 1;
-                let attempt = attempts.and_then(|attempts| attempts.get(&seq)).copied();
-                entry.retries += u64::from(attempt.unwrap_or(1).saturating_sub(1));
+                let attempt = tasks
+                    .and_then(|tasks| tasks.get(&seq))
+                    .map(|task| task.attempt);
+                entry.retries += u64::from(attempt.unwrap_or(0).saturating_sub(1));
                 if call.completed {
                     entry.completed += 1;
                 }
@@ -331,19 +789,8 @@ impl ReadModel for MemoryReadModel {
         }
         Ok(stats
             .into_values()
-            .map(|(mut entry, mut latencies)| {
-                latencies.sort_unstable();
-                if !latencies.is_empty() {
-                    let count = latencies.len() as u64;
-                    entry.latency = Some(Latency {
-                        count,
-                        mean_ms: latencies.iter().sum::<u64>() / count,
-                        p50_ms: percentile(&latencies, 50),
-                        p95_ms: percentile(&latencies, 95),
-                        p99_ms: percentile(&latencies, 99),
-                        max_ms: latencies[latencies.len() - 1],
-                    });
-                }
+            .map(|(mut entry, latencies)| {
+                entry.latency = latency(latencies);
                 entry
             })
             .collect())
@@ -371,48 +818,22 @@ impl ReadModel for MemoryReadModel {
         Ok(shapes)
     }
 
-    async fn purge(
-        &self,
-        ended_before: Timestamp,
-        tenants: &TenantScope,
-    ) -> Result<usize, ReadModelError> {
-        let mut state = self.lock()?;
-        let State { runs, attempts } = &mut *state;
-        let before = runs.len();
-        runs.retain(|_, projected| {
-            let ended_at = projected
-                .entries
-                .values()
-                .find(|entry| status_of(entry).is_some())
-                .map(|entry| entry.recorded_at);
-            !(tenants.contains(&projected.run.run.tenant)
-                && ended_at.is_some_and(|at| at < ended_before))
-        });
-        attempts.retain(|run, _| runs.contains_key(run));
-        Ok(before - runs.len())
-    }
-
-    async fn record_attempt(
+    async fn record_tasks(
         &self,
         run: &RunRef,
-        seq: Seq,
-        attempt: u32,
+        tasks: &[TaskProgress],
     ) -> Result<(), ReadModelError> {
         let mut state = self.lock()?;
-        if state
-            .runs
-            .get(&run.id)
-            .is_some_and(|projected| projected.run.run.tenant != run.tenant)
-        {
+        if state.foreign(run) {
             return Ok(());
         }
-        let recorded = state
-            .attempts
-            .entry(run.id)
-            .or_default()
-            .entry(seq)
-            .or_default();
-        *recorded = (*recorded).max(attempt);
+        let recorded = state.tasks.entry(run.id).or_default();
+        for task in tasks {
+            let kept = recorded.entry(task.seq).or_insert(*task);
+            if task.rank() > kept.rank() {
+                *kept = *task;
+            }
+        }
         Ok(())
     }
 
@@ -425,27 +846,76 @@ impl ReadModel for MemoryReadModel {
         if !projected {
             return Ok(BTreeMap::new());
         }
-        Ok(state.attempts.get(&run.id).cloned().unwrap_or_default())
+        Ok(state
+            .tasks
+            .get(&run.id)
+            .map(|tasks| {
+                tasks
+                    .iter()
+                    .map(|(seq, task)| (*seq, task.attempt))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    async fn record_quarantine(
+        &self,
+        run: &RunRef,
+        quarantine: Option<&QuarantineNote>,
+        at: Timestamp,
+    ) -> Result<(), ReadModelError> {
+        let mut state = self.lock()?;
+        if state.foreign(run) {
+            return Ok(());
+        }
+        let newer = state
+            .quarantines
+            .get(&run.id)
+            .is_none_or(|(kept_at, kept)| {
+                at > *kept_at || (at == *kept_at && kept.is_none() && quarantine.is_some())
+            });
+        if newer {
+            state.quarantines.insert(run.id, (at, quarantine.cloned()));
+        }
+        Ok(())
+    }
+
+    async fn purge(
+        &self,
+        ended_before: Timestamp,
+        tenants: &TenantScope,
+    ) -> Result<usize, ReadModelError> {
+        let mut state = self.lock()?;
+        let purged: Vec<RunId> = state
+            .runs
+            .iter()
+            .filter(|(_, projected)| {
+                tenants.contains(&projected.run.run.tenant)
+                    && projected.ended().is_some_and(|(_, at)| at < ended_before)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for run in &purged {
+            state.remove(*run);
+        }
+        Ok(purged.len())
     }
 
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {
         let mut state = self.lock()?;
-        if state
-            .runs
-            .get(&run.id)
-            .is_some_and(|projected| projected.run.run.tenant == run.tenant)
-        {
-            state.runs.remove(&run.id);
-            state.attempts.remove(&run.id);
-            return Ok(true);
+        if state.foreign(run) {
+            return Ok(false);
         }
-        Ok(false)
+        let projected = state.runs.contains_key(&run.id);
+        state.remove(run.id);
+        Ok(projected)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::percentile;
+    use super::{Buckets, percentile};
+    use ptc_core::Timestamp;
 
     #[test]
     fn percentiles_are_nearest_rank() {
@@ -454,5 +924,18 @@ mod tests {
         assert_eq!(percentile(&values, 95), 100);
         assert_eq!(percentile(&[7], 50), 7);
         assert_eq!(percentile(&[1, 2, 3], 50), 2);
+    }
+
+    #[test]
+    fn buckets_start_at_since_and_cover_until() {
+        let buckets = Buckets::new(Some(Timestamp(1_000)), Some(Timestamp(3_500)), Some(1_000));
+        let buckets = buckets.unwrap();
+        assert_eq!(buckets.count, 3);
+        assert_eq!(buckets.index(Timestamp(999)), None);
+        assert_eq!(buckets.index(Timestamp(1_000)), Some(0));
+        assert_eq!(buckets.index(Timestamp(3_999)), Some(2));
+        assert_eq!(buckets.index(Timestamp(4_000)), None);
+        assert!(Buckets::new(None, Some(Timestamp(1)), Some(1)).is_none());
+        assert!(Buckets::new(Some(Timestamp(0)), Some(Timestamp(1)), Some(0)).is_none());
     }
 }

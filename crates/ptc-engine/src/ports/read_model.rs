@@ -34,8 +34,8 @@ pub struct RunSnapshot {
     pub status: RunStatus,
     /// From `run_started`; `None` before it.
     pub mode: Option<RunMode>,
-    /// With `active`: what the run waits for, by `since` then kind; empty otherwise. A signal's
-    /// timeout timer is part of the signal's wait, not a wait of its own.
+    /// With `active`: what the run waits for, by `since`, then kind, then seq and name; empty
+    /// otherwise. A signal's timeout timer is part of the signal's wait, not a wait of its own.
     pub waits: Vec<Wait>,
     /// With `failed`, `cancelled` or `aborted`: how the run ended.
     pub ending: Option<Ending>,
@@ -224,7 +224,7 @@ pub struct RunSummary {
     pub errors: u64,
     /// The highest index projected, plus one.
     pub history_len: u64,
-    /// The latest snapshot's waits, each call's with its task's furthest state.
+    /// The latest snapshot's waits, in its order, each call's with its task's furthest state.
     pub waits: Vec<Wait>,
     /// The earliest `until` of the waits: when the run wakes by itself.
     pub wakes_at: Option<Timestamp>,
