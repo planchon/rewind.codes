@@ -4,6 +4,7 @@
 
 mod support;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -15,11 +16,12 @@ use ptc_core::{
 use ptc_engine::adapters::{MemoryJournal, VirtualClock};
 use ptc_engine::ports::{
     AcquireRunnable, Clock, Delivery, Enqueued, ExecutorError, JournalStore, QuarantineKind,
-    RunFilter, RunRef, STICKY_GRACE, TenantId, TenantScope, VirtualTime,
+    RunFilter, RunRef, STICKY_GRACE, TenantId, TenantScope, TraceContext, VirtualTime,
 };
 use ptc_engine::replay::ReplayEnd;
 use ptc_engine::{
-    ActivationOutcome, DriveOptions, EngineConfig, Limits, ReplayVerdict, StartError, ToolOrder,
+    ActivationOutcome, DriveOptions, EngineConfig, ForkRun, Limits, ReplayVerdict, StartError,
+    ToolOrder,
 };
 use serde_json::json;
 use support::*;
@@ -145,6 +147,75 @@ async fn invalid_requests_are_rejected_before_a_run_exists() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+/// Postgres cannot keep a NUL character (U+0000) in text: every store refuses it alike, at the
+/// way in, before anything is stored, with an error that says so. Payload values are JSON, where
+/// it is escaped: they keep it.
+#[tokio::test]
+async fn text_with_a_nul_character_is_refused_at_the_way_in() {
+    let engine = engine(one_call(), RecordingDispatcher::echo());
+    let refused = |error: String| assert!(error.contains("NUL character (U+0000)"), "{error}");
+
+    let mut source = request("one_call", json!({}));
+    source.script = Script::new("one_call\0");
+    let mut label_key = request("one_call", json!({}));
+    label_key
+        .metadata
+        .labels
+        .insert("agent\0".into(), "triage".into());
+    let mut label_value = request("one_call", json!({}));
+    label_value
+        .metadata
+        .labels
+        .insert("agent".into(), "tri\0age".into());
+    let mut key = request("one_call", json!({}));
+    key.idempotency_key = Some("call\0".into());
+    let mut trace = request("one_call", json!({}));
+    trace.metadata.trace_context = Some(TraceContext {
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
+        tracestate: Some("vendor=\0".into()),
+    });
+    for start in [source, label_key, label_value, key, trace] {
+        refused(engine.start_run(start).await.unwrap_err().to_string());
+    }
+    assert!(
+        engine
+            .list_runs(&RunFilter::new(TenantId::local()))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let run = engine
+        .start_run(request("one_call", json!({ "text": "a\0b" })))
+        .await
+        .unwrap()
+        .run;
+    refused(
+        engine
+            .signal(&run, "go", json!(1), Some("delivery\0".into()))
+            .await
+            .unwrap_err()
+            .to_string(),
+    );
+    drive(&engine).await;
+    assert_eq!(status(&engine, &run).await, RunStatus::Completed);
+    let mut fork = ForkRun::new(run.clone(), Script::new("one_call"));
+    fork.labels = Some(BTreeMap::from([("agent".into(), "\0".into())]));
+    refused(engine.fork(fork).await.unwrap_err().to_string());
+    let mut fork = ForkRun::new(run, Script::new("one_call"));
+    fork.idempotency_key = Some("\0".into());
+    refused(engine.fork(fork).await.unwrap_err().to_string());
+    assert_eq!(
+        engine
+            .list_runs(&RunFilter::new(TenantId::local()))
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "no fork"
     );
 }
 

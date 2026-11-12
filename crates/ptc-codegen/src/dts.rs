@@ -129,13 +129,7 @@ pub(crate) fn module(short: &str, exports: &[Export<'_>], http_tool: bool) -> St
 
 /// One tool's declaration, with the types it uses: what `search_tools` returns.
 pub(crate) fn tool(export: &Export<'_>, signature: &Signature<'_>) -> String {
-    let used = export.types_used_by(signature);
-    let types: Vec<&Declaration> = export
-        .scope
-        .declarations
-        .iter()
-        .filter(|declaration| used.contains(&declaration.name))
-        .collect();
+    let types = export.types_used_by(signature);
     let mut out = "declare module \"ptc:tools\" {\n".to_owned();
     write_export(&mut out, export, &[signature], &types);
     out.push_str("}\n");

@@ -6,7 +6,7 @@
 //! | --- | --- |
 //! | archive | a finished run past its journal retention (30 days) gets its journal document in the `BlobStore`, and its history leaves the store |
 //! | expiry | an archive past its retention (1 year) is deleted with its run |
-//! | payload cleanup | a payload no run has referenced for its grace (24 h) is deleted, row and blob |
+//! | payload cleanup | a payload no run has referenced for its grace (24 h) is deleted, blob then row |
 //! | read model | runs that ended before its retention (90 days) leave the read model |
 //!
 //! `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
@@ -172,19 +172,27 @@ where
         Ok(existed)
     }
 
-    /// Deletes the payloads no run has referenced for their tenant's grace: their rows, then
-    /// their blobs. Returns how many.
+    /// Deletes the payloads no run has referenced for their tenant's grace: their deletion
+    /// starts in the store, then their blobs are deleted, then their rows. A payload that a
+    /// commit took back in the meantime keeps its row, which holds its value. Returns how many
+    /// were deleted.
+    ///
+    /// A round that stops halfway leaves payloads whose deletion started: a later round starts
+    /// it again after [`PAYLOAD_DELETION_TIMEOUT`](crate::ports::PAYLOAD_DELETION_TIMEOUT).
     pub async fn clean_payloads(&self, now: Timestamp) -> Result<usize, RetentionError> {
         let candidates = self.journal.unreferenced_payloads(now, self.batch).await?;
         if candidates.is_empty() {
             return Ok(0);
         }
         let forgotten = self.journal.forget_payloads(&candidates, now).await?;
+        if forgotten.is_empty() {
+            return Ok(0);
+        }
         for (tenant, digest) in &forgotten {
             // A payload of the table tier has no blob: deleting a missing blob does nothing.
             self.blobs.delete(tenant, *digest).await?;
         }
-        Ok(forgotten.len())
+        Ok(self.journal.drop_payloads(&forgotten, now).await?)
     }
 
     /// Removes from the read model the runs that ended before their tenant's read model

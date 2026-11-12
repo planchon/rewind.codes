@@ -78,6 +78,12 @@ const UNEXPORTED_TARGETS: &[&str] = &[
     "tower",
 ];
 
+/// What logs the messages it carries: `rmcp` writes the MCP messages of a session into its
+/// events (a server's notifications at `info`, every request and result at `debug` and
+/// `trace`), and those hold tool arguments and results. Payloads never reach OpenTelemetry
+/// (`archi/05-testing-and-observability.md`, "Span model"); these stay on stderr only.
+const PAYLOAD_TARGETS: &[&str] = &["rmcp"];
+
 /// Service telemetry exported over OpenTelemetry: the [`layer`](Self::layer) to add to a
 /// `tracing` subscriber, and the batch processors and the metric reader behind it. Spans and log
 /// records are exported in batches, and metrics periodically (`OTEL_METRIC_EXPORT_INTERVAL`,
@@ -161,7 +167,7 @@ impl ServiceTelemetry {
 
     /// The `tracing` layer that feeds this pipeline: spans, log records and metrics. It leaves
     /// out what the export itself goes through (the OpenTelemetry SDK, the HTTP and gRPC
-    /// clients).
+    /// clients), and the MCP client's own logs, which hold tool arguments and results.
     pub fn layer<S>(&self) -> impl Layer<S> + Send + Sync
     where
         S: Subscriber + for<'a> LookupSpan<'a>,
@@ -226,11 +232,14 @@ impl fmt::Debug for ServiceTelemetry {
 
 fn exported(metadata: &Metadata<'_>) -> bool {
     let target = metadata.target();
-    !UNEXPORTED_TARGETS.iter().any(|unexported| {
-        target
-            .strip_prefix(unexported)
-            .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
-    })
+    !UNEXPORTED_TARGETS
+        .iter()
+        .chain(PAYLOAD_TARGETS)
+        .any(|unexported| {
+            target
+                .strip_prefix(unexported)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+        })
 }
 
 /// The `tracing` layer of [`ServiceTelemetry`].
@@ -910,6 +919,35 @@ mod tests {
         let logs = backend.logs.get_emitted_logs().expect("logs");
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].record.target().map(|t| t.as_ref()), Some("h2_like"));
+    }
+
+    #[test]
+    fn the_messages_of_mcp_sessions_are_never_exported() {
+        let backend = Backend::new(TelemetryConfig::default());
+        backend.trace(|| {
+            // What `rmcp` logs of a session: a server's notification, a call and its result.
+            tracing::info!(
+                target: "rmcp::service",
+                notification = "{\"method\":\"notifications/message\",\"params\":{\"data\":\"card 4242\"}}",
+                "received notification"
+            );
+            tracing::debug!(target: "rmcp::service", request = "{\"name\":\"charge\"}", "received request");
+            tracing::info_span!(target: "rmcp::service", "serve_inner").in_scope(|| {});
+            tracing::info!(target: "rmcp_like", "kept");
+        });
+        assert!(
+            backend
+                .spans
+                .get_finished_spans()
+                .expect("spans")
+                .is_empty()
+        );
+        let logs = backend.logs.get_emitted_logs().expect("logs");
+        assert_eq!(logs.len(), 1);
+        assert_eq!(
+            logs[0].record.target().map(|t| t.as_ref()),
+            Some("rmcp_like")
+        );
     }
 
     #[test]

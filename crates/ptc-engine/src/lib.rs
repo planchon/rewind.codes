@@ -43,6 +43,7 @@ pub mod replay;
 pub mod retention;
 mod tasks;
 pub mod telemetry;
+pub mod text;
 pub mod trace;
 
 pub use cache::CacheConfig;
@@ -54,3 +55,4 @@ pub use engine::{
 pub use fork::{Compatibility, ForkError, ForkPoint, ForkRun};
 pub use payloads::PayloadTiers;
 pub use tasks::{Backoff, HostClaim, HostFailure, HostTask};
+pub use text::NulCharacter;

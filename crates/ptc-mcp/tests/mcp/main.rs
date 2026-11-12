@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 
 use fixture::{Auth, Fixture};
 use libtest_mimic::{Arguments, Trial};
-use ptc_core::{McpServer, McpTransport, RunId, Seq, Tool, ToolFailure, ToolFailureKind, Toolset};
+use ptc_core::{
+    McpServer, McpTransport, RunId, Seq, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset,
+};
 use ptc_engine::ports::{
     Credentials, Dispatched, ParkKind, RunRef, Secret, ServerCredentials, TaskToken, TenantId,
     ToolCall, ToolDispatcher, TraceContext,
@@ -33,6 +35,10 @@ fn main() -> std::process::ExitCode {
         test(
             "discovery_pins_the_server_tools",
             discovery_pins_the_server_tools(),
+        ),
+        test(
+            "a_tool_list_without_end_is_refused",
+            a_tool_list_without_end_is_refused(),
         ),
         test(
             "content_and_structured_results",
@@ -239,6 +245,48 @@ async fn discovery_pins_the_server_tools() {
     // What discovery returns is a toolset.
     let toolset = Toolset::new([mcp], tools).unwrap();
     assert_eq!(toolset.tools().len(), 8);
+}
+
+async fn a_tool_list_without_end_is_refused() {
+    let fixture = Fixture::new();
+    fixture.state().endless_list = true;
+    let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
+    let mcp = http_server(&server.url);
+    // Listing went on until the timeout, the connection's list locked meanwhile.
+    let dispatcher = McpDispatcher::new(McpConfig {
+        connect_timeout: Duration::from_secs(20),
+        ..McpConfig::default()
+    });
+    let started = Instant::now();
+    let error = dispatcher
+        .list_tools(&tenant(), &mcp, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, McpError::Refused { message, .. } if message.contains("more than 100 pages")),
+        "{error:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert_eq!(fixture.state().pages, 100);
+
+    // A call checks its tool against the list: it fails at once, for good.
+    let tool = Tool::new(
+        "fx.t0",
+        ToolRoute::Mcp {
+            server: "fx".into(),
+        },
+        json!({ "type": "object" }),
+    );
+    let failure = failed(
+        dispatcher
+            .dispatch(call(&mcp, &tool, json!({})), None)
+            .await,
+    );
+    assert_eq!(failure.kind, ToolFailureKind::Unavailable);
+    assert!(
+        failure.message.contains("ai-ptc reads no further"),
+        "{failure:?}"
+    );
 }
 
 async fn content_and_structured_results() {

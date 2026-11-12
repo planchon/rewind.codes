@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use ptc_core::{Shape, Tool, ToolRoute, Toolset};
 
 use crate::observed;
-use crate::schema::{self, Role, Scope};
-use crate::ty::{Doc, Ty, is_identifier};
+use crate::schema::{self, Declaration, Role, Scope};
+use crate::ty::{Doc, Names, Ty, is_identifier};
 
 /// One export of `ptc:tools`.
 #[derive(Debug)]
@@ -126,13 +126,13 @@ fn args_optional(ty: &Ty, scope: &Scope) -> bool {
 
 impl Export<'_> {
     /// The named types a signature uses, transitively, in the order of the scope.
-    pub(crate) fn types_used_by(&self, signature: &Signature<'_>) -> Vec<String> {
-        let mut used = Vec::new();
+    pub(crate) fn types_used_by(&self, signature: &Signature<'_>) -> Vec<&Declaration> {
+        let mut used = Names::default();
         signature.args.named(&mut used);
         signature.result.named(&mut used);
         let mut next = 0;
-        while next < used.len() {
-            if let Some(declaration) = self.scope.get(&used[next]) {
+        while next < used.order.len() {
+            if let Some(declaration) = self.scope.get(&used.order[next]) {
                 declaration.ty.named(&mut used);
             }
             next += 1;
@@ -141,7 +141,6 @@ impl Export<'_> {
             .declarations
             .iter()
             .filter(|declaration| used.contains(&declaration.name))
-            .map(|declaration| declaration.name.clone())
             .collect()
     }
 

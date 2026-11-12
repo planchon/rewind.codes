@@ -25,15 +25,19 @@ pub struct Limits {
     pub value: usize,
     /// One log line, a stack.
     pub line: usize,
+    /// A whole result: room for the parts above, and a last bound on any text left unbounded.
+    pub total: usize,
 }
 
 impl Limits {
     pub fn for_output(output: usize) -> Self {
+        let trace = (output / 2).max(4096);
         Self {
             output,
-            trace: (output / 2).max(4096),
+            trace,
             value: (output / 64).max(1024),
             line: 2048,
+            total: output + trace + 64 * 1024,
         }
     }
 }
@@ -122,7 +126,7 @@ pub struct RunExtras {
 
 /// A run's state for the model: its outcome, or what it waits for.
 pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
-    let mut lines = vec![headline(run)];
+    let mut lines = vec![headline(run, limits)];
     match run.status {
         RunStatus::Completed => {
             if let Some(output) = &extras.output {
@@ -176,7 +180,7 @@ fn log_level(level: ptc_api::common::LogLevel) -> &'static str {
     }
 }
 
-fn headline(run: &Run) -> String {
+fn headline(run: &Run, limits: &Limits) -> String {
     let fork = run
         .parent
         .as_ref()
@@ -191,7 +195,7 @@ fn headline(run: &Run) -> String {
             Some(abort) => format!(
                 "{name} was aborted by the host ({}): {}",
                 abort_kind(abort.kind),
-                abort.message
+                truncate_end(&abort.message, limits.value)
             ),
             None => format!("{name} was aborted by the host."),
         },
@@ -204,7 +208,7 @@ fn headline(run: &Run) -> String {
                 };
                 return format!(
                     "{name} is quarantined ({cause}): {}. It waits for the platform to be fixed; it is not a fault of the script.",
-                    quarantine.reason
+                    truncate_end(&quarantine.reason, limits.value)
                 );
             }
             if is_suspended(run) {
@@ -330,12 +334,12 @@ fn output_section(run_id: &str, output: &str, limit: usize) -> Vec<String> {
 fn error_section(error: &RunError, limits: &Limits) -> Vec<String> {
     let mut lines = vec![format!(
         "{}: {}{}",
-        error.name,
-        error.message,
+        truncate_end(&error.name, limits.line),
+        truncate_end(&error.message, limits.value),
         at(error.location.as_ref())
     )];
     if let Some(frame) = &error.frame {
-        lines.push(frame.trim_end().to_owned());
+        lines.push(truncate_end(frame.trim_end(), limits.value));
     }
     if let Some(call) = &error.failed_call {
         lines.extend(failed_call_section(call, limits));
@@ -365,7 +369,7 @@ fn failed_call_section(call: &FailedCall, limits: &Limits) -> Vec<String> {
         format!(
             "  {}: {}{data}",
             failure_kind(call.error.kind),
-            call.error.message
+            truncate_end(&call.error.message, limits.value)
         ),
     ]
 }
@@ -419,7 +423,7 @@ pub fn entry_text(entry: &ptc_api::events::Entry) -> String {
 // Checks, tests, lists, searches
 
 /// The diagnostics of a check, for the model.
-pub fn describe_check(result: &CheckResult) -> String {
+pub fn describe_check(result: &CheckResult, limits: &Limits) -> String {
     let errors = result
         .diagnostics
         .iter()
@@ -437,51 +441,63 @@ pub fn describe_check(result: &CheckResult) -> String {
             format!(
                 "The script type-checks, with {}:\n{}",
                 counts.join(" and "),
-                diagnostics_text(&result.diagnostics)
+                diagnostics_text(&result.diagnostics, limits)
             )
         };
     }
     format!(
         "The script does not type-check: {}.\n{}",
         counts.join(" and "),
-        diagnostics_text(&result.diagnostics)
+        diagnostics_text(&result.diagnostics, limits)
     )
 }
 
 /// A script refused before any run exists.
-pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic]) -> String {
-    let text = format!("The script was refused before anything ran: {detail}");
+pub fn describe_refusal(detail: &str, diagnostics: &[Diagnostic], limits: &Limits) -> String {
+    let text = format!(
+        "The script was refused before anything ran: {}",
+        truncate_end(detail, limits.value)
+    );
     if diagnostics.is_empty() {
         text
     } else {
-        format!("{text}\n{}", diagnostics_text(diagnostics))
+        format!("{text}\n{}", diagnostics_text(diagnostics, limits))
     }
 }
 
-pub fn diagnostics_text(diagnostics: &[Diagnostic]) -> String {
-    diagnostics
-        .iter()
-        .map(|d| {
-            let location = d
-                .location
-                .map(|l| format!("script.ts:{}:{} ", l.line, l.column))
-                .unwrap_or_default();
-            let mut lines = vec![format!(
-                "{location}{} {}: {}",
-                d.severity.as_str(),
-                d.code,
-                d.message
-            )];
-            if let Some(frame) = &d.frame {
-                lines.push(frame.trim_end().to_owned());
-            }
-            if let Some(hint) = &d.hint {
-                lines.push(format!("hint: {hint}"));
-            }
-            lines.join("\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+/// The diagnostics, in order, as many as the room of a trace holds.
+pub fn diagnostics_text(diagnostics: &[Diagnostic], limits: &Limits) -> String {
+    let mut shown: Vec<String> = Vec::new();
+    let mut bytes = 0;
+    for d in diagnostics {
+        let location = d
+            .location
+            .map(|l| format!("script.ts:{}:{} ", l.line, l.column))
+            .unwrap_or_default();
+        let mut lines = vec![format!(
+            "{location}{} {}: {}",
+            d.severity.as_str(),
+            d.code,
+            truncate_end(&d.message, limits.value)
+        )];
+        if let Some(frame) = &d.frame {
+            lines.push(truncate_end(frame.trim_end(), limits.value));
+        }
+        if let Some(hint) = &d.hint {
+            lines.push(format!("hint: {}", truncate_end(hint, limits.line)));
+        }
+        let text = lines.join("\n");
+        bytes += text.len() + 2;
+        if bytes > limits.trace && !shown.is_empty() {
+            shown.push(format!(
+                "… and {}.",
+                plural(diagnostics.len() - shown.len(), "more diagnostic")
+            ));
+            break;
+        }
+        shown.push(text);
+    }
+    shown.join("\n\n")
 }
 
 /// The outcome of a scenario.
@@ -496,7 +512,12 @@ pub fn describe_test(result: &TestResult, limits: &Limits) -> String {
             "The test failed: {} do not hold:",
             plural(result.failures.len(), "expectation")
         ));
-        lines.extend(result.failures.iter().map(|failure| format!("- {failure}")));
+        lines.extend(
+            result
+                .failures
+                .iter()
+                .map(|failure| format!("- {}", truncate_end(failure, limits.value))),
+        );
     }
     lines.push(format!("The run {}.", status_phrase(result.status)));
     if let Some(output) = &result.output
@@ -508,13 +529,17 @@ pub fn describe_test(result: &TestResult, limits: &Limits) -> String {
         ));
     }
     if let Some(error) = &result.error {
-        lines.push(format!("{}: {}", error.name, error.message));
+        lines.push(format!(
+            "{}: {}",
+            truncate_end(&error.name, limits.line),
+            truncate_end(&error.message, limits.value)
+        ));
     }
     if let Some(abort) = &result.abort {
         lines.push(format!(
             "Aborted ({}): {}",
             abort_kind(abort.kind),
-            abort.message
+            truncate_end(&abort.message, limits.value)
         ));
     }
     if result.calls.is_empty() {
@@ -679,6 +704,62 @@ mod tests {
         assert_eq!(
             args(&[("run_id", json!("r")), ("offset", json!(10))]),
             r#"{"run_id":"r","offset":10}"#
+        );
+    }
+
+    #[test]
+    fn every_text_a_script_a_server_or_a_tool_wrote_is_bounded() {
+        let limits = Limits::for_output(64 * 1024);
+        let long = "m".repeat(3_000_000);
+        let run: Run = serde_json::from_value(json!({
+            "id": "r", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
+            "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
+            "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
+            "expiresAt": "2026-11-13T00:00:00Z",
+            "error": {
+                "name": long, "message": long, "frame": long,
+                "failedCall": {
+                    "seq": 1, "tool": "crm.find", "args": { "value": {}, "digest": "d", "bytes": 2, "preview": "{}" },
+                    "error": { "kind": "error", "message": long }
+                }
+            }
+        }))
+        .unwrap();
+        let text = describe_run(&run, &RunExtras::default(), &limits);
+        assert!(
+            text.len() < 4 * limits.value + limits.line,
+            "{}",
+            text.len()
+        );
+        assert!(text.contains("more bytes]"));
+
+        let test: TestResult = serde_json::from_value(json!({
+            "passed": false, "failures": [long], "status": "failed",
+            "error": { "name": long, "message": long }, "calls": {}, "trace": ""
+        }))
+        .unwrap();
+        assert!(describe_test(&test, &limits).len() < 3 * limits.value + limits.line);
+
+        let diagnostic = |message: &str| Diagnostic {
+            severity: Severity::Error,
+            code: "TS2322".into(),
+            message: message.into(),
+            location: None,
+            frame: Some(long.clone()),
+            hint: Some(long.clone()),
+        };
+        let refusal = describe_refusal(&long, &[diagnostic("bad")], &limits);
+        assert!(refusal.len() < 3 * limits.value + limits.line + 100);
+        // Diagnostics take the room of a trace, then say how many are left out.
+        let many: Vec<Diagnostic> = (0..1000)
+            .map(|n| diagnostic(&format!("error {n}")))
+            .collect();
+        let text = diagnostics_text(&many, &limits);
+        assert!(text.len() <= limits.trace + limits.value + limits.line + 100);
+        assert!(
+            text.ends_with("more diagnostics."),
+            "{}",
+            &text[text.len() - 60..]
         );
     }
 

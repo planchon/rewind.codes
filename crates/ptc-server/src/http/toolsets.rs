@@ -27,6 +27,7 @@ use ptc_core::{
 use ptc_engine::ports::{
     JournalStore, ReadModel, Secret, ServerCredentials, StoredToolset, TenantId, ToolDeclarations,
 };
+use ptc_engine::text::{TOOLSET_TEXT, refuse_nul};
 
 use crate::app::App;
 use crate::auth::{Access, Caller};
@@ -57,6 +58,8 @@ pub(super) async fn create(
         typescript: generated.typescript,
         prompt: generated.prompt,
     };
+    refuse_nul(TOOLSET_TEXT, &declarations.typescript)?;
+    refuse_nul(TOOLSET_TEXT, &declarations.prompt)?;
     let created = app
         .store
         .get_toolset(&caller.tenant, toolset.digest())

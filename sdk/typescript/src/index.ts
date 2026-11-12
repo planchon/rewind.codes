@@ -41,6 +41,7 @@ export { WebhookVerificationFailed, verifyWebhook, type WebhookHeaders } from ".
 export {
   AgentTools,
   idempotencyKeyOf,
+  runIdempotencyKey,
   type AgentToolResult,
   type AgentToolsClient,
   type AgentToolsOptions,

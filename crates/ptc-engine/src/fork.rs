@@ -32,7 +32,9 @@ use ptc_core::{
 
 use crate::activation::{Batch, Grace, abort_reason};
 use crate::adapters::StaticTypeChecker;
-use crate::engine::{Engine, EngineError, StartError, idempotency_key, type_check};
+use crate::engine::{
+    Engine, EngineError, StartError, idempotency_key, refuse_nul_in_metadata, type_check,
+};
 use crate::payloads;
 use crate::ports::{
     BlobStore, Clock, CompiledScript, CreateRun, Created, Emitted, Entropy, ForkParent,
@@ -40,6 +42,7 @@ use crate::ports::{
     SecretStore, StartScript, StoreError, ToolDispatcher, TraceContext, TypeChecker, WebhookSender,
 };
 use crate::replay::{Heartbeat, NoHeartbeat};
+use crate::text;
 
 /// A request to fork a run (`POST /v1/runs/{id}/fork`, `ptc fork`, `retry_run`).
 #[derive(Debug, Clone)]
@@ -238,6 +241,17 @@ where
                 max: self.config.max_ttl,
             }));
         }
+        let refused = |nul| ForkError::Start(StartError::NulCharacter(nul));
+        text::refuse_nul("the script", request.script.source()).map_err(refused)?;
+        let metadata = RunMetadata {
+            labels: request.labels.unwrap_or(record.metadata.labels),
+            trace_context: request.trace_context,
+            parent: Some(ForkParent {
+                run: parent.id,
+                at: request.at,
+            }),
+        };
+        refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref()).map_err(refused)?;
         let stored = self.toolset(&parent.tenant, record.toolset).await?;
         let toolset = stored.toolset;
         let compiled = self
@@ -282,14 +296,7 @@ where
                 expires_at: now.saturating_add(ttl),
                 mode: parent_started.mode,
             },
-            metadata: RunMetadata {
-                labels: request.labels.unwrap_or(record.metadata.labels),
-                trace_context: request.trace_context,
-                parent: Some(ForkParent {
-                    run: parent.id,
-                    at: request.at,
-                }),
-            },
+            metadata,
             created_at: now,
         };
         match self

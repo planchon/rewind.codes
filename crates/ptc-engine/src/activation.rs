@@ -43,7 +43,7 @@ use crate::ports::{
 };
 use crate::replay::{self, Heartbeat, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::telemetry::{SpanKey, span_id, trace_of};
-use crate::{metrics, payloads};
+use crate::{metrics, payloads, text};
 
 /// Why a run is activated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,15 +90,14 @@ where
         }))
     }
 
-    /// Retries, once, each quarantined run of this worker's epochs that no worker of this build
-    /// has retried yet: a worker of a new build calls it when it starts
+    /// Retries, once, each quarantined run of this worker's epochs and tenants that no worker of
+    /// this build has retried yet: a worker of a new build calls it when it starts
     /// (`archi/03-execution.md`, "Non-determinism and quarantine"). A run whose replay matches
     /// again leaves quarantine and goes on; a replay that fails again commits nothing and
     /// leaves the run quarantined.
     ///
-    /// A run of a tenant this worker does not serve is never activated here: its script must
-    /// not run outside its tenant's pool. `acquire_quarantined` does not filter by tenant, so
-    /// such a run is handed back at once.
+    /// A run of a tenant this worker does not serve is left to a worker of its tenant's pool:
+    /// its script must not run here, and this build's retry of it is not spent.
     pub async fn retry_quarantined(&self) -> Result<Vec<ActivationReport>, EngineError> {
         let mut reports = Vec::new();
         while let Some(lease) = self
@@ -107,19 +106,12 @@ where
                 &self.config.worker,
                 &self.config.build,
                 self.executor.epochs(),
+                &self.config.tenants,
                 self.clock.now(),
                 self.config.lease_duration,
             )
             .await?
         {
-            if !self.config.tenants.contains(&lease.run.tenant) {
-                tracing::warn!(
-                    run = %lease.run,
-                    "a quarantined run of a tenant this worker does not serve: not retried"
-                );
-                self.journal.release(&lease).await?;
-                continue;
-            }
             let outcome = self.activate_leased(&lease, Purpose::QuarantineRetry).await;
             reports.push(ActivationReport {
                 run: lease.run,
@@ -155,7 +147,7 @@ where
     async fn activate_leased(&self, lease: &Lease, purpose: Purpose) -> ActivationOutcome {
         let span = tracing::info_span!(
             "activation",
-            run = %lease.run,
+            ptc.run_id = %lease.run.id,
             fence = lease.fence,
             trace_id = tracing::field::Empty,
             span_id = tracing::field::Empty,
@@ -386,10 +378,12 @@ where
         let (mut activation, state) = batch.into_parts();
         let status = state.status();
         activation.payloads = payloads::offload(
+            &self.journal,
             &self.blobs,
             tenant,
             &mut activation.entries,
             self.config.payloads,
+            self.clock.now(),
         )
         .await?;
         derive_effects(&mut activation, &state, &toolset)
@@ -441,6 +435,7 @@ where
         mismatch: String,
     ) -> Result<ActivationOutcome, EngineError> {
         tracing::error!(%mismatch, "replay mismatch: run quarantined");
+        let mismatch = text::storable(mismatch);
         self.journal
             .quarantine(lease, mismatch.clone(), self.clock.now())
             .await?;
@@ -473,7 +468,7 @@ where
         }
         let failures = self
             .journal
-            .record_failure(lease, error.to_string(), self.clock.now())
+            .record_failure(lease, text::storable(error.to_string()), self.clock.now())
             .await;
         match failures {
             Ok(Failures {

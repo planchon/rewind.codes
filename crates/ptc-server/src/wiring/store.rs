@@ -227,10 +227,15 @@ impl JournalStore for Store {
         owner: &str,
         build: &str,
         epochs: &[Epoch],
+        tenants: &TenantScope,
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
-        each!(self, store => store.acquire_quarantined(owner, build, epochs, now, lease_duration).await)
+        each!(self, store => {
+            store
+                .acquire_quarantined(owner, build, epochs, tenants, now, lease_duration)
+                .await
+        })
     }
 
     async fn renew(
@@ -440,6 +445,15 @@ impl JournalStore for Store {
         each!(self, store => store.get_payload(tenant, digest).await)
     }
 
+    async fn reserve_payloads(
+        &self,
+        tenant: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        each!(self, store => store.reserve_payloads(tenant, payloads, now).await)
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,
@@ -454,6 +468,14 @@ impl JournalStore for Store {
         now: Timestamp,
     ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
         each!(self, store => store.forget_payloads(payloads, now).await)
+    }
+
+    async fn drop_payloads(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> Result<usize, StoreError> {
+        each!(self, store => store.drop_payloads(payloads, started).await)
     }
 
     async fn runs_to_archive(

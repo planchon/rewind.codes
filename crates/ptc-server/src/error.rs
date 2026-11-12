@@ -10,7 +10,7 @@ use ptc_engine::ports::{
     StoreError,
 };
 use ptc_engine::retention::RetentionError;
-use ptc_engine::{EngineError, ForkError, StartError};
+use ptc_engine::{EngineError, ForkError, NulCharacter, StartError};
 
 /// An error answered by the API.
 #[derive(Debug)]
@@ -87,6 +87,12 @@ impl From<StoreError> for ApiError {
     }
 }
 
+impl From<NulCharacter> for ApiError {
+    fn from(error: NulCharacter) -> Self {
+        Self::invalid(error.to_string())
+    }
+}
+
 impl From<ReadModelError> for ApiError {
     fn from(error: ReadModelError) -> Self {
         Self::internal(error)
@@ -143,6 +149,7 @@ impl From<EngineError> for ApiError {
             EngineError::ToolsetNotFound(digest) => Self::not_found(format!(
                 "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
             )),
+            EngineError::NulCharacter(error) => error.into(),
             EngineError::Store(error) => error.into(),
             other => Self::internal(other),
         }
@@ -174,6 +181,7 @@ impl From<StartError> for ApiError {
                 )
             }
             StartError::InvalidTtl { .. } => Self::invalid(error.to_string()),
+            StartError::NulCharacter(error) => error.into(),
             StartError::InputTooLarge { .. } => {
                 Self::new(ProblemType::PayloadTooLarge, error.to_string())
             }

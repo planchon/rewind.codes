@@ -32,7 +32,7 @@ use crate::ports::{
     ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskToken, TaskUpdate, ToolCall,
     ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind, WebhookSender,
 };
-use crate::{metrics, payloads};
+use crate::{metrics, payloads, text};
 
 /// A call ready to be dispatched.
 struct Prepared {
@@ -429,6 +429,9 @@ where
                 r#"webhook expects {"name": string}"#,
             );
         };
+        if let Err(refused) = text::refuse_nul("the webhook name", name) {
+            return fail(ToolFailureKind::Error, &refused.to_string());
+        }
         match self.journal.create_webhook_token(&call.run, name).await {
             Ok(token) => Dispatched::Result(json!({
                 "url": format!("{}/hooks/{}", base.trim_end_matches('/'), token.0),
