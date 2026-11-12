@@ -317,6 +317,7 @@ fn rejects_what_v1_does_not_define() {
         r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"digest":"F6A214F7A5FCDA0C2CEE9660B7FC29F5649E3C68AAD48E20E950137C98913A68"}}"#,
         r#"{"v":1,"type":"tool_call_completed","seq":1,"result":{"digest":"f6a2"}}"#,
         r#"{"v":1,"type":"cancel_requested","reason":{"kind":"bored"}}"#,
+        r#"{"v":1,"type":"cancel_requested","reason":{"kind":"ttl","extra":1}}"#,
         r#"{"v":1,"type":"log","level":"trace","message":"m"}"#,
     ];
     for json in invalid {

@@ -920,3 +920,44 @@ async fn a_script_with_a_type_error_is_refused_before_any_run_exists() {
     unchecked.input = json!({ "unchecked": true });
     assert!(engine.start_run(unchecked).await.unwrap().created);
 }
+
+#[tokio::test]
+async fn a_timer_fires_at_its_fire_at_at_the_earliest_whatever_the_worker_s_clock() {
+    let programs = FakeExecutor::new().with(
+        "sleep",
+        |run| {
+            run.timer(10_000);
+        },
+        |run, _| {
+            let now = run.now.0;
+            run.complete(json!(now));
+        },
+    );
+    let engine = engine(programs, RecordingDispatcher::echo());
+    let run = engine.start_run(request("sleep", json!({}))).await.unwrap();
+    engine.activate_next().await.unwrap().unwrap();
+    let fire_at = Timestamp(T0.0 + 10_000);
+
+    // The scheduler that fires the timer runs on a machine whose clock is 2 s ahead of this
+    // worker's: the worker delivers it while its own clock reads 8 s.
+    engine.clock().advance_to(Timestamp(T0.0 + 8_000));
+    assert_eq!(
+        engine.journal().fire_due_timers(fire_at, 10).await.unwrap(),
+        1
+    );
+    engine.activate_next().await.unwrap().unwrap();
+
+    let history = engine.history(&run.run).await.unwrap();
+    assert_eq!(
+        events(&history),
+        ["run_started", "start_timer", "timer_fired", "complete_run"]
+    );
+    assert_eq!(history[2].recorded_at, fire_at);
+    assert_eq!(
+        history[3].event,
+        Event::Command(Command::CompleteRun {
+            output: json!(fire_at.0).into()
+        }),
+        "after sleep(10s), Date.now() is at least 10 s after the start"
+    );
+}

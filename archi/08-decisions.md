@@ -168,7 +168,6 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | After a cancellation, a script that nothing can wake fails with `CancelledError`, not `DeadlockError` | `DeadlockError` | Cancelling a wait built on `setTimeout` drops the timer: the run must still end `cancelled`. Found by review. |
 | Lone surrogates become U+FFFD when a value leaves the script | Refusing the value | A string cut in the middle of an emoji is common in generated code; no host string can hold half of a pair. Found by review. |
 
-
 ### Taken while freezing the HTTP API and the sandbox lib (November 2026)
 
 | Decision | Alternative rejected | Why |
@@ -324,6 +323,7 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Decision | Alternative rejected | Why |
 | --- | --- | --- |
 | On disk, a blob lives at `{root}/{tenant}/sha256/{ab}/{digest}` (the embedded server's root is `.ptc/blobs`). A put writes `{root}/.staging/`, syncs the file, renames it without replacing a blob, and syncs the directory; `open` removes the staging files older than an hour | One `sha256/` tree for every tenant; a temporary file next to the blob | The port isolates tenants, and the layout mirrors the S3 keys. A tenant id cannot start with a dot, so the staging directory never meets a tenant, and a crash leaves its leftovers in one place. The journal names a digest once `put` returns, so the blob must survive a crash. |
+| On disk, a tenant's directory writes each capital letter of its id as `+` and the letter in lowercase: `Acme` lives in `+acme`, `acme` and `local` in their own name | The tenant id as it is | Tenant ids are case-sensitive and the file systems of macOS and Windows are not: `Acme` read and deleted `acme`'s blobs. A tenant id holds no `+`, so no two tenants share a directory. |
 | `ptc-blob` writes its files itself rather than through `object_store`'s `LocalFileSystem` | `LocalFileSystem` | It syncs neither files nor directories, and stages next to the target. The file store is about a hundred lines. |
 | S3 goes through `object_store` (feature `aws`). A put is conditional (`If-None-Match: *`), and a second put of a digest succeeds without rewriting it; `delete` asks (`HEAD`) before deleting; with an access key in the configuration nothing comes from the AWS environment, without one the environment and the roles fill in what is missing | Unconditional puts; a delete that reports nothing | One round trip for a new blob, and no object is ever rewritten. S3 does not say whether a deletion removed anything, and the port does (two concurrent deletions may both say yes). A session token left in the environment cannot pair with another key. |
 | The workers' cache is `CachedBlobs`, in memory, in front of any `BlobStore`: bounded in bytes (256 MiB by default; a blob above an eighth of it is not cached), CLOCK-Pro eviction from `quick_cache`, filled by gets and puts. Puts always reach the store behind it; a delete drops the entry; misses are not cached | A cache on disk; caching misses | Workers hold nothing a run needs and run sandboxed. A digest always names the same bytes, so an entry is never refreshed, only dropped. A blob cleaned up by another worker and put again must reach the store. |
@@ -474,6 +474,14 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The acceptance suite is one Playwright Test project in `acceptance/` (TypeScript, pnpm), every criterion a spec run one at a time against the real binary; `acceptance/run.sh` builds what it needs, runs `crates/ptc/tests/cli.rs` for the part of criterion 2 it already proves, runs the specs, and writes each criterion's status from Playwright's JSON report. Containers carry the label `ptc-acceptance`, by which `run.sh` removes leftovers | vitest for the specs and Playwright for the dashboard; a Rust test crate | The harness of criterion 1 must be the TypeScript SDK and criterion 7 needs a browser: one runner serves both, and every other criterion is a process to drive. |
 | A tool's calls are counted from the MCP server's side: the toolset starts `server-everything` behind `sh -c 'tee -a "$MCP_CALL_LOG" \| npx …'`, so every JSON-RPC message it receives is in a file | Counting on the client's side; an MCP server of our own with a log | "Not repeated" has to be seen by the real server, and the reference server keeps no log of its own. |
 | The evals' criterion is proven with two scripted models (`scripted:<file>`), one right at the first try and one refused by the check then fixed, on the three renderings | Waiting for API keys | The report's shape and each measure are the harness's; only the numbers depend on the model. |
+
+### Taken while reviewing the core, the format and the engine (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| `retry_quarantined` hands a quarantined run of a tenant the worker does not serve back at once, without running it | Retrying every tenant's quarantined runs | A worker of one tenant's pool must never run another tenant's script. `acquire_quarantined` takes no tenants, so that build's retry of the run is spent; the port should take the worker's `TenantScope`, as `acquire_runnable` does (a change of the three stores). |
+| Giving up a run quarantined before its first commit commits its `run_started`, from the inbox, with `run_aborted` | `run_aborted` alone | A history always starts with `run_started`; a fork whose parent was erased fails before its first commit. |
+| A `timer_fired` is recorded at `max(now, last recorded_at, fire_at)` | `max(now, last recorded_at)` alone | The scheduler that fired the timer may run on a machine whose clock is ahead of the worker's: `Date.now()` after `sleep(d)` must still be at least `d` later. |
 
 ### Taken while building operations (November 2026)
 

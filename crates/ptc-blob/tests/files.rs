@@ -50,6 +50,28 @@ async fn a_blob_lives_under_its_tenant_and_digest() {
 }
 
 #[tokio::test]
+async fn a_tenant_with_capital_letters_has_a_directory_of_its_own() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("blobs");
+    let store = FileBlobs::open(&root).expect("open");
+    let (digest, bytes) = blob("capitals");
+    let hex = digest.to_hex();
+
+    store
+        .put(&tenant("Acme"), digest, bytes.clone())
+        .await
+        .expect("put");
+
+    let path = root.join("+acme").join("sha256").join(&hex[..2]).join(&hex);
+    assert_eq!(store.path(&tenant("Acme"), digest), path);
+    assert_eq!(fs::read(&path).expect("read"), bytes);
+    assert!(
+        !root.join("acme").exists(),
+        "not in acme's directory, even where case is ignored"
+    );
+}
+
+#[tokio::test]
 async fn a_corrupt_file_is_reported() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FileBlobs::open(dir.path()).expect("open");
