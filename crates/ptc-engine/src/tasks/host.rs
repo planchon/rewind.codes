@@ -237,10 +237,10 @@ where
             task: task.task.clone(),
             tool: task.tool.clone(),
             args: self.task_args(task).await?,
-            idempotency_key: self.task_key(task).await?,
+            idempotency_key: self.task_key(&record, task).await?,
             attempt: task.attempt,
             heartbeat_timeout: task.policy.heartbeat_timeout,
-            trace_context: Self::call_trace_context(&record),
+            trace_context: self.call_trace_context(&record, task.task.seq),
             labels: record.metadata.labels,
         }))
     }

@@ -57,7 +57,7 @@ pub use host::{HostClaim, HostFailure, HostTask};
 /// The delay before a call that failed transiently is attempted again: `initial ×
 /// factor^(n − 1)` after the n-th attempt, at most `max`, of which the upper half is jitter.
 ///
-/// The jitter is drawn from the call's idempotency key and attempt, not from a random
+/// The jitter is drawn from the call (`{run_id}/{seq}`) and its attempt, not from a random
 /// generator: the engine stays deterministic given its ports, and calls that failed together
 /// (a server outage) still come back apart. With the defaults, the second attempt comes 0.5 to
 /// 1 s after the first, then 2 to 4 s, 8 to 16 s and 32 to 64 s.
@@ -79,7 +79,8 @@ impl Default for Backoff {
 }
 
 impl Backoff {
-    /// The delay after the attempt `attempt` (from 1) of the call `key` failed.
+    /// The delay after the attempt `attempt` (from 1) of the call `key` (`{run_id}/{seq}`)
+    /// failed.
     pub fn delay(&self, key: &str, attempt: u32) -> Duration {
         let max = millis(self.max);
         let mut base = millis(self.initial).min(max);
