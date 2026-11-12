@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 ptc-api = { path = "crates/ptc-api" }
+ptc-check = { path = "crates/ptc-check" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
@@ -25,6 +26,10 @@ deno_error = "0.7"
 # observable by scripts, so a new version is a change of the determinism epoch.
 deno_web = "=0.291.0"
 deno_webidl = "=0.260.0"
+# The user's cache directory, where ptc-check extracts tsgo.
+dirs = "6"
+# The tarball of tsgo embedded by ptc-check (gzip, tar).
+flate2 = "1"
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hmac = "0.13"
@@ -47,11 +52,14 @@ serde_html_form = "0.2"
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
 sse-stream = "0.3"
+tar = "0.4"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 utoipa = { version = "6", features = ["jiff_0_2"] }
+# ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
 uuid = { version = "1", default-features = false }
 
