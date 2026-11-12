@@ -367,7 +367,15 @@ where
                             message: format!("{} arrived before run_started", completion.name()),
                         });
                     };
-                    let recorded_at = batch.recorded_at(self.clock.now());
+                    let mut now = self.clock.now();
+                    // A timer fires at its `fire_at` at the earliest, whatever the clock of the
+                    // worker delivering it: after `sleep(d)`, `Date.now()` is at least `d` later.
+                    if let Completion::TimerFired { seq } = &completion
+                        && let Some(fire_at) = batch.state.pending_timers().get(seq)
+                    {
+                        now = max(now, *fire_at);
+                    }
+                    let recorded_at = batch.recorded_at(now);
                     self.deliver(&mut batch, &mut heartbeat, running, completion, recorded_at)
                         .await?;
                 }
