@@ -20,7 +20,8 @@ use ptc_engine::ports::{
     ToolCall, ToolDispatcher, VirtualTime, WebhookEventKind,
 };
 use ptc_engine::{
-    Backoff, DriveOptions, EngineConfig, EngineError, HostClaim, HostFailure, StartError, StartRun,
+    Backoff, DriveOptions, Engine, EngineConfig, EngineError, HostClaim, HostFailure, StartError,
+    StartRun,
 };
 use serde_json::json;
 use support::*;
@@ -235,6 +236,47 @@ async fn a_transient_failure_is_retried_after_a_backoff() {
         completed_at(&engine, &run, 1).await,
         T0.saturating_add(waited)
     );
+}
+
+#[tokio::test]
+async fn an_engine_restarted_during_a_backoff_wakes_up_for_the_retry() {
+    let dispatcher = RecordingDispatcher::dispatching(|call, _| {
+        if call.attempt < 2 {
+            Dispatched::Transient(failure(ToolFailureKind::Unavailable, "overloaded"))
+        } else {
+            Dispatched::Result(json!({ "number": 4 }))
+        }
+    });
+    let engine = engine(caller(), dispatcher.clone());
+    let run = engine
+        .start_run(calling(ISSUE, toolset(|_| {})))
+        .await
+        .unwrap()
+        .run;
+    // At the current time only: the first attempt fails, and the retry waits for its backoff.
+    engine
+        .run_until_idle(&DriveOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(dispatcher.calls().len(), 1);
+    let TaskState::Ready { next_attempt_at } = task_state(&engine, &run).await else {
+        panic!("the task waits for its next attempt");
+    };
+
+    // Another engine on the same store knows nothing of the first one's retries: the store
+    // tells it when the call is due.
+    let engine = Engine::new(engine.into_adapters(), EngineConfig::default());
+    assert_eq!(
+        engine.next_tool_wake_up().await.unwrap(),
+        Some(next_attempt_at)
+    );
+    drive(&engine).await;
+    assert_eq!(dispatcher.calls().len(), 2);
+    assert_eq!(
+        output(&engine, &run).await,
+        json!({ "result": { "number": 4 } })
+    );
+    assert_eq!(completed_at(&engine, &run, 1).await, next_attempt_at);
 }
 
 #[tokio::test]
@@ -808,7 +850,10 @@ async fn a_retryable_host_failure_is_retried_after_a_backoff() {
     };
     let delay = Backoff::default().delay(&first.idempotency_key, 1);
     assert_eq!(next_attempt_at, T0.saturating_add(delay));
-    assert_eq!(engine.next_tool_wake_up(), Some(next_attempt_at));
+    assert_eq!(
+        engine.next_tool_wake_up().await.unwrap(),
+        Some(next_attempt_at)
+    );
     assert!(
         engine
             .claim_host_tasks(&host_claim(&tenant))

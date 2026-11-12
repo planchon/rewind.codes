@@ -44,7 +44,7 @@ mod dispatch;
 mod harness;
 mod host;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -107,12 +107,11 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// What the engine keeps about its own tool calls, between the store's calls: the claims of
-/// the calls it is dispatching, which it heartbeats, and when its retried calls are due, which
-/// the driver jumps to in virtual time.
+/// the calls it is dispatching, which it heartbeats. When a retried call is due is the store's
+/// (`next_tool_attempt`): an engine restarted during a backoff still wakes up for it.
 #[derive(Debug, Default)]
 pub(crate) struct ToolTasks {
     in_flight: Mutex<BTreeMap<TaskToken, InFlight>>,
-    retries: Mutex<BTreeSet<Timestamp>>,
 }
 
 /// While it lives, the engine renews the claim of a call being dispatched.
@@ -145,10 +144,6 @@ impl ToolTasks {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn retries(&self) -> MutexGuard<'_, BTreeSet<Timestamp>> {
-        self.retries.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// Registers a call being dispatched until the returned guard is dropped: when the
     /// dispatcher answers, or when the dispatch is abandoned (its future dropped).
     fn dispatching<'a>(&'a self, token: &'a TaskToken, call: InFlight) -> Dispatching<'a> {
@@ -178,22 +173,12 @@ impl ToolTasks {
             call.renewed_at = now;
         }
     }
-
-    fn retry_at(&self, at: Timestamp) {
-        self.retries().insert(at);
-    }
-
-    /// The earliest retry after `now`. Those due already are forgotten: they are claimable.
-    fn next_retry(&self, now: Timestamp) -> Option<Timestamp> {
-        let mut retries = self.retries();
-        let later = retries.split_off(&Timestamp(now.0.saturating_add(1)));
-        *retries = later;
-        retries.first().copied()
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -266,16 +251,5 @@ mod tests {
             tasks.due_heartbeats(Timestamp(50_000)).is_empty(),
             "an answered or abandoned call is no longer renewed"
         );
-    }
-
-    #[test]
-    fn retries_already_due_are_forgotten() {
-        let tasks = ToolTasks::default();
-        tasks.retry_at(Timestamp(10));
-        tasks.retry_at(Timestamp(30));
-        tasks.retry_at(Timestamp(20));
-        assert_eq!(tasks.next_retry(Timestamp(5)), Some(Timestamp(10)));
-        assert_eq!(tasks.next_retry(Timestamp(10)), Some(Timestamp(20)));
-        assert_eq!(tasks.next_retry(Timestamp(30)), None);
     }
 }

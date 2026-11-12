@@ -880,6 +880,21 @@ impl JournalStore for MemoryJournal {
             .min())
     }
 
+    async fn next_tool_attempt(&self, after: Timestamp) -> Result<Option<Timestamp>, StoreError> {
+        Ok(self
+            .lock()?
+            .runs
+            .values()
+            .flat_map(|run| run.tasks.values())
+            .filter_map(|task| match task.state {
+                TaskState::Ready { next_attempt_at } if next_attempt_at > after => {
+                    Some(next_attempt_at)
+                }
+                _ => None,
+            })
+            .min())
+    }
+
     async fn claim_tool_tasks(
         &self,
         owner: &str,

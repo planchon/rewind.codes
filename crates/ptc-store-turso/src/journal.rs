@@ -1623,6 +1623,18 @@ impl JournalStore for TursoStore {
         .await
     }
 
+    async fn next_tool_attempt(&self, after: Timestamp) -> Result<Option<Timestamp>, StoreError> {
+        let connection = self.connection().await?;
+        // A ready task is due at its next attempt: `tool_tasks_due` holds it.
+        let row = sql::query_row(
+            &connection,
+            "SELECT MIN(due_at) FROM tool_tasks WHERE state = 'ready' AND due_at > ?",
+            vec![ts(after)],
+        )
+        .await?;
+        Ok(row.map(|row| row.opt_ts(0)).transpose()?.flatten())
+    }
+
     async fn retry_tool_task(
         &self,
         token: &TaskToken,

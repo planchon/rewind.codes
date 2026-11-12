@@ -126,7 +126,7 @@ fire_due_timers(now, limit)        next_timer()
 expire_due_runs(now, limit) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
 claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, toolset, tools }}, now, limit)
     -> [ClaimedTask { task, token, previous_claim_expired }]
-heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)
+heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)    next_tool_attempt(after)
 defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
 approve_tool_task(task, now) / reject_tool_task(task, failure, now)    resume_parked(Run(run) | Toolset { tenant, toolset }, now)
@@ -200,7 +200,8 @@ Contracts, all covered by the conformance suite:
   the tasks parked by `credentials_expired`, once the run's or the toolset's credentials are
   renewed.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
-  failure.
+  failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
+  `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.
 - A webhook token is unguessable, the same for a run and a signal name, and maps to one run and
   one signal name. A token whose run has ended no longer resolves.
 - `commit_activation` writes, in the same transaction, the `payloads` rows of the payloads

@@ -2,8 +2,8 @@
 //!
 //! This is the loop of an embedded engine (`ptc run`, tests, mock mode): expire runs, fire
 //! timers, run tool calls, activate runs, and repeat while anything progressed. In virtual time,
-//! when nothing is ready, the clock jumps to the next timer or deadline, so a 10-day sleep takes
-//! no wall-clock time. The projector and the retention jobs are driven by the composition root,
+//! when nothing is ready, the clock jumps to the next timer, tool call retry or deadline, so a
+//! 10-day sleep takes no wall-clock time. The projector and the retention jobs are driven by the composition root,
 //! with their own adapters.
 
 use ptc_core::Timestamp;
@@ -128,8 +128,9 @@ where
     W: WebhookSender,
 {
     /// [`run_until_idle`](Self::run_until_idle) in virtual time: when nothing is ready but a
-    /// timer is pending, the clock jumps to the next timer, or to an earlier deadline. Returns
-    /// when only the outside world (a signal, a cancellation) can wake a run.
+    /// timer or a tool call retry is pending, the clock jumps to the next one, or to an earlier
+    /// deadline. Returns when only the outside world (a signal, a cancellation, a host tool's
+    /// worker) can wake a run.
     pub async fn run_until_idle_virtual(
         &self,
         options: &DriveOptions,
@@ -178,7 +179,7 @@ where
     /// world. A tool call retried after a backoff is work the engine does by itself.
     async fn next_wake_up(&self) -> Result<Option<Timestamp>, EngineError> {
         let timer = self.journal.next_timer().await?;
-        let retry = self.next_tool_wake_up();
+        let retry = self.next_tool_wake_up().await?;
         let Some(next) = timer.into_iter().chain(retry).min() else {
             return Ok(None);
         };

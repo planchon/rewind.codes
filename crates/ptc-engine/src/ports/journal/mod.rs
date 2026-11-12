@@ -341,6 +341,14 @@ pub trait JournalStore: Send + Sync {
         now: Timestamp,
     ) -> impl Future<Output = Result<Option<Timestamp>, StoreError>> + Send;
 
+    /// The earliest `next_attempt_at` later than `after` of the `ready` tasks, across tenants:
+    /// when the next call retried after a backoff becomes due. In virtual time the driver jumps
+    /// there, as to a timer, so that a retry never depends on what one engine remembers.
+    fn next_tool_attempt(
+        &self,
+        after: Timestamp,
+    ) -> impl Future<Output = Result<Option<Timestamp>, StoreError>> + Send;
+
     /// `claimed` → `ready` at `next_attempt_at`: a transient failure, retried with backoff.
     fn retry_tool_task(
         &self,

@@ -120,6 +120,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        the_next_tool_attempt_is_the_earliest_retry_still_to_come
+    );
+    check!(
+        "journal",
+        new_store(),
         deferred_tasks_keep_their_token_until_answered_or_late
     );
     check!(
@@ -1726,6 +1731,64 @@ pub async fn transient_failures_wait_for_their_next_attempt<S: JournalStore>(sto
         !second.previous_claim_expired,
         "a retry is not an interruption"
     );
+}
+
+pub async fn the_next_tool_attempt_is_the_earliest_retry_still_to_come<S: JournalStore>(store: &S) {
+    let next = |after: Timestamp| async move {
+        store
+            .next_tool_attempt(after)
+            .await
+            .expect("next_tool_attempt")
+    };
+    assert_eq!(next(T0).await, None, "no task");
+    let other = tenant("other");
+    start_with_tasks(
+        store,
+        run_ref(1),
+        vec![host_task(1, "t"), host_task(2, "u")],
+    )
+    .await;
+    start_with_tasks(store, run_in(&other, 2), vec![host_task(1, "t")]).await;
+    assert_eq!(
+        next(T0).await,
+        None,
+        "a task ready now is claimable: it is no wake-up"
+    );
+
+    let claimed = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(claimed.len(), 3);
+    assert_eq!(next(T0).await, None, "a claimed task is no retry");
+    let retry_at = |task: &crate::ports::ClaimedTask| match task.task.task.seq.0 {
+        1 if task.task.task.run.tenant == other => later(T0, 1_000),
+        1 => later(T0, 5_000),
+        _ => later(T0, 3_000),
+    };
+    for task in &claimed {
+        assert_eq!(
+            store
+                .retry_tool_task(&task.token, retry_at(task))
+                .await
+                .expect("retry"),
+            TaskUpdate::Applied
+        );
+    }
+    assert_eq!(
+        next(T0).await,
+        Some(later(T0, 1_000)),
+        "the earliest retry, whatever its tenant"
+    );
+    assert_eq!(
+        next(later(T0, 1_000)).await,
+        Some(later(T0, 3_000)),
+        "only retries later than `after`"
+    );
+    assert_eq!(next(later(T0, 4_000)).await, Some(later(T0, 5_000)));
+    assert_eq!(next(later(T0, 5_000)).await, None);
+
+    // Claimed again, a task no longer waits.
+    let again = claim(store, "a", &TaskFilter::All, later(T0, 3_000), 10).await;
+    assert_eq!(again.len(), 2);
+    assert_eq!(next(T0).await, Some(later(T0, 5_000)));
 }
 
 pub async fn deferred_tasks_keep_their_token_until_answered_or_late<S: JournalStore>(store: &S) {

@@ -90,7 +90,8 @@ After `await sleep("10d")`, `Date.now()` is at least start + 10 days, because
 elapsed since the run started.
 
 In virtual time (tests, mock mode), the clock jumps straight to the next timer's
-`fire_at`, so a 10-day sleep takes no wall-clock time.
+`fire_at`, or to the next retry of a tool call after its backoff, so a 10-day sleep takes no
+wall-clock time.
 
 ## Replay
 

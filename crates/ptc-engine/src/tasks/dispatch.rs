@@ -169,10 +169,11 @@ where
             .await?)
     }
 
-    /// The earliest time a call this engine retried after a backoff becomes due, if it is
-    /// later than now: in virtual time, the driver jumps there, as it does to a timer.
-    pub fn next_tool_wake_up(&self) -> Option<Timestamp> {
-        self.tool_tasks.next_retry(self.clock.now())
+    /// The earliest time a call retried after a backoff becomes due, if it is later than now:
+    /// in virtual time, the driver jumps there, as it does to a timer. The store holds it, so
+    /// an engine restarted during a backoff still wakes up for it.
+    pub async fn next_tool_wake_up(&self) -> Result<Option<Timestamp>, EngineError> {
+        Ok(self.journal.next_tool_attempt(self.clock.now()).await?)
     }
 
     /// One pass of the driver over tool tasks: ends the late deferred tasks, then claims up to
@@ -256,11 +257,7 @@ where
         let call = idempotency_key(task.task.run.id, task.task.seq);
         let delay = self.config.backoff.delay(&call, task.attempt);
         let next_attempt_at = self.clock.now().saturating_add(delay);
-        let update = self.journal.retry_tool_task(token, next_attempt_at).await?;
-        if update == TaskUpdate::Applied {
-            self.tool_tasks.retry_at(next_attempt_at);
-        }
-        Ok(update)
+        Ok(self.journal.retry_tool_task(token, next_attempt_at).await?)
     }
 
     /// The call's args, loaded from where they live.
