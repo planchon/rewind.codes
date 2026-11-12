@@ -86,6 +86,13 @@ async fn an_engine_s_service_telemetry_joins_its_runs_and_measures_it() {
                 .attributes
                 .contains(&KeyValue::new(metrics::OUTCOME, "committed"))
         );
+        // The run is the attribute 05 names, not the tenant and the run in one string.
+        assert!(
+            activation
+                .attributes
+                .contains(&KeyValue::new("ptc.run_id", run.id.to_string()))
+        );
+        assert!(activation.attributes.iter().all(|kv| kv.key.as_str() != "run"));
     }
     let fences: Vec<String> = activations
         .iter()

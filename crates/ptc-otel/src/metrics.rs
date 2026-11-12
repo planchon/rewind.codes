@@ -10,10 +10,10 @@
 //! | `counter.<name>` | adds its value (an integer) to the up-down counter `<name>` | nothing |
 //! | `histogram.<name>` | records its value in the histogram `<name>` | records the span's duration, in seconds, when it closes |
 //! | `gauge.<name>` | records its value in the gauge `<name>` | nothing |
-//! | `ptc.*` | an attribute of the measurement | an attribute of the measurement, as last recorded |
+//! | `ptc.*`, but `ptc.run_id` and `ptc.seq` | an attribute of the measurement | an attribute of the measurement, as last recorded |
 //!
-//! No other field becomes an attribute: a run id or a task id next to a measurement never
-//! multiplies its series. A histogram named `*.duration` is in seconds (unit `s`, buckets from
+//! No other field becomes an attribute, and neither do `ptc.run_id` and `ptc.seq`: a run id or a
+//! task id next to a measurement never multiplies its series. A histogram named `*.duration` is in seconds (unit `s`, buckets from
 //! 1 ms to a day); the others count things (buckets at the powers of two up to 1024).
 //!
 //! An event that measures is not a log: it is never exported as a log record nor written to
@@ -319,8 +319,13 @@ fn set(attributes: &mut Vec<KeyValue>, field: &Field, value: Value) {
     }
 }
 
+/// Fields named `ptc.*` that never become attributes of a measurement: one series per run or
+/// per call.
+const PER_RUN_FIELDS: [&str; 2] = ["ptc.run_id", "ptc.seq"];
+
 fn is_attribute(field: &Field) -> bool {
-    field.name().starts_with(ATTRIBUTE_PREFIX)
+    let name = field.name();
+    name.starts_with(ATTRIBUTE_PREFIX) && !PER_RUN_FIELDS.contains(&name)
 }
 
 /// A span's `ptc.*` fields.

@@ -22,11 +22,24 @@
 //!   `properties`, `patternProperties` nor `required`) is a map: `{ [key: string]: unknown }`.
 //! - Properties are listed required first, each group by name; definitions and anchors are
 //!   read in key order. The output does not depend on how the schema's JSON was parsed.
+//! - Schemas come from servers and harnesses ai-ptc does not control, so the work is bounded: a
+//!   document larger than [`MAX_DOCUMENT`] bytes is `unknown`, and one whose `$ref`s designate
+//!   more than [`MAX_DEFINITIONS`] definitions has its references `unknown`. Each definition's
+//!   identity is computed once, from a digest of each definition it reaches.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io;
 
-use ptc_core::canonical_json;
+use ptc_core::{Digest, canonical_json};
 use serde_json::{Map, Value, json};
+
+/// The largest schema document converted, in bytes of JSON: 1 MiB. Its declarations would not
+/// fit a model's context anyway. A larger document is `unknown`.
+pub(crate) const MAX_DOCUMENT: usize = 1 << 20;
+
+/// The definitions one schema document may designate with its `$ref`s. Beyond, its references
+/// are `unknown`: comparing every definition with every other would take too long.
+pub(crate) const MAX_DEFINITIONS: usize = 512;
 
 use crate::ty::{Doc, Object, Property, Tuple, Ty};
 
@@ -35,8 +48,12 @@ use crate::ty::{Doc, Object, Property, Tuple, Ty};
 #[derive(Debug, Default)]
 pub(crate) struct Scope {
     pub(crate) declarations: Vec<Declaration>,
+    /// By name: the index of the declaration.
+    names: HashMap<String, usize>,
     /// By the identity of the definition: its pointer and everything it refers to.
     identities: BTreeMap<String, usize>,
+    /// The number to try next after a prefixed name that is taken: `ListIssuesItem3`…
+    numbers: HashMap<String, usize>,
 }
 
 /// `export interface Issue { … }` or `export type State = "open" | "closed"`.
@@ -49,17 +66,17 @@ pub(crate) struct Declaration {
 
 impl Scope {
     pub(crate) fn get(&self, name: &str) -> Option<&Declaration> {
-        self.declarations
-            .iter()
-            .find(|declaration| declaration.name == name)
+        self.names.get(name).map(|&index| &self.declarations[index])
     }
 
     fn is_taken(&self, name: &str) -> bool {
-        self.get(name).is_some()
+        self.names.contains_key(name)
     }
 
-    /// A free name: `wanted`, else `{prefix}{wanted}`, else `{prefix}{wanted}2`, `3`…
-    fn free_name(&self, wanted: &str, prefix: &str) -> String {
+    /// A free name: `wanted`, else `{prefix}{wanted}`, else `{prefix}{wanted}2`, `3`…: the
+    /// smallest number free. Names are never freed, so the search starts where the last one
+    /// ended.
+    fn free_name(&mut self, wanted: &str, prefix: &str) -> String {
         if !self.is_taken(wanted) {
             return wanted.to_owned();
         }
@@ -67,10 +84,20 @@ impl Scope {
         if !self.is_taken(&prefixed) {
             return prefixed;
         }
-        (2..)
-            .map(|n| format!("{prefixed}{n}"))
-            .find(|name| !self.is_taken(name))
-            .unwrap_or(prefixed)
+        let mut number = self.numbers.get(&prefixed).copied().unwrap_or(2);
+        while self.is_taken(&format!("{prefixed}{number}")) {
+            number += 1;
+        }
+        self.numbers.insert(prefixed.clone(), number + 1);
+        format!("{prefixed}{number}")
+    }
+
+    /// Adds a declaration, under a free name; its index.
+    fn declare(&mut self, declaration: Declaration) -> usize {
+        let index = self.declarations.len();
+        self.names.insert(declaration.name.clone(), index);
+        self.declarations.push(declaration);
+        index
     }
 }
 
@@ -85,12 +112,19 @@ pub(crate) enum Role {
 /// named types it refers to to `scope`. `tool` is the tool's name inside its namespace, which
 /// tells types of different tools apart when their names clash.
 pub(crate) fn convert(scope: &mut Scope, document: &Value, tool: &str, role: Role) -> Ty {
+    if !fits(document, MAX_DOCUMENT) {
+        return Ty::Unknown;
+    }
+    let anchors = anchors(document);
+    let definitions = Definitions::new(document, anchors);
     let mut converter = Converter {
         scope,
         document,
         prefix: pascal_case(tool),
         role,
-        anchors: anchors(document),
+        references: definitions.count() <= MAX_DEFINITIONS,
+        definitions,
+        declared: HashMap::new(),
         pending: Vec::new(),
         root: None,
     };
@@ -121,8 +155,12 @@ struct Converter<'a> {
     /// The tool's name in PascalCase, put in front of a type name that clashes.
     prefix: String,
     role: Role,
-    /// `$anchor` → JSON pointer.
-    anchors: BTreeMap<String, String>,
+    /// Whether `$ref`s become named types: the document designates few enough definitions.
+    references: bool,
+    /// The definitions the document's `$ref`s designate.
+    definitions: Definitions<'a>,
+    /// The declaration of each definition of this document met so far, by pointer.
+    declared: HashMap<String, usize>,
     /// Declarations whose body is still to convert: (index, pointer).
     pending: Vec<(usize, String)>,
     /// The name of the document itself, when it refers to itself (`#`).
@@ -330,39 +368,50 @@ impl Converter<'_> {
 
     /// A named type for the target of a `$ref`, declared in the scope on first sight.
     fn reference(&mut self, reference: &str) -> Ty {
+        if !self.references {
+            return Ty::Unknown;
+        }
         let Some(pointer) = self.pointer(reference) else {
             return Ty::Unknown;
         };
         if self.document.pointer(&pointer).is_none() {
             return Ty::Unknown;
         }
-        let identity = identity(self.document, &pointer, &self.anchors);
-        if let Some(&index) = self.scope.identities.get(&identity) {
-            let name = self.scope.declarations[index].name.clone();
-            if pointer.is_empty() {
-                self.root = Some(name.clone());
-            }
-            return Ty::Named(name);
+        if let Some(&index) = self.declared.get(&pointer) {
+            return self.named(index, &pointer);
         }
-        let wanted = self.wanted_name(&pointer);
-        let name = self.scope.free_name(&wanted, &self.prefix);
-        let index = self.scope.declarations.len();
-        self.scope.declarations.push(Declaration {
-            name: name.clone(),
-            ty: Ty::Unknown,
-            doc: Doc::default(),
-        });
-        self.scope.identities.insert(identity, index);
+        let identity = self.definitions.identity(&pointer);
+        let index = match self.scope.identities.get(&identity) {
+            Some(&index) => index,
+            None => {
+                let wanted = self.wanted_name(&pointer);
+                let name = self.scope.free_name(&wanted, &self.prefix);
+                let index = self.scope.declare(Declaration {
+                    name,
+                    ty: Ty::Unknown,
+                    doc: Doc::default(),
+                });
+                self.scope.identities.insert(identity, index);
+                self.pending.push((index, pointer.clone()));
+                index
+            }
+        };
+        self.declared.insert(pointer.clone(), index);
+        self.named(index, &pointer)
+    }
+
+    /// The named type of a declaration, which `pointer` designates.
+    fn named(&mut self, index: usize, pointer: &str) -> Ty {
+        let name = self.scope.declarations[index].name.clone();
         if pointer.is_empty() {
             self.root = Some(name.clone());
         }
-        self.pending.push((index, pointer));
         Ty::Named(name)
     }
 
     /// The JSON pointer a reference designates in this document, if it is one of its own.
     fn pointer(&self, reference: &str) -> Option<String> {
-        local_pointer(self.document, reference, &self.anchors)
+        local_pointer(self.document, reference, &self.definitions.anchors)
     }
 
     fn wanted_name(&self, pointer: &str) -> String {
@@ -409,28 +458,98 @@ fn local_pointer(
     }
 }
 
-/// What makes two definitions the same type: the definition's pointer, and the canonical
-/// JSON of every subschema it refers to, transitively, by pointer.
-fn identity(document: &Value, pointer: &str, anchors: &BTreeMap<String, String>) -> String {
-    let mut closure: BTreeMap<String, Value> = BTreeMap::new();
-    let mut stack = vec![pointer.to_owned()];
-    while let Some(next) = stack.pop() {
-        if closure.contains_key(&next) {
-            continue;
-        }
-        let Some(target) = document.pointer(&next) else {
-            continue;
-        };
-        closure.insert(next, target.clone());
-        let mut references = Vec::new();
-        collect_references(target, &mut references);
-        for reference in references {
-            if let Some(found) = local_pointer(document, &reference, anchors) {
-                stack.push(found);
-            }
+/// The definitions of a document: what its `$ref`s designate, each read once.
+struct Definitions<'a> {
+    document: &'a Value,
+    /// `$anchor` → JSON pointer.
+    anchors: BTreeMap<String, String>,
+    /// By pointer: the digest of the definition's canonical JSON, and the pointers its `$ref`s
+    /// designate. `None` for a pointer to nothing.
+    read: HashMap<String, Option<Definition>>,
+}
+
+struct Definition {
+    digest: String,
+    refers_to: Vec<String>,
+}
+
+impl<'a> Definitions<'a> {
+    fn new(document: &'a Value, anchors: BTreeMap<String, String>) -> Self {
+        Self {
+            document,
+            anchors,
+            read: HashMap::new(),
         }
     }
-    canonical_json(&json!({ "at": pointer, "closure": closure }))
+
+    /// How many definitions the document's `$ref`s designate.
+    fn count(&self) -> usize {
+        let mut references = Vec::new();
+        collect_references(self.document, &mut references);
+        references
+            .iter()
+            .filter_map(|reference| local_pointer(self.document, reference, &self.anchors))
+            .filter(|pointer| self.document.pointer(pointer).is_some())
+            .collect::<BTreeSet<_>>()
+            .len()
+    }
+
+    fn definition(&mut self, pointer: &str) -> Option<&Definition> {
+        if !self.read.contains_key(pointer) {
+            let definition = self.document.pointer(pointer).map(|target| {
+                let mut references = Vec::new();
+                collect_references(target, &mut references);
+                let refers_to: BTreeSet<String> = references
+                    .iter()
+                    .filter_map(|reference| local_pointer(self.document, reference, &self.anchors))
+                    .collect();
+                Definition {
+                    digest: Digest::of(canonical_json(target).as_bytes()).to_hex(),
+                    refers_to: refers_to.into_iter().collect(),
+                }
+            });
+            self.read.insert(pointer.to_owned(), definition);
+        }
+        self.read.get(pointer).and_then(Option::as_ref)
+    }
+
+    /// What makes two definitions the same type: the definition's pointer, and the canonical
+    /// JSON of every subschema it refers to, transitively, by pointer (each by its digest).
+    fn identity(&mut self, pointer: &str) -> String {
+        let mut closure: BTreeMap<String, String> = BTreeMap::new();
+        let mut stack = vec![pointer.to_owned()];
+        while let Some(next) = stack.pop() {
+            if closure.contains_key(&next) {
+                continue;
+            }
+            let Some(definition) = self.definition(&next) else {
+                continue;
+            };
+            stack.extend(definition.refers_to.iter().cloned());
+            closure.insert(next, definition.digest.clone());
+        }
+        canonical_json(&json!({ "at": pointer, "closure": closure }))
+    }
+}
+
+/// Whether the value's JSON holds in `limit` bytes. Stops writing once it does not.
+fn fits(value: &Value, limit: usize) -> bool {
+    struct Counter {
+        left: usize,
+    }
+    impl io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.left = self
+                .left
+                .checked_sub(bytes.len())
+                .ok_or_else(|| io::Error::other("too large"))?;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(&mut Counter { left: limit }, value).is_ok()
 }
 
 fn collect_references(value: &Value, out: &mut Vec<String>) {
