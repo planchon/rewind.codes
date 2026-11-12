@@ -3,12 +3,16 @@
 import createClient from "openapi-fetch";
 import type {
   Entry,
+  FailureGroupPage,
+  FailuresQuery,
   ListRunsQuery,
   ListScriptsQuery,
   Problem,
   paths,
   Run,
   RunPage,
+  RunStats,
+  RunStatsQuery,
   Script,
   ScriptPage,
   ServerInfo,
@@ -38,6 +42,17 @@ export class ApiError extends Error {
   }
 }
 
+/** The term at fault of a query the server could not read (`invalid-query`), if that is the error. */
+export function queryFault(error: unknown): { message: string; start: number; end: number } | null {
+  if (!(error instanceof ApiError) || error.slug !== "invalid-query") return null;
+  const span = error.problem.query;
+  return {
+    message: error.problem.detail || error.problem.title,
+    start: span?.start ?? 0,
+    end: span?.end ?? 0,
+  };
+}
+
 /** Reads a problem from an error body, whatever the server sent. */
 export function toProblem(status: number, body: unknown, statusText = ""): Problem {
   if (body && typeof body === "object" && "type" in body && "title" in body) {
@@ -48,6 +63,9 @@ export function toProblem(status: number, body: unknown, statusText = ""): Probl
       status: typeof p.status === "number" ? p.status : status,
       detail: typeof p.detail === "string" ? p.detail : "",
       instance: p.instance ?? null,
+      ...(p.query && typeof p.query.start === "number" && typeof p.query.end === "number"
+        ? { query: { start: p.query.start, end: p.query.end } }
+        : {}),
     };
   }
   const text = typeof body === "string" ? body.trim() : "";
@@ -137,6 +155,14 @@ export class Api {
 
   async runs(query: ListRunsQuery, signal?: AbortSignal): Promise<RunPage> {
     return this.unwrap(await this.client.GET("/v1/runs", { params: { query }, signal }));
+  }
+
+  async runStats(query: RunStatsQuery, signal?: AbortSignal): Promise<RunStats> {
+    return this.unwrap(await this.client.GET("/v1/runs/stats", { params: { query }, signal }));
+  }
+
+  async failures(query: FailuresQuery, signal?: AbortSignal): Promise<FailureGroupPage> {
+    return this.unwrap(await this.client.GET("/v1/runs/failures", { params: { query }, signal }));
   }
 
   async run(id: string, signal?: AbortSignal): Promise<Run> {

@@ -9,7 +9,9 @@ import { ProblemView, Time } from "../../components/bits";
 import { JsonValue, PayloadView } from "../../components/Payload";
 import { OutcomeBadge } from "../../components/Status";
 import { formatDuration, formatOffset } from "../../model/format";
+import { fieldTerm, queryLink } from "../../model/query";
 import type { Activity, RunModel } from "../../model/run";
+import { type Step, stepOf } from "../../model/steps";
 import { activityOutcome, activityTitle, entrySummary } from "./describe";
 
 export type Selection = { kind: "entry"; idx: number } | { kind: "line"; line: number } | null;
@@ -21,6 +23,9 @@ interface InspectorProps {
   onSelectEntry: (idx: number) => void;
   onSelectLine: (line: number) => void;
   onClear: () => void;
+  /** The steps of the time cursor, to move it to an activity's start or end. */
+  steps?: readonly Step[];
+  onGoStep?: (n: number) => void;
 }
 
 function At({ ms, t0 }: { ms: number; t0: number | null }) {
@@ -59,18 +64,55 @@ function RawEntry({ runId, idx }: { runId: string; idx: number }) {
   );
 }
 
+/** The steps an activity started and ended in, each a button that moves the cursor there. */
+function StepLinks({
+  activity: a,
+  steps,
+  onGoStep,
+}: {
+  activity: Activity;
+  steps: readonly Step[];
+  onGoStep: (n: number) => void;
+}) {
+  const start = stepOf(steps, a.idx);
+  const end = a.kind !== "log" && a.end ? stepOf(steps, a.end.idx) : -1;
+  if (start < 0) return null;
+  return (
+    <>
+      <dt>steps</dt>
+      <dd>
+        <button type="button" className="link-btn" onClick={() => onGoStep(start)}>
+          started in step {start + 1}
+        </button>
+        {end >= 0 && (
+          <>
+            {", "}
+            <button type="button" className="link-btn" onClick={() => onGoStep(end)}>
+              ended in step {end + 1}
+            </button>
+          </>
+        )}
+      </dd>
+    </>
+  );
+}
+
 function ActivityDetail({
   run,
   model,
   activity,
   onSelectEntry,
   onSelectLine,
+  steps,
+  onGoStep,
 }: {
   run: Run;
   model: RunModel;
   activity: Activity;
   onSelectEntry: (idx: number) => void;
   onSelectLine: (line: number) => void;
+  steps?: readonly Step[] | undefined;
+  onGoStep?: ((n: number) => void) | undefined;
 }) {
   const t0 = model.firstAt;
   const a = activity;
@@ -105,7 +147,7 @@ function ActivityDetail({
             <dt>tool</dt>
             <dd>
               <Link
-                to={`/runs?tool=${encodeURIComponent(a.tool)}`}
+                to={queryLink("/runs", fieldTerm("tool", a.tool))}
                 className="mono"
                 title="Runs that called this tool"
               >
@@ -197,6 +239,7 @@ function ActivityDetail({
             <dd>The signal arrived before the script waited for it.</dd>
           </>
         )}
+        {steps && onGoStep && <StepLinks activity={a} steps={steps} onGoStep={onGoStep} />}
         <dt>entries</dt>
         <dd className="entry-links">
           <RawEntry runId={run.id} idx={a.idx} />
@@ -317,6 +360,8 @@ export function Inspector({
   onSelectEntry,
   onSelectLine,
   onClear,
+  steps,
+  onGoStep,
 }: InspectorProps) {
   let body = <Overview run={run} />;
   let title = "Run";
@@ -342,6 +387,8 @@ export function Inspector({
           activity={activity}
           onSelectEntry={onSelectEntry}
           onSelectLine={onSelectLine}
+          steps={steps}
+          onGoStep={onGoStep}
         />
       );
     } else if (entry) {

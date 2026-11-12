@@ -1,15 +1,49 @@
 // A TypeScript source with line numbers and, beside each line, notes about it: on a run's page,
 // the tool calls, timers, signal waits and logs that line caused. Three stacks of equal-height
 // rows (numbers, code, notes) keep the code scrollable sideways while the notes stay in place.
-import { type ReactNode, useEffect, useMemo, useRef } from "react";
-import { highlightLines } from "../model/highlight";
+// Parts of a line can be targets (a call, a variable): hovered, focused or clicked, they report
+// their key, for the values a run's time cursor shows.
+import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+} from "react";
+import { highlightLines, type Token } from "../model/highlight";
 
 export type LineMark = "error" | "failed" | "open" | "activity";
+
+/** A part of a line that can be hovered: columns from 0, `to` excluded. */
+export interface LineTarget {
+  from: number;
+  to: number;
+  key: string;
+  /** A class for its kind: `call`, `binding`… */
+  kind: string;
+}
+
+export interface TargetEvents {
+  /** The pointer or the focus is on a target. */
+  enter: (key: string, element: HTMLElement) => void;
+  leave: () => void;
+  /** A click, Enter or Space on a target. */
+  pick: (key: string) => void;
+}
 
 export interface CodeViewProps {
   source: string;
   notes?: (line: number) => ReactNode;
   mark?: (line: number) => LineMark | null;
+  /** Before the number of a line: a mark of the time cursor. */
+  gutter?: (line: number) => ReactNode;
+  /** The targets of a line, without overlaps, in order. */
+  targets?: (line: number) => LineTarget[];
+  /** Extra classes of a target: pinned, hovered. */
+  targetClass?: (key: string) => string;
+  targetEvents?: TargetEvents;
   selectedLine?: number | null;
   onLineClick?: (line: number) => void;
   /** Scrolls this line into view when it changes. */
@@ -18,10 +52,39 @@ export interface CodeViewProps {
   notesTitle?: string;
 }
 
+/** A line's tokens cut at its targets' edges, each piece with its target, if any. */
+function pieces(tokens: Token[], targets: LineTarget[]) {
+  const out: { text: string; cls: string; target: LineTarget | null }[] = [];
+  let at = 0;
+  for (const token of tokens) {
+    let start = 0;
+    while (start < token.text.length) {
+      const pos = at + start;
+      const inside = targets.find((t) => t.from <= pos && pos < t.to) ?? null;
+      const next = inside
+        ? inside.to
+        : Math.min(...targets.filter((t) => t.from > pos).map((t) => t.from), Infinity);
+      const end = Math.min(token.text.length, next - at);
+      out.push({ text: token.text.slice(start, end), cls: token.cls, target: inside });
+      start = end;
+    }
+    at += token.text.length;
+  }
+  return out;
+}
+
+function targetOf(e: { target: EventTarget }): HTMLElement | null {
+  return (e.target as HTMLElement).closest?.<HTMLElement>("[data-target]") ?? null;
+}
+
 export function CodeView({
   source,
   notes,
   mark,
+  gutter,
+  targets,
+  targetClass,
+  targetEvents,
   selectedLine = null,
   onLineClick,
   focusLine = null,
@@ -40,7 +103,37 @@ export function CodeView({
     const m = mark?.(n) ?? null;
     return `code-row${m ? ` mark-${m}` : ""}${n === selectedLine ? " selected" : ""}${onLineClick ? " clickable" : ""}`;
   };
-  const click = onLineClick ? (n: number) => () => onLineClick(n) : () => undefined;
+  const click = (n: number) => (e: MouseEvent) => {
+    const target = targetOf(e);
+    if (target && targetEvents) {
+      targetEvents.pick(target.dataset.target ?? "");
+      return;
+    }
+    onLineClick?.(n);
+  };
+
+  const over = (e: MouseEvent) => {
+    const target = targetOf(e);
+    if (target) targetEvents?.enter(target.dataset.target ?? "", target);
+  };
+  const out = (e: MouseEvent) => {
+    const from = targetOf(e);
+    const to =
+      e.relatedTarget instanceof HTMLElement ? e.relatedTarget.closest("[data-target]") : null;
+    if (from && from.dataset.target !== (to as HTMLElement | null)?.dataset.target)
+      targetEvents?.leave();
+  };
+  const focus = (e: FocusEvent) => {
+    const target = targetOf(e);
+    if (target) targetEvents?.enter(target.dataset.target ?? "", target);
+  };
+  const key = (e: KeyboardEvent) => {
+    const target = targetOf(e);
+    if (target && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      targetEvents?.pick(target.dataset.target ?? "");
+    }
+  };
 
   return (
     <div className={`code-view${notes ? " with-notes" : ""}`} ref={container}>
@@ -50,30 +143,77 @@ export function CodeView({
           return (
             // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the notes column has the keyboard targets
             <div key={n} className={rowClass(n)} onClick={click(n)}>
+              {gutter?.(n)}
               {n}
             </div>
           );
         })}
       </div>
-      <div className="code-text">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: hovers and keys of the targets, which are focusable */}
+      <div
+        className="code-text"
+        onMouseOver={targetEvents ? over : undefined}
+        onMouseOut={targetEvents ? out : undefined}
+        onFocus={targetEvents ? focus : undefined}
+        onBlur={targetEvents ? () => targetEvents.leave() : undefined}
+        onKeyDown={targetEvents ? key : undefined}
+      >
         <pre>
           {lines.map((tokens, i) => {
             const n = i + 1;
+            const lineTargets = targets?.(n) ?? [];
             return (
               // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the notes column has the keyboard targets
               <div key={n} className={rowClass(n)} data-line={n} onClick={click(n)}>
                 {tokens.length === 0
                   ? " "
-                  : tokens.map((t, k) =>
-                      t.cls ? (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: tokens of a line never move
-                        <span key={k} className={t.cls}>
-                          {t.text}
-                        </span>
-                      ) : (
-                        t.text
-                      ),
-                    )}
+                  : lineTargets.length === 0
+                    ? tokens.map((t, k) =>
+                        t.cls ? (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: tokens of a line never move
+                          <span key={k} className={t.cls}>
+                            {t.text}
+                          </span>
+                        ) : (
+                          t.text
+                        ),
+                      )
+                    : pieces(tokens, lineTargets).map((p, k, all) => {
+                        const textOf = (key: string) =>
+                          all
+                            .filter((x) => x.target?.key === key)
+                            .map((x) => x.text)
+                            .join("");
+                        if (!p.target) {
+                          return p.cls ? (
+                            // biome-ignore lint/suspicious/noArrayIndexKey: pieces of a line never move
+                            <span key={k} className={p.cls}>
+                              {p.text}
+                            </span>
+                          ) : (
+                            p.text
+                          );
+                        }
+                        const first = all[k - 1]?.target?.key !== p.target.key;
+                        const extra = targetClass?.(p.target.key) ?? "";
+                        return (
+                          <span
+                            // biome-ignore lint/suspicious/noArrayIndexKey: pieces of a line never move
+                            key={k}
+                            className={`${p.cls} hv hv-${p.target.kind}${extra ? ` ${extra}` : ""}`}
+                            data-target={p.target.key}
+                            {...(first
+                              ? {
+                                  tabIndex: 0,
+                                  role: "button",
+                                  "aria-label": `${textOf(p.target.key)}, line ${n}: its value at the cursor`,
+                                }
+                              : {})}
+                          >
+                            {p.text}
+                          </span>
+                        );
+                      })}
               </div>
             );
           })}

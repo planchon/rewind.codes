@@ -5,7 +5,7 @@ import { RUN_STATUSES, type RunStatus } from "../api/types";
 import { Digest, Loading, ProblemView } from "../components/bits";
 import { CodeView } from "../components/CodeView";
 import { StatusGlyph } from "../components/Status";
-import { NO_RUN_FILTERS, toRunsQuery } from "../model/filters";
+import { fieldTerm, joinQuery } from "../model/query";
 import { Seg } from "./FilterBits";
 import { RunTable } from "./RunTable";
 
@@ -16,9 +16,10 @@ export function ScriptView() {
     ? (params.get("status") as RunStatus)
     : null;
   const script = useScript(digest);
-  const runs = useRuns(`script=${digest}&status=${status ?? ""}`, () =>
-    toRunsQuery({ ...NO_RUN_FILTERS, script: digest, status }, Date.now()),
-  );
+  const runs = useRuns(`script=${digest}&status=${status ?? ""}`, () => ({
+    q: joinQuery(fieldTerm("script", digest), status && `status:${status}`),
+    limit: 50,
+  }));
   const headline = script.data?.source.split("\n").find((l) => l.trim() !== "");
 
   return (

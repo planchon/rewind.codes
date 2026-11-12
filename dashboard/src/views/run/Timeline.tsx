@@ -2,10 +2,11 @@
 // gaps are compressed into marked breaks. Open spans end at "now" while the run goes on, with
 // their planned end (a timer's fire time, a wait's timeout) dashed beyond.
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef } from "react";
+import { type PointerEvent, useMemo, useRef } from "react";
 import { useTooltip } from "../../components/Tooltip";
 import { formatDuration, formatOffset } from "../../model/format";
 import type { Activity, RunModel } from "../../model/run";
+import type { Step } from "../../model/steps";
 import { buildTimeScale } from "../../model/timescale";
 import { activityDuration, activityOutcome, activityTitle } from "./describe";
 
@@ -24,10 +25,20 @@ export interface TimelineProps {
   now: number | null;
   selected: number | null;
   onSelect: (idx: number) => void;
+  /** The time cursor: its steps, the one shown, and how to move it. */
+  cursor?: {
+    steps: readonly Step[];
+    n: number;
+    /** The last entry the cursor includes. */
+    last: number;
+    atHead: boolean;
+    onSeek: (n: number) => void;
+  };
 }
 
-export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
+export function Timeline({ model, now, selected, onSelect, cursor }: TimelineProps) {
   const scroller = useRef<HTMLDivElement>(null);
+  const dragging = useRef(false);
   const tip = useTooltip();
 
   const { rows, scale, logs, endAt } = useMemo(() => {
@@ -67,6 +78,22 @@ export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
 
   const pct = (t: number) => `${(scale.x(t) * 100).toFixed(3)}%`;
   const t0 = scale.t0;
+  const step = cursor?.steps[cursor.n];
+  const playhead = step ? scale.x(step.at) : null;
+  const future = (a: Activity) => cursor !== undefined && !cursor.atHead && a.idx > cursor.last;
+
+  /** The step under the pointer: the last one at or before it. */
+  const seek = (e: PointerEvent<HTMLElement>) => {
+    if (!cursor) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const x = (e.clientX - rect.left) / rect.width;
+    let n = 0;
+    cursor.steps.forEach((s, i) => {
+      if (scale.x(s.at) <= x + 0.004) n = i;
+    });
+    if (n !== cursor.n) cursor.onSeek(n);
+  };
 
   const tipFor = (r: Row) => {
     const a = r.activity;
@@ -108,7 +135,40 @@ export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
     <div className="timeline">
       <div className="tl-axis">
         <div className="tl-label muted">{rows.length} spans</div>
-        <div className="tl-track">
+        <div
+          className={`tl-track${cursor ? " seekable" : ""}`}
+          onPointerDown={
+            cursor
+              ? (e) => {
+                  dragging.current = true;
+                  e.currentTarget.setPointerCapture?.(e.pointerId);
+                  seek(e);
+                }
+              : undefined
+          }
+          onPointerMove={cursor ? (e) => dragging.current && seek(e) : undefined}
+          onPointerUp={
+            cursor
+              ? (e) => {
+                  dragging.current = false;
+                  e.currentTarget.releasePointerCapture?.(e.pointerId);
+                }
+              : undefined
+          }
+        >
+          {cursor && playhead !== null && (
+            <span
+              className={`tl-playhead${cursor.atHead ? " head" : ""}`}
+              style={{ left: `${playhead * 100}%` }}
+              role="slider"
+              tabIndex={0}
+              aria-label="Time cursor: drag it, or use the arrow keys"
+              aria-valuemin={1}
+              aria-valuemax={cursor.steps.length}
+              aria-valuenow={cursor.n + 1}
+              aria-valuetext={`Step ${cursor.n + 1} of ${cursor.steps.length}`}
+            />
+          )}
           {scale.ticks.map((t) => (
             <span
               key={`${t.t}-${t.major}`}
@@ -138,7 +198,7 @@ export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
               <button
                 key={l.idx}
                 type="button"
-                className={`tl-log level-${l.level}${selected === l.idx ? " selected" : ""}`}
+                className={`tl-log level-${l.level}${selected === l.idx ? " selected" : ""}${future(l) ? " future" : ""}`}
                 style={{ left: pct(l.at) }}
                 aria-label={`console.${l.level}: ${l.message}`}
                 onMouseMove={(e) =>
@@ -176,6 +236,15 @@ export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
               aria-hidden="true"
             />
           ))}
+          {cursor && playhead !== null && !cursor.atHead && (
+            <span
+              className="tl-cursor"
+              style={{
+                left: `calc(var(--tl-label) + (100% - var(--tl-label)) * ${playhead})`,
+              }}
+              aria-hidden="true"
+            />
+          )}
           {now !== null && (
             <span
               className="tl-now"
@@ -194,7 +263,7 @@ export function Timeline({ model, now, selected, onSelect }: TimelineProps) {
             return (
               <div
                 key={a.idx}
-                className={`tl-row${selected === a.idx ? " selected" : ""}`}
+                className={`tl-row${selected === a.idx ? " selected" : ""}${future(a) ? " future" : ""}`}
                 style={{ position: "absolute", top: item.start, left: 0, right: 0, height: ROW }}
               >
                 <button
