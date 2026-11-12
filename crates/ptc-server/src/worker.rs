@@ -40,10 +40,41 @@ pub(crate) fn spawn(app: &Arc<App>, activations: usize, dispatches: usize) -> Ve
     for _ in 0..activations {
         tasks.push(tokio::spawn(activate(app.clone())));
     }
-    tasks.push(tokio::spawn(dispatch(app.clone(), dispatches)));
-    tasks.push(tokio::spawn(heartbeats(app.clone())));
+    let calls = InFlight::new(dispatches);
+    tasks.push(tokio::spawn(dispatch(app.clone(), calls.clone())));
+    tasks.push(tokio::spawn(heartbeats(app.clone(), calls)));
     tasks.push(tokio::spawn(scheduler(app.clone())));
     tasks
+}
+
+/// The slots of the tool calls dispatched at once: a call holds one until it is answered and
+/// its outcome committed.
+#[derive(Debug, Clone)]
+struct InFlight {
+    slots: Arc<Semaphore>,
+    size: u32,
+}
+
+impl InFlight {
+    fn new(dispatches: usize) -> Self {
+        let size = u32::try_from(dispatches)
+            .unwrap_or(u32::MAX)
+            .min(u32::try_from(Semaphore::MAX_PERMITS).unwrap_or(u32::MAX));
+        Self {
+            slots: Arc::new(Semaphore::new(size as usize)),
+            size,
+        }
+    }
+
+    /// Whether no call is in flight.
+    fn idle(&self) -> bool {
+        self.slots.available_permits() == self.size as usize
+    }
+
+    /// Waits until every call in flight has ended.
+    async fn drained(&self) {
+        let _ = self.slots.acquire_many(self.size).await;
+    }
 }
 
 /// Activates runnable runs, one at a time per loop.
@@ -85,9 +116,12 @@ async fn activate_one(app: &App) -> Result<bool, ()> {
     Ok(true)
 }
 
-/// Claims the tool calls ai-ptc dispatches itself and runs them, up to `dispatches` at once.
-async fn dispatch(app: Arc<App>, dispatches: usize) {
-    let slots = Arc::new(Semaphore::new(dispatches));
+/// Claims the tool calls ai-ptc dispatches itself and runs them, as many at once as `calls`
+/// has slots. Once the server stops, it claims nothing more and returns when the calls in flight
+/// have ended: their outcomes are committed before the server stops, so a stop neither fails
+/// nor repeats them.
+async fn dispatch(app: Arc<App>, calls: InFlight) {
+    let slots = calls.slots.clone();
     let mut changes = app.wake.subscribe();
     while !app.stopping() {
         let free = slots.available_permits();
@@ -126,12 +160,14 @@ async fn dispatch(app: Arc<App>, dispatches: usize) {
             });
         }
     }
+    calls.drained().await;
 }
 
-/// Renews the claims of the calls in flight.
-async fn heartbeats(app: Arc<App>) {
+/// Renews the claims of the calls in flight, until the server stops and the last of them has
+/// ended.
+async fn heartbeats(app: Arc<App>, calls: InFlight) {
     let mut ticks = tokio::time::interval(CLAIM_HEARTBEAT);
-    while !app.stopping() {
+    while !(app.stopping() && calls.idle()) {
         ticks.tick().await;
         if let Err(error) = app.engine.heartbeat_tool_claims().await {
             tracing::warn!(%error, "the claims of the calls in flight were not renewed");

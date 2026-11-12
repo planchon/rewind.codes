@@ -35,7 +35,7 @@ pub(super) async fn stream(
         .get(LAST_EVENT_ID)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
-        .map(|last| last + 1);
+        .map(|last| last.saturating_add(1));
     let tail = Tail {
         changes: app.wake.subscribe(),
         busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),

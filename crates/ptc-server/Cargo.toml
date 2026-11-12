@@ -41,6 +41,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 ptc-engine = { workspace = true, features = ["conformance"] }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
 tempfile.workspace = true
 
 [lints]

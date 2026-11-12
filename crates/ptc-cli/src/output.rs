@@ -88,7 +88,15 @@ impl Console {
             let _ = writeln!(self.err, "{text}");
             return;
         }
-        let _ = writeln!(self.err, "error: {error}");
+        // A problem's own text holds its diagnostics: they are written once, below.
+        match error {
+            CliError::Api(ptc_api::Error::Problem(problem)) => {
+                let _ = writeln!(self.err, "error: {}: {}", problem.title, problem.detail);
+            }
+            other => {
+                let _ = writeln!(self.err, "error: {other}");
+            }
+        }
         for diagnostic in error.diagnostics() {
             let _ = writeln!(self.err, "{diagnostic}");
         }

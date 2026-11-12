@@ -475,3 +475,9 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | A tool's calls are counted from the MCP server's side: the toolset starts `server-everything` behind `sh -c 'tee -a "$MCP_CALL_LOG" \| npx …'`, so every JSON-RPC message it receives is in a file | Counting on the client's side; an MCP server of our own with a log | "Not repeated" has to be seen by the real server, and the reference server keeps no log of its own. |
 | The evals' criterion is proven with two scripted models (`scripted:<file>`), one right at the first try and one refused by the check then fixed, on the three renderings | Waiting for API keys | The report's shape and each measure are the harness's; only the numbers depend on the model. |
 
+
+### Taken while reviewing the server, the API and the CLI (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A server that stops claims no new tool call and waits for the calls its dispatch loop has in flight (within the stop's 30 s), renewing their claims until the last one ends; only then are the MCP connections and the store closed | Stopping the loops and leaving the calls to their claims' expiry | A stop (a deploy, the CLI replacing its embedded server) must neither fail an `at_most_once` call with `outcomeUnknown` nor send a `retry` call again: the work in flight commits (07). |

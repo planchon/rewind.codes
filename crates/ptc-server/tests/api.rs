@@ -745,6 +745,19 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
         }
     }
     assert_eq!(count, 2);
+
+    // A client resumes after the last entry it saw, whatever index it sends.
+    let resumed = reqwest::Client::new()
+        .get(format!("{}/v1/runs/{}/events", server.url, run.id))
+        .bearer_auth(support::ADMIN_KEY)
+        .header("Last-Event-ID", u64::MAX.to_string())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resumed.status(), 200);
+    let text = resumed.text().await.unwrap();
+    assert!(text.contains("event: end"), "{text}");
+    assert!(!text.contains("event: entry"), "{text}");
     server.stop().await;
 }
 
