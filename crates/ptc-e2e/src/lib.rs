@@ -36,7 +36,9 @@ use ptc_core::{
     Command, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunOutcome, RunState, Script,
     Timestamp, Toolset, parse_duration,
 };
-use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
+use ptc_engine::adapters::{
+    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+};
 use ptc_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId, VirtualTime};
 use ptc_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use ptc_engine::{
@@ -190,8 +192,16 @@ fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))
 }
 
-type CorpusEngine =
-    Engine<MemoryJournal, MemoryBlobs, V8Executor, ScenarioTools, VirtualClock, SeededEntropy>;
+type CorpusEngine = Engine<
+    MemoryJournal,
+    MemoryBlobs,
+    V8Executor,
+    ScenarioTools,
+    VirtualClock,
+    SeededEntropy,
+    MemorySecrets,
+    MemoryWebhooks,
+>;
 
 fn executor(scenario: &Scenario) -> V8Executor {
     let mut limits = ptc_runtime::SandboxLimits::default();
@@ -228,6 +238,8 @@ fn engine(case: &Case) -> CorpusEngine {
             dispatcher: ScenarioTools::new(&case.scenario.tools),
             clock: VirtualClock::new(T0),
             entropy: SeededEntropy::new(case.scenario.seed),
+            secrets: MemorySecrets::new(),
+            webhooks: MemoryWebhooks::new(),
         },
         config,
     )

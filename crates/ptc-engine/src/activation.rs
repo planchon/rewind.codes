@@ -28,11 +28,12 @@ use crate::engine::{ActivationOutcome, Engine, EngineError, Limits};
 use crate::payloads;
 use crate::ports::{
     Activation, BlobStore, Clock, Emitted, Entropy, ExecutorError, JournalStore, Lease, NewTimer,
-    NewToolTask, ScriptExecutor, ScriptInstance, StartScript, ToolDispatcher, Trigger,
+    NewToolTask, ScriptExecutor, ScriptInstance, SecretStore, StartScript, ToolDispatcher, Trigger,
+    WebhookSender,
 };
 use crate::replay::{self, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 
-impl<J, B, X, D, C, E> Engine<J, B, X, D, C, E>
+impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
 where
     J: JournalStore,
     B: BlobStore,
@@ -40,6 +41,8 @@ where
     D: ToolDispatcher,
     C: Clock,
     E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
 {
     /// Activates the leased run: replays its history, delivers its inbox, commits. The lease
     /// is released on success; on error the caller releases it.

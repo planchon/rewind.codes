@@ -1,5 +1,5 @@
 //! The engine and its use cases: start, signal, cancel, activate, fire timers, expire runs,
-//! dispatch tool calls, quarantine, replay.
+//! quarantine, replay. The tool tasks' use cases are in [`crate::tasks`].
 
 use std::time::Duration;
 
@@ -7,20 +7,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ptc_core::{
     AbortKind, AbortReason, CancelReason, Completion, Digest, Epoch, Event, HistoryEntry,
-    HistoryError, Interruption, JsonValue, Lifecycle, NonDeterminism, Payload, RunId, RunMode,
-    RunStarted, RunState, RunStatus, Script, Seq, ToolFailure, ToolFailureKind, ToolOutcome,
-    Toolset,
+    HistoryError, JsonValue, Lifecycle, NonDeterminism, Payload, RunId, RunMode, RunStarted,
+    RunState, RunStatus, Script, Seq, Toolset,
 };
 
 use crate::payloads;
 use crate::ports::{
-    AcquireRunnable, Activation, BlobError, BlobStore, ClaimedTask, Clock, CreateRun, Created,
-    Dispatched, Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun,
-    QuarantineKind, RunFilter, RunMetadata, RunRecord, RunRef, STICKY_GRACE, ScriptExecutor,
-    StoreError, StoredScript, StoredToolset, TaskFilter, TenantId, TenantScope, ToolCall,
-    ToolDeclarations, ToolDispatcher,
+    AcquireRunnable, Activation, BlobError, BlobStore, Clock, CreateRun, Created, Credentials,
+    Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun, QuarantineKind,
+    RunFilter, RunMetadata, RunRecord, RunRef, STICKY_GRACE, ScriptExecutor, SecretError,
+    SecretOwner, SecretStore, StoreError, StoredScript, StoredToolset, TaskFilter, TenantId,
+    TenantScope, ToolDeclarations, ToolDispatcher, WebhookSender,
 };
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
+use crate::tasks::{Backoff, ToolTasks};
 
 /// Resource limits enforced by the engine (`archi/03-execution.md`, "Resource limits"). CPU
 /// time and heap size are enforced by the executor.
@@ -55,14 +55,20 @@ pub struct EngineConfig {
     pub max_ttl: Duration,
     /// Payloads above this size (canonical JSON, in bytes) are kept in the blob store.
     pub inline_threshold: usize,
-    /// Attempts at a tool call whose dispatcher keeps dying mid-call. Past it, the call fails
-    /// with `outcome_unknown`.
+    /// Attempts at a tool call, every claim counted (`archi/04-tools.md`, "Policies"). A call
+    /// whose claim expired that many times fails with `outcome_unknown`; a transient failure at
+    /// the last attempt is delivered to the script.
     pub max_tool_attempts: u32,
     /// The tenants this worker serves.
     pub tenants: TenantScope,
     /// The tool tasks this worker claims and dispatches. `TaskFilter::All` by default: the
     /// engine dispatches every task, host tools included, as in mock mode.
     pub tool_tasks: TaskFilter,
+    /// The delay before a tool call that failed transiently is attempted again.
+    pub backoff: Backoff,
+    /// The server's public URL. `webhook(name)` returns `{public_url}/hooks/{token}`; without
+    /// it, the `webhook` built-in fails with `unavailable`.
+    pub public_url: Option<String>,
     /// Timers fired, and runs expired, per call to the store.
     pub scheduler_batch: usize,
     pub limits: Limits,
@@ -80,6 +86,8 @@ impl Default for EngineConfig {
             max_tool_attempts: 5,
             tenants: TenantScope::All,
             tool_tasks: TaskFilter::All,
+            backoff: Backoff::default(),
+            public_url: None,
             scheduler_batch: 1_000,
             limits: Limits::default(),
         }
@@ -88,25 +96,34 @@ impl Default for EngineConfig {
 
 /// The adapters an engine is wired with. Composition roots pick them.
 #[derive(Debug)]
-pub struct Adapters<J, B, X, D, C, E> {
+pub struct Adapters<J, B, X, D, C, E, S, W> {
     pub journal: J,
     pub blobs: B,
     pub executor: X,
     pub dispatcher: D,
     pub clock: C,
     pub entropy: E,
+    /// Credentials, resolved when a tool call is dispatched.
+    pub secrets: S,
+    /// Webhooks about tool tasks that wait for the harness (`tool.schema_changed`,
+    /// `credentials.expired`).
+    pub webhooks: W,
 }
 
 /// The application layer of ai-ptc. It is deterministic given its ports: wired with
 /// in-memory adapters and a virtual clock, it is both mock mode and the test harness.
 #[derive(Debug)]
-pub struct Engine<J, B, X, D, C, E> {
+pub struct Engine<J, B, X, D, C, E, S, W> {
     pub(crate) journal: J,
     pub(crate) blobs: B,
     pub(crate) executor: X,
     pub(crate) dispatcher: D,
     pub(crate) clock: C,
     pub(crate) entropy: E,
+    pub(crate) secrets: S,
+    pub(crate) webhooks: W,
+    /// The calls this engine is dispatching, and when its retried calls are due.
+    pub(crate) tool_tasks: ToolTasks,
     pub(crate) config: EngineConfig,
     /// Draws for the tenant `acquire_runnable` picks: consecutive draws go round the tenants
     /// with runnable work.
@@ -128,11 +145,14 @@ pub struct StartRun {
     pub metadata: RunMetadata,
     /// A retried request with the same key returns the same run instead of starting another.
     pub idempotency_key: Option<String>,
+    /// The run's own credentials, stored before the run exists so that its first call uses
+    /// them. They override the toolset's.
+    pub credentials: Option<Credentials>,
 }
 
 impl StartRun {
-    /// A live run of the tenant `local`, with no declarations, TTL, metadata or idempotency
-    /// key.
+    /// A live run of the tenant `local`, with no declarations, TTL, metadata, idempotency key
+    /// or credentials.
     pub fn new(script: Script, toolset: Toolset, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
@@ -144,6 +164,7 @@ impl StartRun {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
+            credentials: None,
         }
     }
 }
@@ -165,6 +186,8 @@ pub enum StartError {
     QuotaExceeded { quota: u32 },
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Secret(#[from] SecretError),
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -178,6 +201,22 @@ pub enum EngineError {
     /// A command names a tool its run's toolset does not have.
     #[error("run {run_id} called {tool}, which its toolset does not have")]
     UnknownTool { run_id: RunId, tool: String },
+    #[error(transparent)]
+    Secret(#[from] SecretError),
+    /// No such tool task for this tenant: it was answered, its run ended, or its claim was
+    /// taken over by another worker. An outcome reported for it is dropped.
+    #[error(
+        "the task no longer exists: it was answered, its run ended, or its claim was taken over"
+    )]
+    TaskGone,
+    /// Only a task waiting for the harness (`approval` or `parked`) can be approved or rejected.
+    #[error("task {task} is {state}: only a task waiting for the harness is approved or rejected")]
+    TaskNotWaiting { task: String, state: &'static str },
+    /// A tool result above the engine's payload limit.
+    #[error("the result is {size} bytes as canonical JSON, above the limit of {max} bytes")]
+    ResultTooLarge { size: usize, max: usize },
+    #[error("run {0} has ended")]
+    RunEnded(RunId),
     #[error("script {0} not found")]
     ScriptNotFound(Digest),
     #[error("toolset {0} not found")]
@@ -223,7 +262,7 @@ pub enum ReplayVerdict {
     Fails(ExecutorError),
 }
 
-impl<J, B, X, D, C, E> Engine<J, B, X, D, C, E>
+impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
 where
     J: JournalStore,
     B: BlobStore,
@@ -231,8 +270,10 @@ where
     D: ToolDispatcher,
     C: Clock,
     E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
 {
-    pub fn new(adapters: Adapters<J, B, X, D, C, E>, config: EngineConfig) -> Self {
+    pub fn new(adapters: Adapters<J, B, X, D, C, E, S, W>, config: EngineConfig) -> Self {
         let Adapters {
             journal,
             blobs,
@@ -240,6 +281,8 @@ where
             dispatcher,
             clock,
             entropy,
+            secrets,
+            webhooks,
         } = adapters;
         Self {
             journal,
@@ -248,6 +291,9 @@ where
             dispatcher,
             clock,
             entropy,
+            secrets,
+            webhooks,
+            tool_tasks: ToolTasks::default(),
             config,
             draws: AtomicU64::new(0),
         }
@@ -271,6 +317,14 @@ where
 
     pub fn clock(&self) -> &C {
         &self.clock
+    }
+
+    pub fn secrets(&self) -> &S {
+        &self.secrets
+    }
+
+    pub fn webhooks(&self) -> &W {
+        &self.webhooks
     }
 
     pub fn config(&self) -> &EngineConfig {
@@ -316,8 +370,16 @@ where
             .await?;
 
         let now = self.clock.now();
+        let run_ref = RunRef::new(tenant, self.entropy.run_id());
+        // Stored before the run exists: a worker may dispatch its first call at once.
+        let owner = SecretOwner::Run(run_ref.id);
+        if let Some(credentials) = &request.credentials {
+            self.secrets
+                .put(&run_ref.tenant, &owner, credentials)
+                .await?;
+        }
         let run = NewRun {
-            run: RunRef::new(tenant, self.entropy.run_id()),
+            run: run_ref.clone(),
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: request.toolset.digest(),
@@ -330,13 +392,21 @@ where
             metadata: request.metadata,
             created_at: now,
         };
-        let created = match self
-            .journal
-            .create_run(run, request.idempotency_key)
-            .await?
-        {
-            CreateRun::Created(created) => created,
-            CreateRun::QuotaExceeded { quota } => return Err(StartError::QuotaExceeded { quota }),
+        let created = self.journal.create_run(run, request.idempotency_key).await;
+        let created = match created {
+            Ok(CreateRun::Created(created)) if created.created => created,
+            // The run was not created: no run owns the credentials stored for it.
+            other => {
+                if request.credentials.is_some() {
+                    self.secrets.delete(&run_ref.tenant, &owner).await?;
+                }
+                match other? {
+                    CreateRun::Created(existing) => existing,
+                    CreateRun::QuotaExceeded { quota } => {
+                        return Err(StartError::QuotaExceeded { quota });
+                    }
+                }
+            }
         };
         tracing::debug!(run = %created.run, created = created.created, "run started");
         Ok(created)
@@ -437,126 +507,6 @@ where
             self.give_up(run).await?;
         }
         Ok(expired.cancelled.len() + expired.quarantined.len())
-    }
-
-    // ---------------------------------------------------------------------------------------
-    // The way out: tool calls
-
-    /// Claims tool tasks for this worker.
-    pub async fn claim_tool_tasks(&self, limit: usize) -> Result<Vec<ClaimedTask>, EngineError> {
-        Ok(self
-            .journal
-            .claim_tool_tasks(
-                &self.config.worker,
-                &self.config.tool_tasks,
-                self.clock.now(),
-                limit,
-            )
-            .await?)
-    }
-
-    /// Executes a claimed tool task and reports what became of it to the store.
-    ///
-    /// A task claimed again after its previous claim expired (its dispatcher died mid-call) is
-    /// called again with the same idempotency key, so that the tool can tell it apart from a
-    /// new call (`archi/04-tools.md`); under `at_most_once`, or after
-    /// [`EngineConfig::max_tool_attempts`], the call fails with `outcome_unknown` instead.
-    pub async fn run_tool_task(&self, claimed: ClaimedTask) -> Result<(), EngineError> {
-        let ClaimedTask {
-            task,
-            token,
-            previous_claim_expired,
-        } = claimed;
-        let run = task.task.run.clone();
-        let seq = task.task.seq;
-        let now = self.clock.now();
-        let interrupted = task.attempt > self.config.max_tool_attempts
-            || (previous_claim_expired && task.policy.on_interruption == Interruption::AtMostOnce);
-        if interrupted {
-            let failure = ToolFailure {
-                kind: ToolFailureKind::OutcomeUnknown,
-                message: format!(
-                    "the call was interrupted {} times and may or may not have taken effect",
-                    task.attempt - 1
-                ),
-                data: None,
-            };
-            self.journal
-                .complete_tool_task(&token, ToolOutcome::Failure(failure), now)
-                .await?;
-            return Ok(());
-        }
-
-        let stored = self.toolset(&run.tenant, task.toolset).await?;
-        let tool =
-            stored
-                .toolset
-                .tool(&task.tool)
-                .cloned()
-                .ok_or_else(|| EngineError::UnknownTool {
-                    run_id: run.id,
-                    tool: task.tool.clone(),
-                })?;
-        let server = tool
-            .namespace()
-            .and_then(|server| stored.toolset.server(server))
-            .cloned();
-        let call = ToolCall {
-            run: run.clone(),
-            seq,
-            tool,
-            server,
-            args: payloads::load(&self.blobs, &run.tenant, &task.args).await?,
-            idempotency_key: idempotency_key(run.id, seq),
-            attempt: task.attempt,
-            token: token.clone(),
-            trace_context: None,
-        };
-        let journal = &self.journal;
-        match self.dispatcher.dispatch(call, None).await {
-            Dispatched::Result(result) => {
-                let outcome = ToolOutcome::Result(result);
-                journal
-                    .complete_tool_task(&token, outcome, self.clock.now())
-                    .await?;
-            }
-            Dispatched::Failed(failure) => {
-                let outcome = ToolOutcome::Failure(failure);
-                journal
-                    .complete_tool_task(&token, outcome, self.clock.now())
-                    .await?;
-            }
-            Dispatched::Transient(failure) => {
-                let retry = task.policy.on_interruption == Interruption::Retry
-                    && task.attempt < self.config.max_tool_attempts;
-                if retry {
-                    journal.retry_tool_task(&token, self.clock.now()).await?;
-                } else {
-                    let outcome = ToolOutcome::Failure(failure);
-                    journal
-                        .complete_tool_task(&token, outcome, self.clock.now())
-                        .await?;
-                }
-            }
-            Dispatched::Deferred => {
-                let record = self.run_record(&run).await?;
-                journal.defer_tool_task(&token, record.expires_at).await?;
-            }
-            Dispatched::Park(reason) => {
-                journal.park_tool_task(&token, reason).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Claims up to `limit` tool tasks and runs them in order. Returns how many ran.
-    pub async fn dispatch_tool_calls(&self, limit: usize) -> Result<usize, EngineError> {
-        let tasks = self.claim_tool_tasks(limit).await?;
-        let count = tasks.len();
-        for task in tasks {
-            self.run_tool_task(task).await?;
-        }
-        Ok(count)
     }
 
     // ---------------------------------------------------------------------------------------

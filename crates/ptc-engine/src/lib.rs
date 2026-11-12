@@ -3,8 +3,8 @@
 //! - [`ports`]: what the engine needs from the outside world, as traits. Adapters implement
 //!   them; the engine never names Postgres, S3, V8, MCP or OpenTelemetry.
 //! - [`Engine`]: the use cases (start, signal, cancel, activate, fire timers, expire runs,
-//!   dispatch tool calls, quarantine, replay) and the driver (`run_until_idle`, in real or
-//!   virtual time).
+//!   quarantine, replay), the tool tasks' (dispatch, host-tool workers, approvals, parked tasks
+//!   and credentials, backoff), and the driver (`run_until_idle`, in real or virtual time).
 //! - [`replay`]: rebuilding a script from its history.
 //! - [`adapters`]: in-memory storage, read model, secrets, telemetry and webhooks; static tool
 //!   responses and type-checking; system and virtual time; system and seeded entropy. With a
@@ -26,9 +26,11 @@ mod engine;
 mod payloads;
 pub mod ports;
 pub mod replay;
+mod tasks;
 
 pub use driver::{DriveOptions, DriveReport, ToolOrder};
 pub use engine::{
     ActivationOutcome, ActivationReport, Adapters, Engine, EngineConfig, EngineError, Limits,
     ReplayVerdict, StartError, StartRun, idempotency_key,
 };
+pub use tasks::{Backoff, HostClaim, HostFailure, HostTask};

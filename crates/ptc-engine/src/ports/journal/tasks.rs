@@ -92,7 +92,7 @@ pub struct ParkReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParkKind {
     /// The tool's current schema no longer matches the call (`tool.schema_changed`). Approved,
-    /// the call is sent against the new schema.
+    /// the call is sent against the new schema: the task's `schema_change_approved` is set.
     SchemaChanged,
     /// The server refused the credentials (`credentials.expired`). Renewed credentials make the
     /// task ready again.
@@ -112,6 +112,10 @@ pub struct ToolTask {
     pub state: TaskState,
     /// Claims so far: 0 before the first claim.
     pub attempt: u32,
+    /// The harness approved the task while it was parked by
+    /// [`SchemaChanged`](ParkKind::SchemaChanged): the call goes on against the tool's current
+    /// schema, and the dispatcher no longer checks it. It stays set for the task's life.
+    pub schema_change_approved: bool,
     pub created_at: Timestamp,
 }
 

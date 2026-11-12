@@ -9,7 +9,8 @@ use ptc_core::Timestamp;
 
 use crate::engine::{ActivationOutcome, Engine, EngineError};
 use crate::ports::{
-    BlobStore, Clock, Entropy, JournalStore, RunRef, ScriptExecutor, ToolDispatcher, VirtualTime,
+    BlobStore, Clock, Entropy, JournalStore, RunRef, ScriptExecutor, SecretStore, ToolDispatcher,
+    VirtualTime, WebhookSender,
 };
 
 /// The order in which claimed tool calls are run, and so the order of their completions.
@@ -56,7 +57,7 @@ pub struct DriveReport {
     pub interrupted: bool,
 }
 
-impl<J, B, X, D, C, E> Engine<J, B, X, D, C, E>
+impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
 where
     J: JournalStore,
     B: BlobStore,
@@ -64,6 +65,8 @@ where
     D: ToolDispatcher,
     C: Clock,
     E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
 {
     /// Does everything that is ready now, repeatedly, until nothing progresses.
     pub async fn run_until_idle(&self, options: &DriveOptions) -> Result<DriveReport, EngineError> {
@@ -93,15 +96,11 @@ where
         report.timers_fired += fired;
         progressed |= fired > 0;
 
-        let mut tasks = self.claim_tool_tasks(options.tool_batch).await?;
-        if options.tool_order == ToolOrder::Reversed {
-            tasks.reverse();
-        }
-        report.tool_calls += tasks.len();
-        progressed |= !tasks.is_empty();
-        for task in tasks {
-            self.run_tool_task(task).await?;
-        }
+        let tool_calls = self
+            .tool_pass(options.tool_order, options.tool_batch)
+            .await?;
+        report.tool_calls += tool_calls;
+        progressed |= tool_calls > 0;
 
         while let Some(activation) = self.activate_next().await? {
             progressed = true;
@@ -116,7 +115,7 @@ where
     }
 }
 
-impl<J, B, X, D, C, E> Engine<J, B, X, D, C, E>
+impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
 where
     J: JournalStore,
     B: BlobStore,
@@ -124,6 +123,8 @@ where
     D: ToolDispatcher,
     C: VirtualTime,
     E: Entropy,
+    S: SecretStore,
+    W: WebhookSender,
 {
     /// [`run_until_idle`](Self::run_until_idle) in virtual time: when nothing is ready but a
     /// timer is pending, the clock jumps to the next timer, or to an earlier deadline. Returns
@@ -146,13 +147,16 @@ where
         Ok(report)
     }
 
-    /// The next timer, or the next deadline if it comes first. A deadline alone does not wake
-    /// anything up: a run waiting for a signal is waiting for the outside world.
+    /// The next timer or retried tool call, or the next deadline if it comes first. A deadline
+    /// alone does not wake anything up: a run waiting for a signal is waiting for the outside
+    /// world. A tool call retried after a backoff is work the engine does by itself.
     async fn next_wake_up(&self) -> Result<Option<Timestamp>, EngineError> {
-        let Some(timer) = self.journal.next_timer().await? else {
+        let timer = self.journal.next_timer().await?;
+        let retry = self.next_tool_wake_up();
+        let Some(next) = timer.into_iter().chain(retry).min() else {
             return Ok(None);
         };
         let deadline = self.journal.next_deadline().await?;
-        Ok(Some(deadline.map_or(timer, |deadline| deadline.min(timer))))
+        Ok(Some(deadline.map_or(next, |deadline| deadline.min(next))))
     }
 }
