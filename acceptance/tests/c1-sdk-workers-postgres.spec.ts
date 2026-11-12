@@ -195,7 +195,7 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
             runs.every(
               (run) =>
                 spans.some((s) => s.name === "run" && s.attributes["ptc.run_id"] === run.id) &&
-                spans.some((s) => s.name === "activation" && s.attributes.run === `acme/${run.id}`),
+                spans.some((s) => s.name === "activation" && s.attributes["ptc.run_id"] === run.id),
             ) && harness.every((h) => spans.some((s) => s.spanId === h.spanId));
           return done ? spans : undefined;
         },
@@ -206,8 +206,8 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       for (const [n, run] of runs.entries()) {
         const span = harness[n]!;
         expect(spans.find((s) => s.spanId === span.spanId)?.traceId).toBe(span.traceId);
-        // Run telemetry names the run `ptc.run_id`; service spans (activations) `run`, as `{tenant}/{run}`.
-        const mine = spans.filter((s) => s.attributes["ptc.run_id"] === run.id || s.attributes.run === `acme/${run.id}`);
+        // Run telemetry and service spans (activations) both name the run `ptc.run_id`.
+        const mine = spans.filter((s) => s.attributes["ptc.run_id"] === run.id);
         // One trace: the harness's.
         expect(new Set(mine.map((s) => s.traceId))).toEqual(new Set([span.traceId]));
         const runSpan = only(mine.filter((s) => s.name === "run" && s.scope === "ai-ptc.run"));
