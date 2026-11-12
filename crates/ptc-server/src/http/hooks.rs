@@ -27,6 +27,10 @@ pub(super) async fn post(
     body: Bytes,
 ) -> Result<Response, ApiError> {
     let missing = || ApiError::not_found("no webhook at this URL: its run may have ended");
+    // No token holds a NUL character, and Postgres refuses it in a query.
+    if token.contains('\0') {
+        return Err(missing());
+    }
     let target = app
         .store
         .resolve_webhook_token(&WebhookToken(token))

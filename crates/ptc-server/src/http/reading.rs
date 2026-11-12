@@ -18,6 +18,7 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::Query;
+use crate::http::refuse_nul_in_filter;
 use crate::http::runs::core_time;
 
 const PAGE: u32 = 50;
@@ -32,10 +33,14 @@ fn filter(
 ) -> Result<Option<ptc_engine::ports::ScriptFilter>, ApiError> {
     let mut wanted = BTreeMap::new();
     for label in labels {
+        refuse_nul_in_filter("label", label)?;
         let (key, value) = label
             .split_once(':')
             .ok_or_else(|| ApiError::invalid(format!("label {label:?}: expected key:value")))?;
         wanted.insert(key.to_owned(), value.to_owned());
+    }
+    if let Some(tool) = &tool {
+        refuse_nul_in_filter("tool", tool)?;
     }
     let Ok(labels) = caller.within(wanted) else {
         return Ok(None);

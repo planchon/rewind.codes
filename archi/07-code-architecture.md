@@ -153,6 +153,9 @@ script, a toolset, a payload or a task of one tenant is never visible to another
 unique across tenants. Text a store keeps never holds a NUL character (U+0000), which Postgres
 refuses: the engine refuses it at its entry points (`NulCharacter`), and values are JSON, where
 it is escaped ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
+A key looked up with a NUL character matches nothing, and never reaches a store: a token or an id
+is not found, and a filter is refused with 400
+([decided](08-decisions.md#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)).
 
 `metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`), stored with
 the run and never part of its events. `commit_activation` also writes one feed item per

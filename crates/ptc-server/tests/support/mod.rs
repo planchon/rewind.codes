@@ -131,3 +131,125 @@ where
 pub(crate) fn wait(text: &str) -> Option<ptc_api::common::Duration> {
     Some(text.parse().unwrap())
 }
+
+/// Lookups whose key holds a NUL character (U+0000) match nothing, whatever the store: an
+/// unknown token or id is not found, and a filter is refused with 400. Postgres refuses the
+/// character in a query, and its error was answered 503 "the store cannot be reached".
+pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
+    use ptc_api::ProblemType;
+    use ptc_api::runs::RunFilter;
+    use ptc_api::scripts::ScriptFilter;
+    use ptc_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskQuery};
+    use serde_json::json;
+
+    let harness = server.key(Role::Harness, &[]).await;
+    let worker = server.key(Role::Worker, &[]).await;
+    let answer = |error: ptc_api::Error| {
+        let problem = error
+            .problem()
+            .cloned()
+            .unwrap_or_else(|| panic!("not a problem: {error}"));
+        (problem.kind(), problem.status, problem.detail)
+    };
+    let not_found = |error: ptc_api::Error| {
+        let (kind, status, detail) = answer(error);
+        assert_eq!(
+            (kind, status),
+            (Some(ProblemType::NotFound), 404),
+            "{detail}"
+        );
+    };
+    let gone = |error: ptc_api::Error| {
+        let (kind, status, detail) = answer(error);
+        assert_eq!(
+            (kind, status),
+            (Some(ProblemType::TaskGone), 410),
+            "{detail}"
+        );
+    };
+    let refused = |error: ptc_api::Error| {
+        let (kind, status, detail) = answer(error);
+        assert_eq!(
+            (kind, status),
+            (Some(ProblemType::InvalidRequest), 400),
+            "{detail}"
+        );
+        assert!(detail.contains("NUL character"), "{detail}");
+    };
+
+    // Tokens: a webhook's URL, a host-tool task's claim.
+    not_found(
+        harness
+            .post_hook("hook\u{0}token", &json!({ "ok": true }), None)
+            .await
+            .unwrap_err(),
+    );
+    let token = "task\u{0}token";
+    gone(worker.heartbeat_task(token).await.unwrap_err());
+    gone(
+        worker
+            .defer_task(token, &DeferTask::default())
+            .await
+            .unwrap_err(),
+    );
+    gone(
+        worker
+            .complete_task(token, &CompleteTask { result: json!(1) })
+            .await
+            .unwrap_err(),
+    );
+    gone(
+        worker
+            .fail_task(
+                token,
+                &FailTask {
+                    message: "no".into(),
+                    data: None,
+                    retryable: false,
+                },
+            )
+            .await
+            .unwrap_err(),
+    );
+
+    // Ids: a task's, a subscription's, a run's.
+    not_found(harness.approve_task("run\u{0}.1").await.unwrap_err());
+    not_found(
+        harness
+            .reject_task("run\u{0}.1", &RejectTask::default())
+            .await
+            .unwrap_err(),
+    );
+    not_found(harness.delete_subscription("sub\u{0}").await.unwrap_err());
+    not_found(harness.get_run("run\u{0}", None).await.unwrap_err());
+
+    // Filters: labels and tools.
+    for label in ["agent:tri\u{0}age", "ag\u{0}ent:triage"] {
+        let runs = RunFilter {
+            labels: vec![label.into()],
+            ..RunFilter::default()
+        };
+        refused(harness.list_runs(&runs).await.unwrap_err());
+        let scripts = ScriptFilter {
+            labels: vec![label.into()],
+            ..ScriptFilter::default()
+        };
+        refused(harness.list_scripts(&scripts).await.unwrap_err());
+    }
+    let runs = RunFilter {
+        tool: Some("ask\u{0}".into()),
+        ..RunFilter::default()
+    };
+    refused(harness.list_runs(&runs).await.unwrap_err());
+    let scripts = ScriptFilter {
+        tool: Some("ask\u{0}".into()),
+        ..ScriptFilter::default()
+    };
+    refused(harness.list_scripts(&scripts).await.unwrap_err());
+    let claim = TaskQuery {
+        tools: vec!["ask_user".into(), "ask\u{0}".into()],
+        wait: Some("1s".parse().unwrap()),
+        ..TaskQuery::default()
+    };
+    refused(worker.claim_tasks(&claim).await.unwrap_err());
+}

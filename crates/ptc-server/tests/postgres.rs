@@ -237,3 +237,20 @@ async fn an_api_server_and_two_workers_share_one_postgres() {
     second.stop().await;
     drop(postgres);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lookups_with_a_nul_character_match_nothing_on_postgres() {
+    let Some(postgres) = Postgres::start() else {
+        return;
+    };
+    let shared = tempfile::tempdir().unwrap();
+    let server = TestServer::start_on(
+        tempfile::tempdir().unwrap(),
+        &postgres.url(),
+        &shared.path().join("blobs"),
+        &[],
+    )
+    .await;
+    support::nul_lookups_match_nothing(&server).await;
+    server.stop().await;
+}

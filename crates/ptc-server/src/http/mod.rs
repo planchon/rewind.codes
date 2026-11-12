@@ -27,6 +27,7 @@ use ptc_api::routes;
 
 use crate::app::App;
 use crate::auth::{Caller, authenticate};
+use crate::error::ApiError;
 
 /// The largest request body: payloads are bounded at 8 MiB of canonical JSON, and JSON as sent
 /// may be larger.
@@ -88,6 +89,18 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
     api.merge(public)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(from_fn_with_state(app, every_response))
+}
+
+/// Refuses a filter holding a NUL character (U+0000): no text the stores keep holds one, so the
+/// filter could match nothing, and Postgres refuses the character in a query.
+pub(crate) fn refuse_nul_in_filter(what: &str, text: &str) -> Result<(), ApiError> {
+    if text.contains('\0') {
+        return Err(ApiError::invalid(format!(
+            "{what} {text:?} contains a NUL character (U+0000), which no stored text holds: \
+             remove it"
+        )));
+    }
+    Ok(())
 }
 
 /// The core status of an API status.

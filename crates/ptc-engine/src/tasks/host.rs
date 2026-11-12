@@ -210,12 +210,16 @@ where
     }
 
     /// The task holding `token`, if it belongs to `tenant`: a token of another tenant is as
-    /// good as unknown.
+    /// good as unknown, and so is a token with a NUL character, which no store holds (Postgres
+    /// refuses it in a query).
     pub(super) async fn task_of(
         &self,
         tenant: &TenantId,
         token: &TaskToken,
     ) -> Result<ToolTask, EngineError> {
+        if token.0.contains('\0') {
+            return Err(EngineError::TaskGone);
+        }
         self.journal
             .tool_task(token)
             .await?
