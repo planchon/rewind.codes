@@ -616,6 +616,36 @@ impl JournalStore for TursoStore {
     // ---------------------------------------------------------------------------------------
     // The way in
 
+    async fn list_toolsets(&self, tenant_id: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
+        let connection = self.connection().await?;
+        let rows = sql::query_dynamic(
+            &connection,
+            "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = ? \
+             ORDER BY digest",
+            vec![tenant(tenant_id)],
+        )
+        .await?;
+        let mut toolsets = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let key = row.digest(0)?;
+            let toolset = ptc_format::decode_toolset(&row.text(1)?)
+                .map_err(|err| Error::Corrupt(format!("toolset {key}: {err}")))?;
+            if toolset.digest() != key {
+                return Err(
+                    Error::Corrupt(format!("toolset {key} does not hash to its key")).into(),
+                );
+            }
+            toolsets.push(StoredToolset {
+                toolset,
+                declarations: ToolDeclarations {
+                    typescript: row.text(2)?,
+                    prompt: row.text(3)?,
+                },
+            });
+        }
+        Ok(toolsets)
+    }
+
     async fn create_run(
         &self,
         run: NewRun,

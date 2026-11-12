@@ -143,6 +143,23 @@ pub struct Toolset {
     pub declarations: Declarations,
 }
 
+/// `GET /v1/toolsets`: the toolsets registered by the tenant, by id.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsetList {
+    pub toolsets: Vec<ToolsetSummary>,
+}
+
+/// A registered toolset, without its schemas and declarations.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolsetSummary {
+    pub id: String,
+    pub servers: Vec<ServerSummary>,
+    /// The names of its tools, sorted.
+    pub tools: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSummary {

@@ -261,6 +261,7 @@ CREATE TABLE tool_calls (
     args_digest TEXT,
     result_digest TEXT,
     result_shape TEXT,
+    attempts INTEGER,
     PRIMARY KEY (run_id, seq)
 ) STRICT;
 CREATE INDEX tool_calls_by_tool ON tool_calls (tool);

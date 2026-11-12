@@ -329,6 +329,18 @@ impl JournalStore for MemoryJournal {
             .cloned())
     }
 
+    async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
+        let mut toolsets: Vec<StoredToolset> = self
+            .lock()?
+            .toolsets
+            .iter()
+            .filter(|((owner, _), _)| owner == tenant)
+            .map(|(_, stored)| stored.clone())
+            .collect();
+        toolsets.sort_by_key(|stored| stored.toolset.digest());
+        Ok(toolsets)
+    }
+
     async fn create_run(
         &self,
         run: NewRun,

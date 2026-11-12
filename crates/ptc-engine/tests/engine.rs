@@ -871,3 +871,52 @@ async fn values_reach_the_script_with_their_keys_in_canonical_order() {
         })
     );
 }
+
+#[tokio::test]
+async fn a_script_with_a_type_error_is_refused_before_any_run_exists() {
+    use ptc_engine::adapters::StaticTypeChecker;
+    use ptc_engine::ports::{Diagnostic, DiagnosticSource, Severity};
+
+    let engine = engine(one_call(), RecordingDispatcher::echo());
+    let refused = request("one_call", json!({}));
+    let error = Diagnostic {
+        line: 3,
+        column: 28,
+        severity: Severity::Error,
+        source: DiagnosticSource::TypeScript { code: 2322 },
+        message: "Type 'number' is not assignable to type 'string'.".into(),
+        hint: None,
+        frame: String::new(),
+    };
+    let warning = Diagnostic {
+        severity: Severity::Warning,
+        ..error.clone()
+    };
+    let checker = StaticTypeChecker::new().with(&refused.script, vec![error.clone()]);
+    let started = engine.start_run_checked(refused.clone(), &checker).await;
+    let Err(StartError::TypeErrors(diagnostics)) = started else {
+        panic!("a type error refuses the script: {started:?}");
+    };
+    assert_eq!(diagnostics, [error]);
+    assert!(
+        engine
+            .list_runs(&RunFilter::new(TenantId::local()))
+            .await
+            .unwrap()
+            .is_empty(),
+        "no run exists"
+    );
+
+    // Warnings alone do not refuse it, and a start without the checker does not check.
+    let checker = StaticTypeChecker::new().with(&refused.script, vec![warning]);
+    assert!(
+        engine
+            .start_run_checked(refused.clone(), &checker)
+            .await
+            .unwrap()
+            .created
+    );
+    let mut unchecked = refused;
+    unchecked.input = json!({ "unchecked": true });
+    assert!(engine.start_run(unchecked).await.unwrap().created);
+}

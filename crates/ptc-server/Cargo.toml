@@ -1,0 +1,44 @@
+[package]
+name = "ptc-server"
+description = "The engine host of ai-ptc: the HTTP API /v1, the workers, the embedded server, the dashboard."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+# A composition root: the only kind of crate, with ptc-cli, that knows every adapter
+# (archi/07-code-architecture.md, "Dependency rules"). Each adapter is wired in its own module of
+# `src/wiring/`.
+[dependencies]
+ptc-api.workspace = true
+ptc-blob.workspace = true
+ptc-check.workspace = true
+ptc-core.workspace = true
+ptc-engine.workspace = true
+ptc-format.workspace = true
+ptc-runtime.workspace = true
+ptc-store-turso.workspace = true
+axum.workspace = true
+base64.workspace = true
+clap = { workspace = true }
+fs4 = { workspace = true }
+futures-util.workspace = true
+getrandom.workspace = true
+jiff.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_html_form.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+ptc-engine = { workspace = true, features = ["conformance"] }
+tempfile.workspace = true
+
+[lints]
+workspace = true

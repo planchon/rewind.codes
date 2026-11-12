@@ -16,10 +16,15 @@ ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
 ptc-runtime = { path = "crates/ptc-runtime" }
+ptc-server = { path = "crates/ptc-server" }
+ptc-store-turso = { path = "crates/ptc-store-turso" }
+ptc-cli = { path = "crates/ptc-cli" }
 
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
+# The command line of the `ptc` binary.
+clap = { version = "4", features = ["derive", "env"] }
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
 deno_error = "0.7"
@@ -29,6 +34,9 @@ deno_web = "=0.291.0"
 deno_webidl = "=0.260.0"
 # The user's cache directory, where ptc-check extracts tsgo.
 dirs = "6"
+# The embedded server's exclusive lock on `.ptc/server.lock` (flock, released when the process
+# dies).
+fs4 = { version = "0.13", features = ["sync"] }
 # The tarball of tsgo embedded by ptc-check (gzip, tar).
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false }
@@ -62,6 +70,8 @@ tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+# The server's log output until `ptc-otel` installs its subscriber.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["ansi", "env-filter", "fmt", "std"] }
 utoipa = { version = "6", features = ["jiff_0_2"] }
 # ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }

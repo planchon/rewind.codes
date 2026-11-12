@@ -9,7 +9,7 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Timestamp;
 
-/// `GET /v1/tools/stats`: latency, errors and retries per tool, over the calls completed in a
+/// `GET /v1/tools/stats`: latency, errors and retries per tool, over the calls scheduled in a
 /// time window.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
@@ -21,11 +21,11 @@ pub struct ToolStatsFilter {
     /// Only this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
-    /// Calls completed at or after this time. 24 hours ago by default.
+    /// Calls scheduled at or after this time. 24 hours ago by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub since: Option<Timestamp>,
-    /// Calls completed before this time. Now by default.
+    /// Calls scheduled before this time. Now by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
@@ -44,7 +44,7 @@ pub struct ToolStatsPage {
 #[serde(rename_all = "camelCase")]
 pub struct ToolStats {
     pub tool: String,
-    /// Calls completed in the window.
+    /// Calls scheduled in the window.
     pub calls: u64,
     /// Calls that failed, whatever the kind.
     pub errors: u64,
@@ -52,7 +52,8 @@ pub struct ToolStats {
     pub error_kinds: BTreeMap<String, u64>,
     /// Attempts beyond the first, over every call.
     pub retries: u64,
-    /// From `schedule_tool_call` to the completion, in milliseconds.
+    /// From `schedule_tool_call` to the completion, in milliseconds, over the calls that have an
+    /// outcome; zeros when none has.
     pub latency_ms: Latency,
 }
 

@@ -1,0 +1,12 @@
+[package]
+name = "ptc-cli"
+description = "The client commands of the ptc binary: a client of the API /v1 (embedded or remote server), and the local commands check, test and replay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

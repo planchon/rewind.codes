@@ -1,4 +1,5 @@
-//! The conformance suites of the ports with state (feature `conformance`).
+//! The conformance suites of the ports with state, and of `WebhookSender` (feature
+//! `conformance`).
 //!
 //! Every adapter of a port passes its suite: they check the contract of the port, not a table
 //! layout. Each suite is deterministic: time is always passed in, never read, and the only
@@ -19,6 +20,7 @@ pub mod blobs;
 pub mod journal;
 pub mod read_model;
 pub mod secrets;
+pub mod webhooks;
 
 use ptc_core::Timestamp;
 

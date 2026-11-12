@@ -112,7 +112,10 @@ pub struct Run {
     /// For a fork, the run it was forked from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ForkParent>,
-    pub input: Payload,
+    /// The input of `main`. Absent while the run is `pending`: its `run_started` waits in its
+    /// inbox for the first activation, which commits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Payload>,
     /// With `completed`: what `main` returned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<Payload>,
@@ -128,6 +131,11 @@ pub struct Run {
     /// The last log lines of the script (`console.*`), oldest first, at most 20.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub logs: Vec<LogLine>,
+    /// How many times each tool call was sent, by seq, for the calls sent more than once: a
+    /// call retried after a transient failure, or sent again after its worker or dispatcher
+    /// died. Attempts live in the tool tasks, not in the journal: the read model keeps them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<CallAttempts>,
     /// Number of journal entries.
     pub history_len: u64,
     pub created_at: Timestamp,
@@ -198,8 +206,17 @@ pub struct FailedCall {
     pub callsite: Option<Callsite>,
 }
 
+/// How many times a tool call was sent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAttempts {
+    pub seq: u32,
+    /// From 1.
+    pub attempts: u32,
+}
+
 /// Something an active run waits for.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
     /// A tool call in flight, and the state of its task.
@@ -207,6 +224,8 @@ pub enum Waiting {
     ToolCall {
         seq: u32,
         tool: String,
+        /// The call's arguments: what the harness approves or rejects.
+        args: Payload,
         /// For `POST /v1/tasks/{id}/approve` and `/reject`.
         task_id: String,
         state: TaskState,
@@ -326,6 +345,8 @@ pub struct RunSummary {
     pub status: RunStatus,
     pub quarantined: bool,
     pub script: String,
+    /// The first line of the script that is not blank, for display.
+    pub headline: String,
     pub toolset: String,
     pub labels: Labels,
     pub started_at: Timestamp,
@@ -387,7 +408,8 @@ pub struct ForkRun {
     pub input: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
-    /// The fork's labels. The parent's when absent.
+    /// The fork's labels. Absent, the fork keeps its parent's labels, so that whoever sees the
+    /// parent (the agent tools of a conversation, a key limited to labels) sees the fork.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub labels: Option<Labels>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -548,6 +570,10 @@ mod tests {
         let call = Waiting::ToolCall {
             seq: 3,
             tool: "ask_user".into(),
+            args: Payload::of(
+                json!({ "question": "ok?" }),
+                crate::common::PAYLOAD_VALUE_LIMIT,
+            ),
             task_id: "t-1".into(),
             state: TaskState::Approval,
             parked: None,
@@ -556,6 +582,7 @@ mod tests {
         };
         let written = serde_json::to_value(&call).unwrap();
         assert_eq!(written["taskId"], "t-1");
+        assert_eq!(written["args"]["value"], json!({ "question": "ok?" }));
         assert_eq!(written["state"], "approval");
         assert_eq!(serde_json::from_value::<Waiting>(written).unwrap(), call);
     }

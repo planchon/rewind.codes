@@ -31,12 +31,13 @@ use ptc_core::{
 };
 
 use crate::activation::{Batch, Grace, abort_reason};
-use crate::engine::{Engine, EngineError, StartError, idempotency_key};
+use crate::adapters::StaticTypeChecker;
+use crate::engine::{Engine, EngineError, StartError, idempotency_key, type_check};
 use crate::payloads;
 use crate::ports::{
     BlobStore, Clock, CompiledScript, CreateRun, Created, Emitted, Entropy, ForkParent,
     JournalStore, NewRun, RunMetadata, RunRecord, RunRef, ScriptExecutor, ScriptInstance,
-    SecretStore, StartScript, StoreError, ToolDispatcher, TraceContext, WebhookSender,
+    SecretStore, StartScript, StoreError, ToolDispatcher, TraceContext, TypeChecker, WebhookSender,
 };
 use crate::replay::{Heartbeat, NoHeartbeat};
 
@@ -191,6 +192,24 @@ where
     /// Starts a fork of a run with a corrected script. The fork's first activation copies what
     /// it can of the parent's history, then goes live.
     pub async fn fork(&self, request: ForkRun) -> Result<Created, ForkError> {
+        self.fork_with(request, None::<&StaticTypeChecker>).await
+    }
+
+    /// [`fork`](Self::fork), with the corrected script type-checked first against the parent's
+    /// toolset, as a start is: a script with a type error is refused before the fork exists.
+    pub async fn fork_checked<K: TypeChecker>(
+        &self,
+        request: ForkRun,
+        checker: &K,
+    ) -> Result<Created, ForkError> {
+        self.fork_with(request, Some(checker)).await
+    }
+
+    async fn fork_with<K: TypeChecker>(
+        &self,
+        request: ForkRun,
+        checker: Option<&K>,
+    ) -> Result<Created, ForkError> {
         let parent = &request.parent;
         let record = self
             .journal
@@ -219,11 +238,17 @@ where
                 max: self.config.max_ttl,
             }));
         }
-        let toolset = self.toolset(&parent.tenant, record.toolset).await?.toolset;
+        let stored = self.toolset(&parent.tenant, record.toolset).await?;
+        let toolset = stored.toolset;
         let compiled = self
             .executor
             .compile(&request.script, &toolset)
             .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
+        if let Some(checker) = checker {
+            type_check(checker, &request.script, &stored.declarations)
+                .await
+                .map_err(ForkError::Start)?;
+        }
         let input = match request.input {
             Some(input) => input,
             None => self

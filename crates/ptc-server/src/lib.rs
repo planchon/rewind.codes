@@ -1,0 +1,119 @@
+//! `ptc server`: the engine host of ai-ptc (`archi/07-code-architecture.md`, "Crates").
+//!
+//! - The HTTP API `/v1` of `ptc-api`, with axum: API keys hashed in the store, roles and label
+//!   scopes, tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
+//!   of a run (server-sent events); host-tool tasks long-polled by the harness's worker; inbound
+//!   webhooks that become signals; outbound lifecycle webhooks signed following Standard
+//!   Webhooks.
+//! - The worker role: activations with the sticky cache, tool dispatch, the scheduler of timers
+//!   and deadlines, the projector, the retention jobs (`worker`).
+//! - The embedded server of a `.ptc/` directory: its lock, its unix socket, its idle stop
+//!   (`embedded`).
+//! - The dashboard's build, embedded in the binary and served under `/`.
+//!
+//! The adapters are wired by configuration, each in its own module of `wiring`. The `ptc`
+//! binary hands `ptc server …` to [`main`].
+
+#![forbid(unsafe_code)]
+
+mod app;
+mod auth;
+mod config;
+mod embedded;
+mod error;
+mod extract;
+mod http;
+mod serve;
+mod views;
+mod wake;
+mod wiring;
+mod worker;
+
+use std::ffi::OsString;
+use std::process::ExitCode;
+
+use clap::Parser;
+
+pub use config::{ConfigError, RoleArg, ServerArgs};
+pub use serve::{Running, StartupError, VERSION, start};
+
+/// Exit codes of `ptc server`.
+pub mod exit {
+    /// The server stopped: a signal, `POST /v1/server/stop`, or the idle timeout.
+    pub const STOPPED: u8 = 0;
+    /// The command line is invalid.
+    pub const USAGE: u8 = 64;
+    /// The server cannot start: a store, a port, a file.
+    pub const FAILED: u8 = 70;
+    /// Another embedded server holds the directory's lock.
+    pub const LOCKED: u8 = 75;
+}
+
+/// `ptc server …`: `args` are the arguments after `server`. Runs until a signal (SIGINT,
+/// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server.
+pub fn main(args: Vec<OsString>) -> ExitCode {
+    let args =
+        match ServerArgs::try_parse_from(std::iter::once(OsString::from("ptc server")).chain(args))
+        {
+            Ok(args) => args,
+            Err(error) => {
+                let _ = error.print();
+                return ExitCode::from(if error.use_stderr() { exit::USAGE } else { 0 });
+            }
+        };
+    wiring::telemetry::install(&args.log);
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("ptc-server")
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("ptc server: cannot start the async runtime: {error}");
+            return ExitCode::from(exit::FAILED);
+        }
+    };
+    runtime.block_on(async move {
+        let running = match start(args).await {
+            Ok(running) => running,
+            Err(error) => {
+                eprintln!("ptc server: {error}");
+                return ExitCode::from(match error {
+                    StartupError::Config(_) => exit::USAGE,
+                    StartupError::Locked(_) => exit::LOCKED,
+                    StartupError::Io(_) | StartupError::Setup(_) => exit::FAILED,
+                });
+            }
+        };
+        tokio::select! {
+            () = running.stopped() => {}
+            () = signal() => tracing::info!("stopping: signal"),
+        }
+        running.stop().await;
+        ExitCode::from(exit::STOPPED)
+    })
+}
+
+/// SIGINT or SIGTERM.
+async fn signal() {
+    let interrupt = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut terminate) => {
+                tokio::select! {
+                    _ = interrupt => {}
+                    _ = terminate.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = interrupt.await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = interrupt.await;
+    }
+}

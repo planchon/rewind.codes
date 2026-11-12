@@ -50,6 +50,9 @@ pub struct HostTask {
     pub attempt: u32,
     /// The claim expires if no heartbeat comes within this time.
     pub heartbeat_timeout: Duration,
+    /// The tool's execution timeout: past it, the call is not waited for any more. `None` for a
+    /// host tool without one, the default: the run's TTL bounds it.
+    pub execution_timeout: Option<Duration>,
     /// The run's labels.
     pub labels: BTreeMap<String, String>,
     pub trace_context: Option<TraceContext>,
@@ -240,6 +243,7 @@ where
             idempotency_key: self.task_key(&record, task).await?,
             attempt: task.attempt,
             heartbeat_timeout: task.policy.heartbeat_timeout,
+            execution_timeout: task.policy.execution_timeout,
             trace_context: self.call_trace_context(&record, task.task.seq),
             labels: record.metadata.labels,
         }))
