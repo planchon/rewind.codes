@@ -1,7 +1,7 @@
 import { EventSourceParserStream } from "eventsource-parser/stream";
 
 import { durationParam, toMillis } from "../duration.js";
-import { PtcConnectionError } from "../errors.js";
+import { PtcApiError, PtcConnectionError, PtcError } from "../errors.js";
 import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Transport } from "../http.js";
 import { labelParams, timeParam } from "../params.js";
 import {
@@ -278,20 +278,22 @@ export class Runs {
     let failures = 0;
     for (;;) {
       throwIfAborted(signal);
-      const body = await this.transport.send(
-        () =>
-          this.transport.api.GET("/v1/runs/{id}/events", {
-            params: { path: { id }, query: { follow: follow || undefined, from: next } },
-            headers: { Accept: "text/event-stream" },
-            parseAs: "stream",
-            signal,
-          }),
-        { retry: true, signal },
-      );
-      if (body === null) {
-        throw new PtcConnectionError(`the event stream of run ${id} has no body`);
-      }
       try {
+        // Inside the try: a server that cannot be reached for a while (a restart) is reconnected
+        // to as a dropped stream is, within `maxReconnects`.
+        const body = await this.transport.send(
+          () =>
+            this.transport.api.GET("/v1/runs/{id}/events", {
+              params: { path: { id }, query: { follow: follow || undefined, from: next } },
+              headers: { Accept: "text/event-stream" },
+              parseAs: "stream",
+              signal,
+            }),
+          { retry: true, signal },
+        );
+        if (body === null) {
+          throw new PtcConnectionError(`the event stream of run ${id} has no body`);
+        }
         const messages = body.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream());
         for await (const message of messages) {
           const event = JSON.parse(message.data) as StreamEvent;
@@ -306,8 +308,10 @@ export class Runs {
         }
       } catch (error) {
         throwIfAborted(signal);
-        if (!follow || failures >= maxReconnects) {
-          throw new PtcConnectionError(`the event stream of run ${id} broke: ${messageOf(error)}`, { cause: error });
+        if (!follow || failures >= maxReconnects || !reconnectable(error)) {
+          throw error instanceof PtcError
+            ? error
+            : new PtcConnectionError(`the event stream of run ${id} broke: ${messageOf(error)}`, { cause: error });
         }
       }
       if (!follow) {
@@ -418,6 +422,11 @@ export class Runs {
     }
     return current;
   }
+}
+
+/** A failure a new connection may get past: anything but a problem the API answered, unless a 5xx or a 429. */
+function reconnectable(error: unknown): boolean {
+  return !(error instanceof PtcApiError) || error.status >= 500 || error.status === 429;
 }
 
 function deadlineOf(wait: Duration | undefined, now: number): number | undefined {
