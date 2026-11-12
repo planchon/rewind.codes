@@ -1,6 +1,6 @@
 [package]
 name = "ptc-otel"
-description = "OpenTelemetry for ai-ptc: the SpanExporter adapter (OTLP traces and logs), and the tracing subscriber the composition roots install."
+description = "OpenTelemetry for ai-ptc: the SpanExporter adapter (OTLP traces and logs), and the tracing subscriber the composition roots install, with service metrics."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,12 +12,13 @@ ptc-engine.workspace = true
 # Header names and values of the gRPC metadata.
 http = "1"
 # No default features: the SDK's internal logs go through `tracing`, and would be exported again.
-opentelemetry = { version = "0.33", default-features = false, features = ["trace", "logs"] }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "logs"] }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace", "logs", "metrics"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace", "logs", "metrics"] }
 # OTLP over gRPC (tonic) and over HTTP with protobuf (async reqwest), both with TLS.
 opentelemetry-otlp = { version = "0.33", default-features = false, features = [
     "trace",
     "logs",
+    "metrics",
     "grpc-tonic",
     "tls-aws-lc",
     "tls-roots",

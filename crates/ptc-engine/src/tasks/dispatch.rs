@@ -16,6 +16,8 @@
 
 use std::time::Duration;
 
+use tracing::Instrument as _;
+
 use ptc_core::{
     Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp,
     ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute,
@@ -25,12 +27,12 @@ use serde_json::json;
 use super::InFlight;
 use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
-use crate::payloads;
 use crate::ports::{
     BlobStore, ClaimedTask, Clock, Credentials, Dispatched, Entropy, JournalStore, ParkKind,
     ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskToken, TaskUpdate, ToolCall,
     ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind, WebhookSender,
 };
+use crate::{metrics, payloads};
 
 /// A call ready to be dispatched.
 struct Prepared {
@@ -108,20 +110,36 @@ where
             credentials,
             engine_webhook,
         } = prepared;
-        let dispatched = if engine_webhook {
-            self.webhook_builtin(&call).await
-        } else {
-            let in_flight = InFlight {
-                heartbeat_timeout: task.policy.heartbeat_timeout,
-                renewed_at: now,
-                deadline: task
-                    .policy
-                    .execution_timeout
-                    .map(|timeout| now.saturating_add(timeout)),
-            };
-            let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
-            self.dispatcher.dispatch(call, credentials).await
-        };
+        // The attempt span: a child of the tool call span, through the call's trace context.
+        let attempt = tracing::info_span!(
+            "tool_attempt",
+            task = %task.task,
+            attempt = task.attempt,
+            traceparent = call.trace_context.as_ref().map(|context| context.traceparent.as_str()),
+            histogram.ptc.tool_attempt.duration = tracing::field::Empty,
+            ptc.tool = task.tool.as_str(),
+            ptc.outcome = tracing::field::Empty,
+        );
+        let dispatched = async {
+            if engine_webhook {
+                self.webhook_builtin(&call).await
+            } else {
+                let in_flight = InFlight {
+                    heartbeat_timeout: task.policy.heartbeat_timeout,
+                    renewed_at: now,
+                    deadline: task
+                        .policy
+                        .execution_timeout
+                        .map(|timeout| now.saturating_add(timeout)),
+                };
+                let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
+                self.dispatcher.dispatch(call, credentials).await
+            }
+        }
+        .instrument(attempt.clone())
+        .await;
+        attempt.record(metrics::OUTCOME, metrics::attempt_outcome(&dispatched));
+        drop(attempt);
         self.settle(&task, &token, &record, dispatched).await
     }
 
@@ -451,6 +469,7 @@ where
                 let retry = task.policy.on_interruption == Interruption::Retry
                     && task.attempt < self.config.max_tool_attempts;
                 if retry {
+                    metrics::tool_retry(&task.tool);
                     self.retry_later(task, token).await?;
                 } else {
                     self.finish(task, token, ToolOutcome::Failure(failure))

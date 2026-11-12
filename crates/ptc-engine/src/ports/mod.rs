@@ -19,8 +19,10 @@
 //! | [`WebhookSender`] | memory, HTTP (`ptc-server`) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
-//! The ports with state have a conformance suite in the module `conformance` (feature
-//! `conformance`) that every adapter passes.
+//! The ports with state ([`JournalStore`], [`BlobStore`], [`ReadModel`], [`SecretStore`]) and
+//! [`SpanExporter`] have a conformance suite in the module `conformance` (feature
+//! `conformance`) that every adapter passes: five suites. A span exporter has no read side: its
+//! suite reads the backend through a collector the adapter's test provides.
 
 mod blob;
 mod checker;
