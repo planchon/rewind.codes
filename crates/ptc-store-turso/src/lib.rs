@@ -57,6 +57,9 @@ pub enum Error {
     /// A setting name reserved by the store.
     #[error("the setting {0:?} is reserved by the store")]
     ReservedSetting(String),
+    /// The operating system's random generator failed: no key or nonce can be drawn.
+    #[error("the operating system's random generator failed: {0}")]
+    Random(String),
     /// A stored value this build cannot read.
     #[error("corrupt stored value: {0}")]
     Corrupt(String),

@@ -1,16 +1,17 @@
 //! What the conformance suites cannot see: the database file itself. Its schema version and
-//! migrations, what survives a restart, the settings in `meta`, and secrets at rest.
+//! migrations, what survives a restart, the settings in `meta`, secrets at rest, and claims
+//! that read several pages of due tasks.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use ptc_core::{
     Digest, Epoch, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunStarted, RunStatus, Seed,
-    Timestamp,
+    Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use ptc_engine::ports::{
-    Activation, CreateRun, Credentials, JournalStore, NewRun, RunMetadata, RunRef, Secret,
-    SecretError, SecretOwner, SecretStore, ServerCredentials, TenantId,
+    Activation, CreateRun, Credentials, JournalStore, NewRun, NewToolTask, RunMetadata, RunRef,
+    Secret, SecretError, SecretOwner, SecretStore, ServerCredentials, TaskFilter, TenantId,
 };
 use ptc_store_turso::{Error, MasterKey, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
@@ -279,4 +280,59 @@ fn master_keys_are_generated_at_random() {
     let second = MasterKey::generate().expect("generate");
     assert_ne!(first, second);
     assert_eq!(MasterKey::from_bytes(first.to_bytes()), first);
+}
+
+#[tokio::test]
+async fn a_claim_reads_past_tasks_without_a_free_slot() {
+    let dir = TempDir::new().expect("temporary directory");
+    let store = open(&dir.path().join("journal.db")).await;
+    let new_run = NewRun {
+        run: run(),
+        started: started(),
+        metadata: RunMetadata::default(),
+        created_at: T0,
+    };
+    store.create_run(new_run, None).await.expect("create_run");
+    let lease = store
+        .acquire_run(&run(), "worker", T0, std::time::Duration::from_secs(30))
+        .await
+        .expect("acquire_run")
+        .expect("leasable");
+    // Forty calls of a tool limited to one call in flight, then one call of another tool: the
+    // second task to hand out is past the first page of due tasks.
+    let task = |seq: u32, tool: &str, concurrency: u32| {
+        let route = ToolRoute::Host { group: None };
+        let mut policy = ToolPolicy::default_for(&route);
+        policy.concurrency = concurrency;
+        NewToolTask {
+            seq: Seq(seq),
+            tool: tool.into(),
+            args: json!({ "seq": seq }).into(),
+            policy,
+            route,
+            server_concurrency: None,
+        }
+    };
+    let mut activation = Activation::new(Vec::new(), Vec::new(), RunStatus::Active);
+    activation.tool_calls = (1..=40).map(|seq| task(seq, "ask_user", 1)).collect();
+    activation.tool_calls.push(task(41, "notify", 16));
+    store
+        .commit_activation(&lease, activation, T0)
+        .await
+        .expect("commit");
+
+    let claimed = store
+        .claim_tool_tasks("worker", &TaskFilter::All, T0, 2)
+        .await
+        .expect("claim_tool_tasks");
+    let seqs: Vec<u32> = claimed.iter().map(|task| task.task.task.seq.0).collect();
+    assert_eq!(seqs, [1, 41]);
+    assert!(
+        store
+            .claim_tool_tasks("worker", &TaskFilter::All, T0, 10)
+            .await
+            .expect("claim_tool_tasks")
+            .is_empty(),
+        "every slot is taken"
+    );
 }

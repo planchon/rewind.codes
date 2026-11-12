@@ -9,6 +9,9 @@
 //!   across tenants, so `runs` is keyed by `id` (and indexed by tenant);
 //! - composite values are spread over columns (a run's quarantine, lease and trace context; a
 //!   task's route, policy and state), so that the store can query them;
+//! - a run keeps its oldest inbox item (`inbox_head`, received at `runnable_at`), and a task
+//!   when it can be claimed (`due_at`): the picks of `acquire_runnable` and `claim_tool_tasks`
+//!   read an index instead of grouping the inbox or scanning the tasks;
 //! - `data_keys` holds each tenant's data key, encrypted by the master key, apart from
 //!   `tenants`: a tenant without settings (the embedded `local`) still has secrets;
 //! - `tool_calls.result_shape` holds the shape of a result whose value was projected, which
@@ -88,6 +91,8 @@ CREATE TABLE runs (
     lease_owner TEXT,
     lease_until INTEGER,
     fence INTEGER NOT NULL,
+    inbox_head INTEGER,
+    runnable_at INTEGER,
     sticky_worker TEXT,
     labels TEXT NOT NULL,
     traceparent TEXT,
@@ -102,8 +107,12 @@ CREATE TABLE runs (
     UNIQUE (tenant, idempotency_key)
 ) STRICT;
 CREATE INDEX runs_by_tenant ON runs (tenant, created_at, id);
-CREATE INDEX runs_by_deadline ON runs (expires_at);
-CREATE INDEX runs_by_end ON runs (ended_at);
+CREATE INDEX runs_by_deadline ON runs (expires_at, id);
+CREATE INDEX runs_by_end ON runs (ended_at, tenant, id);
+CREATE INDEX runs_by_archive ON runs (archived_at, tenant, id);
+CREATE INDEX runs_runnable ON runs (inbox_head);
+CREATE INDEX runs_runnable_by_tenant ON runs (tenant, inbox_head);
+CREATE INDEX runs_runnable_by_sticky_worker ON runs (sticky_worker, inbox_head);
 
 CREATE TABLE history (
     run_id TEXT NOT NULL,
@@ -133,7 +142,7 @@ CREATE TABLE timers (
     fire_at INTEGER NOT NULL,
     PRIMARY KEY (run_id, seq)
 ) STRICT;
-CREATE INDEX timers_by_fire_at ON timers (fire_at);
+CREATE INDEX timers_by_fire_at ON timers (fire_at, run_id, seq);
 
 CREATE TABLE tool_tasks (
     run_id TEXT NOT NULL,
@@ -156,12 +165,16 @@ CREATE TABLE tool_tasks (
     lease_owner TEXT,
     lease_until INTEGER,
     next_attempt_at INTEGER,
+    due_at INTEGER,
     parked_kind TEXT,
     parked_reason TEXT,
     schema_change_approved INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY (run_id, seq)
 ) STRICT;
+CREATE INDEX tool_tasks_due ON tool_tasks (due_at, run_id, seq);
+CREATE INDEX tool_tasks_deferred ON tool_tasks (state, lease_until, run_id, seq);
+CREATE INDEX tool_tasks_by_owner ON tool_tasks (lease_owner, mcp_server);
 
 CREATE TABLE webhook_tokens (
     token TEXT PRIMARY KEY,

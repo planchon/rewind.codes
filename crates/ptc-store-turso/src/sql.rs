@@ -137,7 +137,12 @@ pub(crate) fn int(value: u64) -> Value {
 }
 
 pub(crate) fn ts(at: Timestamp) -> Value {
-    int(at.as_millis())
+    Value::Integer(millis(at))
+}
+
+/// A time as stored.
+pub(crate) fn millis(at: Timestamp) -> i64 {
+    i64::try_from(at.as_millis()).unwrap_or(i64::MAX)
 }
 
 pub(crate) fn opt_ts(at: Option<Timestamp>) -> Value {

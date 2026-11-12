@@ -57,8 +57,7 @@ impl From<Error> for SecretError {
 
 fn random_bytes<const N: usize>() -> Result<[u8; N], Error> {
     let mut bytes = [0u8; N];
-    getrandom::fill(&mut bytes)
-        .map_err(|err| Error::Database(format!("no random generator: {err}")))?;
+    getrandom::fill(&mut bytes).map_err(|err| Error::Random(err.to_string()))?;
     Ok(bytes)
 }
 

@@ -1,7 +1,7 @@
 //! `JournalStore` on Turso. The in-memory `MemoryJournal` of `ptc-engine` is the reference of
 //! every behavior here; both pass the same conformance suite.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use ptc_core::{
@@ -109,6 +109,9 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
     })
 }
 
+/// How many columns [`task_columns`] selects.
+const TASK_COLUMNS: usize = 23;
+
 /// A task as loaded, with what the claim needs besides the port's view.
 struct TaskRow {
     task: ToolTask,
@@ -173,8 +176,7 @@ fn epochs_clause(column: &str, epochs: &[Epoch], params: &mut Vec<Value>) -> Opt
 /// An unguessable token: `prefix` and 256 bits from the operating system's CSPRNG, in hex.
 fn random_token(prefix: &str) -> Result<String, StoreError> {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .map_err(|err| StoreError::Backend(format!("no random generator: {err}")))?;
+    getrandom::fill(&mut bytes).map_err(|err| StoreError::from(Error::Random(err.to_string())))?;
     let mut token = String::with_capacity(prefix.len() + 64);
     token.push_str(prefix);
     for byte in bytes {
@@ -264,6 +266,27 @@ async fn push_inbox(
         vec![run_id(run), text(codec::encode_trigger(trigger)), ts(now)],
     )
     .await?;
+    // The calls of a store never interleave: the last row inserted is this one.
+    let item = Value::Integer(connection.last_insert_rowid());
+    sql::execute(
+        connection,
+        "UPDATE runs SET inbox_head = ?, runnable_at = ? WHERE id = ? AND inbox_head IS NULL",
+        vec![item, ts(now), run_id(run)],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Points the run at its oldest inbox item again, after items were consumed.
+async fn refresh_inbox_head(connection: &Connection, run: RunId) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "UPDATE runs SET inbox_head = (SELECT MIN(id) FROM inbox WHERE run_id = ?1), \
+         runnable_at = (SELECT received_at FROM inbox WHERE run_id = ?1 ORDER BY id LIMIT 1) \
+         WHERE id = ?1",
+        vec![run_id(run)],
+    )
+    .await?;
     Ok(())
 }
 
@@ -293,7 +316,8 @@ async fn end_run(connection: &Connection, run: RunId) -> Result<(), Error> {
         "DELETE FROM inbox WHERE run_id = ?",
         "DELETE FROM webhook_tokens WHERE run_id = ?",
         "UPDATE runs SET quarantine_kind = NULL, quarantine_reason = NULL, \
-         quarantine_since = NULL, quarantine_retried_by = NULL WHERE id = ?",
+         quarantine_since = NULL, quarantine_retried_by = NULL, inbox_head = NULL, \
+         runnable_at = NULL WHERE id = ?",
     ] {
         sql::execute(connection, statement, vec![run_id(run)]).await?;
     }
@@ -338,6 +362,56 @@ async fn task_by_ref(connection: &Connection, task: &TaskRef) -> Result<Option<T
     row.map(|row| task_from_row(&row)).transpose()
 }
 
+/// The calls of a tool in flight in a run: claimed tasks whose claim has not expired, and
+/// deferred tasks.
+async fn tool_in_flight(
+    connection: &Connection,
+    (run, tool): &(RunId, String),
+    now: Timestamp,
+) -> Result<u32, Error> {
+    let row = sql::query_row(
+        connection,
+        "SELECT COUNT(*) FROM tool_tasks WHERE run_id = ? AND tool = ? \
+         AND ((state = 'claimed' AND lease_until > ?) OR state = 'deferred')",
+        vec![run_id(*run), text(tool.as_str()), ts(now)],
+    )
+    .await?;
+    row.map_or(Ok(0), |row| row.u32(0))
+}
+
+/// The calls in flight to an MCP server of a tenant under `owner`: its claims not expired.
+async fn server_in_flight(
+    connection: &Connection,
+    (owner_tenant, server): &(TenantId, String),
+    owner: &str,
+    now: Timestamp,
+) -> Result<u32, Error> {
+    let row = sql::query_row(
+        connection,
+        "SELECT COUNT(*) FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+         WHERE t.lease_owner = ? AND t.mcp_server = ? AND t.state = 'claimed' \
+         AND t.lease_until > ? AND r.tenant = ?",
+        vec![
+            text(owner),
+            text(server.as_str()),
+            ts(now),
+            tenant(owner_tenant),
+        ],
+    )
+    .await?;
+    row.map_or(Ok(0), |row| row.u32(0))
+}
+
+/// When a task in `state` can be claimed: a ready task at its next attempt, a claimed one once
+/// its claim expires.
+fn due_at(state: &TaskState) -> Option<Timestamp> {
+    match state {
+        TaskState::Ready { next_attempt_at } => Some(*next_attempt_at),
+        TaskState::Claimed { until, .. } => Some(*until),
+        TaskState::Approval | TaskState::Deferred { .. } | TaskState::Parked(_) => None,
+    }
+}
+
 /// Sets a task's state, with the columns that go with it.
 async fn set_task_state(
     connection: &Connection,
@@ -363,13 +437,15 @@ async fn set_task_state(
     sql::execute(
         connection,
         "UPDATE tool_tasks SET state = ?, token = ?, next_attempt_at = ?, lease_owner = ?, \
-         lease_until = ?, parked_kind = ?, parked_reason = ? WHERE run_id = ? AND seq = ?",
+         lease_until = ?, due_at = ?, parked_kind = ?, parked_reason = ? \
+         WHERE run_id = ? AND seq = ?",
         vec![
             text(state.name()),
             opt_text(token),
             opt_ts(next_attempt_at),
             opt_text(owner),
             opt_ts(until),
+            opt_ts(due_at(state)),
             opt_text(parked_kind),
             opt_text(parked_reason),
             run_id(task.run.id),
@@ -723,75 +799,66 @@ impl JournalStore for TursoStore {
         let connection = &*connection;
         transaction(connection, async {
             let now = request.now;
-            let mut params = vec![ts(now)];
-            let Some(epochs) = epochs_clause("r.epoch", request.epochs, &mut params) else {
+            let mut eligible_params = vec![ts(now)];
+            let Some(epochs) = epochs_clause("epoch", request.epochs, &mut eligible_params) else {
                 return Ok(None);
             };
-            let scope = scope_clause("r.tenant", request.tenants, &mut params);
-            let query = format!(
-                "SELECT r.tenant, r.id, r.sticky_worker, r.fence, o.oldest, i.received_at \
-                 FROM (SELECT run_id, MIN(id) AS oldest FROM inbox GROUP BY run_id) o \
-                 JOIN inbox i ON i.id = o.oldest \
-                 JOIN runs r ON r.id = o.run_id \
-                 WHERE r.status NOT IN {terminal} AND r.quarantine_kind IS NULL \
-                 AND (r.lease_until IS NULL OR r.lease_until <= ?) AND {epochs} AND {scope}",
+            let scope = scope_clause("tenant", request.tenants, &mut eligible_params);
+            let eligible = format!(
+                "inbox_head > 0 AND status NOT IN {terminal} AND quarantine_kind IS NULL \
+                 AND (lease_until IS NULL OR lease_until <= ?) AND {epochs} AND {scope}",
                 terminal = terminal!(),
             );
-            struct Eligible {
-                run: RunRef,
-                sticky: Option<String>,
-                fence: u64,
-                oldest: u64,
-                received_at: Timestamp,
-            }
-            let eligible = sql::query_dynamic(connection, &query, params)
-                .await?
-                .iter()
-                .map(|row| {
-                    Ok(Eligible {
-                        run: RunRef::new(row.tenant(0)?, row.run_id(1)?),
-                        sticky: row.opt_text(2)?,
-                        fence: row.u64(3)?,
-                        oldest: row.u64(4)?,
-                        received_at: row.ts(5)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, Error>>()?;
-
-            let mine = eligible
-                .iter()
-                .filter(|run| run.sticky.as_deref() == Some(request.owner))
-                .min_by_key(|run| run.oldest);
-            let chosen = match mine {
-                Some(run) => Some(run),
-                None => {
-                    let open: Vec<&Eligible> = eligible
-                        .iter()
-                        .filter(|run| {
-                            run.sticky.is_none()
-                                || run.received_at.saturating_add(request.sticky_grace) <= now
-                        })
-                        .collect();
-                    let tenants: BTreeSet<&TenantId> =
-                        open.iter().map(|run| &run.run.tenant).collect();
-                    let tenants: Vec<&TenantId> = tenants.into_iter().collect();
-                    if tenants.is_empty() {
-                        None
-                    } else {
-                        let drawn = tenants[(request.draw % tenants.len() as u64) as usize];
-                        open.into_iter()
-                            .filter(|run| &run.run.tenant == drawn)
-                            .min_by_key(|run| run.oldest)
-                    }
-                }
+            let pick = |rows: Vec<Row>| -> Result<Option<(RunRef, u64)>, Error> {
+                rows.first()
+                    .map(|row| Ok((RunRef::new(row.tenant(0)?, row.run_id(1)?), row.u64(2)?)))
+                    .transpose()
             };
-            let Some(chosen) = chosen else {
+
+            // The caller's own runs first, as their sticky worker: oldest inbox item first.
+            let mut params = eligible_params.clone();
+            params.push(text(request.owner));
+            let query = format!(
+                "SELECT tenant, id, fence FROM runs WHERE {eligible} AND sticky_worker = ? \
+                 ORDER BY inbox_head LIMIT 1"
+            );
+            let mut chosen = pick(sql::query_dynamic(connection, &query, params).await?)?;
+
+            if chosen.is_none() {
+                // Then the runs without a sticky worker, or whose oldest item waited the grace:
+                // a tenant drawn among those with such runs, and its oldest one.
+                let grace_end =
+                    sql::millis(now).saturating_sub(sql::duration_ms(request.sticky_grace));
+                let open = format!("{eligible} AND (sticky_worker IS NULL OR runnable_at <= ?)");
+                let mut params = eligible_params.clone();
+                params.push(Value::Integer(grace_end));
+                // Read through the index of runnable runs, not the whole table; ordered here.
+                let query = format!(
+                    "SELECT DISTINCT tenant FROM runs INDEXED BY runs_runnable WHERE {open}"
+                );
+                let mut tenants = sql::query_dynamic(connection, &query, params.clone())
+                    .await?
+                    .iter()
+                    .map(|row| row.text(0))
+                    .collect::<Result<Vec<_>, Error>>()?;
+                tenants.sort_unstable();
+                if !tenants.is_empty() {
+                    let drawn = (request.draw % tenants.len() as u64) as usize;
+                    params.push(text(tenants.swap_remove(drawn)));
+                    let query = format!(
+                        "SELECT tenant, id, fence FROM runs WHERE {open} AND tenant = ? \
+                         ORDER BY inbox_head LIMIT 1"
+                    );
+                    chosen = pick(sql::query_dynamic(connection, &query, params).await?)?;
+                }
+            }
+            let Some((run, fence)) = chosen else {
                 return Ok(None);
             };
             let lease = take_lease(
                 connection,
-                chosen.run.clone(),
-                chosen.fence,
+                run,
+                fence,
                 request.owner,
                 now,
                 request.lease_duration,
@@ -1021,21 +1088,25 @@ impl JournalStore for TursoStore {
                 )
                 .await?;
             }
+            if !activation.consumed.is_empty() {
+                refresh_inbox_head(connection, id).await?;
+            }
             for task in &activation.tool_calls {
                 let (args_digest, args) = codec::payload_columns(&task.args);
-                let state = if task.policy.approval {
-                    "approval"
+                // A task waits for its approval, or is ready, and due, at once.
+                let (state, ready_at) = if task.policy.approval {
+                    ("approval", Value::Null)
                 } else {
-                    "ready"
+                    ("ready", ts(now))
                 };
                 sql::execute(
                     connection,
                     "INSERT OR REPLACE INTO tool_tasks (run_id, seq, tool, route, mcp_server, \
                      dispatched, args_digest, args, on_interruption, approval, \
                      execution_timeout_ms, heartbeat_timeout_ms, concurrency, server_concurrency, \
-                     state, attempt, token, lease_owner, lease_until, next_attempt_at, parked_kind, \
-                     parked_reason, schema_change_approved, created_at) \
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, \
+                     state, attempt, token, lease_owner, lease_until, next_attempt_at, due_at, \
+                     parked_kind, parked_reason, schema_change_approved, created_at) \
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, NULL, ?, ?, \
                      NULL, NULL, 0, ?)",
                     vec![
                         run_id(id),
@@ -1054,11 +1125,8 @@ impl JournalStore for TursoStore {
                         task.server_concurrency
                             .map_or(Value::Null, |max| int(u64::from(max))),
                         text(state),
-                        if task.policy.approval {
-                            Value::Null
-                        } else {
-                            ts(now)
-                        },
+                        ready_at.clone(),
+                        ready_at,
                         ts(now),
                     ],
                 )
@@ -1365,39 +1433,12 @@ impl JournalStore for TursoStore {
         let connection = self.connection().await?;
         let connection = &*connection;
         transaction(connection, async {
-            // Calls in flight, per (run, tool) and per (tenant, MCP server) under this owner.
-            let mut per_tool: HashMap<(RunId, String), u32> = HashMap::new();
-            for row in sql::query(
-                connection,
-                "SELECT run_id, tool, COUNT(*) FROM tool_tasks \
-                 WHERE (state = 'claimed' AND lease_until > ?) OR state = 'deferred' \
-                 GROUP BY run_id, tool",
-                vec![ts(now)],
-            )
-            .await?
-            {
-                per_tool.insert((row.run_id(0)?, row.text(1)?), row.u32(2)?);
-            }
-            let mut per_server: HashMap<(TenantId, String), u32> = HashMap::new();
-            for row in sql::query(
-                connection,
-                "SELECT r.tenant, t.mcp_server, COUNT(*) FROM tool_tasks t \
-                 JOIN runs r ON r.id = t.run_id \
-                 WHERE t.state = 'claimed' AND t.lease_owner = ? AND t.lease_until > ? \
-                 AND t.mcp_server IS NOT NULL GROUP BY r.tenant, t.mcp_server",
-                vec![text(owner), ts(now)],
-            )
-            .await?
-            {
-                per_server.insert((row.tenant(0)?, row.text(1)?), row.u32(2)?);
-            }
-
-            let mut params = vec![ts(now), ts(now)];
+            let mut filter_params = Vec::new();
             let selection = match filter {
                 TaskFilter::All => "1 = 1".to_owned(),
                 TaskFilter::Dispatched { tenants } => format!(
                     "t.dispatched = 1 AND {}",
-                    scope_clause("r.tenant", tenants, &mut params)
+                    scope_clause("r.tenant", tenants, &mut filter_params)
                 ),
                 TaskFilter::Host {
                     tenant: host_tenant,
@@ -1405,78 +1446,138 @@ impl JournalStore for TursoStore {
                     tools,
                 } => {
                     let mut clause = "t.dispatched = 0 AND r.tenant = ?".to_owned();
-                    params.push(tenant(host_tenant));
+                    filter_params.push(tenant(host_tenant));
                     if let Some(toolset) = toolset {
                         clause.push_str(" AND r.toolset = ?");
-                        params.push(digest(*toolset));
+                        filter_params.push(digest(*toolset));
                     }
                     if !tools.is_empty() {
                         clause.push_str(&format!(" AND t.tool IN ({})", placeholders(tools.len())));
-                        params.extend(tools.iter().map(|tool| text(tool.as_str())));
+                        filter_params.extend(tools.iter().map(|tool| text(tool.as_str())));
                     }
                     clause
                 }
             };
-            let query = format!(
-                "SELECT {columns} FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
-                 WHERE ((t.state = 'ready' AND t.next_attempt_at <= ?) \
-                 OR (t.state = 'claimed' AND t.lease_until <= ?)) \
-                 AND r.status NOT IN {terminal} AND {selection} \
-                 ORDER BY CASE t.state WHEN 'ready' THEN t.next_attempt_at ELSE t.lease_until END, \
-                 t.run_id, t.seq",
+            // Due tasks are read a page at a time, in the order they became due: a task
+            // without a free concurrency slot is skipped, so a claim may read past `max`.
+            let page = max.saturating_mul(2).max(32);
+            let first_page = format!(
+                "SELECT {columns}, t.due_at FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                 WHERE t.due_at <= ? AND r.status NOT IN {terminal} AND {selection} \
+                 ORDER BY t.due_at, t.run_id, t.seq LIMIT ?",
                 columns = task_columns!(),
                 terminal = terminal!(),
             );
-            let due = sql::query_dynamic(connection, &query, params).await?;
+            let next_page = format!(
+                "SELECT {columns}, t.due_at FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                 WHERE t.due_at <= ? AND r.status NOT IN {terminal} AND {selection} \
+                 AND (t.due_at > ? OR (t.due_at = ? AND (t.run_id > ? \
+                      OR (t.run_id = ? AND t.seq > ?)))) \
+                 ORDER BY t.due_at, t.run_id, t.seq LIMIT ?",
+                columns = task_columns!(),
+                terminal = terminal!(),
+            );
 
+            // Calls in flight, per (run, tool) and per (tenant, MCP server) under this owner,
+            // counted the first time a due task needs them, then kept up to date here.
+            let mut per_tool: HashMap<(RunId, String), u32> = HashMap::new();
+            let mut per_server: HashMap<(TenantId, String), u32> = HashMap::new();
             let mut claimed = Vec::new();
-            for row in &due {
-                if claimed.len() >= max {
+            let mut after: Option<(Value, RunId, Seq)> = None;
+            'pages: loop {
+                let mut params = vec![ts(now)];
+                params.extend(filter_params.iter().cloned());
+                let query = match &after {
+                    None => &first_page,
+                    Some((due_at, run, seq)) => {
+                        params.extend([
+                            due_at.clone(),
+                            due_at.clone(),
+                            run_id(*run),
+                            run_id(*run),
+                            int(u64::from(seq.0)),
+                        ]);
+                        &next_page
+                    }
+                };
+                params.push(limit(page));
+                let due = sql::query_dynamic(connection, query, params).await?;
+                for row in &due {
+                    if claimed.len() >= max {
+                        break 'pages;
+                    }
+                    let TaskRow {
+                        mut task,
+                        server_concurrency,
+                        mcp_server,
+                    } = task_from_row(row)?;
+                    after = Some((row.column(TASK_COLUMNS)?, task.task.run.id, task.task.seq));
+
+                    let tool_key = (task.task.run.id, task.tool.clone());
+                    let in_flight = match per_tool.get(&tool_key) {
+                        Some(count) => *count,
+                        None => {
+                            let count = tool_in_flight(connection, &tool_key, now).await?;
+                            per_tool.insert(tool_key.clone(), count);
+                            count
+                        }
+                    };
+                    if in_flight >= task.policy.concurrency {
+                        continue;
+                    }
+                    let server_key =
+                        mcp_server.map(|server| (task.task.run.tenant.clone(), server));
+                    if let (Some(key), Some(max_in_flight)) = (&server_key, server_concurrency) {
+                        let in_flight = match per_server.get(key) {
+                            Some(count) => *count,
+                            None => {
+                                let count = server_in_flight(connection, key, owner, now).await?;
+                                per_server.insert(key.clone(), count);
+                                count
+                            }
+                        };
+                        if in_flight >= max_in_flight {
+                            continue;
+                        }
+                    }
+                    *per_tool.entry(tool_key).or_default() += 1;
+                    if let Some(key) = server_key {
+                        *per_server.entry(key).or_default() += 1;
+                    }
+
+                    let previous_claim_expired = matches!(task.state, TaskState::Claimed { .. });
+                    let token = random_token("ptc_tt_")?;
+                    let until = now.saturating_add(task.policy.heartbeat_timeout);
+                    task.attempt += 1;
+                    task.state = TaskState::Claimed {
+                        owner: owner.to_owned(),
+                        until,
+                    };
+                    sql::execute(
+                        connection,
+                        "UPDATE tool_tasks SET state = 'claimed', token = ?, attempt = ?, \
+                         lease_owner = ?, lease_until = ?, due_at = ?, next_attempt_at = NULL, \
+                         parked_kind = NULL, parked_reason = NULL WHERE run_id = ? AND seq = ?",
+                        vec![
+                            text(token.as_str()),
+                            int(u64::from(task.attempt)),
+                            text(owner),
+                            ts(until),
+                            ts(until),
+                            run_id(task.task.run.id),
+                            int(u64::from(task.task.seq.0)),
+                        ],
+                    )
+                    .await?;
+                    claimed.push(ClaimedTask {
+                        task,
+                        token: TaskToken(token),
+                        previous_claim_expired,
+                    });
+                }
+                if due.len() < page {
                     break;
                 }
-                let TaskRow {
-                    mut task,
-                    server_concurrency,
-                    mcp_server,
-                } = task_from_row(row)?;
-                let tool_key = (task.task.run.id, task.tool.clone());
-                if per_tool.get(&tool_key).copied().unwrap_or(0) >= task.policy.concurrency {
-                    continue;
-                }
-                let server_key = mcp_server.map(|server| (task.task.run.tenant.clone(), server));
-                if let (Some(key), Some(max)) = (&server_key, server_concurrency)
-                    && per_server.get(key).copied().unwrap_or(0) >= max
-                {
-                    continue;
-                }
-                *per_tool.entry(tool_key).or_default() += 1;
-                if let Some(key) = server_key {
-                    *per_server.entry(key).or_default() += 1;
-                }
-
-                let previous_claim_expired = matches!(task.state, TaskState::Claimed { .. });
-                let token = random_token("ptc_tt_")?;
-                task.attempt += 1;
-                task.state = TaskState::Claimed {
-                    owner: owner.to_owned(),
-                    until: now.saturating_add(task.policy.heartbeat_timeout),
-                };
-                set_task_state(connection, &task.task, &task.state, Some(&token)).await?;
-                sql::execute(
-                    connection,
-                    "UPDATE tool_tasks SET attempt = ? WHERE run_id = ? AND seq = ?",
-                    vec![
-                        int(u64::from(task.attempt)),
-                        run_id(task.task.run.id),
-                        int(u64::from(task.task.seq.0)),
-                    ],
-                )
-                .await?;
-                claimed.push(ClaimedTask {
-                    task,
-                    token: TaskToken(token),
-                    previous_claim_expired,
-                });
             }
             Ok(claimed)
         })
@@ -1667,11 +1768,11 @@ impl JournalStore for TursoStore {
                 vec![tenant(owner), digest(*toolset)],
             ),
         };
-        params.insert(0, ts(now));
+        params.splice(0..0, [ts(now), ts(now)]);
         let query = format!(
-            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = ?, parked_kind = NULL, \
-             parked_reason = NULL WHERE state = 'parked' AND parked_kind = 'credentials_expired' \
-             AND run_id IN ({runs})"
+            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = ?, due_at = ?, \
+             parked_kind = NULL, parked_reason = NULL \
+             WHERE state = 'parked' AND parked_kind = 'credentials_expired' AND run_id IN ({runs})"
         );
         let resumed = sql::execute(&connection, &query, params).await?;
         Ok(usize::try_from(resumed).unwrap_or(usize::MAX))
@@ -1995,7 +2096,8 @@ impl JournalStore for TursoStore {
             }
             sql::execute(
                 connection,
-                "UPDATE runs SET archive_document = ?, archived_at = ? WHERE id = ?",
+                "UPDATE runs SET archive_document = ?, archived_at = ?, inbox_head = NULL, \
+                 runnable_at = NULL WHERE id = ?",
                 vec![digest(document), ts(now), run_id(run.id)],
             )
             .await?;
