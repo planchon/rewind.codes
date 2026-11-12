@@ -286,7 +286,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `ptc-e2e replay <case>` |
 | `evals` | tooling | eval suite driving the `ptc` CLI: tasks, fake MCP servers, reports |
 | `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools |
-| `dashboard` | client | React single-page application over the public HTTP API |
+| `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
 One `ptc` binary holds both composition roots. The `ptc` crate is that binary: it depends on
 `ptc-cli` and `ptc-server` and only dispatches the command line. The CLI's code never calls
@@ -492,3 +492,22 @@ Exit codes:
 | 65 | Script refused at start |
 | 70 | Internal error |
 | 130 | Interrupted by a second Ctrl-C |
+
+## Dashboard
+
+`dashboard/` is the React single-page application of [05](05-testing-and-observability.md#dashboard):
+Vite, strict TypeScript, pnpm. Its types are generated from `api/openapi.json`, and it calls only the
+public API.
+
+Its build is what `ptc-server` serves:
+
+| | |
+| --- | --- |
+| Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
+| Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `ptc-server` embeds the directory when it is compiled |
+| Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
+| API | `/v1` on the same origin. Only `GET` requests, so a `reader` key is enough. The operator types the key; the browser keeps it for the tab, or on the device when asked |
+| Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
+| Resources | None from another origin: the fonts are in the build. No inline script |
+
+`dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.

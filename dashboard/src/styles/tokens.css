@@ -1,0 +1,167 @@
+/* Design tokens. Light by default; dark from the system unless the viewer picked light, or when
+   the viewer picked dark. Status colors are reserved for run and call states and always come
+   with a glyph and a word. */
+
+:root {
+  color-scheme: light;
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --bg: #f3f2ee;
+  --surface: #ffffff;
+  --surface-2: #f8f7f4;
+  --surface-3: #eeede8;
+  --line: #e1dfd8;
+  --line-strong: #c9c6bc;
+  --ink: #1a1915;
+  --ink-2: #55534c;
+  --ink-3: #87857c;
+  --brand: #059669;
+
+  --accent: #1f5fcc;
+  --accent-ink: #ffffff;
+  --accent-soft: #e4ecfa;
+  --accent-line: #b9cdf2;
+  --focus: #1f5fcc;
+
+  --good: #0c8f3d;
+  --good-soft: #e2f3e8;
+  --critical: #c8322f;
+  --critical-soft: #fbe8e6;
+  --serious: #c45a1c;
+  --serious-soft: #fcecdf;
+  --warning: #b07800;
+  --warning-mark: #e9a300;
+  --warning-soft: #fbf1d6;
+  --info: #1f5fcc;
+  --info-soft: #e4ecfa;
+  --neutral: #77756d;
+  --neutral-soft: #ecebe6;
+
+  --series-call: #2a78d6;
+  --series-timer: #b77a00;
+  --series-signal: #6250d6;
+  --series-log: #87857c;
+
+  --code-bg: #fdfcfa;
+  --code-gutter: #f6f5f1;
+  --tok-keyword: #8b2fa8;
+  --tok-string: #2b7a3b;
+  --tok-number: #b4501a;
+  --tok-comment: #8e8c83;
+  --tok-type: #0d6f7a;
+  --tok-def: #1f4fb0;
+  --tok-prop: #3d3b35;
+  --tok-punct: #6f6d65;
+
+  --shadow-pop: 0 6px 24px rgb(20 18 12 / 0.14), 0 1px 3px rgb(20 18 12 / 0.12);
+  --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(0 0 0 / 0.08) 3px 5px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110;
+    --surface: #191917;
+    --surface-2: #1e1e1c;
+    --surface-3: #282825;
+    --line: #2d2d2a;
+    --line-strong: #44433e;
+    --ink: #ecebe5;
+    --ink-2: #b4b2a8;
+    --ink-3: #807e75;
+    --brand: #10b981;
+
+    --accent: #6ea2f2;
+    --accent-ink: #0d1420;
+    --accent-soft: #1a2638;
+    --accent-line: #2f4a72;
+    --focus: #6ea2f2;
+
+    --good: #3fbf6a;
+    --good-soft: #15291c;
+    --critical: #f0706b;
+    --critical-soft: #36191a;
+    --serious: #ee9058;
+    --serious-soft: #35231a;
+    --warning: #f0b93a;
+    --warning-mark: #f0b93a;
+    --warning-soft: #33290f;
+    --info: #6ea2f2;
+    --info-soft: #1a2638;
+    --neutral: #98968c;
+    --neutral-soft: #262624;
+
+    --series-call: #3987e5;
+    --series-timer: #c98500;
+    --series-signal: #9085e9;
+    --series-log: #807e75;
+
+    --code-bg: #161614;
+    --code-gutter: #1b1b19;
+    --tok-keyword: #d18ce6;
+    --tok-string: #8fcf8f;
+    --tok-number: #f0a36b;
+    --tok-comment: #7b796f;
+    --tok-type: #6fc7cf;
+    --tok-def: #8db4f5;
+    --tok-prop: #d6d4cc;
+    --tok-punct: #9a988e;
+
+    --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+    --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(255 255 255 / 0.1) 3px 5px);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110;
+  --surface: #191917;
+  --surface-2: #1e1e1c;
+  --surface-3: #282825;
+  --line: #2d2d2a;
+  --line-strong: #44433e;
+  --ink: #ecebe5;
+  --ink-2: #b4b2a8;
+  --ink-3: #807e75;
+  --brand: #10b981;
+
+  --accent: #6ea2f2;
+  --accent-ink: #0d1420;
+  --accent-soft: #1a2638;
+  --accent-line: #2f4a72;
+  --focus: #6ea2f2;
+
+  --good: #3fbf6a;
+  --good-soft: #15291c;
+  --critical: #f0706b;
+  --critical-soft: #36191a;
+  --serious: #ee9058;
+  --serious-soft: #35231a;
+  --warning: #f0b93a;
+  --warning-mark: #f0b93a;
+  --warning-soft: #33290f;
+  --info: #6ea2f2;
+  --info-soft: #1a2638;
+  --neutral: #98968c;
+  --neutral-soft: #262624;
+
+  --series-call: #3987e5;
+  --series-timer: #c98500;
+  --series-signal: #9085e9;
+  --series-log: #807e75;
+
+  --code-bg: #161614;
+  --code-gutter: #1b1b19;
+  --tok-keyword: #d18ce6;
+  --tok-string: #8fcf8f;
+  --tok-number: #f0a36b;
+  --tok-comment: #7b796f;
+  --tok-type: #6fc7cf;
+  --tok-def: #8db4f5;
+  --tok-prop: #d6d4cc;
+  --tok-punct: #9a988e;
+
+  --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(255 255 255 / 0.1) 3px 5px);
+}

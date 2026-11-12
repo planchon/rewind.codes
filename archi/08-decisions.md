@@ -242,3 +242,16 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Host tools: a retryable failure is retried under `retry` with attempts left, otherwise delivered as `unavailable`; a non-retryable one as `error`. A deferral ends at the run's deadline, or earlier at the requested timeout or the tool's execution timeout from now. A token of another tenant is gone | Keeping the worker's failure kind | The API's failure carries no kind. The claim's start is not stored, so an execution timeout cannot be counted from it. |
 | A result above `max_payload_bytes` fails a dispatched call with `error`, and is refused when a host worker completes (413) | Storing it | The script could not hold it within its limits; the worker can still fail the task. |
 | `RoutingDispatcher { mcp, builtins, host }` sends each call to the dispatcher of its route; `Unrouted` fails the calls of a route without one (`unavailable`) | One dispatcher for every route | Composition roots plug `ptc-mcp`, `ptc-http` and mocks per route; host tools only reach a dispatcher in mock mode. |
+
+### Taken while building the dashboard (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| React 19, Vite, TypeScript 7 in strict mode, pnpm; types from `openapi-typescript`, calls through `openapi-fetch`, caching with TanStack Query, routes with React Router; Biome for lint and format | A hand-written client; ESLint | The generated types follow the API's diff. `typescript-eslint` needs TypeScript 5's compiler API, which TypeScript 7 does not have. |
+| Routes in the URL fragment and relative paths in the build; `dashboard/dist/` is not committed, `ptc-server` embeds it when compiled | History routes with a fallback route on the server; committing the build | The server serves a plain directory under any prefix. Hashed build files would change in every diff. |
+| The event stream is read with `fetch` and `eventsource-parser`, resumed with `from` after a drop | `EventSource` | `EventSource` cannot send the `Authorization` header. |
+| The operator types an API key; it stays in `sessionStorage`, or `localStorage` when asked; the dashboard only sends `GET` | A login page and a cookie on the server | The API has no session: a cookie would be a second way in. A `reader` key is enough. |
+| The timeline compresses a gap into a marked break when it is longer than 30 s and four times longer than all the shorter gaps together | A linear or a logarithmic axis | A run that sleeps 10 days must still show its 300 ms calls, and a slow call must still look slow. |
+| The source is highlighted with Lezer's TypeScript grammar | Shiki; Monaco | Small and synchronous, and it gives tokens line by line, which the notes beside each line need. |
+| The mocked API is a set of MSW handlers over fixtures: vitest runs them with `msw/node`, and `pnpm dev:mock` serves them from the Vite dev server | MSW's service worker | Nothing of the mock reaches the build. |
+| IBM Plex Sans and Mono are bundled from `@fontsource`, Latin only | Fonts from a CDN; system fonts | The dashboard loads nothing from another origin, and looks the same on every machine. |

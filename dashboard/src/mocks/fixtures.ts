@@ -1,0 +1,806 @@
+// A small world of scripts and runs for the mocked API: every status, a quarantine, a fork, a
+// ten-day sleep, retries, a payload above the inline limit and, for `pnpm dev:mock`, a run that
+// goes on live. Times are relative to `now`.
+import type { Labels, Quarantine, Waiting } from "../api/types";
+import { fakeDigest, JournalBuilder } from "./journal";
+
+const SECOND = 1_000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+export interface ScriptFixture {
+  name: string;
+  digest: string;
+  source: string;
+}
+
+export interface RunFixture {
+  id: string;
+  script: ScriptFixture;
+  toolset: string;
+  labels: Labels;
+  journal: JournalBuilder;
+  parent?: { run: string; at?: number | null };
+  quarantine?: Quarantine;
+  /** Where `fail_run` happened, for `Run.error.location`. */
+  errorAt?: { line: number; column: number };
+  /** The `seq` of the call whose failure failed the run. */
+  failedSeq?: number;
+  /** States of calls in flight, by `seq`, when they are not simply `claimed`. */
+  taskStates?: Record<number, Pick<Extract<Waiting, { kind: "tool_call" }>, "state" | "parked">>;
+  /** Dispatcher attempts beyond the first, by `seq`. */
+  retries?: Record<number, number>;
+}
+
+export interface World {
+  now: number;
+  scripts: ScriptFixture[];
+  runs: RunFixture[];
+  payloads: Map<string, unknown>;
+  /** When set, every request must carry `Authorization: Bearer <requireKey>`. */
+  requireKey?: string;
+  embedded: boolean;
+}
+
+function script(name: string, source: string): ScriptFixture {
+  return { name, source, digest: fakeDigest(source) };
+}
+
+const TRIAGE = script(
+  "triage.ts",
+  `import { github, slack } from "ptc:tools";
+import { sleep, signal } from "ptc";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+  console.log(\`\${stale.length} of \${issues.length} open issues are stale\`);
+
+  await slack.post_message({ channel: "#triage", text: \`\${stale.length} stale issues in \${input.repo}\` });
+
+  const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+  if (!decision?.close) return { closed: 0 };
+
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+
+  await sleep("10d");
+  const reopened = await github.list_issues({ repo: input.repo, state: "open", labels: "reopened" });
+  return { closed: stale.length, reopened: reopened.length };
+}
+`,
+);
+
+const TRIAGE_FIXED = script(
+  "triage.ts",
+  `import { github, slack } from "ptc:tools";
+import { sleep, signal } from "ptc";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+  console.log(\`\${stale.length} of \${issues.length} open issues are stale\`);
+
+  await slack.post_message({ channel: "#triage", text: \`\${stale.length} stale issues in \${input.repo}\` });
+
+  const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+  if (!decision?.close) return { closed: 0 };
+
+  const results = await Promise.allSettled(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+  const failed = results.filter((r) => r.status === "rejected").length;
+  if (failed > 0) console.warn(\`\${failed} issues could not be closed\`);
+
+  return { closed: results.length - failed, failed };
+}
+`,
+);
+
+const DIGEST = script(
+  "digest.ts",
+  `import { github, llm, slack } from "ptc:tools";
+
+export default async function main(input: { repos: string[]; channel: string }) {
+  const prs = [];
+  for (const repo of input.repos) {
+    const page = await github.list_pull_requests({ repo, state: "closed", since: "7d" });
+    prs.push(...page.filter((pr) => pr.merged_at));
+  }
+  console.info(\`summarising \${prs.length} merged pull requests\`);
+
+  const summary = await llm.complete({
+    model: "claude-haiku-5-5",
+    prompt: \`Summarise these changes for the team:\\n\${prs.map((p) => \`- \${p.title}\`).join("\\n")}\`,
+  });
+
+  const posted = await slack.post_message({ channel: input.channel, text: summary.text });
+  return { prs: prs.length, ts: posted.ts };
+}
+`,
+);
+
+const ONBOARDING = script(
+  "onboarding.ts",
+  `import { ask_user, crm } from "ptc:tools";
+import { sleep } from "ptc";
+
+export default async function main(input: { email: string }) {
+  const account = await crm.find_account({ email: input.email });
+  if (!account) {
+    const answer = await ask_user({ question: \`No account for \${input.email}. Create one?\` });
+    if (answer !== "yes") return { created: false };
+  }
+  let attempt = 0;
+  while (true) {
+    try {
+      return await crm.provision({ email: input.email, plan: account?.plan ?? "trial" });
+    } catch (e) {
+      if (++attempt === 3) throw e;
+      console.warn(\`provision failed (\${attempt}/3), retrying in 1m\`);
+      await sleep("1m");
+    }
+  }
+}
+`,
+);
+
+const FORECAST = script(
+  "forecast.ts",
+  `// One-shot lookup started by the support agent.
+import { weather } from "ptc:tools";
+
+export default async function main(input: { city: string }) {
+  const forecast = await weather.forecast({ city: input.city, days: 3 });
+  return forecast.days[0];
+}
+`,
+);
+
+export const SCRIPTS = { TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST };
+
+const TOOLSET_GITHUB = fakeDigest("toolset:github,slack");
+const TOOLSET_DIGEST = fakeDigest("toolset:github,llm,slack");
+const TOOLSET_CRM = fakeDigest("toolset:ask_user,crm");
+const TOOLSET_WEATHER = fakeDigest("toolset:weather");
+
+/** A deterministic UUID v7 for a run started at `at`. */
+export function runId(at: number, n: number): string {
+  const hex = Math.max(0, Math.floor(at)).toString(16).padStart(12, "0").slice(-12);
+  const rand = fakeDigest(`run-${n}-${at}`);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-7${rand.slice(0, 3)}-a${rand.slice(3, 6)}-${rand.slice(6, 18)}`;
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4_294_967_296;
+  };
+}
+
+function issues(count: number, now: number, pad = 0) {
+  return Array.from({ length: count }, (_, i) => ({
+    number: 4100 + i,
+    title: `Issue ${4100 + i}: ${["flaky test in ci", "docs typo", "panic on empty body", "slow query"][i % 4]}`,
+    updated_at: new Date(now - (i % 3 === 0 ? 45 : 3) * DAY).toISOString(),
+    body: pad > 0 ? "x".repeat(pad) : undefined,
+  }));
+}
+
+export interface WorldOptions {
+  now: number;
+  /** Adds a run whose entries keep arriving after `now`, for `pnpm dev:mock`. */
+  live?: boolean;
+  requireKey?: string;
+  embedded?: boolean;
+}
+
+export function createWorld(options: WorldOptions): World {
+  const { now } = options;
+  const runs: RunFixture[] = [];
+  let n = 0;
+  const run = (
+    start: number,
+    s: ScriptFixture,
+    toolset: string,
+    labels: Labels,
+    input: unknown,
+    extra: Partial<RunFixture> = {},
+    mode: "live" | "mock" = "live",
+  ): RunFixture => {
+    n += 1;
+    const journal = new JournalBuilder(start).started({
+      script: s.digest,
+      toolset,
+      input,
+      mode,
+    });
+    const fixture: RunFixture = {
+      id: runId(start, n),
+      script: s,
+      toolset,
+      labels,
+      journal,
+      ...extra,
+    };
+    runs.push(fixture);
+    return fixture;
+  };
+
+  // triage: completed after a ten-day sleep.
+  {
+    const r = run(
+      now - 14 * DAY - 3 * HOUR,
+      TRIAGE,
+      TOOLSET_GITHUB,
+      { agent: "triage", conversation: "c-41", env: "prod" },
+      { repo: "acme/api" },
+    );
+    const j = r.journal;
+    j.after(40)
+      .call(1, "github.list_issues", { repo: "acme/api", state: "open" }, 5)
+      .after(310)
+      .ok(1, issues(37, now - 14 * DAY))
+      .log("info", "3 of 37 open issues are stale", 7)
+      .call(2, "slack.post_message", { channel: "#triage", text: "3 stale issues in acme/api" }, 9)
+      .after(120)
+      .ok(2, { ok: true, ts: "1731146531.000200" })
+      .timer(3, 3 * DAY, 11)
+      .awaitSignal("approval", 11, 3)
+      .after(2 * HOUR + 14 * MINUTE)
+      .signal("approval", { close: true, by: "maya@acme.dev" })
+      .cancelTimer(3)
+      .call(4, "github.close_issue", { repo: "acme/api", number: 4100 }, 14, 52)
+      .call(5, "github.close_issue", { repo: "acme/api", number: 4103 }, 14, 52)
+      .call(6, "github.close_issue", { repo: "acme/api", number: 4106 }, 14, 52)
+      .after(180)
+      .ok(5, { state: "closed" })
+      .after(40)
+      .ok(4, { state: "closed" })
+      .after(95)
+      .ok(6, { state: "closed" })
+      .timer(7, 10 * DAY, 16)
+      .after(10 * DAY)
+      .fired(7)
+      .call(8, "github.list_issues", { repo: "acme/api", state: "open", labels: "reopened" }, 17)
+      .after(260)
+      .ok(8, issues(1, now - 4 * DAY))
+      .complete({ closed: 3, reopened: 1 });
+    r.retries = { 1: 1 };
+  }
+
+  // triage: active, waiting for the approval, with a result above the inline limit.
+  {
+    const r = run(
+      now - 2 * HOUR - 11 * MINUTE,
+      TRIAGE,
+      TOOLSET_GITHUB,
+      { agent: "triage", conversation: "c-42", env: "prod" },
+      { repo: "acme/web" },
+    );
+    r.journal
+      .after(35)
+      .call(1, "github.list_issues", { repo: "acme/web", state: "open" }, 5)
+      .after(1_840)
+      .ok(1, issues(120, now - 2 * HOUR, 2_400))
+      .log("info", "41 of 120 open issues are stale", 7)
+      .call(2, "slack.post_message", { channel: "#triage", text: "41 stale issues in acme/web" }, 9)
+      .after(140)
+      .ok(2, { ok: true, ts: "1731396123.000400" })
+      .timer(3, 3 * DAY, 11)
+      .awaitSignal("approval", 11, 3);
+  }
+
+  // triage: failed, one close_issue refused inside Promise.all.
+  const failedTriage = run(
+    now - 26 * HOUR,
+    TRIAGE,
+    TOOLSET_GITHUB,
+    { agent: "triage", conversation: "c-39", env: "prod" },
+    { repo: "acme/infra" },
+    {
+      errorAt: { line: 14, column: 3 },
+      failedSeq: 6,
+    },
+  );
+  {
+    const j = failedTriage.journal;
+    j.after(30)
+      .call(1, "github.list_issues", { repo: "acme/infra", state: "open" }, 5)
+      .after(410)
+      .ok(1, issues(12, now - 26 * HOUR))
+      .log("info", "5 of 12 open issues are stale", 7)
+      .call(
+        2,
+        "slack.post_message",
+        { channel: "#triage", text: "5 stale issues in acme/infra" },
+        9,
+      )
+      .after(130)
+      .ok(2, { ok: true, ts: "1731310000.000100" })
+      .signal("approval", { close: true, by: "sam@acme.dev" })
+      .timer(3, 3 * DAY, 11)
+      .awaitSignal("approval", 11, 3)
+      .cancelTimer(3);
+    for (let seq = 4; seq <= 8; seq += 1)
+      j.call(
+        seq,
+        "github.close_issue",
+        { repo: "acme/infra", number: 4100 + 3 * (seq - 4) },
+        14,
+        52,
+      );
+    j.after(150)
+      .ok(4, { state: "closed" })
+      .ok(5, { state: "closed" })
+      .after(30)
+      .fail(6, "error", "Resource not accessible by integration (403)", {
+        status: 403,
+        documentation_url: "https://docs.github.com/rest/issues/issues#update-an-issue",
+      })
+      .after(60)
+      .ok(7, { state: "closed" })
+      .ok(8, { state: "closed" })
+      .failRun(
+        "ToolError",
+        "github.close_issue: Resource not accessible by integration (403)",
+        "ToolError: github.close_issue: Resource not accessible by integration (403)\n    at async Promise.all (index 2)\n    at async main (script.ts:14:3)",
+      );
+  }
+
+  // triage: the fork of the failed run, with Promise.allSettled.
+  {
+    const r = run(
+      now - 25 * HOUR,
+      TRIAGE_FIXED,
+      TOOLSET_GITHUB,
+      { agent: "triage", conversation: "c-39", env: "prod" },
+      { repo: "acme/infra" },
+      {
+        parent: { run: failedTriage.id, at: null },
+      },
+    );
+    const j = r.journal;
+    j.after(5)
+      .call(1, "github.list_issues", { repo: "acme/infra", state: "open" }, 5)
+      .ok(1, issues(12, now - 26 * HOUR))
+      .log("info", "5 of 12 open issues are stale", 7)
+      .call(
+        2,
+        "slack.post_message",
+        { channel: "#triage", text: "5 stale issues in acme/infra" },
+        9,
+      )
+      .ok(2, { ok: true, ts: "1731310000.000100" })
+      .signal("approval", { close: true, by: "sam@acme.dev" })
+      .timer(3, 3 * DAY, 11)
+      .awaitSignal("approval", 11, 3)
+      .cancelTimer(3);
+    for (let seq = 4; seq <= 8; seq += 1)
+      j.call(
+        seq,
+        "github.close_issue",
+        { repo: "acme/infra", number: 4100 + 3 * (seq - 4) },
+        14,
+        70,
+      );
+    j.ok(4, { state: "closed" })
+      .ok(5, { state: "closed" })
+      .fail(6, "error", "Resource not accessible by integration (403)")
+      .ok(7, { state: "closed" })
+      .ok(8, { state: "closed" })
+      .after(10)
+      .log("warn", "1 issues could not be closed", 16)
+      .complete({ closed: 4, failed: 1 });
+  }
+
+  // triage: active, asleep for ten days.
+  {
+    const r = run(
+      now - 6 * DAY - 2 * HOUR,
+      TRIAGE,
+      TOOLSET_GITHUB,
+      { agent: "triage", conversation: "c-40", env: "prod" },
+      { repo: "acme/docs" },
+    );
+    r.journal
+      .after(20)
+      .call(1, "github.list_issues", { repo: "acme/docs", state: "open" }, 5)
+      .after(220)
+      .ok(1, issues(4, now - 6 * DAY))
+      .log("info", "2 of 4 open issues are stale", 7)
+      .call(2, "slack.post_message", { channel: "#triage", text: "2 stale issues in acme/docs" }, 9)
+      .after(90)
+      .ok(2, { ok: true, ts: "1730900000.000100" })
+      .timer(3, 3 * DAY, 11)
+      .awaitSignal("approval", 11, 3)
+      .after(31 * MINUTE)
+      .signal("approval", { close: true, by: "maya@acme.dev" })
+      .cancelTimer(3)
+      .call(4, "github.close_issue", { repo: "acme/docs", number: 4100 }, 14, 52)
+      .call(5, "github.close_issue", { repo: "acme/docs", number: 4103 }, 14, 52)
+      .after(200)
+      .ok(4, { state: "closed" })
+      .after(20)
+      .ok(5, { state: "closed" })
+      .timer(6, 10 * DAY, 16);
+  }
+
+  // digest: completed.
+  {
+    const r = run(
+      now - 3 * DAY - 5 * HOUR,
+      DIGEST,
+      TOOLSET_DIGEST,
+      { agent: "digest", schedule: "weekly", env: "prod" },
+      { repos: ["acme/api", "acme/web", "acme/infra"], channel: "#eng" },
+    );
+    const j = r.journal;
+    ["acme/api", "acme/web", "acme/infra"].forEach((repo, i) => {
+      j.after(25)
+        .call(i + 1, "github.list_pull_requests", { repo, state: "closed", since: "7d" }, 6, 18)
+        .after(380 + 90 * i)
+        .ok(
+          i + 1,
+          Array.from({ length: 4 + i }, (_, k) => ({
+            number: 900 + k,
+            title: `Improve ${repo} ${k}`,
+            merged_at: "2026-11-08T09:00:00Z",
+          })),
+        );
+    });
+    j.log("info", "summarising 12 merged pull requests", 9)
+      .call(
+        4,
+        "llm.complete",
+        {
+          model: "claude-haiku-5-5",
+          prompt: "Summarise these changes for the team:\n- Improve acme/api 0\n…",
+        },
+        11,
+        25,
+      )
+      .after(4_210)
+      .ok(4, { text: "This week: faster CI, a fix for empty bodies, docs." })
+      .call(
+        5,
+        "slack.post_message",
+        { channel: "#eng", text: "This week: faster CI, a fix for empty bodies, docs." },
+        16,
+        24,
+      )
+      .after(160)
+      .ok(5, { ok: true, ts: "1731150000.000900" })
+      .complete({ prs: 12, ts: "1731150000.000900" });
+    r.retries = { 4: 2 };
+  }
+
+  // digest: aborted by the CPU budget.
+  {
+    const r = run(
+      now - 10 * DAY,
+      DIGEST,
+      TOOLSET_DIGEST,
+      { agent: "digest", schedule: "weekly", env: "prod" },
+      { repos: ["acme/api", "acme/monorepo"], channel: "#eng" },
+    );
+    r.journal
+      .after(20)
+      .call(
+        1,
+        "github.list_pull_requests",
+        { repo: "acme/api", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(390)
+      .ok(1, [{ number: 1, title: "Bump deps", merged_at: "2026-11-01T09:00:00Z" }])
+      .call(
+        2,
+        "github.list_pull_requests",
+        { repo: "acme/monorepo", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(2_900)
+      .ok(
+        2,
+        Array.from({ length: 500 }, (_, k) => ({
+          number: k,
+          title: `Change ${k}`,
+          merged_at: k % 2 ? "2026-11-02T09:00:00Z" : null,
+        })),
+      )
+      .abort(
+        "limit_exceeded",
+        "The script used more than its CPU budget of 2s in one call (2.31s).",
+      );
+  }
+
+  // digest: failed with a TypeError.
+  {
+    const r = run(
+      now - 17 * HOUR,
+      DIGEST,
+      TOOLSET_DIGEST,
+      { agent: "digest", schedule: "adhoc", env: "staging" },
+      { repos: ["acme/api"], channel: "#eng-staging" },
+      {
+        errorAt: { line: 16, column: 75 },
+      },
+    );
+    r.journal
+      .after(20)
+      .call(
+        1,
+        "github.list_pull_requests",
+        { repo: "acme/api", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(350)
+      .ok(1, [{ number: 7, title: "Fix login", merged_at: "2026-11-11T09:00:00Z" }])
+      .log("info", "summarising 1 merged pull requests", 9)
+      .call(
+        2,
+        "llm.complete",
+        { model: "claude-haiku-5-5", prompt: "Summarise these changes for the team:\n- Fix login" },
+        11,
+        25,
+      )
+      .after(2_650)
+      .ok(2, { content: [{ type: "text", text: "Login is fixed." }] })
+      .failRun(
+        "TypeError",
+        "Cannot read properties of undefined (reading 'text')",
+        "TypeError: Cannot read properties of undefined (reading 'text')\n    at main (script.ts:16:75)",
+      );
+  }
+
+  // digest: quarantined, its replay diverged.
+  {
+    const r = run(
+      now - 9 * HOUR,
+      DIGEST,
+      TOOLSET_DIGEST,
+      { agent: "digest", schedule: "weekly", env: "prod" },
+      { repos: ["acme/web", "acme/api"], channel: "#eng" },
+      {
+        quarantine: {
+          cause: "non_determinism",
+          reason:
+            'Replay diverged at entry 3: the script scheduled github.list_pull_requests({"repo":"acme/api",…}) at script.ts:6, where the journal has github.list_pull_requests({"repo":"acme/web",…}).',
+        },
+      },
+    );
+    r.journal
+      .after(20)
+      .call(
+        1,
+        "github.list_pull_requests",
+        { repo: "acme/web", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(420)
+      .ok(1, [{ number: 3, title: "Dark mode", merged_at: "2026-11-10T09:00:00Z" }])
+      .call(
+        2,
+        "github.list_pull_requests",
+        { repo: "acme/api", state: "closed", since: "7d" },
+        6,
+        18,
+      );
+  }
+
+  // onboarding: completed after two failed provisions and two sleeps.
+  {
+    const r = run(
+      now - 4 * DAY - 7 * HOUR,
+      ONBOARDING,
+      TOOLSET_CRM,
+      { agent: "support", conversation: "c-77", user: "u-1203", env: "prod" },
+      { email: "lee@example.org" },
+    );
+    const j = r.journal;
+    j.after(15)
+      .call(1, "crm.find_account", { email: "lee@example.org" }, 5)
+      .after(95)
+      .ok(1, null)
+      .call(2, "ask_user", { question: "No account for lee@example.org. Create one?" }, 7, 26)
+      .after(6 * MINUTE + 12 * SECOND)
+      .ok(2, "yes")
+      .call(3, "crm.provision", { email: "lee@example.org", plan: "trial" }, 13, 20)
+      .after(30 * SECOND)
+      .fail(3, "unavailable", "crm is unavailable: 503 Service Unavailable")
+      .log("warn", "provision failed (1/3), retrying in 1m", 16)
+      .timer(4, MINUTE, 17)
+      .after(MINUTE)
+      .fired(4)
+      .call(5, "crm.provision", { email: "lee@example.org", plan: "trial" }, 13, 20)
+      .after(30 * SECOND)
+      .fail(5, "timeout", "no answer within 30s")
+      .log("warn", "provision failed (2/3), retrying in 1m", 16)
+      .timer(6, MINUTE, 17)
+      .after(MINUTE)
+      .fired(6)
+      .call(7, "crm.provision", { email: "lee@example.org", plan: "trial" }, 13, 20)
+      .after(1_420)
+      .ok(7, { id: "acct_9f2", plan: "trial", created: true })
+      .complete({ id: "acct_9f2", plan: "trial", created: true });
+    r.retries = { 3: 2, 5: 1 };
+  }
+
+  // onboarding: active, its host-tool call waits for the harness's approval.
+  {
+    const r = run(
+      now - 47 * MINUTE,
+      ONBOARDING,
+      TOOLSET_CRM,
+      { agent: "support", conversation: "c-81", user: "u-1288", env: "prod" },
+      { email: "kim@example.org" },
+      {
+        taskStates: { 2: { state: "approval" } },
+      },
+    );
+    r.journal
+      .after(15)
+      .call(1, "crm.find_account", { email: "kim@example.org" }, 5)
+      .after(88)
+      .ok(1, null)
+      .call(2, "ask_user", { question: "No account for kim@example.org. Create one?" }, 7, 26);
+  }
+
+  // onboarding: cancelled while waiting for the user.
+  {
+    const r = run(
+      now - 2 * DAY - 3 * HOUR,
+      ONBOARDING,
+      TOOLSET_CRM,
+      { agent: "support", conversation: "c-63", user: "u-1101", env: "prod" },
+      { email: "ana@example.org" },
+      {
+        errorAt: { line: 7, column: 20 },
+      },
+    );
+    r.journal
+      .after(15)
+      .call(1, "crm.find_account", { email: "ana@example.org" }, 5)
+      .after(102)
+      .ok(1, null)
+      .call(2, "ask_user", { question: "No account for ana@example.org. Create one?" }, 7, 26)
+      .after(3 * HOUR)
+      .cancelRequested("requested", "The conversation was closed.")
+      .fail(2, "error", "cancelled")
+      .failRun(
+        "CancelledError",
+        "The conversation was closed.",
+        "CancelledError: The conversation was closed.\n    at main (script.ts:7:20)",
+      );
+  }
+
+  // onboarding: a scenario in mock mode, in virtual time.
+  {
+    const r = run(
+      now - 5 * HOUR,
+      ONBOARDING,
+      TOOLSET_CRM,
+      { agent: "support", env: "test" },
+      { email: "test@example.org" },
+      {},
+      "mock",
+    );
+    r.journal
+      .call(1, "crm.find_account", { email: "test@example.org" }, 5)
+      .ok(1, { id: "acct_1", plan: "pro" })
+      .call(2, "crm.provision", { email: "test@example.org", plan: "pro" }, 13, 20)
+      .ok(2, { id: "acct_1", plan: "pro", created: false })
+      .complete({ id: "acct_1", plan: "pro", created: false });
+  }
+
+  // forecast: many short runs, for the lists and the tool statistics.
+  const random = mulberry32(7);
+  const cities = ["Lyon", "Oslo", "Lima", "Kyoto", "Accra", "Perth", "Quito", "Riga"];
+  for (let i = 0; i < 64; i += 1) {
+    const start = now - Math.floor(random() * 7 * DAY) - MINUTE;
+    const city = cities[i % cities.length] ?? "Lyon";
+    const r = run(
+      start,
+      FORECAST,
+      TOOLSET_WEATHER,
+      { agent: "support", conversation: `c-${200 + i}`, env: "prod" },
+      { city },
+    );
+    const latency = Math.round(120 + random() * 380 + (random() < 0.1 ? 4_000 : 0));
+    r.journal.after(10).call(1, "weather.forecast", { city, days: 3 }, 5, 26).after(latency);
+    const roll = random();
+    if (roll < 0.06) {
+      r.journal
+        .fail(1, "timeout", "no answer within 5s")
+        .after(2)
+        .failRun(
+          "ToolError",
+          "weather.forecast: no answer within 5s",
+          "ToolError: weather.forecast: no answer within 5s\n    at main (script.ts:5:26)",
+        );
+      r.errorAt = { line: 5, column: 26 };
+      r.failedSeq = 1;
+    } else if (roll < 0.09) {
+      r.journal
+        .fail(1, "unavailable", "weather is unavailable: connection refused")
+        .after(2)
+        .failRun("ToolError", "weather.forecast: weather is unavailable: connection refused");
+      r.errorAt = { line: 5, column: 26 };
+      r.failedSeq = 1;
+    } else {
+      const day = {
+        date: "2026-11-12",
+        high: Math.round(4 + random() * 20),
+        low: Math.round(random() * 6),
+        sky: random() < 0.5 ? "rain" : "clear",
+      };
+      r.journal
+        .ok(1, { city, days: [day, day, day] })
+        .after(1)
+        .complete(day);
+    }
+    if (random() < 0.15) r.retries = { 1: 1 + Math.floor(random() * 2) };
+  }
+
+  // digest: live, for pnpm dev:mock. Its entries arrive over the next minute.
+  if (options.live) {
+    const repos = ["acme/api", "acme/web", "acme/infra", "acme/docs", "acme/cli", "acme/sdk"];
+    const r = run(
+      now - 4 * SECOND,
+      DIGEST,
+      TOOLSET_DIGEST,
+      { agent: "digest", schedule: "adhoc", env: "staging" },
+      { repos, channel: "#eng-staging" },
+    );
+    const j = r.journal;
+    repos.forEach((repo, i) => {
+      j.after(1_500)
+        .call(i + 1, "github.list_pull_requests", { repo, state: "closed", since: "7d" }, 6, 18)
+        .after(1_800 + 700 * (i % 3))
+        .ok(i + 1, [
+          { number: 10 + i, title: `Change in ${repo}`, merged_at: "2026-11-11T09:00:00Z" },
+        ]);
+    });
+    j.after(400)
+      .log("info", `summarising ${repos.length} merged pull requests`, 9)
+      .call(
+        repos.length + 1,
+        "llm.complete",
+        { model: "claude-haiku-5-5", prompt: "Summarise these changes for the team:\n…" },
+        11,
+        25,
+      )
+      .after(9_000)
+      .ok(repos.length + 1, { text: "Six small changes across the repositories." })
+      .call(
+        repos.length + 2,
+        "slack.post_message",
+        { channel: "#eng-staging", text: "Six small changes across the repositories." },
+        16,
+        24,
+      )
+      .after(700)
+      .ok(repos.length + 2, { ok: true, ts: "1731400000.000100" })
+      .complete({ prs: repos.length, ts: "1731400000.000100" });
+  }
+
+  const payloads = new Map<string, unknown>();
+  for (const r of runs)
+    for (const [digest, value] of r.journal.payloads) payloads.set(digest, value);
+  const world: World = {
+    now,
+    scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST],
+    runs,
+    payloads,
+    embedded: options.embedded ?? false,
+  };
+  if (options.requireKey) world.requireKey = options.requireKey;
+  return world;
+}
