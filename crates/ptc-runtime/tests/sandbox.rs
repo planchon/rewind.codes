@@ -340,6 +340,44 @@ async fn time_and_randomness_are_deterministic_and_keyed_by_the_seed() {
     first.assert_replays(&a).await;
 }
 
+/// The depth at which recursion overflows the stack depends on the size of the frames, which
+/// changes when V8 installs optimized code. Compiled concurrently, it was installed at a time
+/// that varied from one isolate to the next: the same script caught its first overflow at
+/// different depths, and its replay diverged.
+#[tokio::test]
+async fn the_depth_of_a_stack_overflow_does_not_vary() {
+    const RECURSES: &str = r#"
+import { audit } from "ptc:tools";
+
+function depth(n: number): number {
+  try {
+    return depth(n + 1);
+  } catch {
+    return n;
+  }
+}
+
+export default async function main() {
+  const depths: number[] = [];
+  for (let i = 0; i < 3000; i++) depths.push(depth(0));
+  const sample = { first: depths[0], last: depths[depths.length - 1], distinct: new Set(depths).size };
+  await audit.record(sample);
+  return sample;
+}
+"#;
+    let harness = harness();
+    let mut outputs = Vec::new();
+    for _ in 0..4 {
+        let run = harness.run(RECURSES, json!({})).await;
+        harness.assert_replays(&run).await;
+        outputs.push(run.output().clone());
+    }
+    assert!(
+        outputs.windows(2).all(|pair| pair[0] == pair[1]),
+        "{outputs:?}"
+    );
+}
+
 #[tokio::test]
 async fn crypto_is_chacha20_keyed_by_the_seed() {
     // The first bytes of the ChaCha20 keystream (RFC 8439, nonce 0) under the key derived
