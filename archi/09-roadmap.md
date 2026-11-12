@@ -28,8 +28,13 @@ parallel against them. 0.1 is done when the [acceptance criteria](#01-is-done-wh
 
 ## Current state of the code
 
-The layering is done. `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
-warnings` and `cargo test --workspace` pass.
+Every workstream is built and integrated on `main`, and every part was reviewed and its
+findings fixed. On November 12, 2026: `cargo fmt --check`, `cargo clippy --workspace
+--all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors and
+`cargo test --workspace` (795 tests, Postgres, MinIO and a Collector in Docker) pass, the
+SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the seven criteria of
+[0.1 is done when](#01-is-done-when). Not yet done: the evals with real models (they need
+API keys), a run of the CI workflow on GitHub, and the gVisor profile on a Linux host.
 
 | Crate | State |
 | --- | --- |
