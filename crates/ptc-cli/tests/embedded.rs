@@ -1,7 +1,8 @@
 //! The launcher of the embedded server: lock check, detached start, socket wait, version
 //! handshake, replacement of a server of another version, a killed server, concurrent commands.
 //!
-//! The test binary is also the server it starts: run as `<test> server --embedded --dir <dir>`,
+//! The test binary is also the server it starts: run as `<test> server --embedded --dir <dir>
+//! --idle-timeout 10m`,
 //! it is a stub embedded server that takes `server.lock`, listens on `server.sock` and answers
 //! `GET /v1/server` and `POST /v1/server/stop`, as `ptc server --embedded` does. Files in the
 //! state directory steer it: `stub-version` (the version it reports), `stub-delay-ms` (before it
@@ -286,9 +287,16 @@ fn a_server_that_cannot_start_is_reported(state: &Path) -> Result<(), Failed> {
 
 fn stub_server(args: &[String]) -> ExitCode {
     let dir = match args {
-        [embedded, flag, dir] if embedded == "--embedded" && flag == "--dir" => PathBuf::from(dir),
+        [embedded, flag, dir, idle, timeout]
+            if embedded == "--embedded"
+                && flag == "--dir"
+                && idle == "--idle-timeout"
+                && timeout == "10m" =>
+        {
+            PathBuf::from(dir)
+        }
         _ => {
-            eprintln!("stub: usage: server --embedded --dir <dir>");
+            eprintln!("stub: usage: server --embedded --dir <dir> --idle-timeout 10m: {args:?}");
             return ExitCode::from(64);
         }
     };

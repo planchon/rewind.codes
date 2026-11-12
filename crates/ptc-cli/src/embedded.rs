@@ -36,6 +36,9 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long the version handshake may take.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(25);
+/// The embedded server the CLI starts stops after 10 minutes without requests and without
+/// work in progress.
+const IDLE_TIMEOUT: &str = "10m";
 /// How many servers one command starts at most before it reports why they did not start.
 const MAX_SPAWNS: usize = 3;
 /// The end of the server's log quoted when it does not start.
@@ -80,7 +83,7 @@ pub enum LaunchError {
 
 impl Launcher {
     /// The embedded server of `dir` (`.ptc`), started by running this executable as
-    /// `ptc server --embedded --dir <dir>`.
+    /// `ptc server --embedded --dir <dir> --idle-timeout 10m`.
     pub fn new(dir: impl Into<PathBuf>) -> Result<Self, LaunchError> {
         let program = std::env::current_exe().map_err(|source| LaunchError::Spawn {
             program: PathBuf::from("ptc"),
@@ -90,7 +93,7 @@ impl Launcher {
     }
 
     /// Starts the server with another program, which takes the arguments `server --embedded
-    /// --dir <dir>`.
+    /// --dir <dir> --idle-timeout 10m`.
     pub fn with_program(dir: impl Into<PathBuf>, program: impl Into<PathBuf>) -> Self {
         let dir = dir.into();
         let dir = std::path::absolute(&dir).unwrap_or(dir);
@@ -102,7 +105,7 @@ impl Launcher {
         }
     }
 
-    /// Arguments given to the program before `server --embedded --dir <dir>`.
+    /// Arguments given to the program before `server --embedded …`.
     pub fn program_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.program_args = args.into_iter().map(Into::into).collect();
         self
@@ -239,6 +242,8 @@ impl Launcher {
             .args(&self.program_args)
             .args(["server", "--embedded", "--dir"])
             .arg(&self.dir)
+            // Unlike a server run in the foreground, the CLI's stops when unused.
+            .args(["--idle-timeout", IDLE_TIMEOUT])
             // The runtime refuses to start unless TZ=UTC.
             .env("TZ", "UTC")
             .stdin(Stdio::null())

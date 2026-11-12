@@ -463,11 +463,7 @@ impl Embedded {
     /// Runs `ptc --dir <dir>/.ptc <args…>` in this process.
     async fn ptc(&self, args: &[&str]) -> (Exit, String, String) {
         let state = self.dir.path().join(".ptc");
-        let mut argv = vec![
-            "ptc".to_owned(),
-            "--dir".to_owned(),
-            state.display().to_string(),
-        ];
+        let mut argv = vec!["--dir".to_owned(), state.display().to_string()];
         argv.extend(args.iter().map(|arg| (*arg).to_owned()));
         let (mut console, captured) = Console::captured();
         let exit = ptc_cli::run(argv, &mut console).await;
@@ -773,7 +769,6 @@ async fn a_remote_server_gets_the_api_key() {
     let (mut console, captured) = Console::captured();
     let exit = ptc_cli::run(
         [
-            "ptc",
             "--url",
             &url,
             "--api-key",
@@ -802,25 +797,19 @@ async fn a_remote_server_gets_the_api_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn usage_errors_exit_64() {
     let (mut console, captured) = Console::captured();
-    assert_eq!(
-        ptc_cli::run(["ptc", "launch"], &mut console).await,
-        Exit::Usage
-    );
+    assert_eq!(ptc_cli::run(["launch"], &mut console).await, Exit::Usage);
     assert!(captured.stderr().contains("unrecognized subcommand"));
     let (mut console, captured) = Console::captured();
-    assert_eq!(
-        ptc_cli::run(["ptc", "--help"], &mut console).await,
-        Exit::Success
-    );
+    assert_eq!(ptc_cli::run(["--help"], &mut console).await, Exit::Success);
     assert!(captured.stdout().contains("Exit codes: 0 completed"));
     let (mut console, _) = Console::captured();
     assert_eq!(
-        ptc_cli::run(["ptc", "run", "/nonexistent/script.ts"], &mut console).await,
+        ptc_cli::run(["run", "/nonexistent/script.ts"], &mut console).await,
         Exit::Usage
     );
     let (mut console, captured) = Console::captured();
     assert_eq!(
-        ptc_cli::run(["ptc", "signal", "r1", "go", "{not json"], &mut console).await,
+        ptc_cli::run(["signal", "r1", "go", "{not json"], &mut console).await,
         Exit::Usage
     );
     assert!(captured.stderr().contains("the payload is not JSON"));

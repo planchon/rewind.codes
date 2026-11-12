@@ -14,7 +14,8 @@
 //! Every command takes `--json`, and exits with one code per outcome ([`Exit`]). A first Ctrl-C
 //! lets the command finish the call in flight; a second one exits at once with 130.
 //!
-//! The `ptc` binary hands `ptc server …` to `ptc-server` and every other command to [`main`].
+//! The `ptc` binary hands `ptc server …` to `ptc-server` and every other command to [`main`],
+//! once it runs with `TZ=UTC`.
 
 #![forbid(unsafe_code)]
 
@@ -39,23 +40,13 @@ pub use error::CliError;
 pub use exit::Exit;
 pub use output::{Captured, Console};
 
-/// The `ptc` command line, but `ptc server`. `args` starts with the program's name, as
-/// `std::env::args_os()` does.
+/// `ptc <command> …`, but `ptc server`: `args` are the arguments after `ptc`. The `ptc` binary
+/// calls it once it runs with `TZ=UTC`, which the sandbox requires.
 ///
-/// The runtime needs `TZ=UTC` from the start of the process: without it, the process runs
-/// itself again with it. Then the command runs on a Tokio runtime of its own, with the
-/// `tracing` subscriber of `ptc-otel` (logs on stderr at `warn`, or as `RUST_LOG` says; service
-/// telemetry over OTLP when `OTEL_EXPORTER_OTLP_ENDPOINT` is set) and Ctrl-C handled.
-pub fn main<I, T>(args: I) -> ExitCode
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString> + Clone,
-{
-    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    if let Err(error) = ensure_utc(&args) {
-        eprintln!("error: cannot run with TZ=UTC: {error}");
-        return Exit::Internal.into();
-    }
+/// The command runs on a Tokio runtime of its own, with the `tracing` subscriber of `ptc-otel`
+/// (logs on stderr at `warn`, or as `RUST_LOG` says; service telemetry over OTLP when
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` is set) and Ctrl-C handled.
+pub fn main(args: Vec<OsString>) -> ExitCode {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -67,31 +58,30 @@ where
             return Exit::Internal.into();
         }
     };
-    let exit = runtime.block_on(async {
+    let (exit, telemetry) = runtime.block_on(async {
         let telemetry = telemetry();
         interrupt::install();
         let mut console = Console::stdio();
         let exit = run(args, &mut console).await;
         (exit, telemetry)
     });
-    let (exit, telemetry) = exit;
     // Exports what is buffered, on the runtime still alive.
     drop(telemetry);
     exit.into()
 }
 
-/// Runs one command line, writing to `console`. `args` starts with the program's name.
+/// Runs one command line, writing to `console`: `args` are the arguments after `ptc`.
 pub async fn run<I, T>(args: I, console: &mut Console) -> Exit
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString> + Clone,
 {
-    let cli = match args::Cli::try_parse_from(args) {
+    let argv = std::iter::once(OsString::from("ptc")).chain(args.into_iter().map(Into::into));
+    let cli = match args::Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(error) => {
             let exit = match error.kind() {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => Exit::Success,
-                ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => Exit::Usage,
                 _ => Exit::Usage,
             };
             let text = error.render().to_string();
@@ -114,22 +104,6 @@ where
     };
     console.flush();
     exit
-}
-
-/// Runs the process again with `TZ=UTC` unless it has it: the sandbox refuses another time
-/// zone, and only the start of a process can set it safely.
-fn ensure_utc(args: &[OsString]) -> std::io::Result<()> {
-    use std::os::unix::process::CommandExt;
-
-    if std::env::var_os("TZ").is_some_and(|tz| tz == "UTC") {
-        return Ok(());
-    }
-    let program = std::env::current_exe()?;
-    // Only returns if the process could not be replaced.
-    Err(std::process::Command::new(program)
-        .args(args.iter().skip(1))
-        .env("TZ", "UTC")
-        .exec())
 }
 
 /// The process's `tracing` subscriber. A CLI is quiet: warnings and errors only, unless

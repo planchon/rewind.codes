@@ -19,7 +19,7 @@ struct Run {
 /// `ptc <args…>` in this process. No `--dir`: a local command must not need a server, and
 /// the state directory it would use does not exist.
 async fn ptc(args: &[&str]) -> Run {
-    let mut argv = vec!["ptc", "--dir", "/nonexistent/.ptc"];
+    let mut argv = vec!["--dir", "/nonexistent/.ptc"];
     argv.extend(args);
     let (mut console, captured) = Console::captured();
     let exit = ptc_cli::run(argv, &mut console).await;
