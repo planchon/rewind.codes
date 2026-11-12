@@ -105,7 +105,14 @@ impl Minio {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let name = format!("ptc-blob-minio-{}-{nanos}", std::process::id());
+        // A counter keeps two containers of one process apart when the clock has only
+        // microseconds.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "ptc-blob-minio-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
         docker(&[
             "run",
             "--detach",

@@ -9,6 +9,7 @@
 mod support;
 
 use std::process::Command;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ptc_api::admin::Role;
@@ -38,11 +39,18 @@ impl Postgres {
             );
             return None;
         }
+        // Tests run in parallel within one process, and the clock may only have microseconds:
+        // a counter keeps two containers of the same process from sharing a name.
+        static NEXT: AtomicU32 = AtomicU32::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let name = format!("ptc-server-postgres-{}-{nanos}", std::process::id());
+        let name = format!(
+            "ptc-server-postgres-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
         run(&[
             "run",
             "--detach",

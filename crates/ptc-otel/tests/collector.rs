@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ptc_core::{LogLevel, RunId, Timestamp};
@@ -537,7 +538,14 @@ impl OtelCollector {
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        let name = format!("ptc-otel-collector-{}-{nanos}", std::process::id());
+        // A counter keeps two containers of one process apart when the clock has only
+        // microseconds.
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let name = format!(
+            "ptc-otel-collector-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
         docker(&[
             "run",
             "--detach",
