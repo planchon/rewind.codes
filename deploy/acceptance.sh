@@ -72,9 +72,16 @@ step "limits through the API" limits
 
 # 2. The reference deployment, from its images.
 images() {
-  local jobs=(--build-arg "JOBS=$CARGO_BUILD_JOBS")
-  docker build --quiet "${jobs[@]}" --target ptc -t "$PTC_IMAGE" "$ROOT" &&
-    docker build --quiet "${jobs[@]}" --target load -t "$PTC_LOAD_IMAGE" "$ROOT"
+  local target image
+  for target in ptc load; do
+    image="$PTC_IMAGE"
+    [ "$target" = load ] && image="$PTC_LOAD_IMAGE"
+    if ! docker build --progress=plain --build-arg "JOBS=$CARGO_BUILD_JOBS" --target "$target" \
+      -t "$image" "$ROOT" >"$WORK/build-$target.log" 2>&1; then
+      tail -n 40 "$WORK/build-$target.log"
+      return 1
+    fi
+  done
 }
 up() {
   ./init.sh "$WORK/env" >/dev/null &&
