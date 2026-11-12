@@ -33,14 +33,16 @@ pub(super) async fn create(
     Body(request): Body<CreateSubscription>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
+    // The request is validated before the URL's address is resolved: a malformed request
+    // is refused without any network access.
     refuse_nul("the url", &request.url)?;
+    let labels = caller.within(request.labels.0)?;
+    refuse_nul_in_labels(&labels)?;
     app.settings
         .webhook_egress
         .check_subscription(&request.url)
         .await
         .map_err(|reason| ApiError::invalid(format!("url {:?}: {reason}", request.url)))?;
-    let labels = caller.within(request.labels.0)?;
-    refuse_nul_in_labels(&labels)?;
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(ApiError::internal)?;
     let secret = WebhookSecret::from_bytes(key).map_err(ApiError::internal)?;
