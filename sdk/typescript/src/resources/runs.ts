@@ -198,22 +198,26 @@ export class Runs {
 
   /**
    * Cancels a run: every pending await of the script rejects with `CancelledError`, and the
-   * script gets one activation to clean up. With `wait`, returns the run's state after it.
+   * script gets one activation to clean up. With `wait`, returns the run's state after it, waiting
+   * as `start` does.
    */
-  cancel(
+  async cancel(
     id: string,
     options: RequestOptions & { reason?: string | undefined; wait?: Duration | undefined } = {},
   ): Promise<Run> {
     const { signal, reason, wait } = options;
-    return this.transport.send(
+    const asked = Date.now();
+    const deadline = deadlineOf(wait, asked);
+    const run = await this.transport.send(
       () =>
         this.transport.api.POST("/v1/runs/{id}/cancel", {
           params: { path: { id } },
-          body: { reason, wait },
+          body: { reason, wait: firstWait(wait) },
           signal,
         }),
       { retry: false, signal },
     );
+    return this.waitUntil(run, asked, deadline, signal);
   }
 
   /**

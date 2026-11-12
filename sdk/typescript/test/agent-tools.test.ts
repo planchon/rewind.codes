@@ -516,7 +516,7 @@ describe("the tools that take a run id", () => {
     const result = await tools.handle("cancel_run", { run_id: RUN_ID });
     expect(result.isError).toBe(false);
     expect(result.content).toBe(`Run ${RUN_ID} was cancelled.\nCancelledError: cancelled`);
-    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: 30_000 });
+    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "30s" });
   });
 
   it("retry_run: forks the run with the corrected script", async () => {
