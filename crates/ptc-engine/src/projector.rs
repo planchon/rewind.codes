@@ -393,7 +393,7 @@ fn waiting_for(state: &RunState, toolset: Option<&Toolset>) -> Vec<String> {
         .collect();
     for (seq, tool) in state.pending_tool_calls() {
         match route(tool) {
-            Some(ToolRoute::Host { .. }) => waiting.push(format!("tool {tool} ({seq})")),
+            Some(ToolRoute::Host { .. }) => waiting.push(format!("tool {tool} {seq}")),
             _ => return Vec::new(),
         }
     }

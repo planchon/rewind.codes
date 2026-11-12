@@ -1,0 +1,32 @@
+{
+  "description": "A fork forced live at an entry calls the tool again from there, although its commands still match the parent's; the results before that entry are reused.",
+  "tools": {
+    "weather.forecast": {
+      "$sequence": [
+        {
+          "sky": "sunny"
+        },
+        {
+          "sky": "unavailable"
+        },
+        {
+          "sky": "snow"
+        }
+      ]
+    }
+  },
+  "fork": {
+    "script": "script.ts",
+    "at": 3
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "paris": "sunny",
+      "oslo": "snow"
+    },
+    "dispatched": {
+      "weather.forecast": 3
+    }
+  }
+}

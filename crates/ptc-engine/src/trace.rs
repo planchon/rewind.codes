@@ -291,6 +291,8 @@ struct Outcomes<'h> {
     /// Timers that implement the timeout of a signal wait: seq → signal name.
     timeouts: BTreeMap<Seq, &'h str>,
     waits: BTreeMap<u64, &'h HistoryEntry>,
+    /// The run has ended: what is still pending was dropped with it.
+    ended: bool,
 }
 
 impl<'h> Outcomes<'h> {
@@ -300,6 +302,7 @@ impl<'h> Outcomes<'h> {
             timers: BTreeMap::new(),
             timeouts: BTreeMap::new(),
             waits: BTreeMap::new(),
+            ended: history.last().is_some_and(|entry| entry.event.is_terminal()),
         };
         let mut open_waits: Vec<(u64, &str, Option<Seq>)> = Vec::new();
         for entry in history {
@@ -412,6 +415,7 @@ fn describe(
             let outcome = match outcomes.timers.get(seq).map(|end| &end.event) {
                 Some(Event::Completion(_)) => "→ fired",
                 Some(_) => "→ cancelled",
+                None if outcomes.ended => "→ dropped with the run",
                 None => "→ pending",
             };
             line(event, callsite.map(|c| c.line), Some(outcome.to_owned()))
@@ -424,6 +428,7 @@ fn describe(
                     }
                     _ => format!("→ timed out after {}", since(end)),
                 },
+                None if outcomes.ended => "→ ended with the run".to_owned(),
                 None => "→ waiting".to_owned(),
             };
             line(

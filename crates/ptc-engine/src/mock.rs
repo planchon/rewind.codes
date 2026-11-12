@@ -386,7 +386,8 @@ where
             );
         }
     };
-    drive_failures(engine.run_until_idle_virtual(&options).await?);
+    // Each signal drives the run until its time; the last drive takes the run as far as it
+    // goes.
     let mut undelivered = Vec::new();
     for signal in signals {
         match signal.when {
