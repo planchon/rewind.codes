@@ -17,6 +17,9 @@ pub struct Scenario {
     /// The toolset, and how each tool answers (see [`crate::tools::ScenarioTools`]).
     #[serde(default)]
     pub tools: BTreeMap<String, Value>,
+    /// The tools whose policy is `at_most_once`; the others retry.
+    #[serde(default)]
+    pub at_most_once: Vec<String>,
     /// The order in which tool calls answer.
     #[serde(default)]
     pub tool_order: ToolOrder,
@@ -32,11 +35,32 @@ pub struct Scenario {
     /// engine at the current time; a last pass in virtual time follows the last step.
     #[serde(default)]
     pub steps: Vec<Step>,
+    /// Forks the run once its steps are done: the expectations, the recorded journal and the
+    /// replays are then the fork's.
+    #[serde(default)]
+    pub fork: Option<Fork>,
     #[serde(default)]
     pub expect: Expect,
     /// A check of the recorded journal against another script, or a tampered journal.
     #[serde(default)]
     pub replay: Option<ReplayCheck>,
+}
+
+/// A fork of the case's run (`archi/03-execution.md`, "Forks").
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Fork {
+    /// The corrected script, next to `scenario.json`.
+    pub script: String,
+    /// Go live from this entry of the parent's history.
+    #[serde(default)]
+    pub at: Option<u64>,
+    /// The fork's input; the parent's when absent.
+    #[serde(default)]
+    pub input: Option<Value>,
+    /// What happens after the fork starts, as the case's steps.
+    #[serde(default)]
+    pub steps: Vec<Step>,
 }
 
 fn empty_object() -> Value {
@@ -104,6 +128,9 @@ pub struct Expect {
     pub events: Option<Vec<String>>,
     /// The signals the run is waiting for at the end.
     pub awaiting: Option<Vec<String>>,
+    /// How many times each tool really answered, across the case: a fork that reuses its
+    /// parent's results calls the tools fewer times than its journal schedules calls.
+    pub dispatched: Option<BTreeMap<String, usize>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

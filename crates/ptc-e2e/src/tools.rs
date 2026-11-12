@@ -15,9 +15,12 @@ use serde_json::Value;
 /// | `{"$echo": true}` | the call's arguments |
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
+/// | `{"$defer": true}` | no answer: the call stays without an outcome |
 #[derive(Debug)]
 pub struct ScenarioTools {
     responses: Mutex<BTreeMap<String, Responses>>,
+    /// The calls answered, by tool, and the idempotency keys they carried.
+    dispatched: Mutex<Vec<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -42,10 +45,35 @@ impl ScenarioTools {
             .collect();
         Self {
             responses: Mutex::new(responses),
+            dispatched: Mutex::new(Vec::new()),
         }
     }
 
-    fn respond(&self, call: &ToolCall) -> Result<JsonValue, ToolFailure> {
+    /// How many times each tool answered.
+    pub fn dispatched(&self) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for (tool, _) in self
+            .dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            *counts.entry(tool.clone()).or_default() += 1;
+        }
+        counts
+    }
+
+    /// The idempotency keys of the calls answered, in order.
+    pub fn keys(&self) -> Vec<String> {
+        self.dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect()
+    }
+
+    fn respond(&self, call: &ToolCall) -> Result<Option<JsonValue>, ToolFailure> {
         let mut responses = self
             .responses
             .lock()
@@ -71,9 +99,12 @@ impl ScenarioTools {
     }
 }
 
-fn answer(response: &Value, call: &ToolCall) -> Result<JsonValue, ToolFailure> {
+fn answer(response: &Value, call: &ToolCall) -> Result<Option<JsonValue>, ToolFailure> {
+    if response.get("$defer") == Some(&Value::Bool(true)) {
+        return Ok(None);
+    }
     if response.get("$echo") == Some(&Value::Bool(true)) {
-        return Ok(call.args.clone());
+        return Ok(Some(call.args.clone()));
     }
     if let Some(message) = response.get("$error") {
         let kind = match response.get("$kind").and_then(Value::as_str) {
@@ -87,7 +118,7 @@ fn answer(response: &Value, call: &ToolCall) -> Result<JsonValue, ToolFailure> {
             .map_or_else(|| message.to_string(), str::to_owned);
         return Err(failure(kind, message, response.get("$data").cloned()));
     }
-    Ok(response.clone())
+    Ok(Some(response.clone()))
 }
 
 fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolFailure {
@@ -100,8 +131,14 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 
 impl ToolDispatcher for ScenarioTools {
     async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
-        match self.respond(&call) {
-            Ok(result) => Dispatched::Result(result),
+        let answered = self.respond(&call);
+        self.dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((call.tool.name.clone(), call.idempotency_key.clone()));
+        match answered {
+            Ok(Some(result)) => Dispatched::Result(result),
+            Ok(None) => Dispatched::Deferred,
             Err(failure) => Dispatched::Failed(failure),
         }
     }

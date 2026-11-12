@@ -1,9 +1,10 @@
 //! Driving runs until nothing more can happen (`run_until_idle`), in real or virtual time.
 //!
-//! This is the loop of an embedded engine (`ptc run`, `ptc tick`, tests, mock mode): expire
-//! runs, fire timers, run tool calls, activate runs, and repeat while anything progressed. In
-//! virtual time, when nothing is ready, the clock jumps to the next timer or deadline, so a
-//! 10-day sleep takes no wall-clock time.
+//! This is the loop of an embedded engine (`ptc run`, tests, mock mode): expire runs, fire
+//! timers, run tool calls, activate runs, and repeat while anything progressed. In virtual time,
+//! when nothing is ready, the clock jumps to the next timer or deadline, so a 10-day sleep takes
+//! no wall-clock time. The projector and the retention jobs are driven by the composition root,
+//! with their own adapters.
 
 use ptc_core::Timestamp;
 
@@ -141,6 +142,31 @@ where
                 return Ok(report);
             };
             self.clock.advance_to(next);
+        }
+        report.interrupted = true;
+        Ok(report)
+    }
+
+    /// [`run_until_idle_virtual`](Self::run_until_idle_virtual), without moving the clock past
+    /// `until`: once nothing is ready before it, the clock is moved to `until` and the drive
+    /// returns. A scenario sends a signal at a given time this way.
+    pub async fn run_virtual_until(
+        &self,
+        options: &DriveOptions,
+        until: Timestamp,
+    ) -> Result<DriveReport, EngineError> {
+        let mut report = DriveReport::default();
+        for _ in 0..options.max_passes {
+            if self.pass(options, &mut report).await? {
+                continue;
+            }
+            match self.next_wake_up().await? {
+                Some(next) if next <= until => self.clock.advance_to(next),
+                _ => {
+                    self.clock.advance_to(until);
+                    return Ok(report);
+                }
+            }
         }
         report.interrupted = true;
         Ok(report)

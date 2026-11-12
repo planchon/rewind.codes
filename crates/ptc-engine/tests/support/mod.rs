@@ -53,6 +53,13 @@ pub fn engine_with(
     )
 }
 
+/// The default configuration without the instance cache: every activation replays.
+pub fn replaying() -> EngineConfig {
+    let mut config = EngineConfig::default();
+    config.cache.max_instances = 0;
+    config
+}
+
 /// A run of the program named `name`.
 pub fn request(name: &str, input: JsonValue) -> StartRun {
     StartRun::new(

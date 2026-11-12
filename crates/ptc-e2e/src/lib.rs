@@ -6,7 +6,11 @@
 //!
 //! - `script.ts`, the script;
 //! - `scenario.json`, its input, tools, steps and expectations ([`Scenario`]);
-//! - `journal.v1.json`, the journal recorded from it (`ptc-format` v1), committed.
+//! - `journal.v1.json`, the journal document recorded from it (`ptc-format` v1): the run's id,
+//!   its script, its toolset and its entries, committed.
+//!
+//! A case may fork its run with a corrected script (`fork` in the scenario): the expectations,
+//! the recorded journal and the replays are then the fork's.
 //!
 //! **Blue** cases end as they should succeed: the run completes, or waits for the outside
 //! world. **Red** cases must fail, exactly as specified: a refused start, a failed, cancelled
@@ -19,8 +23,9 @@
 //! 2. **Recorded**: the journal it produced is byte for byte the committed `journal.v1.json`.
 //!    `PTC_E2E_RECORD=1 cargo test -p ptc-e2e` writes the files instead: review the diff.
 //! 3. **Replayed**: the committed journal, decoded from its file, replays identically with the
-//!    script, on a fresh executor with no store. This is the epoch contract: a build that
-//!    stops replaying a journal of an epoch it supports fails here.
+//!    script it holds, which must be the case's, on a fresh executor with no store. This is the
+//!    epoch contract: a build that stops replaying a journal of an epoch it supports fails
+//!    here.
 
 #![forbid(unsafe_code)]
 
@@ -33,14 +38,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use ptc_core::{
-    Command, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunOutcome, RunState, Script,
-    Timestamp, Toolset, parse_duration,
+    Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle, RunId, RunMode,
+    RunOutcome, RunState, Script, Timestamp, Tool, ToolRoute, Toolset, ToolsetError,
+    parse_duration,
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
 use ptc_engine::ports::{Entropy, RunRef, ScriptExecutor, TenantId, VirtualTime};
 use ptc_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use ptc_engine::{
-    Adapters, DriveOptions, Engine, EngineConfig, Limits, ReplayVerdict, StartRun, ToolOrder,
+    Adapters, DriveOptions, Engine, EngineConfig, ForkRun, Limits, ReplayVerdict, StartRun,
+    ToolOrder,
 };
 use ptc_runtime::V8Executor;
 use serde_json::Value;
@@ -97,6 +104,8 @@ pub struct Case {
     pub color: Color,
     pub scenario: Scenario,
     pub script: Script,
+    /// The corrected script of the fork, if the case forks its run.
+    pub fork_script: Option<Script>,
 }
 
 impl Case {
@@ -119,15 +128,20 @@ impl Case {
         let scenario: Scenario = serde_json::from_str(&read(&dir.join("scenario.json"))?)
             .map_err(|err| format!("{name}/scenario.json: {err}"))?;
         let script = Script::new(read(&dir.join("script.ts"))?);
+        let fork_script = match &scenario.fork {
+            Some(fork) => Some(Script::new(read(&dir.join(&fork.script))?)),
+            None => None,
+        };
         let case = Self {
             name: name.to_owned(),
             dir,
             color,
             scenario,
             script,
+            fork_script,
         };
         case.check_color()?;
-        Toolset::from_host_tools(case.scenario.tools.keys())
+        case.try_toolset()
             .map_err(|err| format!("{name}/scenario.json: tools: {err}"))?;
         Ok(case)
     }
@@ -136,16 +150,41 @@ impl Case {
         self.dir.join("journal.v1.json")
     }
 
-    /// The scenario's tools, as host tools with the default policy: in mock mode every call
-    /// goes to the scenario's responses, whatever its route.
+    /// The scenario's tools, as host tools with the default policy, `at_most_once` for those
+    /// the scenario lists: in mock mode every call goes to the scenario's responses, whatever
+    /// its route.
     pub fn toolset(&self) -> Toolset {
-        Toolset::from_host_tools(self.scenario.tools.keys())
+        self.try_toolset()
             .expect("the tools were checked when the case was loaded")
     }
 
-    /// The run's id: the first id of the scenario's entropy.
+    fn try_toolset(&self) -> Result<Toolset, ToolsetError> {
+        let tools = self.scenario.tools.keys().map(|name| {
+            let group = name.split_once('.').map(|(group, _)| group.to_owned());
+            let mut tool = Tool::new(name.clone(), ToolRoute::Host { group }, serde_json::json!({}));
+            if self.scenario.at_most_once.contains(name) {
+                tool.policy.on_interruption = Interruption::AtMostOnce;
+            }
+            tool
+        });
+        Toolset::new([], tools)
+    }
+
+    /// The id of the run the case records: the first id of the scenario's entropy, or the
+    /// fork's, drawn after the parent's id and seed.
     pub fn run_id(&self) -> RunId {
-        SeededEntropy::new(self.scenario.seed).run_id()
+        let entropy = SeededEntropy::new(self.scenario.seed);
+        let parent = entropy.run_id();
+        if self.scenario.fork.is_none() {
+            return parent;
+        }
+        entropy.seed();
+        entropy.run_id()
+    }
+
+    /// The script of the run the case records: the fork's, if it forks.
+    pub fn recorded_script(&self) -> &Script {
+        self.fork_script.as_ref().unwrap_or(&self.script)
     }
 
     /// A blue case expects no failure; a red case expects one.
@@ -238,8 +277,10 @@ fn engine(case: &Case) -> CorpusEngine {
 pub struct Recorded {
     pub run_id: RunId,
     /// With every payload loaded.
-    pub history: Vec<HistoryEntry>,
+    pub journal: JournalDocument,
     pub state: RunState,
+    /// How many times each tool answered, across the case.
+    pub dispatched: BTreeMap<String, usize>,
 }
 
 /// The outcome of a live run.
@@ -295,7 +336,53 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
     };
     let fail = |err: ptc_engine::EngineError| err.to_string();
     drive(false).await?;
-    for step in &case.scenario.steps {
+    apply_steps(&engine, &run, &case.scenario.steps, &drive).await?;
+    drive(true).await?;
+
+    let mut run = run;
+    if let (Some(fork), Some(script)) = (&case.scenario.fork, &case.fork_script) {
+        let mut request = ForkRun::new(run.clone(), script.clone());
+        request.at = fork.at;
+        request.input = fork.input.clone();
+        run = match engine.fork(request).await {
+            Ok(created) => created.run,
+            Err(refused) => return Ok(Live::Refused(refused.to_string())),
+        };
+        drive(false).await?;
+        apply_steps(&engine, &run, &fork.steps, &drive).await?;
+        drive(true).await?;
+    }
+
+    // The engine's own replay, from its store, must agree with the live run.
+    match engine.replay(&run, None).await.map_err(fail)? {
+        ReplayVerdict::Matches(_) => {}
+        other => return Err(format!("the engine's replay of the live run: {other:?}")),
+    }
+
+    let journal = engine.export_journal(&run).await.map_err(fail)?;
+    let state = RunState::from_history(&journal.entries).map_err(|err| err.to_string())?;
+    Ok(Live::Ran(Box::new(Recorded {
+        run_id: run.id,
+        journal,
+        state,
+        dispatched: engine.dispatcher().dispatched(),
+    })))
+}
+
+/// Applies steps to a run, each followed by a pass of the engine at the current time.
+async fn apply_steps<F, Fut>(
+    engine: &CorpusEngine,
+    run: &RunRef,
+    steps: &[Step],
+    drive: &F,
+) -> Result<(), String>
+where
+    F: Fn(bool) -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let fail = |err: ptc_engine::EngineError| err.to_string();
+    let run = run.clone();
+    for step in steps {
         match step {
             Step::Signal { name, payload, key } => {
                 engine
@@ -314,21 +401,7 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         }
         drive(false).await?;
     }
-    drive(true).await?;
-
-    // The engine's own replay, from its store, must agree with the live run.
-    match engine.replay(&run, None).await.map_err(fail)? {
-        ReplayVerdict::Matches(_) => {}
-        other => return Err(format!("the engine's replay of the live run: {other:?}")),
-    }
-
-    let history = engine.export_history(&run).await.map_err(fail)?;
-    let state = RunState::from_history(&history).map_err(|err| err.to_string())?;
-    Ok(Live::Ran(Box::new(Recorded {
-        run_id: run.id,
-        history,
-        state,
-    })))
+    Ok(())
 }
 
 /// How replaying a journal ended.
@@ -338,17 +411,17 @@ pub enum Replayed {
     Fails(String),
 }
 
-/// Replays a journal with a script on a fresh executor, without any store.
-pub async fn replay_journal(case: &Case, history: &[HistoryEntry], script: &Script) -> Replayed {
+/// Replays a journal document's entries with a script on a fresh executor, without any store:
+/// the document holds the run's id and toolset.
+pub async fn replay_journal(case: &Case, journal: &JournalDocument, script: &Script) -> Replayed {
     let executor = executor(&case.scenario);
-    let toolset = case.toolset();
-    let compiled = executor.compile(script, &toolset);
-    let run = RunRef::new(TenantId::local(), case.run_id());
+    let compiled = executor.compile(script, &journal.toolset);
+    let run = RunRef::new(TenantId::local(), journal.run);
     let input = ReplayInput {
         run: &run,
         compiled: compiled.as_ref(),
-        toolset: &toolset,
-        history,
+        toolset: &journal.toolset,
+        history: &journal.entries,
     };
     match replay::replay(&executor, &MemoryBlobs::new(), input).await {
         Ok(rebuilt) => Replayed::Matches(rebuilt.end),
@@ -473,9 +546,18 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
             other => check(false, format!("the run was not aborted: {other:?}")),
         }
     }
+    if let Some(expected) = &expect.dispatched {
+        check(
+            &recorded.dispatched == expected,
+            format!(
+                "the tools answered {:?}, expected {expected:?}",
+                recorded.dispatched
+            ),
+        );
+    }
     if let Some(expected) = &expect.calls {
         let mut calls: BTreeMap<String, usize> = BTreeMap::new();
-        for entry in &recorded.history {
+        for entry in &recorded.journal.entries {
             if let Event::Command(Command::ScheduleToolCall { tool, .. }) = &entry.event {
                 *calls.entry(tool.clone()).or_default() += 1;
             }
@@ -487,7 +569,8 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
     }
     if let Some(expected) = &expect.events {
         let events: Vec<&str> = recorded
-            .history
+            .journal
+            .entries
             .iter()
             .map(|entry| entry.event.name())
             .collect();
@@ -530,7 +613,7 @@ fn check_recording(case: &Case, recorded: &Recorded, mode: Mode, failures: &mut 
             case.run_id()
         ));
     }
-    let journal = ptc_format::encode_history(&recorded.history);
+    let journal = ptc_format::encode_journal(&recorded.journal);
     let path = case.journal_path();
     if mode == Mode::Record {
         if let Err(err) = std::fs::write(&path, &journal) {
@@ -562,22 +645,29 @@ fn first_difference(a: &str, b: &str) -> usize {
 }
 
 async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<String>) {
-    // The committed journal, decoded from its file, replays with the script.
+    // The committed journal, decoded from its file, holds the case's script and replays with
+    // it.
     let committed = match std::fs::read_to_string(case.journal_path())
         .map_err(|err| err.to_string())
-        .and_then(|json| ptc_format::decode_history(&json).map_err(|err| err.to_string()))
+        .and_then(|json| ptc_format::decode_journal(&json).map_err(|err| err.to_string()))
     {
-        Ok(history) => history,
+        Ok(journal) => journal,
         Err(err) => {
             failures.push(format!("cannot read the committed journal: {err}"));
             return;
         }
     };
-    let expected_end = match committed.last().map(|entry| &entry.event) {
+    if let Err(err) = committed.check() {
+        failures.push(format!("the committed journal is inconsistent: {err}"));
+    }
+    if &committed.script != case.recorded_script() {
+        failures.push("the committed journal holds another script than the case's".into());
+    }
+    let expected_end = match committed.entries.last().map(|entry| &entry.event) {
         Some(Event::Lifecycle(Lifecycle::RunAborted(reason))) => ReplayEnd::Aborted(reason.clone()),
         _ => ReplayEnd::EndOfHistory,
     };
-    let replayed = replay_journal(case, &committed, &case.script).await;
+    let replayed = replay_journal(case, &committed, case.recorded_script()).await;
     if replayed != Replayed::Matches(expected_end.clone()) {
         failures.push(format!(
             "the committed journal does not replay: {replayed:?} (expected {expected_end:?})"
@@ -585,17 +675,18 @@ async fn check_replays(case: &Case, recorded: &Recorded, failures: &mut Vec<Stri
     }
 
     if let Some(check) = &case.scenario.replay {
-        check_altered_replay(case, &recorded.history, check, failures).await;
+        check_altered_replay(case, &recorded.journal, check, failures).await;
     }
 }
 
 async fn check_altered_replay(
     case: &Case,
-    history: &[HistoryEntry],
+    journal: &JournalDocument,
     check: &ReplayCheck,
     failures: &mut Vec<String>,
 ) {
-    let mut history = history.to_vec();
+    let mut journal = journal.clone();
+    let history: &mut Vec<HistoryEntry> = &mut journal.entries;
     if let Some(index) = check.drop_entry {
         if index >= history.len() {
             failures.push(format!("drop_entry {index} is past the end of the journal"));
@@ -611,9 +702,9 @@ async fn check_altered_replay(
                 return;
             }
         },
-        None => case.script.clone(),
+        None => case.recorded_script().clone(),
     };
-    let replayed = replay_journal(case, &history, &script).await;
+    let replayed = replay_journal(case, &journal, &script).await;
     let expected = check.diverges.as_ref().or(check.error.as_ref());
     match (&replayed, expected) {
         (Replayed::Fails(message), Some(expected)) if message == expected => {}

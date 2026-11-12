@@ -2,23 +2,29 @@
 //!
 //! Replay creates a fresh instance, runs `main(input)`, and walks the history with the
 //! domain's [`ReplayCursor`]: recorded completions are delivered, and every command the
-//! script emits must match the history. No tool is called and nothing is written.
+//! script emits must match the history. No tool is called and nothing is written: annotations
+//! the script emits are already recorded, so they are dropped, and nothing about the script is
+//! emitted as telemetry.
+
+use std::future::Future;
 
 use ptc_core::{
     AbortReason, HistoryEntry, HistoryError, Next, NonDeterminism, ReplayCursor, Replayed, Toolset,
 };
 
+pub use crate::payloads::{PayloadSource, StoredPayloads};
+
 use crate::payloads;
 use crate::ports::{
-    BlobError, BlobStore, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef,
-    ScriptExecutor, ScriptInstance, StartScript,
+    BlobError, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef, ScriptExecutor,
+    ScriptInstance, StartScript, StoreError,
 };
 
 /// What to replay.
 #[derive(Debug, Clone, Copy)]
 pub struct ReplayInput<'a> {
-    /// The run: its id, which the script can read (`run.id`), and its tenant, whose blobs hold
-    /// its payloads.
+    /// The run: its id, which the script can read (`run.id`), and its tenant, whose payloads
+    /// the history references.
     pub run: &'a RunRef,
     /// The script as compiled, or why it does not compile.
     pub compiled: Result<&'a CompiledScript, &'a InvalidScript>,
@@ -53,18 +59,52 @@ pub enum ReplayError {
     Executor(#[from] ExecutorError),
     #[error(transparent)]
     Blob(#[from] BlobError),
+    /// The heartbeat could not renew the lease: another worker may hold the run now.
+    #[error("the lease was lost during the replay: {0}")]
+    LeaseLost(StoreError),
 }
 
-/// Re-executes a script against a history. Annotations the script emits are dropped: they
-/// are already recorded.
-pub async fn replay<X, B>(
+/// Called between the steps of a replay, so that a long replay keeps its lease
+/// (`archi/06-storage-and-scale.md`, "Leases, fencing, workers"). Each step is one call into
+/// the script, bounded by its CPU budget.
+pub trait Heartbeat: Send {
+    fn beat(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
+}
+
+/// No lease to keep: a replay outside an activation (`ptc replay`, the corpus).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoHeartbeat;
+
+impl Heartbeat for NoHeartbeat {
+    async fn beat(&mut self) -> Result<(), StoreError> {
+        Ok(())
+    }
+}
+
+/// Re-executes a script against a history, loading the payloads it delivers from `payloads`.
+pub async fn replay<X, P>(
     executor: &X,
-    blobs: &B,
+    payloads: &P,
     input: ReplayInput<'_>,
 ) -> Result<Rebuilt<X::Instance>, ReplayError>
 where
     X: ScriptExecutor,
-    B: BlobStore,
+    P: PayloadSource,
+{
+    replay_with_heartbeat(executor, payloads, &mut NoHeartbeat, input).await
+}
+
+/// [`replay`], calling `heartbeat` before each call into the script.
+pub async fn replay_with_heartbeat<X, P, H>(
+    executor: &X,
+    payloads: &P,
+    heartbeat: &mut H,
+    input: ReplayInput<'_>,
+) -> Result<Rebuilt<X::Instance>, ReplayError>
+where
+    X: ScriptExecutor,
+    P: PayloadSource,
+    H: Heartbeat,
 {
     let mut cursor = ReplayCursor::new(input.history)?;
     let compiled = match input.compiled {
@@ -80,12 +120,13 @@ where
         run_id: input.run.id,
         compiled,
         toolset: input.toolset.clone(),
-        input: payloads::load(blobs, tenant, &started.input).await?,
+        input: payloads::load(payloads, tenant, &started.input).await?,
         seed: started.seed,
         epoch: started.epoch,
         started_at: cursor.started_at(),
     };
 
+    heartbeat.beat().await.map_err(ReplayError::LeaseLost)?;
     let (mut instance, emitted) = match executor.start(start).await {
         Ok(started) => started,
         Err(err) => return stopped(&mut cursor, None, err),
@@ -97,7 +138,8 @@ where
     loop {
         match cursor.on_idle()? {
             Next::Deliver { completion, .. } => {
-                let delivery = payloads::delivery(blobs, tenant, completion).await?;
+                let delivery = payloads::delivery(payloads, tenant, completion).await?;
+                heartbeat.beat().await.map_err(ReplayError::LeaseLost)?;
                 let emitted = match instance.deliver(delivery, cursor.logical_now()).await {
                     Ok(emitted) => emitted,
                     Err(err) => return stopped(&mut cursor, Some(instance), err),

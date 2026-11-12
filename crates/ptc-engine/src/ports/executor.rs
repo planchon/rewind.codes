@@ -116,4 +116,33 @@ pub trait ScriptInstance: Send {
         delivery: Delivery,
         now: Timestamp,
     ) -> impl Future<Output = Result<Vec<Emitted>, ExecutorError>> + Send;
+
+    /// The memory the instance holds (its V8 heap), in bytes, as last measured. The engine's
+    /// instance cache is bounded by the sum over the instances it keeps
+    /// (`archi/03-execution.md`, "Sticky execution"). An executor that does not measure it
+    /// reports 0, and the cache is then bounded by its number of instances only.
+    fn memory_usage(&self) -> u64 {
+        0
+    }
+}
+
+/// An executor can be shared: an engine may borrow it, as mock mode does to run scenarios with
+/// the executor of its host.
+impl<X: ScriptExecutor> ScriptExecutor for &X {
+    type Instance = X::Instance;
+
+    fn epochs(&self) -> &[Epoch] {
+        (**self).epochs()
+    }
+
+    fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
+        (**self).compile(script, toolset)
+    }
+
+    fn start(
+        &self,
+        start: StartScript,
+    ) -> impl Future<Output = Result<(Self::Instance, Vec<Emitted>), ExecutorError>> + Send {
+        (**self).start(start)
+    }
 }
