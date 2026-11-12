@@ -384,8 +384,15 @@ fn a_first_ctrl_c_before_the_start_starts_no_run() {
     project.write("script.ts", "export default async () => 1;\n");
     project.write("toolset.json", "{}");
     let (url, requests, release) = slow_registration_server();
-    let mut running: Child = project
-        .command(&["--url", &url, "run", "script.ts", "--toolset", "toolset.json"])
+    let running: Child = project
+        .command(&[
+            "--url",
+            &url,
+            "run",
+            "script.ts",
+            "--toolset",
+            "toolset.json",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
