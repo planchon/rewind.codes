@@ -177,11 +177,13 @@ async fn caller(app: &App, headers: &axum::http::HeaderMap) -> Result<Caller, Ap
             "no API key: send it as `Authorization: Bearer ptc_sk_…`",
         ));
     };
+    // The scheme is case-insensitive (RFC 9110, section 11.1).
     let key = value
         .to_str()
         .ok()
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .map(str::trim)
+        .and_then(|value| value.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+        .map(|(_, key)| key.trim())
         .filter(|key| key.starts_with(API_KEY_PREFIX))
         .ok_or_else(|| unauthorized("the Authorization header must be `Bearer ptc_sk_…`"))?;
     let hash = key_hash(key);

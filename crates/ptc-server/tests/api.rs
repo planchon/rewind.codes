@@ -867,6 +867,14 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
         problem(unknown.list_runs(&RunFilter::default()).await.unwrap_err()).kind(),
         Some(ProblemType::Unauthorized)
     );
+    // The scheme is case-insensitive (RFC 9110).
+    let lowercase = reqwest::Client::new()
+        .get(format!("{}/v1/whoami", server.url))
+        .header("authorization", format!("bearer {}", support::ADMIN_KEY))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(lowercase.status(), 200);
     let anonymous = ptc_api::Client::remote(&server.url, None).unwrap();
     assert_eq!(
         problem(anonymous.server_info().await.unwrap_err()).kind(),
