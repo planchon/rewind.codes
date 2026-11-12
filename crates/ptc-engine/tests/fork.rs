@@ -383,3 +383,48 @@ async fn a_fork_is_refused_like_a_run_that_cannot_start() {
         Err(ForkError::Start(StartError::InvalidTtl { .. }))
     ));
 }
+
+#[tokio::test]
+async fn a_fork_whose_parent_is_gone_is_quarantined_then_given_up_with_a_valid_history() {
+    use ptc_engine::ActivationOutcome;
+    use ptc_engine::ports::{Clock as _, JournalStore as _, QuarantineKind};
+
+    let engine = engine(programs(), dispatcher());
+    let parent = failed_parent(&engine).await;
+    let fork = engine
+        .fork(ForkRun::new(parent.clone(), Script::new("fixed")))
+        .await
+        .unwrap()
+        .run;
+    // The parent is erased before the fork's first activation: the fork cannot follow it.
+    let now = engine.clock().now();
+    assert!(engine.journal().delete_run(&parent, now).await.unwrap());
+
+    // Each activation fails and keeps the lease until it expires; the fifth quarantines the run.
+    let mut last = None;
+    for _ in 0..5 {
+        let report = engine.activate_next().await.unwrap().unwrap();
+        assert_eq!(report.run, fork);
+        last = Some(report.outcome);
+        let later = engine.clock().now().saturating_add(Duration::from_secs(31));
+        engine.clock().advance_to(later);
+    }
+    assert!(matches!(
+        last,
+        Some(ActivationOutcome::Quarantined {
+            kind: QuarantineKind::Failures,
+            ..
+        })
+    ));
+
+    // Given up, the fork ends `aborted` with a history that starts with its own `run_started`.
+    assert!(engine.give_up(&fork).await.unwrap());
+    let history = engine.history(&fork).await.unwrap();
+    assert_eq!(events(&history), ["run_started", "run_aborted"]);
+    ptc_core::validate_history(&history).unwrap();
+    assert_eq!(status(&engine, &fork).await, RunStatus::Aborted);
+    assert_eq!(
+        engine.run_state(&fork).await.unwrap().status(),
+        RunStatus::Aborted
+    );
+}
