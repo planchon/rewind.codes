@@ -1,20 +1,13 @@
-//! Measures the production store: the latency of `commit_activation` and the throughput of
-//! activations, driven the way the engine drives the store, by several engines sharing one
-//! database.
+//! Measures the embedded store on a laptop-sized load: the latency of `commit_activation` and
+//! the throughput of activations, driven the way the engine drives the store.
 //!
 //! Each run calls `calls` host tools in sequence, then completes. One activation is: acquire a
 //! runnable run, take its inbox, commit the trigger with the next command (and its tool task),
 //! release. Between activations, workers claim ready tool tasks and complete them, which wakes
-//! the runs. Payloads are small and inline, as most are. Each engine has its own pool of
-//! connections and its workers.
-//!
-//! It needs an empty database, which it fills:
+//! the runs. Payloads are small and inline, as most are.
 //!
 //! ```text
-//! docker run --rm -d --name ptc-load -p 127.0.0.1:55432:5432 -e POSTGRES_PASSWORD=ptc postgres:17
-//! cargo run --release -p ptc-store-postgres --example load -- \
-//!     --url postgres://postgres:ptc@127.0.0.1:55432/postgres [--runs 300] [--calls 10] \
-//!     [--engines 2] [--workers 4]
+//! cargo run --release -p ptc-store-turso --example turso_load -- [--runs 300] [--calls 10] [--workers 4]
 //! ```
 
 use std::collections::{BTreeMap, HashMap};
@@ -31,7 +24,7 @@ use ptc_engine::ports::{
     AcquireRunnable, Activation, JournalStore, NewRun, NewToolTask, RunMetadata, RunRef,
     STICKY_GRACE, TaskFilter, TenantId, TenantScope, Trigger,
 };
-use ptc_store_postgres::{Config, MasterKey, PostgresStore};
+use ptc_store_turso::{MasterKey, TursoStore};
 use serde_json::json;
 use tokio::sync::Mutex;
 
@@ -39,19 +32,15 @@ const LEASE: Duration = Duration::from_secs(30);
 const EPOCHS: &[Epoch] = &[Epoch(1)];
 
 struct Options {
-    url: String,
     runs: u64,
     calls: u32,
-    engines: u64,
     workers: u64,
 }
 
 fn options() -> Options {
     let mut options = Options {
-        url: String::new(),
         runs: 300,
         calls: 10,
-        engines: 2,
         workers: 4,
     };
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -62,15 +51,12 @@ fn options() -> Options {
                 .unwrap_or_else(|| panic!("{} takes a number", pair[0]))
         };
         match pair[0].as_str() {
-            "--url" => options.url = pair.get(1).cloned().expect("--url takes a URL"),
-            "--engines" => options.engines = value().max(1),
             "--runs" => options.runs = value(),
             "--calls" => options.calls = u32::try_from(value()).expect("--calls fits in u32"),
             "--workers" => options.workers = value().max(1),
             other => panic!("unknown option {other}"),
         }
     }
-    assert!(!options.url.is_empty(), "--url postgres://… is required");
     options
 }
 
@@ -132,7 +118,7 @@ impl Measures {
 
 /// One activation of a runnable run, if any. Returns whether there was one.
 async fn activate(
-    store: &PostgresStore,
+    store: &TursoStore,
     worker: &str,
     calls: u32,
     lengths: &Mutex<HashMap<RunId, u64>>,
@@ -213,7 +199,7 @@ async fn activate(
 }
 
 /// Claims ready tool tasks and completes them. Returns how many.
-async fn answer_tools(store: &PostgresStore, worker: &str, measures: &mut Measures) -> usize {
+async fn answer_tools(store: &TursoStore, worker: &str, measures: &mut Measures) -> usize {
     let claimed = measures
         .time(
             "claim_tasks",
@@ -261,36 +247,22 @@ fn report(name: &str, mut values: Vec<Duration>) {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let options = options();
-    let master_key = MasterKey::generate().expect("master key");
-    let mut config = Config::new(options.url.clone());
-    config.max_connections = u32::try_from(options.workers + 2).expect("in range");
-    let mut engines = Vec::new();
-    for _ in 0..options.engines {
-        let store = PostgresStore::connect(&config, master_key.clone())
-            .await
-            .expect("connect to Postgres");
-        engines.push(store);
-    }
+    let dir = tempfile::TempDir::new().expect("temporary directory");
+    let path = dir.path().join("journal.db");
+    let store = TursoStore::open(&path, MasterKey::generate().expect("master key"))
+        .await
+        .expect("open the store");
 
-    // Runs ids are unique: a second measure on the same database starts after the first.
-    let first: u128 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("after 1970")
-        .as_nanos()
-        << 20;
     let tenant = TenantId::local();
     for n in 0..options.runs {
-        let run = RunRef::new(tenant.clone(), RunId::from_u128(first + u128::from(n)));
+        let run = RunRef::new(tenant.clone(), RunId::from_u128(u128::from(n) + 1));
         let new_run = NewRun {
             run,
             started: started(),
             metadata: RunMetadata::default(),
             created_at: now(),
         };
-        engines[0]
-            .create_run(new_run, None)
-            .await
-            .expect("create_run");
+        store.create_run(new_run, None).await.expect("create_run");
     }
 
     let lengths = Arc::new(Mutex::new(HashMap::new()));
@@ -298,27 +270,25 @@ async fn main() {
     let expected = options.runs * (u64::from(options.calls) + 1);
     let started_at = Instant::now();
     let mut workers = Vec::new();
-    for (e, store) in engines.iter().enumerate() {
-        for w in 0..options.workers {
-            let store = store.clone();
-            let lengths = Arc::clone(&lengths);
-            let completed = Arc::clone(&completed);
-            let calls = options.calls;
-            workers.push(tokio::spawn(async move {
-                let worker = format!("engine-{e}/worker-{w}");
-                let mut measures = Measures::default();
-                while completed.load(Ordering::SeqCst) < expected {
-                    if activate(&store, &worker, calls, &lengths, &mut measures).await {
-                        completed.fetch_add(1, Ordering::SeqCst);
-                        continue;
-                    }
-                    if answer_tools(&store, &worker, &mut measures).await == 0 {
-                        tokio::task::yield_now().await;
-                    }
+    for w in 0..options.workers {
+        let store = store.clone();
+        let lengths = Arc::clone(&lengths);
+        let completed = Arc::clone(&completed);
+        let calls = options.calls;
+        workers.push(tokio::spawn(async move {
+            let worker = format!("worker-{w}");
+            let mut measures = Measures::default();
+            while completed.load(Ordering::SeqCst) < expected {
+                if activate(&store, &worker, calls, &lengths, &mut measures).await {
+                    completed.fetch_add(1, Ordering::SeqCst);
+                    continue;
                 }
-                measures
-            }));
-        }
+                if answer_tools(&store, &worker, &mut measures).await == 0 {
+                    tokio::task::yield_now().await;
+                }
+            }
+            measures
+        }));
     }
     let mut all = Measures::default();
     for worker in workers {
@@ -330,11 +300,14 @@ async fn main() {
     }
     let elapsed = started_at.elapsed();
 
+    let size: u64 = std::fs::read_dir(dir.path())
+        .expect("read the directory")
+        .map(|file| file.expect("entry").metadata().expect("metadata").len())
+        .sum();
     println!(
-        "{} runs × {} tool calls, {} engines × {} workers: {} activations in {:.2?}",
+        "{} runs × {} tool calls, {} workers: {} activations in {:.2?}",
         options.runs,
         options.calls,
-        options.engines,
         options.workers,
         all.activations.len(),
         elapsed
@@ -348,4 +321,8 @@ async fn main() {
     for (method, latencies) in all.calls {
         report(method, latencies);
     }
+    println!(
+        "database     {:.1} MiB (journal.db and its WAL)",
+        size as f64 / 1_048_576.0
+    );
 }

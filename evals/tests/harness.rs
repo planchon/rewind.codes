@@ -231,7 +231,7 @@ async fn a_script_refused_first_counts_against_the_first_try() {
     assert!(results[0].is_error);
     assert!(
         results[0].content.starts_with(
-            "The script was refused before anything ran: it does not type-check (1 error)"
+            "The script was refused before anything ran: the script does not type-check (1 error): fix the diagnostics and start it again"
         ),
         "{}",
         results[0].content

@@ -1811,6 +1811,36 @@ impl JournalStore for PostgresStore {
         }))
     }
 
+    async fn list_toolsets(&self, tenant_id: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT digest, spec, declarations, prompt FROM toolsets WHERE tenant = $1 \
+             ORDER BY digest",
+        )
+        .bind(tenant(tenant_id))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        let mut toolsets = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let digest = row.digest(0)?;
+            let toolset = ptc_format::decode_toolset(&row.text(1)?)
+                .map_err(|err| Error::Corrupt(format!("toolset {digest}: {err}")))?;
+            if toolset.digest() != digest {
+                return Err(
+                    Error::Corrupt(format!("toolset {digest} does not hash to its key")).into(),
+                );
+            }
+            toolsets.push(StoredToolset {
+                toolset,
+                declarations: ToolDeclarations {
+                    typescript: row.text(2)?,
+                    prompt: row.text(3)?,
+                },
+            });
+        }
+        Ok(toolsets)
+    }
+
     // ---------------------------------------------------------------------------------------
     // The way in
 

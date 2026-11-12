@@ -38,6 +38,7 @@ use crate::webhooks::{
     servers((url = "/", description = "The server that serves this document.")),
     paths(
         operations::create_toolset,
+        operations::list_toolsets,
         operations::get_toolset_declarations,
         operations::search_tools,
         operations::set_toolset_credentials,
@@ -74,6 +75,7 @@ use crate::webhooks::{
         operations::get_payload,
         operations::create_api_key,
         operations::revoke_api_key,
+        operations::whoami,
         operations::get_server,
         operations::stop_server,
     ),
@@ -289,7 +291,7 @@ fn webhooks_paths() -> PathsBuilder {
 /// The operations, declared for `utoipa`. Their bodies are empty: the server implements them.
 #[allow(dead_code)]
 mod operations {
-    use crate::admin::{ApiKey, CreateApiKey, ServerInfo};
+    use crate::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
     use crate::events::{Entry, EventsQuery, StreamEvent};
     use crate::problem::Problem;
     use crate::reading::{ToolStatsFilter, ToolStatsPage};
@@ -305,7 +307,7 @@ mod operations {
     };
     use crate::toolsets::{
         CreateToolset, Credentials, DeclarationsQuery, DeclarationsText, SearchQuery,
-        ToolSearchResults, Toolset,
+        ToolSearchResults, Toolset, ToolsetList,
     };
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
 
@@ -328,6 +330,15 @@ mod operations {
         )
     )]
     pub(super) fn create_toolset() {}
+
+    /// List the toolsets
+    ///
+    /// The toolsets the tenant registered, by id, with their servers and tool names.
+    #[utoipa::path(
+        get, path = "/v1/toolsets", tag = "toolsets", operation_id = "listToolsets",
+        responses((status = 200, description = "Every toolset of the tenant.", body = ToolsetList))
+    )]
+    pub(super) fn list_toolsets() {}
 
     /// The toolset's declarations
     #[utoipa::path(
@@ -806,6 +817,16 @@ mod operations {
         )
     )]
     pub(super) fn revoke_api_key() {}
+
+    /// Who the API key is
+    ///
+    /// Its tenant, role and allowed labels. Over the embedded server's socket: the tenant
+    /// `local`, role `admin`.
+    #[utoipa::path(
+        get, path = "/v1/whoami", tag = "administration", operation_id = "whoami",
+        responses((status = 200, description = "The key's identity.", body = Identity))
+    )]
+    pub(super) fn whoami() {}
 
     /// What this server is
     #[utoipa::path(

@@ -96,36 +96,6 @@ describe("approvals", () => {
       ["t-schema", "schema_changed"],
     ]);
 
-    server.on(
-      "GET",
-      "/v1/runs/{id}/events",
-      sse([
-        {
-          event: "entry",
-          data: {
-            type: "entry",
-            idx: 3,
-            recordedAt: "t",
-            event: {
-              type: "schedule_tool_call",
-              seq: 4,
-              tool: "github.delete_repo",
-              args: payload({ repo: "acme/api" }),
-            },
-          },
-        },
-        {
-          event: "entry",
-          data: {
-            type: "entry",
-            idx: 4,
-            recordedAt: "t",
-            event: { type: "schedule_tool_call", seq: 5, tool: "big", args: payload({ big: 1 }, false) },
-          },
-        },
-        end,
-      ]),
-    );
     server.on("GET", "/v1/payloads/{digest}", { status: 200, body: { big: 1 } });
     server.on("POST", "/v1/tasks/{id}/approve", { status: 204 });
     server.on("POST", "/v1/tasks/{id}/reject", { status: 204 });
@@ -163,6 +133,7 @@ function runWaiting() {
         taskId: "t-approval",
         state: "approval" as const,
         attempt: 1,
+        args: payload({ repo: "acme/api" }),
       },
       {
         kind: "tool_call" as const,
@@ -172,6 +143,7 @@ function runWaiting() {
         state: "parked" as const,
         parked: "schema_changed" as const,
         attempt: 1,
+        args: payload({ big: 1 }, false),
       },
       {
         kind: "tool_call" as const,
@@ -181,8 +153,17 @@ function runWaiting() {
         state: "parked" as const,
         parked: "credentials_expired" as const,
         attempt: 1,
+        args: payload({}),
       },
-      { kind: "tool_call" as const, seq: 7, tool: "y", taskId: "t-ready", state: "ready" as const, attempt: 1 },
+      {
+        kind: "tool_call" as const,
+        seq: 7,
+        tool: "y",
+        taskId: "t-ready",
+        state: "ready" as const,
+        attempt: 1,
+        args: payload({}),
+      },
       { kind: "signal" as const, name: "approval" },
     ],
   };

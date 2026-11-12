@@ -115,6 +115,7 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
         kind: "tool_call",
         seq: call.seq,
         tool: call.tool,
+        args: call.args,
         callsite: call.callsite,
         state: state?.state ?? "claimed",
         parked: state?.parked ?? null,
@@ -158,6 +159,11 @@ export function summarize(
     id: run.id,
     status: run.status,
     script: run.script,
+    headline:
+      fixture.script.source
+        .split("\n")
+        .find((line) => line.trim() !== "")
+        ?.trim() ?? "",
     toolset: run.toolset,
     labels: run.labels,
     startedAt: run.createdAt,

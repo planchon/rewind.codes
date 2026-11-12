@@ -1,0 +1,28 @@
+[package]
+name = "ptc"
+description = "The ptc binary: hands `ptc server …` to ptc-server and every other command to ptc-cli."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The entry point: it depends only on the two composition roots (archi/07-code-architecture.md,
+# "Dependency rules").
+[dependencies]
+ptc-cli.workspace = true
+ptc-server.workspace = true
+
+[[bin]]
+name = "ptc"
+path = "src/main.rs"
+
+# The embedded server's lifecycle is tested through this binary. The tests reach its socket with
+# an HTTP client of their own: the binary crate depends on no other internal crate.
+[dev-dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[lints]
+workspace = true

@@ -1708,6 +1708,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs4"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8640e34b88f7652208ce9e88b1a37a2ae95227d84abec377ccd3c5cfeb141ed4"
+dependencies = [
+ "rustix 1.1.6",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "fs_extra"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3660,6 +3670,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ptc"
+version = "0.1.0"
+dependencies = [
+ "ptc-cli",
+ "ptc-server",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "ptc-api"
 version = "0.1.0"
 dependencies = [
@@ -3721,6 +3743,10 @@ dependencies = [
  "tracing",
  "ureq",
 ]
+
+[[package]]
+name = "ptc-cli"
+version = "0.1.0"
 
 [[package]]
 name = "ptc-codegen"
@@ -3839,6 +3865,40 @@ dependencies = [
  "rustix 1.1.6",
  "serde_json",
  "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "ptc-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "clap",
+ "fs4",
+ "futures-util",
+ "getrandom 0.3.4",
+ "jiff",
+ "ptc-api",
+ "ptc-blob",
+ "ptc-check",
+ "ptc-codegen",
+ "ptc-core",
+ "ptc-engine",
+ "ptc-format",
+ "ptc-mcp",
+ "ptc-otel",
+ "ptc-runtime",
+ "ptc-store-postgres",
+ "ptc-store-turso",
+ "reqwest",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
  "thiserror",
  "tokio",
  "tracing",

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
-use ptc_core::{Digest, HistoryEntry, RunId, RunStatus, Shape, Timestamp, ToolFailureKind};
+use ptc_core::{Digest, HistoryEntry, RunId, RunStatus, Seq, Shape, Timestamp, ToolFailureKind};
 
 use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
 
@@ -85,6 +85,25 @@ pub struct ScriptFilter {
     pub tenant: TenantId,
     /// Only the runs started at or after this time count.
     pub since: Option<Timestamp>,
+    /// Only this script.
+    pub digest: Option<Digest>,
+    /// Only the runs carrying all of these labels count.
+    pub labels: BTreeMap<String, String>,
+    /// Only the scripts whose counted runs called this tool.
+    pub tool: Option<String>,
+}
+
+impl ScriptFilter {
+    /// Every script of the tenant, every run counted.
+    pub fn new(tenant: TenantId) -> Self {
+        Self {
+            tenant,
+            since: None,
+            digest: None,
+            labels: BTreeMap::new(),
+            tool: None,
+        }
+    }
 }
 
 /// A script, across its runs.
@@ -96,6 +115,8 @@ pub struct ScriptSummary {
     pub statuses: BTreeMap<RunStatus, u64>,
     /// The tools its runs called.
     pub tools: BTreeSet<String>,
+    /// The labels its runs carried, as `key:value`, with the number of runs carrying each.
+    pub labels: BTreeMap<String, u64>,
     pub first_started_at: Option<Timestamp>,
     pub last_started_at: Option<Timestamp>,
 }
@@ -120,6 +141,8 @@ pub struct ToolStats {
     pub completed: u64,
     pub failed: u64,
     pub errors_by_kind: BTreeMap<ToolFailureKind, u64>,
+    /// Attempts beyond the first, over the calls: what [`ReadModel::record_attempt`] recorded.
+    pub retries: u64,
     /// Over the calls with an outcome; `None` when no call has one.
     pub latency: Option<Latency>,
 }
@@ -134,6 +157,7 @@ pub struct Latency {
     pub mean_ms: u64,
     pub p50_ms: u64,
     pub p95_ms: u64,
+    pub p99_ms: u64,
     pub max_ms: u64,
 }
 
@@ -154,7 +178,10 @@ pub enum ReadModelError {
 /// - **Observed shapes.** The results of `tool_call_completed` entries whose value is held are
 ///   folded into the shape of their tool ([`Shape::merge`]); a result held only by its digest
 ///   contributes nothing.
-/// - **Retention.** `purge` and `delete_run` remove a run's summary and calls.
+/// - **Attempts.** Attempts live in the tool tasks, never in the journal: whoever claims a task
+///   records its attempt with `record_attempt`, which keeps the highest attempt of each call,
+///   in any order, before or after the call's entries are projected.
+/// - **Retention.** `purge` and `delete_run` remove a run's summary, calls and attempts.
 pub trait ReadModel: Send + Sync {
     /// Projects committed entries of a run.
     fn apply(
@@ -184,6 +211,21 @@ pub trait ReadModel: Send + Sync {
         tenant: &TenantId,
         tools: &[String],
     ) -> impl Future<Output = Result<BTreeMap<String, Shape>, ReadModelError>> + Send;
+
+    /// Records that the call `seq` of a run was claimed for its `attempt`-th time (from 1). The
+    /// call keeps the highest attempt recorded.
+    fn record_attempt(
+        &self,
+        run: &RunRef,
+        seq: Seq,
+        attempt: u32,
+    ) -> impl Future<Output = Result<(), ReadModelError>> + Send;
+
+    /// The attempts recorded for the calls of a projected run, by seq.
+    fn attempts(
+        &self,
+        run: &RunRef,
+    ) -> impl Future<Output = Result<BTreeMap<Seq, u32>, ReadModelError>> + Send;
 
     /// Removes the runs of the tenants in scope that ended before `ended_before`. Returns how
     /// many runs were removed.

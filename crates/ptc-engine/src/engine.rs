@@ -11,14 +11,15 @@ use ptc_core::{
     RunState, RunStatus, Script, Seq, Toolset,
 };
 
+use crate::adapters::StaticTypeChecker;
 use crate::cache::{CacheConfig, InstanceCache};
 use crate::payloads::{self, PayloadTiers};
 use crate::ports::{
-    Activation, BlobError, BlobStore, Clock, CreateRun, Created, Credentials, Enqueued, Entropy,
-    ExecutorError, InvalidScript, JournalStore, NewRun, QuarantineKind, RunFilter, RunMetadata,
-    RunRecord, RunRef, ScriptExecutor, SecretError, SecretOwner, SecretStore, StoreError,
-    StoredScript, StoredToolset, TaskFilter, TenantId, TenantScope, ToolDeclarations,
-    ToolDispatcher, WebhookSender,
+    Activation, BlobError, BlobStore, CheckerError, Clock, CreateRun, Created, Credentials,
+    Diagnostic, Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun,
+    QuarantineKind, RunFilter, RunMetadata, RunRecord, RunRef, ScriptExecutor, SecretError,
+    SecretOwner, SecretStore, Severity, StoreError, StoredScript, StoredToolset, TaskFilter,
+    TenantId, TenantScope, ToolDeclarations, ToolDispatcher, TypeChecker, WebhookSender,
 };
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
@@ -194,6 +195,13 @@ pub enum StartError {
     /// default export… The message is written to be read by the model that wrote the script.
     #[error("the script is invalid: {0}")]
     InvalidScript(InvalidScript),
+    /// The script does not type-check against the sandbox lib and the toolset's declarations:
+    /// at least one diagnostic is an error. Every diagnostic is given, warnings included.
+    #[error("the script does not type-check: {}", first_error(.0))]
+    TypeErrors(Vec<Diagnostic>),
+    /// The type-checker itself failed: the script was neither accepted nor refused.
+    #[error(transparent)]
+    Checker(#[from] CheckerError),
     #[error("invalid TTL {requested:?}: it must be positive and at most {max:?}")]
     InvalidTtl { requested: Duration, max: Duration },
     #[error("the input is {size} bytes as canonical JSON, above the limit of {max} bytes")]
@@ -365,6 +373,27 @@ where
     /// that wrote it) learns at once instead of at the first activation
     /// (`archi/03-execution.md`, "Starting a run").
     pub async fn start_run(&self, request: StartRun) -> Result<Created, StartError> {
+        self.start(request, None::<&StaticTypeChecker>).await
+    }
+
+    /// [`start_run`](Self::start_run), with the script type-checked first against the sandbox
+    /// lib and the toolset's declarations (`request.declarations`), as `ptc check` does: a
+    /// script with a type error is refused ([`StartError::TypeErrors`]) before any run exists
+    /// (`archi/03-execution.md`, "Starting a run"). The checks at start come first: a script that
+    /// does not even compile is refused with them.
+    pub async fn start_run_checked<K: TypeChecker>(
+        &self,
+        request: StartRun,
+        checker: &K,
+    ) -> Result<Created, StartError> {
+        self.start(request, Some(checker)).await
+    }
+
+    async fn start<K: TypeChecker>(
+        &self,
+        request: StartRun,
+        checker: Option<&K>,
+    ) -> Result<Created, StartError> {
         let ttl = request.ttl.unwrap_or(self.config.default_ttl);
         if ttl.is_zero() || ttl > self.config.max_ttl {
             return Err(StartError::InvalidTtl {
@@ -385,6 +414,9 @@ where
             .executor
             .compile(&request.script, &request.toolset)
             .map_err(StartError::InvalidScript)?;
+        if let Some(checker) = checker {
+            type_check(checker, &request.script, &request.declarations).await?;
+        }
         let tenant = request.tenant;
         self.journal
             .put_script(&tenant, &request.script, &compiled)
@@ -665,6 +697,30 @@ where
     pub fn epochs(&self) -> &[Epoch] {
         self.executor.epochs()
     }
+}
+
+/// Type-checks a script; refuses it when a diagnostic is an error.
+pub(crate) async fn type_check<K: TypeChecker>(
+    checker: &K,
+    script: &Script,
+    declarations: &ToolDeclarations,
+) -> Result<(), StartError> {
+    let diagnostics = checker.check(script, declarations).await?;
+    if diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity == Severity::Error)
+    {
+        return Err(StartError::TypeErrors(diagnostics));
+    }
+    Ok(())
+}
+
+/// The first error of a refused check, for the message of [`StartError::TypeErrors`].
+fn first_error(diagnostics: &[Diagnostic]) -> String {
+    diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity == Severity::Error)
+        .map_or_else(String::new, ToString::to_string)
 }
 
 /// `"{run_id}/{seq}"`, the key every attempt of a tool call carries.

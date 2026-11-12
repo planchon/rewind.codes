@@ -60,6 +60,10 @@ pub struct Task {
     pub attempt: u32,
     /// The claim expires if no heartbeat comes within this many milliseconds.
     pub heartbeat_timeout_ms: u64,
+    /// The tool's execution timeout, in milliseconds: past it, the call is not waited for any
+    /// more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
     /// The run's labels.
     pub labels: Labels,
     /// W3C trace context, with the tool call's span as parent.

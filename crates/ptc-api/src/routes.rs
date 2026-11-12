@@ -44,12 +44,14 @@ pub const PAYLOAD: &str = "/v1/payloads/{digest}";
 
 pub const API_KEYS: &str = "/v1/api-keys";
 pub const API_KEY: &str = "/v1/api-keys/{id}";
+pub const WHOAMI: &str = "/v1/whoami";
 pub const SERVER: &str = "/v1/server";
 pub const SERVER_STOP: &str = "/v1/server/stop";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 39] = [
+pub const OPERATIONS: [(&str, &str); 41] = [
     ("POST", TOOLSETS),
+    ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
     ("GET", TOOLSET_SEARCH),
     ("PUT", TOOLSET_CREDENTIALS),
@@ -86,6 +88,7 @@ pub const OPERATIONS: [(&str, &str); 39] = [
     ("GET", PAYLOAD),
     ("POST", API_KEYS),
     ("DELETE", API_KEY),
+    ("GET", WHOAMI),
     ("GET", SERVER),
     ("POST", SERVER_STOP),
 ];

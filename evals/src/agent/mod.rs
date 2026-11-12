@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ptc_api::common::{RunStatus, ScriptError};
-use ptc_api::scripts::{CheckResult, Diagnostic, Severity, TestResult};
+use ptc_api::scripts::{CheckResult, Diagnostic, TestResult};
 use ptc_api::toolsets::ToolMatch;
 use ptc_core::{Matching, RunId, Script, Timestamp, parse_duration};
 use ptc_engine::mock::{
@@ -33,7 +33,7 @@ use crate::view;
 use crate::world::World;
 use render::{
     Limits, RunExtras, args, describe_check, describe_matches, describe_page, describe_refusal,
-    describe_run, describe_runs, describe_test, entry_text, json, plural,
+    describe_run, describe_runs, describe_test, entry_text, json,
 };
 
 /// What a tool call returns to the model.
@@ -193,14 +193,17 @@ impl<'w> AgentTools<'w> {
     async fn run_script(&self, input: &Map<String, Value>, call_id: &str) -> Handled {
         let code = require_string(input, "code", "code")?;
         let wait = self.wait_of(input.get("wait"))?;
-        let script = Script::new(code);
-        self.type_check(&script).await?;
         let mut request = self.world.start_request(
-            script,
+            Script::new(code),
             input.get("input").cloned().unwrap_or_else(|| json!({})),
         );
         request.idempotency_key = Some(idempotency_key(call_id));
-        let created = match self.world.engine.start_run(request).await {
+        let started = self
+            .world
+            .engine
+            .start_run_checked(request, &*self.world.checker)
+            .await;
+        let created = match started {
             Ok(created) => created,
             Err(error) => return Err(start_failure(error)),
         };
@@ -235,8 +238,6 @@ impl<'w> AgentTools<'w> {
             return Err(Failure::Input("`scenario` must be an object.".into()));
         };
         let script = Script::new(code);
-        self.type_check(&script).await?;
-
         let mut dispatcher = MockDispatcher::new();
         if let Some(run_id) = scenario.get("from_run") {
             let run_id = run_id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
@@ -258,7 +259,7 @@ impl<'w> AgentTools<'w> {
             }
             dispatcher = dispatcher
                 .with_static_responses(tools)
-                .map_err(|err| Failure::Problem(format!("the static responses: {err}")))?;
+                .map_err(|err| Failure::Problem(format!("tools: {err}")))?;
         }
         let mut signals = Vec::new();
         if let Some(listed) = scenario.get("signals") {
@@ -271,8 +272,10 @@ impl<'w> AgentTools<'w> {
                 let name = signal["name"].as_str().ok_or_else(invalid)?;
                 let when = match signal.get("when").and_then(Value::as_str) {
                     None | Some("blocked") => SignalWhen::Blocked,
-                    Some(after) => SignalWhen::After(parse_duration(after).map_err(|err| {
-                        Failure::Problem(format!("signal {name:?}: `when` {after:?}: {err}"))
+                    Some(after) => SignalWhen::After(parse_duration(after).map_err(|_| {
+                        Failure::Problem(format!(
+                            "signal {name}: when must be \"blocked\" or a duration such as \"2h\", not {after:?}"
+                        ))
                     })?),
                 };
                 signals.push(ScenarioSignal {
@@ -300,7 +303,14 @@ impl<'w> AgentTools<'w> {
                     Arc::new(SharedClock::new(Scenario::DEFAULT_START));
                 let handlers = TsMocks::new(&Script::new(source), clock, SandboxLimits::default())
                     .await
-                    .map_err(|err| Failure::Problem(format!("the mocks: {err}")))?;
+                    .map_err(|err| match err {
+                        ptc_runtime::MockError::Invalid(message) => {
+                            Failure::Problem(format!("the mocks cannot load: {message}"))
+                        }
+                        ptc_runtime::MockError::Internal(message) => {
+                            Failure::Platform(AgentError::Checker(message))
+                        }
+                    })?;
                 let tools = handlers.tools().clone();
                 let dispatcher = dispatcher.with_mocks(Mocks { handlers, tools });
                 ptc_engine::mock::run_scenario(executor, dispatcher, test).await
@@ -343,8 +353,8 @@ impl<'w> AgentTools<'w> {
             let history = self.world.engine.export_history(&run).await?;
             let Some(found) = history.iter().find(|e| e.index == index) else {
                 return Err(Failure::Problem(format!(
-                    "run {run_id} has no entry {index}: its history has {} entries",
-                    history.len()
+                    "run {run_id} has no entry {index}: its entries are numbered from 0 to {}",
+                    history.len().saturating_sub(1)
                 )));
             };
             let entry = ptc_api::events::Entry::from_core(found, |payload| match payload.value() {
@@ -432,11 +442,7 @@ impl<'w> AgentTools<'w> {
             .signal(&run, name.clone(), payload, Some(idempotency_key(call_id)))
             .await?;
         let content = match enqueued {
-            Enqueued::RunEnded => {
-                return Err(Failure::Problem(format!(
-                    "run {run_id} has ended: it takes no more signals"
-                )));
-            }
+            Enqueued::RunEnded => return Err(self.run_ended(&run, "a signal").await?),
             Enqueued::Duplicate => format!(
                 "This signal {} was already sent to run {run_id}: nothing was added.",
                 render::quoted(&name)
@@ -456,9 +462,7 @@ impl<'w> AgentTools<'w> {
         let run_id = require_string(input, "run_id", "run_id")?;
         let run = self.scoped_run(&run_id).await?;
         if self.world.engine.cancel(&run, None).await? == Enqueued::RunEnded {
-            return Err(Failure::Problem(format!(
-                "run {run_id} has ended: it cannot be cancelled"
-            )));
+            return Err(self.run_ended(&run, "a cancellation").await?);
         }
         self.world
             .drive(Some(&run), Some(self.deadline(self.default_wait())))
@@ -471,15 +475,18 @@ impl<'w> AgentTools<'w> {
         let run_id = require_string(input, "run_id", "run_id")?;
         let code = require_string(input, "code", "code")?;
         let parent = self.scoped_run(&run_id).await?;
-        let script = Script::new(code);
-        self.type_check(&script).await?;
-        let mut request = ForkRun::new(parent, script);
+        let mut request = ForkRun::new(parent, Script::new(code));
         request.labels = Some(self.world.labels.clone());
         request.idempotency_key = Some(idempotency_key(call_id));
-        let created = match self.world.engine.fork(request).await {
+        let forked = self
+            .world
+            .engine
+            .fork_checked(request, &*self.world.checker)
+            .await;
+        let created = match forked {
             Ok(created) => created,
             Err(ForkError::Start(error)) => return Err(start_failure(error)),
-            Err(ForkError::Engine(error)) => return Err(error.into()),
+            Err(ForkError::Engine(error)) => return Err(engine_failure(error)),
             Err(other) => return Err(Failure::Problem(other.to_string())),
         };
         let run = created.run;
@@ -493,7 +500,8 @@ impl<'w> AgentTools<'w> {
 
     fn search_tools(&self, input: &Map<String, Value>) -> Handled {
         let query = require_string(input, "query", "query")?;
-        let matches = search(&self.world.declarations, &query);
+        let matches = search(&self.world.toolset, &self.world.declarations, &query)
+            .ok_or_else(|| Failure::Problem("query: give at least one word to look for".into()))?;
         Ok(result(describe_matches(&query, &matches), false))
     }
 
@@ -552,49 +560,41 @@ impl<'w> AgentTools<'w> {
         })
     }
 
-    /// Type-checks a script, and refuses it with its diagnostics when it does not pass, as
-    /// `POST /v1/runs` does by default.
-    async fn type_check(&self, script: &Script) -> Result<(), Failure> {
-        let checked = self.check(script).await?;
-        if checked.ok {
-            return Ok(());
-        }
-        let errors = checked
-            .diagnostics
-            .iter()
-            .filter(|d| d.severity == Severity::Error)
-            .count();
-        Err(Failure::Refused {
-            detail: format!("it does not type-check ({})", plural(errors, "error")),
-            diagnostics: checked.diagnostics,
-        })
-    }
-
-    /// The type-checker's diagnostics, and when it finds no error, the sandbox's checks at
-    /// start (imports and their names, the default export).
+    /// `POST /v1/check`: the checks at start, then tsgo and the checker's rules.
     async fn check(&self, script: &Script) -> Result<CheckResult, Failure> {
+        use ptc_engine::ports::ScriptExecutor as _;
+        if let Err(invalid) = self
+            .world
+            .engine
+            .executor()
+            .compile(script, &self.world.toolset)
+        {
+            return Ok(CheckResult {
+                ok: false,
+                diagnostics: vec![view::invalid_script_diagnostic(&invalid)],
+            });
+        }
         let diagnostics = self
             .world
             .checker
             .check(script, &self.world.tool_declarations())
             .await
             .map_err(|err| Failure::Platform(AgentError::Checker(err.to_string())))?;
-        let mut checked = view::check_result(&diagnostics);
-        if checked.ok {
-            use ptc_engine::ports::ScriptExecutor as _;
-            if let Err(invalid) = self
-                .world
-                .engine
-                .executor()
-                .compile(script, &self.world.toolset)
-            {
-                checked.ok = false;
-                checked
-                    .diagnostics
-                    .push(view::start_diagnostic(&invalid.message, script.source()));
-            }
-        }
-        Ok(checked)
+        Ok(view::check_result(&diagnostics))
+    }
+
+    /// A run that has ended refuses a signal or a cancellation, as the server says it.
+    async fn run_ended(&self, run: &RunRef, what: &str) -> Result<Failure, Failure> {
+        let status = self
+            .world
+            .engine
+            .get_run(run)
+            .await?
+            .map_or("ended", |record| record.status.as_str());
+        Ok(Failure::Problem(format!(
+            "run {} has ended ({status}): {what} can only be sent to a run that is still active",
+            run.id
+        )))
     }
 
     /// The run, if it carries the agent's labels; otherwise the same answer as a run that does
@@ -652,17 +652,47 @@ fn result_of_test(result: &TestResult, limits: &Limits) -> AgentToolResult {
     }
 }
 
-/// A refused start, as the API answers it.
+/// A refused start, as the API answers it (`ptc-server`'s `error.rs`).
 fn start_failure(error: StartError) -> Failure {
     match error {
         StartError::InvalidScript(invalid) => Failure::Refused {
-            detail: invalid.message,
-            diagnostics: Vec::new(),
+            detail: format!("the script cannot run: {}", invalid.message),
+            diagnostics: vec![view::invalid_script_diagnostic(&invalid)],
         },
+        StartError::TypeErrors(diagnostics) => {
+            let errors = diagnostics
+                .iter()
+                .filter(|d| d.severity == ptc_engine::ports::Severity::Error)
+                .count();
+            Failure::Refused {
+                detail: format!(
+                    "the script does not type-check ({errors} error{}): fix the diagnostics and \
+                     start it again",
+                    if errors == 1 { "" } else { "s" }
+                ),
+                diagnostics: diagnostics.iter().map(view::diagnostic).collect(),
+            }
+        }
+        StartError::InvalidTtl { .. } | StartError::InputTooLarge { .. } => {
+            Failure::Problem(error.to_string())
+        }
+        StartError::QuotaExceeded { .. } => {
+            Failure::Problem(format!("{error}: wait for runs to end, or cancel some"))
+        }
+        StartError::Checker(error) => Failure::Platform(AgentError::Checker(error.to_string())),
         StartError::Store(error) => Failure::Platform(AgentError::Engine(error.into())),
-        StartError::Secret(error) => Failure::Platform(AgentError::Engine(error.into())),
-        StartError::NoEpoch => Failure::Platform(AgentError::Checker(error.to_string())),
-        other => Failure::Problem(other.to_string()),
+        other => Failure::Platform(AgentError::Checker(other.to_string())),
+    }
+}
+
+/// An engine error, as the API answers it: what the model can fix is a problem, the rest a
+/// fault of the platform.
+fn engine_failure(error: EngineError) -> Failure {
+    match error {
+        EngineError::RunEnded(run) => Failure::Problem(format!(
+            "run {run} has ended: nothing can be sent to it any more"
+        )),
+        other => Failure::Platform(AgentError::Engine(other)),
     }
 }
 
@@ -690,45 +720,59 @@ fn expectations(value: Option<&Value>) -> Result<Expectations, Failure> {
     })
 }
 
-/// The tools matching a query, best first: each word of the query found in a tool's name
-/// counts three, in its prompt line (its description) one. At most 10.
-pub fn search(declarations: &ptc_codegen::Declarations, query: &str) -> Vec<ToolMatch> {
+/// The tools matching a query, best first, as `GET /v1/toolsets/{id}/search` ranks them: each
+/// word of the query found in a tool's name counts two, in its description one; 10 tools at
+/// most. `None` when the query has no word.
+pub fn search(
+    toolset: &ptc_core::Toolset,
+    declarations: &ptc_codegen::Declarations,
+    query: &str,
+) -> Option<Vec<ToolMatch>> {
     let words: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|word| !word.is_empty())
         .map(str::to_lowercase)
         .collect();
-    let mut scored: Vec<(usize, &ptc_codegen::ToolDeclaration)> = declarations
-        .tools
+    if words.is_empty() {
+        return None;
+    }
+    let mut scored: Vec<(usize, &ptc_core::Tool)> = toolset
+        .tools()
         .iter()
         .map(|tool| {
             let name = tool.name.to_lowercase();
-            let line = tool.prompt.to_lowercase();
+            let description = tool
+                .description
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase();
             let score = words
                 .iter()
                 .map(|word| {
-                    3 * usize::from(name.contains(word.as_str()))
-                        + usize::from(line.contains(word.as_str()))
+                    usize::from(name.contains(word.as_str())) * 2
+                        + usize::from(description.contains(word.as_str()))
                 })
                 .sum();
             (score, tool)
         })
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
-    scored
-        .into_iter()
-        .take(10)
-        .map(|(_, tool)| ToolMatch {
-            name: tool.name.clone(),
-            description: tool
-                .prompt
-                .split_once(" · ")
-                .map_or_else(String::new, |(_, description)| description.to_owned()),
-            prompt: tool.prompt.clone(),
-            dts: tool.typescript.clone(),
-        })
-        .collect()
+    scored.sort_by(|(a, tool_a), (b, tool_b)| b.cmp(a).then_with(|| tool_a.name.cmp(&tool_b.name)));
+    Some(
+        scored
+            .into_iter()
+            .take(10)
+            .map(|(_, tool)| {
+                let declared = declarations.tools.iter().find(|d| d.name == tool.name);
+                ToolMatch {
+                    name: tool.name.clone(),
+                    description: tool.description.clone().unwrap_or_default(),
+                    prompt: declared.map(|d| d.prompt.clone()).unwrap_or_default(),
+                    dts: declared.map(|d| d.typescript.clone()).unwrap_or_default(),
+                }
+            })
+            .collect(),
+    )
 }
 
 /// The idempotency key of a tool call: its id when the API takes it as a key, otherwise the
@@ -811,31 +855,39 @@ mod tests {
 
     #[test]
     fn search_ranks_names_before_descriptions() {
-        let declarations = ptc_codegen::Declarations {
-            typescript: String::new(),
-            prompt: String::new(),
-            tools: vec![
-                ptc_codegen::ToolDeclaration {
-                    name: "crm.refund_order".into(),
-                    prompt: "crm.refund_order({ order_id: string }) → ToolContent · Refund an order".into(),
-                    typescript: "refund".into(),
-                },
-                ptc_codegen::ToolDeclaration {
-                    name: "crm.get_order".into(),
-                    prompt: "crm.get_order({ id: string }) → ToolContent · Get an order, refunds included".into(),
-                    typescript: "get".into(),
-                },
-                ptc_codegen::ToolDeclaration {
-                    name: "chat.post_message".into(),
-                    prompt: "chat.post_message({ channel: string }) → ToolContent · Post".into(),
-                    typescript: "post".into(),
-                },
-            ],
+        let crm = || ptc_core::ToolRoute::Mcp {
+            server: "crm".into(),
         };
-        let found = search(&declarations, "refund");
+        let tool = |name: &str, description: &str| {
+            let mut tool = ptc_core::Tool::new(name, crm(), json!({ "type": "object" }));
+            tool.description = Some(description.into());
+            tool
+        };
+        let toolset = ptc_core::Toolset::new(
+            [ptc_core::McpServer::new(
+                "crm",
+                ptc_core::McpTransport::Http {
+                    url: "https://mcp.example.com/crm".into(),
+                },
+            )],
+            vec![
+                tool("crm.refund_order", "Refund an order"),
+                tool("crm.get_order", "Get an order, refunds included"),
+                tool("crm.post_note", "Post a note"),
+            ],
+        )
+        .unwrap();
+        let declarations = ptc_codegen::generate(&toolset, &BTreeMap::new());
+        let found = search(&toolset, &declarations, "refund").unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].name, "crm.refund_order");
         assert_eq!(found[0].description, "Refund an order");
-        assert!(search(&declarations, "deploy").is_empty());
+        assert!(found[0].dts.contains("refund_order"));
+        assert!(
+            search(&toolset, &declarations, "deploy")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(search(&toolset, &declarations, "!?").is_none());
     }
 }
