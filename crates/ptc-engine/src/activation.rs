@@ -35,7 +35,6 @@ use tracing::Instrument;
 
 use crate::cache::Cached;
 use crate::engine::{ActivationOutcome, ActivationReport, Adapters, Engine, EngineError, Limits};
-use crate::payloads;
 use crate::ports::{
     AcquireRunnable, Activation, BlobStore, Clock, Emitted, Entropy, ExecutorError, Failures,
     JournalStore, Lease, NewTimer, NewToolTask, QuarantineKind, RunRef, STICKY_GRACE,
@@ -44,6 +43,7 @@ use crate::ports::{
 };
 use crate::replay::{self, Heartbeat, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::telemetry::{SpanKey, span_id, trace_of};
+use crate::{metrics, payloads};
 
 /// Why a run is activated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,31 +138,40 @@ where
         self.instances.lock().map_or(0, |cache| cache.len())
     }
 
+    /// Activates the leased run within the activation span (service telemetry): a child of the
+    /// run span in the run's trace once the run is read, timed as `ptc.activation.duration`.
     async fn activate_leased(&self, lease: &Lease, purpose: Purpose) -> ActivationOutcome {
-        match self.activate(lease, purpose).await {
-            Ok(outcome) => outcome,
-            Err(error) => self.activation_failed(lease, purpose, error).await,
-        }
-    }
-
-    /// Activates the leased run: rebuilds its instance, delivers its inbox, commits, and keeps
-    /// the instance. On error nothing is committed, and the instance is dropped.
-    pub(crate) async fn activate(
-        &self,
-        lease: &Lease,
-        purpose: Purpose,
-    ) -> Result<ActivationOutcome, EngineError> {
         let span = tracing::info_span!(
             "activation",
             run = %lease.run,
             fence = lease.fence,
             trace_id = tracing::field::Empty,
             span_id = tracing::field::Empty,
+            parent_span_id = tracing::field::Empty,
+            histogram.ptc.activation.duration = tracing::field::Empty,
+            ptc.outcome = tracing::field::Empty,
         );
-        self.activate_in_span(lease, purpose).instrument(span).await
+        let outcome = async {
+            match self.activate(lease, purpose).await {
+                Ok(outcome) => outcome,
+                Err(error) => self.activation_failed(lease, purpose, error).await,
+            }
+        }
+        .instrument(span.clone())
+        .await;
+        span.record(metrics::OUTCOME, metrics::activation_outcome(&outcome));
+        // A quarantined run whose retry fails again stays quarantined: not counted again.
+        if let ActivationOutcome::Quarantined { kind, .. } = &outcome
+            && purpose == Purpose::Runnable
+        {
+            metrics::quarantined(*kind);
+        }
+        outcome
     }
 
-    async fn activate_in_span(
+    /// Activates the leased run: rebuilds its instance, delivers its inbox, commits, and keeps
+    /// the instance. On error nothing is committed, and the instance is dropped.
+    pub(crate) async fn activate(
         &self,
         lease: &Lease,
         purpose: Purpose,
@@ -179,6 +188,7 @@ where
             last: self.clock.now(),
         };
         let inbox = self.journal.take_inbox(lease).await?;
+        metrics::inbox(inbox.len());
         if inbox.is_empty() && purpose == Purpose::Runnable {
             self.journal.release(lease).await?;
             return Ok(ActivationOutcome::NothingToDo);
@@ -192,16 +202,23 @@ where
             "span_id",
             tracing::field::display(span_id(run_id, SpanKey::Activation(lease.fence))),
         );
+        current.record(
+            "parent_span_id",
+            tracing::field::display(span_id(run_id, SpanKey::Run)),
+        );
         let stored = self.stored_script(tenant, record.script).await?;
         let toolset = self.toolset(tenant, record.toolset).await?.toolset;
 
         // Sticky execution: a hit delivers the new triggers to the instance as it is.
         let cached = self.take_instance(run);
+        let hit = cached.as_ref().is_some_and(|cached| {
+            purpose == Purpose::Runnable && cached.state.history_len() == record.history_len
+        });
+        if purpose == Purpose::Runnable && record.history_len > 0 {
+            metrics::instance_cache_lookup(hit);
+        }
         let (mut instance, state) = match cached {
-            Some(cached)
-                if purpose == Purpose::Runnable
-                    && cached.state.history_len() == record.history_len =>
-            {
+            Some(cached) if hit => {
                 tracing::debug!("instance cache hit");
                 (Some(cached.instance), cached.state)
             }
@@ -472,6 +489,7 @@ where
             Ok(mut cache) => cache.insert(run, cached),
             Err(_) => return,
         };
+        metrics::instance_cache_evictions(evicted.len());
         for run in evicted {
             self.give_up_stickiness(&run).await;
         }

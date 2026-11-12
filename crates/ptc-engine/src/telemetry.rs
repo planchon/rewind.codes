@@ -24,6 +24,7 @@ use ptc_core::{
     RunId, RunMode, Seq, Timestamp, canonical_json,
 };
 
+use crate::metrics::RunMeasurement;
 use crate::ports::{
     AttributeValue, LogRecord, PayloadRecord, RunRecord, Span, SpanId, SpanKind, SpanStatus,
     TraceContext, TraceId,
@@ -172,14 +173,71 @@ pub(crate) struct RunTelemetry<'a> {
 }
 
 impl RunTelemetry<'_> {
-    /// Whether this run's telemetry is exported: sampled, and not a mock run unless the
+    /// Whether this run's spans and logs are exported: sampled, and not a mock run unless the
     /// configuration asks for it.
     pub(crate) fn exported(&self, history: &[HistoryEntry]) -> bool {
+        self.measured(history) && sampled(trace_of(self.record).0, self.config)
+    }
+
+    /// Whether this run's metrics are recorded: not a mock run, whose times are virtual, unless
+    /// the configuration exports them. Metrics are never sampled.
+    pub(crate) fn measured(&self, history: &[HistoryEntry]) -> bool {
         let mock = history.first().is_some_and(|entry| {
             matches!(&entry.event, Event::Lifecycle(Lifecycle::RunStarted(started))
                 if started.mode == RunMode::Mock)
         });
-        (!mock || self.config.export_mock_runs) && sampled(trace_of(self.record).0, self.config)
+        !mock || self.config.export_mock_runs
+    }
+
+    /// What the entries within `from..to` measure, given the history up to `to` at least: the
+    /// run's start and end, and the tool calls that end within the range, timed as their spans
+    /// are.
+    pub(crate) fn measurements(
+        &self,
+        history: &[HistoryEntry],
+        from: u64,
+        to: u64,
+    ) -> Vec<RunMeasurement> {
+        let mut scheduled: BTreeMap<Seq, (Timestamp, &str)> = BTreeMap::new();
+        let mut measurements = Vec::new();
+        for entry in history.iter().take_while(|entry| entry.index < to) {
+            let within = (from..to).contains(&entry.index);
+            let at = entry.recorded_at;
+            let mut call = |seq: &Seq, outcome: &'static str, error_kind: Option<&'static str>| {
+                if let Some((start, tool)) = scheduled.remove(seq)
+                    && within
+                {
+                    measurements.push(tool_call(tool, outcome, error_kind, start, at));
+                }
+            };
+            match &entry.event {
+                Event::Lifecycle(Lifecycle::RunStarted(_)) if within => {
+                    measurements.push(RunMeasurement::Started);
+                }
+                Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
+                    scheduled.insert(*seq, (at, tool.as_str()));
+                }
+                Event::Completion(Completion::ToolCallCompleted { seq, .. }) => {
+                    call(seq, "completed", None);
+                }
+                Event::Completion(Completion::ToolCallFailed { seq, error }) => {
+                    call(seq, "failed", Some(error.kind.as_str()));
+                }
+                _ => {}
+            }
+            if entry.event.is_terminal() {
+                let open = std::mem::take(&mut scheduled);
+                if within {
+                    for (start, tool) in open.into_values() {
+                        measurements.push(tool_call(tool, "no_outcome", None, start, at));
+                    }
+                    measurements.push(RunMeasurement::Ended {
+                        outcome: run_outcome(&entry.event),
+                    });
+                }
+            }
+        }
+        measurements
     }
 
     /// The spans that end within `from..to`, given the history up to `to` at least. Each is
@@ -274,6 +332,36 @@ impl RunTelemetry<'_> {
         if let Some(preview) = preview {
             attributes.insert(format!("{prefix}.preview"), AttributeValue::String(preview));
         }
+    }
+}
+
+fn tool_call(
+    tool: &str,
+    outcome: &'static str,
+    error_kind: Option<&'static str>,
+    start: Timestamp,
+    end: Timestamp,
+) -> RunMeasurement {
+    RunMeasurement::ToolCall {
+        tool: tool.to_owned(),
+        outcome,
+        error_kind,
+        seconds: end.0.saturating_sub(start.0) as f64 / 1_000.0,
+    }
+}
+
+/// How a run ended at its terminal entry, as its span and its metrics say.
+fn run_outcome(event: &Event) -> &'static str {
+    match event {
+        Event::Command(Command::CompleteRun { .. }) => "completed",
+        Event::Command(Command::FailRun { error })
+            if error.name == ptc_core::ScriptError::CANCELLED =>
+        {
+            "cancelled"
+        }
+        Event::Command(Command::FailRun { .. }) => "failed",
+        Event::Lifecycle(Lifecycle::RunAborted(_)) => "aborted",
+        _ => "ended",
     }
 }
 
@@ -571,30 +659,25 @@ impl<'t, 'a> Derivation<'t, 'a> {
                 attributes.insert(format!("ptc.label.{key}"), string(value));
             }
         }
-        let (outcome, status) = match &entry.event {
+        let status = match &entry.event {
             Event::Command(Command::CompleteRun { output }) => {
                 self.run
                     .payload_attributes(&mut attributes, "ptc.output", output);
-                ("completed", SpanStatus::Ok)
+                SpanStatus::Ok
             }
             Event::Command(Command::FailRun { error }) => {
                 attributes.insert("ptc.error.name".into(), string(&error.name));
-                let outcome = if error.name == ptc_core::ScriptError::CANCELLED {
-                    "cancelled"
-                } else {
-                    "failed"
-                };
                 let message = format!("{}: {}", error.name, error.message);
-                (outcome, SpanStatus::Error { message })
+                SpanStatus::Error { message }
             }
             Event::Lifecycle(Lifecycle::RunAborted(reason)) => {
                 attributes.insert("ptc.abort.kind".into(), string(reason.kind.as_str()));
                 let message = reason.to_string();
-                ("aborted", SpanStatus::Error { message })
+                SpanStatus::Error { message }
             }
-            _ => ("ended", SpanStatus::Unset),
+            _ => SpanStatus::Unset,
         };
-        attributes.insert("ptc.outcome".into(), string(outcome));
+        attributes.insert("ptc.outcome".into(), string(run_outcome(&entry.event)));
         self.spans.push(Span {
             trace_id: self.trace,
             span_id: self.run_span,
@@ -691,6 +774,135 @@ mod tests {
             format!("00-0af7651916cd43dd8448eb211c80319c-{span}-01")
         );
         assert_eq!(context.tracestate.as_deref(), Some("vendor=1"));
+    }
+
+    fn history(mode: RunMode, events: Vec<(u64, Event)>) -> Vec<HistoryEntry> {
+        let started = Event::Lifecycle(Lifecycle::RunStarted(ptc_core::RunStarted {
+            script: Digest::of(b"s"),
+            toolset: Digest::of(b"t"),
+            input: Payload::Value(serde_json::json!({})),
+            seed: ptc_core::Seed::from_bytes([0; 32]),
+            epoch: ptc_core::Epoch(1),
+            expires_at: Timestamp(u64::MAX),
+            mode,
+        }));
+        std::iter::once((0, started))
+            .chain(events)
+            .enumerate()
+            .map(|(index, (at, event))| HistoryEntry {
+                index: index as u64,
+                recorded_at: Timestamp(at),
+                event,
+            })
+            .collect()
+    }
+
+    fn schedule(seq: u32, tool: &str) -> Event {
+        Event::Command(Command::ScheduleToolCall {
+            seq: Seq(seq),
+            tool: tool.into(),
+            args: Payload::Value(serde_json::json!({})),
+            callsite: None,
+        })
+    }
+
+    #[test]
+    fn a_run_measures_its_start_its_end_and_its_tool_calls() {
+        let failure = ptc_core::ToolFailure {
+            kind: ptc_core::ToolFailureKind::Timeout,
+            message: "too slow".into(),
+            data: None,
+        };
+        let entries = history(
+            RunMode::Live,
+            vec![
+                (0, schedule(1, "github.list_issues")),
+                (0, schedule(2, "slack.post")),
+                (0, schedule(3, "slack.post")),
+                (
+                    1_500,
+                    Event::Completion(Completion::ToolCallCompleted {
+                        seq: Seq(1),
+                        result: Payload::Value(serde_json::json!([])),
+                    }),
+                ),
+                (
+                    4_000,
+                    Event::Completion(Completion::ToolCallFailed {
+                        seq: Seq(2),
+                        error: failure,
+                    }),
+                ),
+                (
+                    5_000,
+                    Event::Command(Command::FailRun {
+                        error: ptc_core::ScriptError {
+                            name: ptc_core::ScriptError::CANCELLED.into(),
+                            message: "stop".into(),
+                            stack: None,
+                        },
+                    }),
+                ),
+            ],
+        );
+        let config = TelemetryConfig::default();
+        let payloads = BTreeMap::new();
+        let record = record(None);
+        let telemetry = RunTelemetry {
+            record: &record,
+            config: &config,
+            payloads: &payloads,
+        };
+        let call = |tool: &str, outcome, error_kind, seconds| RunMeasurement::ToolCall {
+            tool: tool.into(),
+            outcome,
+            error_kind,
+            seconds,
+        };
+        assert!(telemetry.measured(&entries));
+        // The first activation committed the start and the calls; the next ones, the rest.
+        assert_eq!(
+            telemetry.measurements(&entries, 0, 4),
+            vec![RunMeasurement::Started]
+        );
+        assert_eq!(
+            telemetry.measurements(&entries, 4, 6),
+            vec![
+                call("github.list_issues", "completed", None, 1.5),
+                call("slack.post", "failed", Some("timeout"), 4.0),
+            ]
+        );
+        // The call still open when the run ends ends with it.
+        assert_eq!(
+            telemetry.measurements(&entries, 6, 7),
+            vec![
+                call("slack.post", "no_outcome", None, 5.0),
+                RunMeasurement::Ended {
+                    outcome: "cancelled"
+                },
+            ]
+        );
+        // Applied again, an item measures the same.
+        assert_eq!(
+            telemetry.measurements(&entries, 6, 7),
+            telemetry.measurements(&entries, 6, 7)
+        );
+
+        // Mock runs are not measured unless their telemetry is exported; sampling does not
+        // matter.
+        let mock = history(RunMode::Mock, Vec::new());
+        assert!(!telemetry.measured(&mock));
+        let sampled_out = TelemetryConfig {
+            sampled_per_million: 0,
+            export_mock_runs: true,
+            ..TelemetryConfig::default()
+        };
+        let telemetry = RunTelemetry {
+            config: &sampled_out,
+            ..telemetry
+        };
+        assert!(telemetry.measured(&mock));
+        assert!(!telemetry.exported(&mock));
     }
 
     #[test]
