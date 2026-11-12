@@ -28,7 +28,7 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
-use crate::http::toolsets;
+use crate::http::{refuse_nul_in_filter, toolsets};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -102,10 +102,14 @@ pub(super) async fn list(
     let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let mut labels = BTreeMap::new();
     for label in &filter.labels {
+        refuse_nul_in_filter("label", label)?;
         let (key, value) = label
             .split_once(':')
             .ok_or_else(|| ApiError::invalid(format!("label {label:?}: expected key:value")))?;
         labels.insert(key.to_owned(), value.to_owned());
+    }
+    if let Some(tool) = &filter.tool {
+        refuse_nul_in_filter("tool", tool)?;
     }
     let Ok(labels) = caller.within(labels) else {
         // A filter outside the key's labels matches nothing it may see.

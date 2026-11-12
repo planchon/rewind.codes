@@ -113,12 +113,19 @@ pub struct FakeRun {
     next_seq: u32,
     emitted: Vec<Emitted>,
     refused: Option<ExecutorError>,
+    hung: bool,
 }
 
 impl FakeRun {
     /// Makes the start of this instance fail with `error`, as an executor would.
     pub fn refuse(&mut self, error: ExecutorError) {
         self.refused = Some(error);
+    }
+
+    /// Makes this call into the script never return, as a script that brings its worker down
+    /// does: the activation is left without a commit and without a recorded failure.
+    pub fn hang(&mut self) {
+        self.hung = true;
     }
 
     fn take_seq(&mut self) -> Seq {
@@ -274,8 +281,12 @@ impl ScriptExecutor for FakeExecutor {
             next_seq: 1,
             emitted: Vec::new(),
             refused: None,
+            hung: false,
         };
         program.start(&mut run);
+        if run.hung {
+            std::future::pending::<()>().await;
+        }
         if let Some(error) = run.refused.take() {
             return Err(error);
         }
@@ -292,6 +303,9 @@ impl ScriptInstance for FakeInstance {
     ) -> Result<Vec<Emitted>, ExecutorError> {
         self.run.now = now;
         self.program.deliver(&mut self.run, &delivery);
+        if self.run.hung {
+            std::future::pending::<()>().await;
+        }
         Ok(std::mem::take(&mut self.run.emitted))
     }
 }

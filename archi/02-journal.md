@@ -112,7 +112,7 @@ replayed, never exported, never in a cassette.
 
 - labels, idempotency keys, the tenant, the trace context;
 - credentials;
-- quarantine; lease, fence and sticky worker;
+- quarantine, the counts of failed and started activations; lease, fence and sticky worker;
 - the feed;
 - a fork's link to its parent.
 

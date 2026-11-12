@@ -712,6 +712,7 @@ mod tests {
             history_len: 0,
             quarantine: None,
             failures: 0,
+            attempts: 0,
             sticky_worker: None,
             metadata: RunMetadata {
                 trace_context: traceparent.map(|traceparent| TraceContext {

@@ -1347,6 +1347,13 @@ async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lookups_with_a_nul_character_match_nothing() {
+    let server = TestServer::start(&[]).await;
+    support::nul_lookups_match_nothing(&server).await;
+    server.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn text_with_a_nul_character_is_refused_with_400() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(Role::Harness, &[]).await;

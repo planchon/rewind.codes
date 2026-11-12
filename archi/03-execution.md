@@ -57,6 +57,12 @@ Failures of the activation itself:
   After **5 such failures in a row**, the run is [quarantined](#non-determinism-and-quarantine)
   with the last error: a run that cannot make progress is set aside and reported, not
   retried forever.
+- The worker dies during the activation (the script crashed the process, the container was
+  killed for its memory, a native dependency failed) → nothing is committed and nothing is
+  recorded: the lease expires, and another worker takes the run. This is a failure too. The
+  store counts the activations started since the run's last commit, and when a worker leases a
+  run whose last 5 activations committed nothing, it quarantines the run instead of activating
+  it. A script that kills its workers does not go from worker to worker forever.
 
 ## Inside the isolate
 
@@ -148,7 +154,9 @@ activation first.
 - The cache is an LRU, bounded per worker: 500 instances and 4 GiB by default. An instance's
   memory is its isolate's, as V8's heap statistics give it after each call into the script.
 - The store records the run's sticky worker at commit. When the run becomes runnable again,
-  that worker gets it first. Other workers only take it after 5 s.
+  that worker gets it first. Other workers only take it after 5 s, counted from the oldest
+  trigger waiting. A worker that dies during an activation holds the run until its lease
+  expires, and not longer: by then that trigger has waited more than 5 s.
 - **Hit**: the instance is cached, and its history length is the run's. Only the new trigger
   is delivered: no replay.
 - **Miss**: a new instance starts from a V8 startup snapshot and replays the history.
@@ -252,9 +260,10 @@ the glue), never of the script. Ending the run would make its owner pay for it.
   ends it with `run_aborted { non_determinism }`.
 
 A run whose activations failed 5 times in a row is quarantined the same way, with the last
-error as its reason. Released, it is activated again; given up on, it ends with
-`run_aborted { internal }`. The failure is logged and reported through OpenTelemetry and
-webhooks.
+error as its reason. An activation whose worker died during it counts as a failed one: the
+reason then says how many never finished. Released, it is activated again; given up on, it
+ends with `run_aborted { internal }`. The failure is logged and reported through
+OpenTelemetry and webhooks.
 
 `ptc replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
 different script is the point.

@@ -21,6 +21,7 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::{Body, OptionalBody, Query};
+use crate::http::refuse_nul_in_filter;
 use crate::http::runs::check_payload_size;
 use crate::http::toolsets::parse_digest;
 use crate::views::{parse_task_id, task_id};
@@ -48,6 +49,9 @@ pub(super) async fn claim(
         ));
     }
     let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
+    for tool in &query.tools {
+        refuse_nul_in_filter("tool", tool)?;
+    }
     let claim = HostClaim {
         tenant: caller.tenant.clone(),
         toolset,
