@@ -1,6 +1,6 @@
 // Runs: every run the key may read, filtered by status, label, script, tool, error and time.
 import { RefreshCw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import { useRuns, useToolStats } from "../api/queries";
 import { RUN_STATUSES, type RunStatus, TOOL_FAILURE_KINDS } from "../api/types";
@@ -59,11 +59,28 @@ export function RunsView() {
     since: new Date(Date.now() - RANGES["7d"]).toISOString(),
   }));
 
-  const update = (patch: Partial<RunFilters>) =>
-    setParams(writeRunFilters({ ...filters, ...patch }), { replace: false });
-  const addLabel = (pair: string) => {
-    if (!filters.labels.includes(pair)) update({ labels: [...filters.labels, pair] });
+  // The filters this view wrote that the URL does not show yet, oldest first. A change applies
+  // to the last of them: two changes made before the view renders again both apply.
+  const writes = useRef<{ shown: string; pending: { key: string; filters: RunFilters }[] }>({
+    shown: key,
+    pending: [],
+  });
+  if (writes.current.shown !== key) {
+    const at = writes.current.pending.findIndex((w) => w.key === key);
+    // Another URL (back, a link) drops what was pending.
+    writes.current = { shown: key, pending: at >= 0 ? writes.current.pending.slice(at + 1) : [] };
+  }
+  const update = (patch: Partial<RunFilters> | ((current: RunFilters) => Partial<RunFilters>)) => {
+    const current = writes.current.pending.at(-1)?.filters ?? filters;
+    const next = { ...current, ...(typeof patch === "function" ? patch(current) : patch) };
+    const written = writeRunFilters(next);
+    writes.current.pending.push({ key: written.toString(), filters: next });
+    setParams(written, { replace: false });
   };
+  const addLabel = (pair: string) =>
+    update((current) =>
+      current.labels.includes(pair) ? {} : { labels: [...current.labels, pair] },
+    );
 
   const seenLabels = useMemo(() => {
     const pairs = new Set<string>();
@@ -137,7 +154,9 @@ export function RunsView() {
           type="button"
           className="btn"
           aria-pressed={filters.quarantined === true}
-          onClick={() => update({ quarantined: filters.quarantined === true ? null : true })}
+          onClick={() =>
+            update((current) => ({ quarantined: current.quarantined === true ? null : true }))
+          }
           style={
             filters.quarantined === true
               ? { background: "var(--warning-soft)", borderColor: "var(--warning-mark)" }
@@ -207,7 +226,9 @@ export function RunsView() {
                 key={pair}
                 name="label"
                 value={pair}
-                onRemove={() => update({ labels: filters.labels.filter((l) => l !== pair) })}
+                onRemove={() =>
+                  update((current) => ({ labels: current.labels.filter((l) => l !== pair) }))
+                }
               />
             ))}
             {filters.tool && (
@@ -247,7 +268,7 @@ export function RunsView() {
             style={{ marginLeft: "auto" }}
             onClick={() => {
               setCustom(false);
-              setParams(new URLSearchParams());
+              update(readRunFilters(new URLSearchParams()));
             }}
           >
             Clear filters

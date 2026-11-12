@@ -305,30 +305,17 @@ fn run_error(error: &ptc_core::ScriptError, history: &[HistoryEntry], source: &s
         stack: error.stack.clone(),
         frame: location.and_then(|(line, column)| code_frame(source, line, column)),
         location: location.map(|(line, column)| Callsite { line, column }),
-        failed_call: (error.name == "ToolError")
-            .then(|| failed_call(history, &error.message))
-            .flatten(),
+        failed_call: error
+            .failed_call(history)
+            .and_then(|seq| failed_call(history, seq)),
     }
 }
 
-/// The last failed call whose `ToolError` has this message.
-fn failed_call(history: &[HistoryEntry], message: &str) -> Option<FailedCall> {
-    let tools: BTreeMap<Seq, &str> = history
-        .iter()
-        .filter_map(|entry| match &entry.event {
-            Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
-                Some((*seq, tool.as_str()))
-            }
-            _ => None,
-        })
-        .collect();
-    let (seq, failure) = history.iter().rev().find_map(|entry| match &entry.event {
-        Event::Completion(Completion::ToolCallFailed { seq, error })
-            if tools
-                .get(seq)
-                .is_some_and(|tool| format!("{tool} failed: {}", error.message) == message) =>
-        {
-            Some((*seq, error))
+/// The call whose `ToolError` the script did not catch, as `ScriptError::failed_call` finds it.
+fn failed_call(history: &[HistoryEntry], seq: Seq) -> Option<FailedCall> {
+    let failure = history.iter().find_map(|entry| match &entry.event {
+        Event::Completion(Completion::ToolCallFailed { seq: failed, error }) if *failed == seq => {
+            Some(error)
         }
         _ => None,
     })?;

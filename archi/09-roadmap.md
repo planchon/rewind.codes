@@ -53,6 +53,7 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-server` | The engine host. Every endpoint of `ptc-api` with axum: API keys hashed in the store, roles and label scopes, tenants and their quotas (429), `Idempotency-Key`, problem+json; the event stream of a run; host-tool tasks long-polled; inbound webhooks; outbound webhooks signed following Standard Webhooks (passes the `WebhookSender` suite). The worker role: activations, tool dispatch with its claims' heartbeats, the scheduler, the projector (`run.quarantined` included), retention, the retry of quarantined runs, virtual time kept in the store. The embedded server of a `.ptc/` directory: its lock, its socket, its idle stop. The dashboard's build embedded and served. Adapters wired by configuration: Turso or Postgres, files or S3, `ptc-mcp`, `ptc-codegen`, `ptc-check`, `ptc-otel`. Tested over HTTP on Turso and on Postgres (an api server and two workers), and through the `ptc` binary (lock, socket, idle stop, `kill -9` and restart, virtual time). |
 | `ptc` | The `ptc` binary: it restarts itself with `TZ=UTC`, then hands `ptc server …` to `ptc-server` and everything else to `ptc-cli`. |
 | `evals` | 22 tasks from easy to hard (fan-out, pagination, `ToolError`, signals with and without timeout, sleeping and polling, webhooks, idempotent retries under a rate limit, outputs above 256 KB, `retry_run`, `cancel_run`) over six deterministic fake MCP servers built with `rmcp`; the engine wired in process in virtual time; the SDK's agent tools ported on `ptc-api`'s DTOs; Claude (Messages API) and OpenAI (Responses API) clients and a scripted model; reports per model and prompt rendering (`compact`, `dts`, `search`) in JSON and Markdown. Every task's reference solution passes through the scripted model in `cargo test` ([08](08-decisions.md#taken-while-building-the-evals-november-2026)). |
+| `acceptance` | The acceptance suite of 0.1, one command (`acceptance/run.sh`): Playwright specs against the real `ptc` binary, Postgres, MinIO and an OpenTelemetry Collector in Docker, `@modelcontextprotocol/server-everything` through `npx`, and the embedded dashboard in Chromium; it also runs `crates/ptc/tests/cli.rs` and the operations' load and limit tests, and writes the status of each criterion to `acceptance/results/summary.md` ([its README](../acceptance/README.md)). |
 
 ## Contracts frozen first
 
@@ -135,6 +136,21 @@ specified.
 - Load tests and limit tests pass.
 - An operator finds any run by label, tool or error in the dashboard, and sees its code next
   to its trace.
+
+### Acceptance status (November 2026)
+
+`acceptance/run.sh` proves each criterion end to end on the real `ptc` binary; what each check
+does is in [acceptance/README.md](../acceptance/README.md).
+
+| Criterion | Status | Proven by |
+| --- | --- | --- |
+| SDK, several workers on one Postgres, one trace per run, search by label and tool | Passes | `acceptance/tests/c1-sdk-workers-postgres.spec.ts`: an api server and two workers on Postgres, blobs on MinIO, a Collector writing to a file; host tools served by the SDK's worker, a sleep, a signal, an approval |
+| Locally across processes; forgotten `await`, unhandled rejection, deadlock | Passes | `crates/ptc/tests/cli.rs` (sleep, `kill -9`, resume in another process; `run`, `signal`, `status`, `trace`, `replay`) and `acceptance/tests/c2-local-endings.spec.ts` |
+| A real MCP server, types checked beforehand | Passes | `acceptance/tests/c3-c5-mcp-test-fork.spec.ts` with `@modelcontextprotocol/server-everything` 2.2.1 over stdio |
+| The evals' report per model and prompt rendering | Passes with scripted models; the run with Claude and OpenAI models is pending API keys | `acceptance/tests/c4-evals.spec.ts` |
+| `ptc test` of a recorded real run; `ptc fork` without repeating calls | Passes | `acceptance/tests/c3-c5-mcp-test-fork.spec.ts`, checked against the MCP server's own log of the calls it received |
+| Load tests and limit tests | Not run: the operations' load and limit tests are not on `main` yet | `deploy/acceptance.sh`, which `acceptance/run.sh` runs once it exists |
+| The dashboard: find by label, tool or error; code next to the trace | Passes | `acceptance/tests/c7-dashboard.spec.ts`, in Chromium against the dashboard `ptc server` serves |
 
 ## Open questions
 
