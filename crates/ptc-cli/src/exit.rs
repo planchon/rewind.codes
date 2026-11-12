@@ -29,7 +29,8 @@ pub enum Exit {
     ScriptRefused,
     /// Internal error: the server is unreachable or failed.
     Internal,
-    /// Interrupted by a second Ctrl-C.
+    /// Interrupted by a second Ctrl-C, or by a first one before a call that changes something
+    /// was sent.
     Interrupted,
 }
 

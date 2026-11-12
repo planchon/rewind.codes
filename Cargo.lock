@@ -3930,6 +3930,7 @@ dependencies = [
  "ptc-store-postgres",
  "ptc-store-turso",
  "reqwest",
+ "rmcp",
  "serde",
  "serde_html_form",
  "serde_json",

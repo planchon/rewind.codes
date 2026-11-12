@@ -30,6 +30,18 @@ impl TestServer {
         Self::start_on(dir, &store, &blobs, extra).await
     }
 
+    /// A server on `store`, with its blobs in `blobs`, whose files the caller keeps: another
+    /// server may start on them once this one stopped.
+    pub(crate) async fn start_in(
+        dir: &std::path::Path,
+        store: &str,
+        blobs: &std::path::Path,
+        extra: &[&str],
+    ) -> Self {
+        let scratch = tempfile::tempdir_in(dir).unwrap();
+        Self::start_on(scratch, store, blobs, extra).await
+    }
+
     /// A server on `store`, with its blobs in `blobs`.
     pub(crate) async fn start_on(
         dir: tempfile::TempDir,

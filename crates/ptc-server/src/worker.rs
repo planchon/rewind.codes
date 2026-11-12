@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use ptc_core::Timestamp;
 use ptc_engine::ActivationOutcome;
-use ptc_engine::ports::{JournalStore, VirtualTime};
+use ptc_engine::ports::{FeedConsumer, JournalStore, VirtualTime};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
@@ -31,6 +31,7 @@ pub(crate) fn spawn(app: &Arc<App>, activations: usize, dispatches: usize) -> Ve
     let mut tasks = vec![
         tokio::spawn(retry_quarantined(app.clone())),
         tokio::spawn(projector(app.clone())),
+        tokio::spawn(webhooks(app.clone())),
         tokio::spawn(housekeeping(app.clone())),
     ];
     if app.engine.clock().is_virtual() {
@@ -40,10 +41,41 @@ pub(crate) fn spawn(app: &Arc<App>, activations: usize, dispatches: usize) -> Ve
     for _ in 0..activations {
         tasks.push(tokio::spawn(activate(app.clone())));
     }
-    tasks.push(tokio::spawn(dispatch(app.clone(), dispatches)));
-    tasks.push(tokio::spawn(heartbeats(app.clone())));
+    let calls = InFlight::new(dispatches);
+    tasks.push(tokio::spawn(dispatch(app.clone(), calls.clone())));
+    tasks.push(tokio::spawn(heartbeats(app.clone(), calls)));
     tasks.push(tokio::spawn(scheduler(app.clone())));
     tasks
+}
+
+/// The slots of the tool calls dispatched at once: a call holds one until it is answered and
+/// its outcome committed.
+#[derive(Debug, Clone)]
+struct InFlight {
+    slots: Arc<Semaphore>,
+    size: u32,
+}
+
+impl InFlight {
+    fn new(dispatches: usize) -> Self {
+        let size = u32::try_from(dispatches)
+            .unwrap_or(u32::MAX)
+            .min(u32::try_from(Semaphore::MAX_PERMITS).unwrap_or(u32::MAX));
+        Self {
+            slots: Arc::new(Semaphore::new(size as usize)),
+            size,
+        }
+    }
+
+    /// Whether no call is in flight.
+    fn idle(&self) -> bool {
+        self.slots.available_permits() == self.size as usize
+    }
+
+    /// Waits until every call in flight has ended.
+    async fn drained(&self) {
+        let _ = self.slots.acquire_many(self.size).await;
+    }
 }
 
 /// Activates runnable runs, one at a time per loop.
@@ -85,9 +117,12 @@ async fn activate_one(app: &App) -> Result<bool, ()> {
     Ok(true)
 }
 
-/// Claims the tool calls ai-ptc dispatches itself and runs them, up to `dispatches` at once.
-async fn dispatch(app: Arc<App>, dispatches: usize) {
-    let slots = Arc::new(Semaphore::new(dispatches));
+/// Claims the tool calls ai-ptc dispatches itself and runs them, as many at once as `calls`
+/// has slots. Once the server stops, it claims nothing more and returns when the calls in flight
+/// have ended: their outcomes are committed before the server stops, so a stop neither fails
+/// nor repeats them.
+async fn dispatch(app: Arc<App>, calls: InFlight) {
+    let slots = calls.slots.clone();
     let mut changes = app.wake.subscribe();
     while !app.stopping() {
         let free = slots.available_permits();
@@ -126,12 +161,14 @@ async fn dispatch(app: Arc<App>, dispatches: usize) {
             });
         }
     }
+    calls.drained().await;
 }
 
-/// Renews the claims of the calls in flight.
-async fn heartbeats(app: Arc<App>) {
+/// Renews the claims of the calls in flight, until the server stops and the last of them has
+/// ended.
+async fn heartbeats(app: Arc<App>, calls: InFlight) {
     let mut ticks = tokio::time::interval(CLAIM_HEARTBEAT);
-    while !app.stopping() {
+    while !(app.stopping() && calls.idle()) {
         ticks.tick().await;
         if let Err(error) = app.engine.heartbeat_tool_claims().await {
             tracing::warn!(%error, "the claims of the calls in flight were not renewed");
@@ -183,15 +220,46 @@ async fn schedule(app: &App) -> Result<usize, ()> {
     Ok(moved)
 }
 
-/// Applies the feed: read model, run telemetry, lifecycle webhooks.
+/// Applies the feed to the read model and the run telemetry. Lifecycle webhooks have a loop
+/// of their own: a receiver that is slow or down must not hold up the projections every
+/// tenant reads.
 async fn projector(app: Arc<App>) {
     let mut changes = app.wake.subscribe();
     while !app.stopping() {
-        match app.projector().project(app.now()).await {
-            Ok(projected) if projected.total() > 0 => {}
-            Ok(_) => wait(&mut changes, POLL * 4, None).await,
+        let mut projected = 0;
+        let mut failed = None;
+        for consumer in [FeedConsumer::ReadModel, FeedConsumer::Otel] {
+            match app.projector().project_consumer(consumer, app.now()).await {
+                Ok((applied, _)) => projected += applied,
+                Err(error) => failed = Some(error),
+            }
+        }
+        if let Some(error) = failed {
+            tracing::error!(%error, "the projector failed");
+            tokio::time::sleep(BACKOFF).await;
+        } else if projected == 0 {
+            wait(&mut changes, POLL * 4, None).await;
+        }
+    }
+}
+
+/// Sends the lifecycle webhooks of the feed. A delivery retries with backoff for minutes: when
+/// the server stops, the batch in progress is left unacknowledged, and sent again (with the same
+/// `webhook-id`) by the next server.
+async fn webhooks(app: Arc<App>) {
+    let mut changes = app.wake.subscribe();
+    let mut stop = app.stop.subscribe();
+    while !app.stopping() {
+        let projector = app.projector();
+        let projected = tokio::select! {
+            projected = projector.project_consumer(FeedConsumer::Webhooks, app.now()) => projected,
+            _ = stop.wait_for(|stop| *stop) => return,
+        };
+        match projected {
+            Ok((0, _)) => wait(&mut changes, POLL * 4, None).await,
+            Ok(_) => {}
             Err(error) => {
-                tracing::error!(%error, "the projector failed");
+                tracing::error!(%error, "the lifecycle webhooks failed");
                 tokio::time::sleep(BACKOFF).await;
             }
         }

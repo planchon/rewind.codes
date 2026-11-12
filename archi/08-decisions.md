@@ -483,6 +483,14 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Giving up a run quarantined before its first commit commits its `run_started`, from the inbox, with `run_aborted` | `run_aborted` alone | A history always starts with `run_started`; a fork whose parent was erased fails before its first commit. |
 | A `timer_fired` is recorded at `max(now, last recorded_at, fire_at)` | `max(now, last recorded_at)` alone | The scheduler that fired the timer may run on a machine whose clock is ahead of the worker's: `Date.now()` after `sleep(d)` must still be at least `d` later. |
 
+### Taken while reviewing the server, the API and the CLI (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A server that stops claims no new tool call and waits for the calls its dispatch loop has in flight (within the stop's 30 s), renewing their claims until the last one ends; only then are the MCP connections and the store closed | Stopping the loops and leaving the calls to their claims' expiry | A stop (a deploy, the CLI replacing its embedded server) must neither fail an `at_most_once` call with `outcomeUnknown` nor send a `retry` call again: the work in flight commits (07). |
+| The worker role sends lifecycle webhooks in a loop of their own, apart from the read model and the run telemetry; at a stop, the batch being delivered is left unacknowledged and sent again by the next server, with the same `webhook-id` | One projector loop over the three consumers | A delivery retries for about two minutes inline: a receiver that is down held up the run listings and traces of every tenant, and the stop. |
+| After a first Ctrl-C, a command sends no new call that changes something (a start, a fork, a signal, a cancellation, a release): it exits with 130, saying what it did not send | Sending it, then abandoning the wait | `ptc run` interrupted while it registered its toolset still started a durable run the user meant to abort. |
+
 ### Taken while building operations (November 2026)
 
 | Decision | Alternative rejected | Why |
