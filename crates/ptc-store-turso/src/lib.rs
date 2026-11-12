@@ -6,7 +6,10 @@
 //! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
 //!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants and API keys,
 //!   payload rows and references, retention;
-//! - `ReadModel`: the projections behind the dashboard (`run_summaries`, `tool_calls`);
+//! - `ReadModel`: the projections behind the dashboard and the query language
+//!   (`run_summaries` with each run's snapshot, `run_labels`, `run_waits`, `run_texts`,
+//!   `tool_calls`), with the task states and quarantine recorded by whoever changes them
+//!   (`tool_calls.task_*`, `run_quarantine`);
 //! - `SecretStore`: credentials per toolset and per run, encrypted with a data key per tenant,
 //!   itself encrypted by the deployment's [`MasterKey`].
 //!
