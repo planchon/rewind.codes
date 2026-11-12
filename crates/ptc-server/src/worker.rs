@@ -105,6 +105,7 @@ async fn activate_one(app: &App) -> Result<bool, ()> {
     match &report.outcome {
         ActivationOutcome::Quarantined { kind, reason } => {
             tracing::warn!(run = %report.run, ?kind, %reason, "run quarantined");
+            app.record_quarantine(&report.run).await;
             // Queued: the engine's sender delivers in the background.
             if let Err(error) = app.projector().notify_quarantined(&report.run).await {
                 tracing::warn!(run = %report.run, %error, "run.quarantined was not sent");
@@ -151,12 +152,13 @@ async fn dispatch(app: Arc<App>, calls: InFlight) {
             let app = app.clone();
             tokio::spawn(async move {
                 let busy = app.activity.busy();
-                app.record_attempt(&task.task.task.run, task.task.task.seq, task.task.attempt)
-                    .await;
+                app.record_task(&task.task).await;
                 let name = task.task.task.clone();
                 if let Err(error) = app.engine.run_tool_task(task).await {
                     tracing::warn!(task = %name, %error, "a tool call could not be prepared");
                 }
+                // The call may have been parked, or put back for another attempt.
+                app.record_tasks(&name.run).await;
                 app.wake.bump();
                 drop(busy);
                 drop(slot);
@@ -335,11 +337,12 @@ async fn drive(app: &App) -> Result<bool, ()> {
     })?;
     for task in claimed {
         moved = true;
-        app.record_attempt(&task.task.task.run, task.task.task.seq, task.task.attempt)
-            .await;
+        app.record_task(&task.task).await;
+        let run = task.task.task.run.clone();
         if let Err(error) = app.engine.run_tool_task(task).await {
             tracing::warn!(%error, "a tool call could not be prepared");
         }
+        app.record_tasks(&run).await;
     }
     while activate_one(app).await? {
         moved = true;

@@ -1,7 +1,6 @@
 //! Runs: start, list, state, trace, entries, signals, cancellation, forks, export, quarantine,
 //! credentials and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::Json;
@@ -9,18 +8,19 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use ptc_api::ProblemType;
-use ptc_api::common::{Labels, Payload, timestamp};
+use ptc_api::common::{Payload, timestamp};
 use ptc_api::events::Entry;
 use ptc_api::runs::{
-    CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
-    RunSummary, SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
+    CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalExport, JournalQuery,
+    Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
+    TraceQuery,
 };
 use ptc_core::{
-    Command, Digest, Event, JournalDocument, Lifecycle, Matching, RunId, RunMode, Script,
-    ToolFailureKind, canonical_json,
+    Command, Event, JournalDocument, Lifecycle, Matching, RunMode, Script, canonical_json,
 };
 use ptc_engine::ports::{
-    Enqueued, JournalStore, ReadModel, RunMetadata, RunRecord, RunSearch, TraceContext,
+    Enqueued, FailureWindow, JournalStore, ReadModel, RunMetadata, RunRecord, StatsWindow,
+    TraceContext,
 };
 use ptc_engine::trace::{TraceInput, render_trace};
 
@@ -28,13 +28,11 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
-use crate::http::{refuse_nul_in_filter, toolsets};
+use crate::http::{search, toolsets};
 
-/// Runs a page of `GET /v1/runs` holds by default, and at most.
+/// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
-/// Summaries read from the read model for one page at most, filters applied after it included.
-const MAX_SCANNED: usize = 2_000;
 
 /// `POST /v1/runs`.
 pub(super) async fn start(
@@ -91,8 +89,9 @@ pub(super) async fn start(
     Ok((status, Json(run)).into_response())
 }
 
-/// `GET /v1/runs`: the read model's runs, newest first, with what the journal's records add
-/// (quarantine, the parent of a fork, the error that ended the run).
+/// `GET /v1/runs`: a page of the read model's runs, in the order of `sort`. The run's own
+/// record, which the read model follows by a moment, gives each its status, quarantine and
+/// times as they are now.
 pub(super) async fn list(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -100,113 +99,162 @@ pub(super) async fn list(
 ) -> Result<Json<RunPage>, ApiError> {
     caller.allow(Access::Read)?;
     let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    let mut labels = BTreeMap::new();
-    for label in &filter.labels {
-        refuse_nul_in_filter("label", label)?;
-        let (key, value) = label
-            .split_once(':')
-            .ok_or_else(|| ApiError::invalid(format!("label {label:?}: expected key:value")))?;
-        labels.insert(key.to_owned(), value.to_owned());
-    }
-    if let Some(tool) = &filter.tool {
-        refuse_nul_in_filter("tool", tool)?;
-    }
-    let Ok(labels) = caller.within(labels) else {
-        // A filter outside the key's labels matches nothing it may see.
-        return Ok(Json(RunPage {
-            runs: Vec::new(),
-            next_cursor: None,
-        }));
-    };
-    let mut search = RunSearch::new(caller.tenant.clone(), limit);
-    search.labels = labels;
-    search.status = filter.status.map(super::runs_status);
-    search.tool = filter.tool.clone();
-    search.started_after = filter.started_after.map(core_time);
-    search.started_before = filter.started_before.map(core_time);
-    if let Some(script) = &filter.script {
-        search.script = Some(
-            Digest::from_hex(script)
-                .map_err(|_| ApiError::invalid(format!("script {script:?}: expected a digest")))?,
-        );
-    }
-    let error_kind = filter.error.as_deref().and_then(failure_kind);
-    search.error_kind = error_kind;
-    let error_name = filter.error.clone().filter(|_| error_kind.is_none());
-    if let Some(cursor) = &filter.cursor {
-        search.before = Some(
-            cursor
-                .parse::<RunId>()
-                .map_err(|_| ApiError::invalid(format!("cursor {cursor:?} is not valid")))?,
-        );
-    }
-    let parent = match &filter.parent {
-        Some(parent) => Some(
-            parent
-                .parse::<RunId>()
-                .map_err(|_| ApiError::invalid(format!("parent {parent:?}: expected a run id")))?,
-        ),
-        None => None,
-    };
-
-    let mut runs = Vec::new();
-    let mut scanned = 0;
-    let mut next_cursor = None;
-    search.limit = limit.max(100);
-    'pages: loop {
-        let batch = app.store.search_runs(&search).await?;
-        let full = batch.len() == search.limit;
-        for summary in batch {
-            scanned += 1;
-            search.before = Some(summary.run.id);
-            let Some(record) = app.store.get_run(&summary.run).await? else {
-                continue;
-            };
-            if filter
-                .quarantined
-                .is_some_and(|quarantined| quarantined != record.quarantine.is_some())
-                || parent
-                    .is_some_and(|parent| record.metadata.parent.is_none_or(|of| of.run != parent))
-            {
-                continue;
+    let query = search::run_query(&caller, filter.q.as_deref(), Some(&filter), app.now())?;
+    let order = search::order(filter.sort);
+    let after = filter
+        .cursor
+        .as_deref()
+        .map(|cursor| search::decode_cursor(order, cursor))
+        .transpose()?;
+    let found = app
+        .store
+        .search_runs(&query, order, after.as_ref(), limit)
+        .await?;
+    let next_cursor = (found.len() == limit)
+        .then(|| found.last())
+        .flatten()
+        .map(|last| search::encode_cursor(order, &last.cursor(order)));
+    let mut runs = Vec::with_capacity(found.len());
+    for found in &found {
+        let mut summary = search::summary(found);
+        if let Some(record) = app.store.get_run(&found.run).await? {
+            summary.status = record.status.into();
+            summary.quarantined = record.quarantine.is_some();
+            summary.history_len = summary.history_len.max(record.history_len);
+            summary.last_activity_at = summary.last_activity_at.max(timestamp(record.updated_at));
+            if let Some(ended_at) = record.ended_at {
+                summary.ended_at = Some(timestamp(ended_at));
             }
-            let error = ended_with(&app, &record).await?;
-            if let Some(name) = &error_name
-                && error.as_ref() != Some(name)
-            {
-                continue;
-            }
-            runs.push(RunSummary {
-                id: record.run.id.to_string(),
-                status: record.status.into(),
-                quarantined: record.quarantine.is_some(),
-                script: record.script.to_hex(),
-                headline: app.headline(&record.run.tenant, record.script).await,
-                toolset: record.toolset.to_hex(),
-                labels: Labels::from(record.metadata.labels.clone()),
-                started_at: timestamp(summary.started_at.unwrap_or(record.created_at)),
-                ended_at: record.ended_at.or(summary.ended_at).map(timestamp),
-                last_activity_at: timestamp(summary.last_activity_at.max(record.updated_at)),
-                tool_calls: summary.tool_calls,
-                errors: summary.errors,
-                history_len: summary.history_len.max(record.history_len),
-                error,
-                parent: record.metadata.parent.map(|parent| parent.run.to_string()),
-            });
-            if runs.len() == limit {
-                next_cursor = Some(record.run.id.to_string());
-                break 'pages;
+            if record.status.is_terminal() {
+                summary.waiting_for.clear();
+                summary.wakes_at = None;
+                if summary.error.is_none() {
+                    summary.error = ended_with(&app, &record).await?;
+                }
             }
         }
-        if !full {
-            break;
-        }
-        if scanned >= MAX_SCANNED {
-            next_cursor = search.before.map(|id| id.to_string());
-            break;
-        }
+        runs.push(summary);
     }
     Ok(Json(RunPage { runs, next_cursor }))
+}
+
+/// `GET /v1/runs/stats`.
+pub(super) async fn stats(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Query(request): Query<RunStatsQuery>,
+) -> Result<Json<RunStats>, ApiError> {
+    caller.allow(Access::Read)?;
+    let now = app.now();
+    let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
+    let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
+    let top = usize::try_from(request.top.unwrap_or(10).clamp(1, 50)).unwrap_or(10);
+    let stats = app
+        .store
+        .run_stats(
+            &query,
+            &StatsWindow {
+                since,
+                until: Some(until),
+                bucket_ms: bucket,
+                top,
+            },
+        )
+        .await?;
+    Ok(Json(RunStats {
+        since: since.map(timestamp),
+        until: timestamp(until),
+        bucket: request.bucket,
+        runs: stats.runs,
+        statuses: search::status_counts(&stats.statuses),
+        series: search::series(&stats.series, since, bucket),
+        durations: search::durations(stats.durations),
+        waiting: search::wait_counts(&stats.waiting),
+        quarantined: stats.quarantined,
+        facets: search::facets(&stats.facets),
+    }))
+}
+
+/// `GET /v1/runs/failures`.
+pub(super) async fn failures(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Query(request): Query<FailureQuery>,
+) -> Result<Json<FailureGroupPage>, ApiError> {
+    caller.allow(Access::Read)?;
+    let now = app.now();
+    let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
+    let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
+    let limit = usize::try_from(request.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
+    let groups = app
+        .store
+        .failure_groups(
+            &query,
+            &FailureWindow {
+                since,
+                until: Some(until),
+                bucket_ms: bucket,
+                limit,
+            },
+        )
+        .await?;
+    Ok(Json(FailureGroupPage {
+        since: since.map(timestamp),
+        until: timestamp(until),
+        bucket: request.bucket,
+        runs: groups.runs,
+        total_groups: groups.groups,
+        groups: groups.top.iter().map(search::failure_group).collect(),
+    }))
+}
+
+/// Buckets of a series at most.
+const MAX_BUCKETS: u64 = 500;
+
+/// The window of the statistics and the failure groups: `until` is now by default, and a
+/// bucket needs `since`.
+fn window(
+    since: Option<jiff::Timestamp>,
+    until: Option<jiff::Timestamp>,
+    bucket: Option<ptc_api::common::Duration>,
+    now: ptc_core::Timestamp,
+) -> Result<
+    (
+        Option<ptc_core::Timestamp>,
+        ptc_core::Timestamp,
+        Option<u64>,
+    ),
+    ApiError,
+> {
+    let since = since.map(core_time);
+    let until = until.map_or(now, core_time);
+    if since.is_some_and(|since| since >= until) {
+        return Err(ApiError::invalid(
+            "since must be before until (now by default)",
+        ));
+    }
+    let bucket = match (bucket, since) {
+        (None, _) => None,
+        (Some(_), None) => {
+            return Err(ApiError::invalid(
+                "bucket needs since: the series starts there",
+            ));
+        }
+        (Some(bucket), Some(since)) => {
+            let width = bucket.as_millis();
+            if width == 0 {
+                return Err(ApiError::invalid("bucket must be longer than 0ms"));
+            }
+            let span = until.as_millis().saturating_sub(since.as_millis());
+            if span.div_ceil(width) > MAX_BUCKETS {
+                return Err(ApiError::invalid(format!(
+                    "{bucket} buckets from since to until make more than {MAX_BUCKETS}: widen the bucket or narrow the window"
+                )));
+            }
+            Some(width)
+        }
+    };
+    Ok((since, until, bucket))
 }
 
 /// `GET /v1/runs/{id}`.
@@ -484,6 +532,7 @@ pub(super) async fn release(
     if !app.engine.release_quarantine(&record.run).await? {
         return Err(not_quarantined(&id));
     }
+    app.record_quarantine(&record.run).await;
     app.wake.bump();
     let record = app.run(&caller, &id).await?;
     Ok(Json(app.views().run(&record).await?))
@@ -505,6 +554,7 @@ pub(super) async fn give_up(
             "run {id} is being activated: give it up again in a few seconds"
         )));
     }
+    app.record_quarantine(&record.run).await;
     app.wake.bump();
     let record = app.run(&caller, &id).await?;
     Ok(Json(app.views().run(&record).await?))
@@ -529,6 +579,7 @@ pub(super) async fn credentials(
     app.engine
         .set_run_credentials(&record.run, &toolsets::secrets(credentials))
         .await?;
+    app.record_tasks(&record.run).await;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }
@@ -548,17 +599,6 @@ async fn ended_with(app: &App, record: &RunRecord) -> Result<Option<String>, Api
         Event::Lifecycle(Lifecycle::RunAborted(reason)) => Some(reason.kind.as_str().to_owned()),
         _ => None,
     }))
-}
-
-fn failure_kind(text: &str) -> Option<ToolFailureKind> {
-    [
-        ToolFailureKind::Error,
-        ToolFailureKind::Unavailable,
-        ToolFailureKind::Timeout,
-        ToolFailureKind::OutcomeUnknown,
-    ]
-    .into_iter()
-    .find(|kind| kind.as_str() == text)
 }
 
 pub(crate) fn core_time(time: jiff::Timestamp) -> ptc_core::Timestamp {

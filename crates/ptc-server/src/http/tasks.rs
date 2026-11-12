@@ -14,7 +14,7 @@ use ptc_api::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, Task, TaskBatch, TaskQuery,
 };
 use ptc_core::canonical_json;
-use ptc_engine::ports::{JournalStore, TaskToken};
+use ptc_engine::ports::{JournalStore, TaskPhase, TaskProgress, TaskToken};
 use ptc_engine::{HostClaim, HostFailure, HostTask};
 
 use crate::app::App;
@@ -66,8 +66,12 @@ pub(super) async fn claim(
         if !claimed.is_empty() {
             let mut tasks = Vec::with_capacity(claimed.len());
             for task in claimed {
-                app.record_attempt(&task.task.run, task.task.seq, task.attempt)
-                    .await;
+                let claimed = TaskProgress {
+                    seq: task.task.seq,
+                    attempt: task.attempt,
+                    phase: TaskPhase::Claimed,
+                };
+                app.record_progress(&task.task.run, claimed).await;
                 tasks.push(view(task));
             }
             app.wake.bump();
@@ -126,13 +130,17 @@ pub(super) async fn defer(
     OptionalBody(request): OptionalBody<DeferTask>,
 ) -> Result<StatusCode, ApiError> {
     caller.allow(Access::Tasks)?;
+    let token = TaskToken(token);
     app.engine
         .defer_task(
             &caller.tenant,
-            &TaskToken(token),
+            &token,
             request.timeout.map(|timeout| timeout.get()),
         )
         .await?;
+    if let Some(task) = app.store.tool_task(&token).await? {
+        app.record_task(&task).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -182,6 +190,7 @@ pub(super) async fn approve(
     caller.allow(Access::Write)?;
     let task = task(&app, &caller, &id).await?;
     app.engine.approve_task(&task).await?;
+    app.record_tasks(&task.run).await;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }

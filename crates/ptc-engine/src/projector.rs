@@ -274,7 +274,7 @@ where
     }
 
     /// Applies the entries from `from` to the end of `history`, with the snapshot of `history`,
-    /// then records the states of the run's open tasks. The read model gets the entries with the
+    /// then records the run's quarantine and the states of its open tasks. The read model gets the entries with the
     /// values of the table tier loaded, so that the shapes of most results are observed; values
     /// in the blob store are not downloaded.
     async fn apply_read_model(
@@ -319,6 +319,17 @@ where
         };
         let snapshot = run_snapshot(history, toolset.as_ref());
         self.read_model.apply(&run, &entries, &snapshot).await?;
+        // The record says whether the run is quarantined now: a quarantine as of its start, a
+        // release as of the run's last commit, so that a release or a quarantine recorded
+        // later by whoever changed it wins, and one that was never recorded (its server died
+        // first) is caught up.
+        let quarantine = record.quarantine.as_ref().map(QuarantineNote::from);
+        let at = quarantine
+            .as_ref()
+            .map_or(record.updated_at, |quarantine| quarantine.since);
+        self.read_model
+            .record_quarantine(&record.run, quarantine.as_ref(), at)
+            .await?;
         self.record_tasks(&record.run).await
     }
 

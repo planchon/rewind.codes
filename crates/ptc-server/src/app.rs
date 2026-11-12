@@ -1,7 +1,7 @@
 //! The state every request and every loop shares: the engine wired with this server's
 //! adapters, and what the HTTP API needs beside it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -10,8 +10,8 @@ use ptc_core::{Digest, RunId, Timestamp, Toolset};
 use ptc_engine::Engine;
 use ptc_engine::adapters::SystemEntropy;
 use ptc_engine::ports::{
-    Clock, JournalStore, ReadModel, Retention, RunRecord, RunRef, StoredToolset, TenantId,
-    ToolDeclarations,
+    Clock, JournalStore, Predicate, ReadModel, Retention, RunOrder, RunQuery, RunRecord, RunRef,
+    StoredToolset, TaskProgress, TenantId, ToolDeclarations, ToolTask, WaitingFor,
 };
 use ptc_engine::projector::{Projector, ProjectorConfig};
 use ptc_engine::retention::Housekeeper;
@@ -236,10 +236,63 @@ impl App {
         headline
     }
 
-    /// Records the attempt of a claimed call, for the read model's statistics.
-    pub(crate) async fn record_attempt(&self, run: &RunRef, seq: ptc_core::Seq, attempt: u32) {
-        if let Err(error) = self.store.record_attempt(run, seq, attempt).await {
-            tracing::warn!(run = %run, seq = seq.0, %error, "the attempt was not recorded");
+    /// Records the state of a task the caller holds in the read model: a claim, a deferral.
+    pub(crate) async fn record_task(&self, task: &ToolTask) {
+        self.record_progress(&task.task.run, ptc_engine::projector::task_progress(task))
+            .await;
+    }
+
+    /// Records a task's state in the read model.
+    pub(crate) async fn record_progress(&self, run: &RunRef, progress: TaskProgress) {
+        if let Err(error) = self.store.record_tasks(run, &[progress]).await {
+            tracing::warn!(run = %run, seq = progress.seq.0, %error, "the task's state was not recorded");
+        }
+    }
+
+    /// Records the states of a run's open tasks, as the store holds them now, after a change
+    /// the caller does not see the result of: an approval, a rejection, a call that may have
+    /// been parked, renewed credentials.
+    pub(crate) async fn record_tasks(&self, run: &RunRef) {
+        if let Err(error) = self.projector().record_tasks(run).await {
+            tracing::warn!(run = %run, %error, "the tasks' states were not recorded");
+        }
+    }
+
+    /// Records the states of the tasks of the runs of a toolset that had a call parked, after
+    /// the toolset's credentials were renewed: their parked calls are ready again.
+    pub(crate) async fn record_parked_tasks(&self, tenant: &TenantId, toolset: Digest) {
+        const PAGE: usize = 100;
+        let query = RunQuery::new(tenant.clone())
+            .with(Predicate::Toolset(vec![toolset.to_hex()]))
+            .with(Predicate::Waiting(BTreeSet::from([WaitingFor::Parked])));
+        let mut after = None;
+        loop {
+            let runs = match self
+                .store
+                .search_runs(&query, RunOrder::Started, after.as_ref(), PAGE)
+                .await
+            {
+                Ok(runs) => runs,
+                Err(error) => {
+                    tracing::warn!(%toolset, %error, "the parked tasks' states were not recorded");
+                    return;
+                }
+            };
+            for run in &runs {
+                self.record_tasks(&run.run).await;
+            }
+            match runs.last() {
+                Some(last) if runs.len() == PAGE => after = Some(last.cursor(RunOrder::Started)),
+                _ => return,
+            }
+        }
+    }
+
+    /// Records a run's quarantine, as the store holds it now, after a quarantine, a release or
+    /// a give-up.
+    pub(crate) async fn record_quarantine(&self, run: &RunRef) {
+        if let Err(error) = self.projector().record_quarantine(run, self.now()).await {
+            tracing::warn!(run = %run, %error, "the quarantine was not recorded");
         }
     }
 }
