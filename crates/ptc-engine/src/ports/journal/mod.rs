@@ -20,7 +20,7 @@ pub use activation::{
 };
 pub use feed::{FeedConsumer, FeedItem};
 pub use runs::{
-    Archive, CreateRun, Created, Enqueued, ExpiredRuns, Failures, NewRun,
+    Archive, CreateRun, Created, Enqueued, ExpiredRuns, Failures, ForkParent, NewRun,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata,
     RunRecord, TraceContext,
 };

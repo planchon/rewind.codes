@@ -14,8 +14,8 @@ use ptc_core::{
 };
 use ptc_engine::adapters::{MemoryJournal, VirtualClock};
 use ptc_engine::ports::{
-    AcquireRunnable, Clock, Delivery, Enqueued, ExecutorError, JournalStore, RunFilter, RunRef,
-    STICKY_GRACE, TenantId, TenantScope, VirtualTime,
+    AcquireRunnable, Clock, Delivery, Enqueued, ExecutorError, JournalStore, QuarantineKind,
+    RunFilter, RunRef, STICKY_GRACE, TenantId, TenantScope, VirtualTime,
 };
 use ptc_engine::replay::ReplayEnd;
 use ptc_engine::{
@@ -356,7 +356,7 @@ async fn cancellation_gives_the_script_one_grace_delivery() {
 }
 
 #[tokio::test]
-async fn large_payloads_live_in_the_blob_store() {
+async fn payloads_leave_the_events_by_size() {
     let big = "x".repeat(5_000);
     let engine = engine(one_call(), RecordingDispatcher::echo());
     let run = engine
@@ -382,7 +382,17 @@ async fn large_payloads_live_in_the_blob_store() {
         })
         .count();
     assert_eq!(digests, 4, "input, args, result and output are offloaded");
-    assert_eq!(engine.blobs().len(), 1, "one value, deduplicated");
+    // 5 KB: in the payloads table, deduplicated, not in the blob store.
+    assert_eq!(engine.blobs().len(), 0);
+    let value = json!({ "text": big });
+    let row = engine
+        .journal()
+        .get_payload(&run.run.tenant, Payload::digest_of(&value))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.value, Some(value));
+    assert_eq!(row.size, 5_011);
 
     let exported = engine.export_history(&run.run).await.unwrap();
     assert_eq!(
@@ -391,6 +401,31 @@ async fn large_payloads_live_in_the_blob_store() {
             output: json!({ "text": "x".repeat(5_000) }).into()
         })
     );
+    assert_eq!(
+        engine.replay(&run.run, None).await.unwrap(),
+        ReplayVerdict::Matches(ReplayEnd::EndOfHistory)
+    );
+}
+
+#[tokio::test]
+async fn payloads_above_the_table_tier_live_in_the_blob_store() {
+    let huge = json!({ "text": "y".repeat(70_000) });
+    let engine = engine_with(one_call(), RecordingDispatcher::echo(), replaying());
+    let run = engine
+        .start_run(request("one_call", huge.clone()))
+        .await
+        .unwrap();
+    drive(&engine).await;
+    assert_eq!(status(&engine, &run.run).await, RunStatus::Completed);
+    assert_eq!(engine.blobs().len(), 1, "one value, deduplicated");
+    let row = engine
+        .journal()
+        .get_payload(&run.run.tenant, Payload::digest_of(&huge))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!((row.size, row.value), (70_011, None));
+    assert!(row.preview.starts_with("{\"text\":\"yyy"));
     assert_eq!(
         engine.replay(&run.run, None).await.unwrap(),
         ReplayVerdict::Matches(ReplayEnd::EndOfHistory)
@@ -414,7 +449,11 @@ fn non_deterministic() -> FakeExecutor {
 
 #[tokio::test]
 async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
-    let engine = engine(non_deterministic(), RecordingDispatcher::echo());
+    let engine = engine_with(
+        non_deterministic(),
+        RecordingDispatcher::echo(),
+        replaying(),
+    );
     let run = engine
         .start_run(request("flaky_platform", json!({})))
         .await
@@ -447,7 +486,10 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
     let report = engine.activate_next().await.unwrap().unwrap();
     assert!(matches!(
         report.outcome,
-        ActivationOutcome::Quarantined { .. }
+        ActivationOutcome::Quarantined {
+            kind: QuarantineKind::NonDeterminism,
+            ..
+        }
     ));
 
     // An operator gives up.
@@ -463,7 +505,11 @@ async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
 
 #[tokio::test]
 async fn a_quarantined_run_is_given_up_at_its_deadline() {
-    let engine = engine(non_deterministic(), RecordingDispatcher::echo());
+    let engine = engine_with(
+        non_deterministic(),
+        RecordingDispatcher::echo(),
+        replaying(),
+    );
     let mut request = request("flaky_platform", json!({}));
     request.ttl = Some(Duration::from_millis(HOUR));
     let run = engine.start_run(request).await.unwrap();
@@ -765,7 +811,7 @@ async fn a_failing_activation_is_retried_later_and_does_not_block_other_runs() {
         },
         |run, delivery| run.complete(result_of(delivery).clone()),
     );
-    let engine = engine(programs, RecordingDispatcher::echo());
+    let engine = engine_with(programs, RecordingDispatcher::echo(), replaying());
     let unlucky = engine
         .start_run(request("unlucky", json!({})))
         .await

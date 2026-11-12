@@ -5,10 +5,10 @@
 
 use ptc_core::{
     AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
-    Event, Lifecycle, LogLevel, Payload, RunMode, RunStarted, RunState, RunStatus, ScriptError,
-    Seed, Seq, Timestamp, ToolFailure, ToolFailureKind, validate_history,
+    Event, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunState, RunStatus,
+    ScriptError, Seed, Seq, Timestamp, ToolFailure, ToolFailureKind,
 };
-use ptc_format::{FormatError, decode_event, decode_history, encode_event, encode_history};
+use ptc_format::{FormatError, decode_event, decode_journal, encode_event, encode_journal};
 use serde_json::json;
 
 const FIXTURES: [(&str, &str); 3] = [
@@ -28,12 +28,15 @@ fn digest(hex: &str) -> Digest {
 }
 
 #[test]
-fn every_fixture_decodes_to_a_valid_history_and_re_encodes_to_the_same_bytes() {
+fn every_fixture_decodes_to_a_valid_journal_and_re_encodes_to_the_same_bytes() {
     for (name, fixture) in FIXTURES {
-        let history = decode_history(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
-        validate_history(&history).unwrap_or_else(|err| panic!("{name}: {err}"));
-        assert_eq!(encode_history(&history), fixture, "{name}");
-        for entry in &history {
+        let journal = decode_journal(fixture).unwrap_or_else(|err| panic!("{name}: {err}"));
+        // The history is valid, and the script and toolset are those of its run_started.
+        journal
+            .check()
+            .unwrap_or_else(|err| panic!("{name}: {err}"));
+        assert_eq!(encode_journal(&journal), fixture, "{name}");
+        for entry in &journal.entries {
             let event = encode_event(&entry.event);
             assert_eq!(
                 decode_event(&event).unwrap(),
@@ -46,13 +49,27 @@ fn every_fixture_decodes_to_a_valid_history_and_re_encodes_to_the_same_bytes() {
 
 #[test]
 fn decodes_to_the_expected_domain_values() {
-    let history = decode_history(FIXTURES[0].1).unwrap();
+    let journal = decode_journal(FIXTURES[0].1).unwrap();
+    assert_eq!(
+        journal.run,
+        "019b7a3c-8f00-7000-8000-000000000001"
+            .parse::<RunId>()
+            .unwrap()
+    );
+    assert!(
+        journal
+            .script
+            .source()
+            .starts_with("import { github } from \"ptc:tools\";")
+    );
+    assert_eq!(journal.toolset.tools().len(), 7);
+    let history = journal.entries;
     assert_eq!(history.len(), 16);
     assert_eq!(
         history[0].event,
         Event::Lifecycle(Lifecycle::RunStarted(RunStarted {
-            script: digest("21a0270b7f66a1e4c25933f13a1e5a1bbb4757578072930c8189131f9c6aaae1"),
-            toolset: digest("5598149567a46bd3164b1d42e871b4d65cf49b78dd8b4547436efd1784b533c6"),
+            script: digest("e33505cb2c61ff0f50a25c852c3ff798d4068e978c7a490bfdea15bfc5d25d81"),
+            toolset: digest("41c98467fab2b9b22e2ef928f7b284e4c7adf424ed905dabfe4342e65ea69552"),
             input: json!({ "repo": "acme/api" }).into(),
             seed: Seed::from_bytes(
                 *digest("19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b")
@@ -118,7 +135,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Cancelled
     );
 
-    let ttl = decode_history(FIXTURES[1].1).unwrap();
+    let ttl = decode_journal(FIXTURES[1].1).unwrap().entries;
     assert_eq!(
         ttl[9].event,
         Event::Completion(Completion::CancelRequested {
@@ -130,7 +147,7 @@ fn decodes_to_the_expected_domain_values() {
         RunStatus::Completed
     );
 
-    let aborted = decode_history(FIXTURES[2].1).unwrap();
+    let aborted = decode_journal(FIXTURES[2].1).unwrap().entries;
     assert_eq!(
         aborted[1].event,
         Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
@@ -310,17 +327,47 @@ fn rejects_what_v1_does_not_define() {
         );
     }
 
+    let toolset = r#"{"servers":[],"tools":[],"v":1}"#;
+    let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
+    let valid = document(&format!(
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[]"#
+    ));
+    assert_eq!(decode_journal(&valid).unwrap().entries, vec![]);
+    let invalid_documents = [
+        // An unknown field.
+        format!(
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[],"x":1"#
+        ),
+        // A missing field.
+        r#""entries":[]"#.to_owned(),
+        format!(r#""script":"s","toolset":{toolset},"entries":[]"#),
+        format!(r#""run":"019b7a3c-8f00-7000-8000-000000000003","toolset":{toolset},"entries":[]"#),
+        r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","entries":[]"#.to_owned(),
+        // A run that is not a run id.
+        format!(r#""run":"x","script":"s","toolset":{toolset},"entries":[]"#),
+        // A script that is not a source.
+        format!(
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":1,"toolset":{toolset},"entries":[]"#
+        ),
+    ];
+    for json in invalid_documents {
+        let json = document(&json);
+        assert!(
+            matches!(decode_journal(&json), Err(FormatError::InvalidDocument(_))),
+            "{json} must be rejected, got {:?}",
+            decode_journal(&json)
+        );
+    }
     assert!(matches!(
-        decode_history(r#"{"v":1,"entries":[],"run":"x"}"#),
-        Err(FormatError::InvalidDocument(_))
+        decode_journal(&document(
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{"servers":[],"v":1},"entries":[]"#
+        )),
+        Err(FormatError::InvalidToolset(_))
     ));
     assert!(matches!(
-        decode_history(r#"{"v":1}"#),
-        Err(FormatError::InvalidDocument(_))
-    ));
-    assert!(matches!(
-        decode_history(r#"{"v":1,"entries":[{"index":0,"recorded_at":0}]}"#),
+        decode_journal(&document(&format!(
+            r#""run":"019b7a3c-8f00-7000-8000-000000000003","script":"s","toolset":{toolset},"entries":[{{"index":0,"recorded_at":0}}]"#
+        ))),
         Err(FormatError::InvalidEntry { position: 0, .. })
     ));
-    assert_eq!(decode_history(r#"{"v":1,"entries":[]}"#), Ok(vec![]));
 }

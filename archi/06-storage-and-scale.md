@@ -186,7 +186,7 @@ Active runs are never touched. Defaults, configurable per tenant:
 | Payloads | As long as a run's journal, live or archived, references them; deleted 24 h after the last reference is gone |
 
 - `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-  rows and its payload references. Tool arguments can hold personal data.
+  rows, its credentials and its payload references. Tool arguments can hold personal data.
 - A `payload_refs` table, filled at commit, records which runs reference a payload. Cleanup
   deletes the payloads that no run has referenced for 24 h, per tenant.
 

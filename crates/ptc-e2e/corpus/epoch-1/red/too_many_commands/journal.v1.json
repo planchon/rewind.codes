@@ -1,4 +1,4 @@
-{"v":1,"entries":[
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { audit } from \"ptc:tools\";\n\nexport default async function main() {\n  await Promise.all(Array.from({ length: 50 }, (_, i) => audit.record({ i })));\n}\n","toolset":{"servers":[],"tools":[{"name":"audit.record","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"audit","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
 {"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"8dbdb07e6cc470d3efbbf5568eb45e5d20fcbb324d0a548c5074daa86516c0ba","toolset":"19b1e02dbc3e39cdd27f37db4f5f3241fed040c61119bd9c80a36a4434d8e181","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
 {"index":1,"recorded_at":1767225600000,"event":{"type":"run_aborted","reason":{"kind":"limit_exceeded","message":"the script emitted more than 20 commands in one activation"}}}
 ]}

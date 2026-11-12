@@ -1,4 +1,4 @@
-{"v":1,"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"21a0270b7f66a1e4c25933f13a1e5a1bbb4757578072930c8189131f9c6aaae1","toolset":"5598149567a46bd3164b1d42e871b4d65cf49b78dd8b4547436efd1784b533c6","input":{"digest":"f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68"},"seed":"19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b","epoch":1,"expires_at":1769817600000,"mode":"live"}},
+{"v":1,"run":"019b7a3c-8f00-7000-8000-000000000003","script":"export default async function main() {\n  while (true) {}\n}\n","toolset":{"servers":[],"tools":[],"v":1},"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"3630def50d36c3c9a773f5f744bf874123ee4fe15ee167463d4f2fa6904552c1","toolset":"f3e36efa9bae959bf0e62cf9b1da2adc53de0a970ef5b69f92dcb984a9175843","input":{"digest":"f6a214f7a5fcda0c2cee9660b7fc29f5649e3c68aad48e20e950137c98913a68"},"seed":"19b25856e1c150ca834cffc8b59b23adbd0ec0389e58eb22b3b64768098d002b","epoch":1,"expires_at":1769817600000,"mode":"live"}},
 {"index":1,"recorded_at":1767225605000,"event":{"type":"run_aborted","reason":{"kind":"limit_exceeded","message":"the activation used more than 5000ms of CPU time"}}}
 ]}

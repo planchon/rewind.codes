@@ -148,7 +148,7 @@ draws from a CSPRNG. Every method is scoped by the tenant: a run (`RunRef { tena
 script, a toolset, a payload or a task of one tenant is never visible to another. Run ids are
 unique across tenants.
 
-`metadata` is the run metadata (labels, trace context, the parent of a fork), stored with
+`metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`), stored with
 the run and never part of its events. `commit_activation` also writes one feed item per
 consumer (`read_model`, `otel`, `webhooks`) in the same transaction: the store guarantees that
 every committed activation is eventually projected.
@@ -225,8 +225,9 @@ Contracts, all covered by the conformance suite:
   canonical JSON, so the key is the payload's digest) and the journal documents of archived
   runs. `put` refuses bytes that do not hash to the digest; a second `put` changes nothing.
   `get` checks the digest of what it reads. `delete` serves cleanup.
-- **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, unchanged. The
-  executor knows nothing about the instance cache, which lives in the engine.
+- **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, and `memory_usage`
+  (the memory an instance holds, which bounds the instance cache). The executor knows nothing
+  about the instance cache, which lives in the engine.
 - **`ToolDispatcher`**: `dispatch(call, credentials) -> Dispatched`. The call carries the run,
   the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, whether
   the harness approved a schema change (then the call is sent without checking the schema

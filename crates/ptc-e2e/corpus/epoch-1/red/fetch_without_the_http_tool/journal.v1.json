@@ -1,4 +1,4 @@
-{"v":1,"entries":[
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"export default async function main() {\n  const response = await fetch(\"https://api.example.com/v1/items\");\n  return response.status;\n}\n","toolset":{"servers":[],"tools":[{"name":"audit.record","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"audit","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
 {"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"9e93fa967ef6943847754e1f8f557c0cdc8c1c1563eac4af4b6bb6be9c7a7e35","toolset":"19b1e02dbc3e39cdd27f37db4f5f3241fed040c61119bd9c80a36a4434d8e181","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
 {"index":1,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"ReferenceError","message":"fetch is not defined","stack":"ReferenceError: fetch is not defined\n    at main (file:///script.ts:2:20)"}}}
 ]}

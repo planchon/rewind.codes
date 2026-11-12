@@ -1,9 +1,9 @@
 //! The engine and its use cases: start, signal, cancel, activate, fire timers, expire runs,
 //! quarantine, replay. The tool tasks' use cases are in [`crate::tasks`].
 
+use std::sync::Mutex;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use ptc_core::{
     AbortKind, AbortReason, CancelReason, Completion, Digest, Epoch, Event, HistoryEntry,
@@ -11,16 +11,18 @@ use ptc_core::{
     RunState, RunStatus, Script, Seq, Toolset,
 };
 
-use crate::payloads;
+use crate::cache::{CacheConfig, InstanceCache};
+use crate::payloads::{self, PayloadTiers};
 use crate::ports::{
-    AcquireRunnable, Activation, BlobError, BlobStore, Clock, CreateRun, Created, Credentials,
-    Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun, QuarantineKind,
-    RunFilter, RunMetadata, RunRecord, RunRef, STICKY_GRACE, ScriptExecutor, SecretError,
-    SecretOwner, SecretStore, StoreError, StoredScript, StoredToolset, TaskFilter, TenantId,
-    TenantScope, ToolDeclarations, ToolDispatcher, WebhookSender,
+    Activation, BlobError, BlobStore, Clock, CreateRun, Created, Credentials, Enqueued, Entropy,
+    ExecutorError, InvalidScript, JournalStore, NewRun, QuarantineKind, RunFilter, RunMetadata,
+    RunRecord, RunRef, ScriptExecutor, SecretError, SecretOwner, SecretStore, StoreError,
+    StoredScript, StoredToolset, TaskFilter, TenantId, TenantScope, ToolDeclarations,
+    ToolDispatcher, WebhookSender,
 };
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
+use crate::telemetry::TelemetryConfig;
 
 /// Resource limits enforced by the engine (`archi/03-execution.md`, "Resource limits"). CPU
 /// time and heap size are enforced by the executor.
@@ -53,8 +55,6 @@ pub struct EngineConfig {
     pub default_ttl: Duration,
     /// The largest TTL a run may ask for.
     pub max_ttl: Duration,
-    /// Payloads above this size (canonical JSON, in bytes) are kept in the blob store.
-    pub inline_threshold: usize,
     /// Attempts at a tool call, every claim counted (`archi/04-tools.md`, "Policies"). A call
     /// whose claim expired that many times fails with `outcome_unknown`; a transient failure at
     /// the last attempt is delivered to the script.
@@ -72,6 +72,19 @@ pub struct EngineConfig {
     /// Timers fired, and runs expired, per call to the store.
     pub scheduler_batch: usize,
     pub limits: Limits,
+    /// This worker's build. A worker of a new build retries each quarantined run of its epochs
+    /// once ([`Engine::retry_quarantined`]).
+    pub build: String,
+    /// The bounds of the sticky instance cache.
+    pub cache: CacheConfig,
+    /// Where payloads go at commit, by size.
+    pub payloads: PayloadTiers,
+    /// How often an activation renews its lease, about 10 s: the lease outlives a worker that
+    /// renews it, and a dead worker frees the run at most `lease_duration` after its last
+    /// renewal.
+    pub lease_renewal: Duration,
+    /// Run telemetry: sampling, and the labels exported as span attributes.
+    pub telemetry: TelemetryConfig,
 }
 
 impl Default for EngineConfig {
@@ -82,7 +95,6 @@ impl Default for EngineConfig {
             lease_duration: Duration::from_secs(30),
             default_ttl: Duration::from_secs(30 * DAY),
             max_ttl: Duration::from_secs(365 * DAY),
-            inline_threshold: 1024,
             max_tool_attempts: 5,
             tenants: TenantScope::All,
             tool_tasks: TaskFilter::All,
@@ -90,6 +102,11 @@ impl Default for EngineConfig {
             public_url: None,
             scheduler_batch: 1_000,
             limits: Limits::default(),
+            build: concat!("ptc-engine ", env!("CARGO_PKG_VERSION")).into(),
+            cache: CacheConfig::default(),
+            payloads: PayloadTiers::default(),
+            lease_renewal: Duration::from_secs(10),
+            telemetry: TelemetryConfig::default(),
         }
     }
 }
@@ -113,7 +130,7 @@ pub struct Adapters<J, B, X, D, C, E, S, W> {
 /// The application layer of ai-ptc. It is deterministic given its ports: wired with
 /// in-memory adapters and a virtual clock, it is both mock mode and the test harness.
 #[derive(Debug)]
-pub struct Engine<J, B, X, D, C, E, S, W> {
+pub struct Engine<J, B, X: ScriptExecutor, D, C, E, S, W> {
     pub(crate) journal: J,
     pub(crate) blobs: B,
     pub(crate) executor: X,
@@ -127,7 +144,9 @@ pub struct Engine<J, B, X, D, C, E, S, W> {
     pub(crate) config: EngineConfig,
     /// Draws for the tenant `acquire_runnable` picks: consecutive draws go round the tenants
     /// with runnable work.
-    draws: AtomicU64,
+    pub(crate) draws: AtomicU64,
+    /// The instances of sticky execution, kept between activations.
+    pub(crate) instances: Mutex<InstanceCache<X::Instance>>,
 }
 
 /// A request to start a run.
@@ -242,8 +261,12 @@ pub struct ActivationReport {
 pub enum ActivationOutcome {
     /// Entries were committed; the run is now in `status`.
     Committed { entries: usize, status: RunStatus },
-    /// Replay did not match the history: nothing was committed and the run is quarantined.
-    Quarantined { mismatch: String },
+    /// Nothing was committed and the run is quarantined: replay did not match the history
+    /// (`non_determinism`), or the activation failed for the fifth time in a row (`failures`).
+    Quarantined {
+        kind: QuarantineKind,
+        reason: String,
+    },
     /// The inbox was empty by the time the lease was acquired.
     NothingToDo,
     /// The activation failed and committed nothing. The lease is kept until it expires, then
@@ -294,6 +317,7 @@ where
             secrets,
             webhooks,
             tool_tasks: ToolTasks::default(),
+            instances: Mutex::new(InstanceCache::new(config.cache)),
             config,
             draws: AtomicU64::new(0),
         }
@@ -452,40 +476,6 @@ where
     }
 
     // ---------------------------------------------------------------------------------------
-    // Activations
-
-    /// Leases one runnable run of a supported epoch and activates it. `None` when no run is
-    /// runnable. An activation that fails is reported, not returned as an error: only a
-    /// failure to lease a run is.
-    pub async fn activate_next(&self) -> Result<Option<ActivationReport>, EngineError> {
-        let request = AcquireRunnable {
-            owner: &self.config.worker,
-            epochs: self.executor.epochs(),
-            tenants: &self.config.tenants,
-            now: self.clock.now(),
-            lease_duration: self.config.lease_duration,
-            sticky_grace: STICKY_GRACE,
-            draw: self.draws.fetch_add(1, Ordering::Relaxed),
-        };
-        let Some(lease) = self.journal.acquire_runnable(&request).await? else {
-            return Ok(None);
-        };
-        let outcome = match self.activate(&lease).await {
-            Ok(outcome) => outcome,
-            // The lease is kept: the run is retried once it expires, and meanwhile the other
-            // runs are activated instead of this one again and again.
-            Err(error) => {
-                tracing::error!(run = %lease.run, %error, "activation failed");
-                ActivationOutcome::Failed(error)
-            }
-        };
-        Ok(Some(ActivationReport {
-            run: lease.run,
-            outcome,
-        }))
-    }
-
-    // ---------------------------------------------------------------------------------------
     // Time: timers and deadlines
 
     /// Pushes `timer_fired` into the inbox of every run whose timer is due.
@@ -602,12 +592,13 @@ where
             toolset: &toolset,
             history: &history,
         };
-        match replay::replay(&self.executor, &self.blobs, input).await {
+        match replay::replay(&self.executor, &self.payloads(), input).await {
             Ok(rebuilt) => Ok(ReplayVerdict::Matches(rebuilt.end)),
             Err(ReplayError::NonDeterminism(mismatch)) => Ok(ReplayVerdict::Diverges(mismatch)),
             Err(ReplayError::Executor(err)) => Ok(ReplayVerdict::Fails(err)),
             Err(ReplayError::History(error)) => Err(EngineError::CorruptHistory { run_id, error }),
             Err(ReplayError::Blob(err)) => Err(err.into()),
+            Err(ReplayError::LeaseLost(err)) => Err(err.into()),
         }
     }
 
@@ -628,7 +619,7 @@ where
     /// The run's history with every payload loaded: a self-contained document.
     pub async fn export_history(&self, run: &RunRef) -> Result<Vec<HistoryEntry>, EngineError> {
         let mut history = self.history(run).await?;
-        payloads::load_all(&self.blobs, &run.tenant, &mut history).await?;
+        payloads::load_all(&self.payloads(), &run.tenant, &mut history).await?;
         Ok(history)
     }
 

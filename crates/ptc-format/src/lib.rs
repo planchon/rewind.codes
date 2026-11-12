@@ -10,9 +10,11 @@
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
-//! - a **journal document** (exports, the epoch corpus):
-//!   `{"v":1,"entries":[{"index":0,"recorded_at":…,"event":{"type":"run_started",…}},…]}`,
-//!   written with one entry per line so that diffs stay readable;
+//! - a **journal document** (exports, the archive of a finished run, the epoch corpus):
+//!   `{"v":1,"run":"…","script":"…","toolset":{…},"entries":[{"index":0,"recorded_at":…,
+//!   "event":{"type":"run_started",…}},…]}`: the run's id, its TypeScript source, its pinned
+//!   toolset document and its entries, written with one entry per line so that diffs stay
+//!   readable. It replays on its own;
 //! - a **cassette** (mocks recorded from a run, replayed by `ptc test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
 //! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, in its
@@ -26,7 +28,7 @@
 
 mod v1;
 
-use ptc_core::{Cassette, Event, HistoryEntry, Toolset, canonical_json};
+use ptc_core::{Cassette, Event, JournalDocument, RunId, Script, Toolset, canonical_json};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -77,10 +79,16 @@ pub fn decode_event(json: &str) -> Result<Event, FormatError> {
     }
 }
 
-/// A journal document: the version, then one entry per line.
-pub fn encode_history(history: &[HistoryEntry]) -> String {
-    let mut out = format!("{{\"v\":{VERSION},\"entries\":[");
-    for (i, entry) in history.iter().enumerate() {
+/// A journal document: the version, the run, its script and its toolset, then one entry per
+/// line.
+pub fn encode_journal(journal: &JournalDocument) -> String {
+    let mut out = format!(
+        "{{\"v\":{VERSION},\"run\":{},\"script\":{},\"toolset\":{},\"entries\":[",
+        to_json(&journal.run.to_string()),
+        to_json(&journal.script.source()),
+        encode_toolset(&journal.toolset),
+    );
+    for (i, entry) in journal.entries.iter().enumerate() {
         out.push_str(if i == 0 { "\n" } else { ",\n" });
         out.push_str(&to_json(&v1::EntryV1::from(entry)));
     }
@@ -88,36 +96,60 @@ pub fn encode_history(history: &[HistoryEntry]) -> String {
     out
 }
 
-/// Decodes a journal document written by [`encode_history`], of any supported version.
+/// Decodes a journal document written by [`encode_journal`], of any supported version.
 ///
-/// Only the encoding is checked here. Whether the entries form a valid history is the
-/// domain's business (`ptc_core::validate_history`).
-pub fn decode_history(json: &str) -> Result<Vec<HistoryEntry>, FormatError> {
+/// Only the encoding is checked here. Whether the entries form a valid history, and whether
+/// the script and the toolset are those of its `run_started`, is the domain's business
+/// ([`JournalDocument::check`]).
+pub fn decode_journal(json: &str) -> Result<JournalDocument, FormatError> {
     let mut object = parse_object(json)?;
     match take_version(&mut object)? {
         Version::V1 => {
+            let invalid = |message: &str| FormatError::InvalidDocument(message.to_owned());
+            let run = match object.remove("run") {
+                Some(Value::String(run)) => run
+                    .parse::<RunId>()
+                    .map_err(|err| FormatError::InvalidDocument(format!("\"run\": {err}")))?,
+                Some(_) => return Err(invalid("\"run\" is not a string")),
+                None => return Err(invalid("missing \"run\"")),
+            };
+            let script = match object.remove("script") {
+                Some(Value::String(source)) => Script::new(source),
+                Some(_) => return Err(invalid("\"script\" is not a string")),
+                None => return Err(invalid("missing \"script\"")),
+            };
+            let toolset = match object.remove("toolset") {
+                Some(Value::Object(mut toolset)) => match take_version(&mut toolset)? {
+                    Version::V1 => v1::decode_toolset(Value::Object(toolset))
+                        .map_err(FormatError::InvalidToolset)?,
+                },
+                Some(_) => return Err(invalid("\"toolset\" is not an object")),
+                None => return Err(invalid("missing \"toolset\"")),
+            };
             let entries = match object.remove("entries") {
                 Some(Value::Array(entries)) => entries,
-                Some(_) => {
-                    return Err(FormatError::InvalidDocument(
-                        "\"entries\" is not an array".into(),
-                    ));
-                }
-                None => return Err(FormatError::InvalidDocument("missing \"entries\"".into())),
+                Some(_) => return Err(invalid("\"entries\" is not an array")),
+                None => return Err(invalid("missing \"entries\"")),
             };
             if let Some(unknown) = object.keys().next() {
                 return Err(FormatError::InvalidDocument(format!(
                     "unknown field {unknown:?}"
                 )));
             }
-            entries
+            let entries = entries
                 .into_iter()
                 .enumerate()
                 .map(|(position, entry)| {
                     v1::decode_entry(entry)
                         .map_err(|message| FormatError::InvalidEntry { position, message })
                 })
-                .collect()
+                .collect::<Result<_, _>>()?;
+            Ok(JournalDocument {
+                run,
+                script,
+                toolset,
+                entries,
+            })
         }
     }
 }

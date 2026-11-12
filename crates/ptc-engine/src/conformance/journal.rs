@@ -18,11 +18,12 @@ use serde_json::json;
 use super::{T0, check, tenant};
 use crate::ports::{
     AcquireRunnable, Activation, ApiKey, CompiledScript, CreateRun, Enqueued, ExpiredRuns,
-    FeedConsumer, JournalStore, Lease, NewRun, NewTimer, NewToolTask, ParkKind, ParkReason,
-    ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention, RunCursor,
-    RunFilter, RunMetadata, RunRef, STICKY_GRACE, Secret, StoreError, Subscription, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
-    TraceContext, Trigger, WebhookEventType, WebhookToken, deferred_timeout_failure,
+    FeedConsumer, ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, ParkKind,
+    ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention,
+    RunCursor, RunFilter, RunMetadata, RunRef, STICKY_GRACE, Secret, StoreError, Subscription,
+    TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope,
+    ToolDeclarations, TraceContext, Trigger, WebhookEventType, WebhookToken,
+    deferred_timeout_failure,
 };
 
 const LEASE: Duration = Duration::from_secs(30);
@@ -492,7 +493,10 @@ pub async fn create_run_enqueues_run_started<S: JournalStore>(store: &S) {
             traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".into(),
             tracestate: Some("vendor=1".into()),
         }),
-        parent: Some(id(99)),
+        parent: Some(ForkParent {
+            run: id(99),
+            at: Some(7),
+        }),
     };
     let created = store
         .create_run(run.clone(), Some("call-1".into()))

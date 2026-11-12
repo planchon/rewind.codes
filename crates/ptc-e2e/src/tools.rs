@@ -18,9 +18,12 @@ use serde_json::Value;
 /// | `{"$unauthorized": "message"}` | the server refuses the credentials: the call is parked until they are renewed |
 /// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its claim expires |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
+/// | `{"$defer": true}` | no answer: the call stays without an outcome |
 #[derive(Debug)]
 pub struct ScenarioTools {
     responses: Mutex<BTreeMap<String, Responses>>,
+    /// The calls dispatched, by tool, and the idempotency keys they carried.
+    dispatched: Mutex<Vec<(String, String)>>,
 }
 
 #[derive(Debug)]
@@ -37,6 +40,7 @@ pub enum Answer {
     Transient(ToolFailure),
     Unauthorized(String),
     Crash,
+    Deferred,
 }
 
 impl ScenarioTools {
@@ -55,11 +59,41 @@ impl ScenarioTools {
             .collect();
         Self {
             responses: Mutex::new(responses),
+            dispatched: Mutex::new(Vec::new()),
         }
     }
 
-    /// The next answer of `tool` to a call with these args.
-    pub fn answer(&self, tool: &str, args: &JsonValue) -> Answer {
+    /// How many times each tool was dispatched.
+    pub fn dispatched(&self) -> BTreeMap<String, usize> {
+        let mut counts = BTreeMap::new();
+        for (tool, _) in self
+            .dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+        {
+            *counts.entry(tool.clone()).or_default() += 1;
+        }
+        counts
+    }
+
+    /// The idempotency keys of the calls dispatched, in order.
+    pub fn keys(&self) -> Vec<String> {
+        self.dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(_, key)| key.clone())
+            .collect()
+    }
+
+    /// The next answer of `tool` to a call with these args, which carries this idempotency
+    /// key. The call is counted as dispatched.
+    pub fn answer(&self, tool: &str, args: &JsonValue, key: &str) -> Answer {
+        self.dispatched
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((tool.to_owned(), key.to_owned()));
         let mut responses = self
             .responses
             .lock()
@@ -101,7 +135,9 @@ fn answer(response: &Value, args: &JsonValue) -> Answer {
         _ => ToolFailureKind::Error,
     };
     let data = response.get("$data").cloned();
-    if response.get("$echo") == Some(&Value::Bool(true)) {
+    if response.get("$defer") == Some(&Value::Bool(true)) {
+        Answer::Deferred
+    } else if response.get("$echo") == Some(&Value::Bool(true)) {
         Answer::Result(args.clone())
     } else if response.get("$crash") == Some(&Value::Bool(true)) {
         Answer::Crash
@@ -126,8 +162,9 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 
 impl ToolDispatcher for ScenarioTools {
     async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
-        match self.answer(&call.tool.name, &call.args) {
+        match self.answer(&call.tool.name, &call.args, &call.idempotency_key) {
             Answer::Result(result) => Dispatched::Result(result),
+            Answer::Deferred => Dispatched::Deferred,
             Answer::Failed(failure) => Dispatched::Failed(failure),
             Answer::Transient(failure) => Dispatched::Transient(failure),
             Answer::Unauthorized(message) => Dispatched::Park(ParkReason {

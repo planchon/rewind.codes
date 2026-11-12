@@ -17,9 +17,18 @@ pub struct RunMetadata {
     /// attributes.
     pub labels: BTreeMap<String, String>,
     pub trace_context: Option<TraceContext>,
-    /// For a fork, the run it was forked from, in the same tenant
+    /// For a fork, the run it was forked from, in the same tenant, and where it was forced live
     /// (`archi/03-execution.md`, "Forks").
-    pub parent: Option<RunId>,
+    pub parent: Option<ForkParent>,
+}
+
+/// The run a fork was started from. The fork's first activation copies the parent's history
+/// while the fork's commands match it, up to the entry `at` when the request gave one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForkParent {
+    pub run: RunId,
+    /// Go live from this entry of the parent's history, even if the commands still match.
+    pub at: Option<u64>,
 }
 
 /// W3C trace context.

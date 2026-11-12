@@ -265,22 +265,28 @@ where
 
     /// The call's args, loaded from where they live.
     pub(super) async fn task_args(&self, task: &ToolTask) -> Result<JsonValue, EngineError> {
-        Ok(payloads::load(&self.blobs, &task.task.run.tenant, &task.args).await?)
+        Ok(self.load_payload(&task.task.run.tenant, &task.args).await?)
     }
 
-    /// The idempotency key every attempt of the call carries: `"{run_id}/{seq}"`.
+    /// The idempotency key every attempt of the call carries: `"{run_id}/{seq}"`, or its
+    /// parent's key for a call a fork inherited without an outcome.
     pub(super) async fn task_key(
         &self,
         record: &RunRecord,
         task: &ToolTask,
     ) -> Result<String, EngineError> {
-        Ok(idempotency_key(record.run.id, task.task.seq))
+        self.call_key(record, task.task.seq, &task.tool, &task.args)
+            .await
     }
 
-    /// The trace context the call forwards: the run's, so that the tool's own spans join the
-    /// harness's trace.
-    pub(super) fn call_trace_context(&self, record: &RunRecord, _seq: Seq) -> Option<TraceContext> {
-        record.metadata.trace_context.clone()
+    /// The trace context the call forwards: the run's trace, with the tool call span as parent,
+    /// so that the tool's own spans join it.
+    pub(super) fn call_trace_context(&self, record: &RunRecord, seq: Seq) -> Option<TraceContext> {
+        Some(crate::telemetry::tool_call_trace_context(
+            record,
+            seq,
+            &self.config.telemetry,
+        ))
     }
 
     /// A result above the payload limit fails the call instead of reaching the script.

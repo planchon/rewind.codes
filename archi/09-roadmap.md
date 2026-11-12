@@ -49,14 +49,8 @@ Not there yet:
   `ptc-codegen`, `ptc-check`, `ptc-otel`, `ptc-cli`, `ptc-server` and the evals.
 - Payloads above 1 KiB all go to the `BlobStore`: the table tier is not used.
 - Starting a run does not type-check the script.
-- Every activation replays the full history: there is no instance cache.
-- An activation that fails 5 times in a row does not quarantine the run: it is retried every
-  lease period, forever. The store does not count consecutive failures, nor record why a run
-  is quarantined.
-- Leases are not renewed during an activation. A replay longer than the lease (30 s) lets
-  another worker take the run over, and with several workers on a very long history they can
-  fence each other off forever.
-- No feed, no projector, no OpenTelemetry export, no read model.
+- The projector, its span derivation and the in-memory read model exist, but no OpenTelemetry
+  exporter (`ptc-otel`) nor a stored read model.
 
 ## Contracts frozen first
 

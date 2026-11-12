@@ -4,7 +4,7 @@
 //! cargo run -p ptc-e2e -- replay epoch-1/blue/fan_out [--script other.ts]
 //! ```
 //!
-//! The committed `journal.v1.json` is decoded and replayed with the case's script (or
+//! The committed `journal.v1.json` is decoded and replayed with the script it holds (or
 //! another one, to check that it is compatible with the journal), on a fresh V8 executor.
 
 use std::process::ExitCode;
@@ -40,17 +40,17 @@ async fn main() -> ExitCode {
 async fn replay(name: &str, script: Option<&str>) -> Result<String, String> {
     let case = Case::load(name)?;
     let journal = std::fs::read_to_string(case.journal_path()).map_err(|err| err.to_string())?;
-    let history = ptc_format::decode_history(&journal).map_err(|err| err.to_string())?;
+    let journal = ptc_format::decode_journal(&journal).map_err(|err| err.to_string())?;
     let script = match script {
         Some(path) => {
             Script::new(std::fs::read_to_string(path).map_err(|err| format!("{path}: {err}"))?)
         }
-        None => case.script.clone(),
+        None => journal.script.clone(),
     };
-    match ptc_e2e::replay_journal(&case, &history, &script).await {
+    match ptc_e2e::replay_journal(&case, &journal, &script).await {
         Replayed::Matches(end) => Ok(format!(
             "{name}: the script replays the {} entries of the journal ({end:?})",
-            history.len()
+            journal.entries.len()
         )),
         Replayed::Fails(message) => Err(format!("{name}: {message}")),
     }

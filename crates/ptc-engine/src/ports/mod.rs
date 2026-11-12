@@ -46,7 +46,7 @@ pub use executor::{
 };
 pub use journal::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CreateRun, Created, Enqueued, ExpiredRuns,
-    Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease, NewRun, NewTimer,
+    Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore, Lease, NewRun, NewTimer,
     NewToolTask, ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES,
     Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata, RunRecord, STICKY_GRACE,
     StoreError, StoredScript, StoredToolset, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate,

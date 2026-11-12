@@ -6,6 +6,7 @@
 //! - [`ReplayCursor`]: the determinism check (`archi/03-execution.md`, "Replay").
 //! - [`Script`] and [`Toolset`]: the immutable, content-addressed inputs of a run. The toolset
 //!   is pinned: its servers, and for each tool its route, schemas and policy.
+//! - [`JournalDocument`]: a run's journal with its script and toolset, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
 //! - [`Shape`]: the type of a tool's results, as observed in journals.
 //!
@@ -22,6 +23,7 @@ mod digest;
 pub mod event;
 mod history;
 mod ids;
+mod journal;
 mod payload;
 mod replay;
 mod shape;
@@ -40,6 +42,7 @@ pub use event::{
 };
 pub use history::{HistoryError, validate_history};
 pub use ids::{Epoch, RunId, Seed, Seq};
+pub use journal::{JournalDocument, JournalError};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
 pub use shape::{Field, Shape};

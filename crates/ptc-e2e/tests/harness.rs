@@ -22,13 +22,14 @@ async fn a_wrong_expectation_is_reported() {
 async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
     let case = Case::load("epoch-1/blue/fan_out_out_of_order").unwrap();
     let journal = std::fs::read_to_string(case.journal_path()).unwrap();
-    let mut history = ptc_format::decode_history(&journal).unwrap();
-    let Event::Command(Command::ScheduleToolCall { args, .. }) = &mut history[2].event else {
+    let mut document = ptc_format::decode_journal(&journal).unwrap();
+    let Event::Command(Command::ScheduleToolCall { args, .. }) = &mut document.entries[2].event
+    else {
         panic!("entry 2 is the second call");
     };
     *args = Payload::Value(json!({ "number": 20, "repo": "acme/api" }));
 
-    let replayed = ptc_e2e::replay_journal(&case, &history, &case.script).await;
+    let replayed = ptc_e2e::replay_journal(&case, &document, &case.script).await;
     let Replayed::Fails(message) = replayed else {
         panic!("{replayed:?}")
     };
@@ -38,9 +39,10 @@ async fn a_journal_that_no_longer_matches_its_script_does_not_replay() {
     );
 
     // The same journal, untouched, replays.
-    let history = ptc_format::decode_history(&journal).unwrap();
+    let document = ptc_format::decode_journal(&journal).unwrap();
+    assert_eq!(document.script, case.script);
     assert!(matches!(
-        ptc_e2e::replay_journal(&case, &history, &case.script).await,
+        ptc_e2e::replay_journal(&case, &document, &case.script).await,
         Replayed::Matches(_)
     ));
 }
