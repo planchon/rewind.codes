@@ -328,3 +328,60 @@ async fn a_quarantined_run_is_reported_to_the_harness() {
         WebhookEventKind::RunQuarantined { reason } if reason == "history entry 1 is …"
     ));
 }
+
+#[tokio::test]
+async fn a_composition_root_turns_webhook_items_into_their_deliveries() {
+    let engine = engine(programs(), RecordingDispatcher::echo());
+    subscribe(&engine).await;
+    let run = start(&engine, RunMetadata::default()).await;
+    drive(&engine).await;
+    let items = engine
+        .journal()
+        .claim_feed(
+            FeedConsumer::Webhooks,
+            "root",
+            now(&engine),
+            std::time::Duration::from_secs(300),
+            10,
+        )
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 2, "two activations");
+    let mut deliveries = Vec::new();
+    for item in &items {
+        deliveries.extend(
+            ptc_engine::projector::webhook_deliveries(engine.journal(), item)
+                .await
+                .unwrap(),
+        );
+    }
+    // Suspended twice: waiting for the host tool `a`, then for the signal.
+    assert_eq!(deliveries.len(), 2);
+    for delivery in &deliveries {
+        assert_eq!(delivery.subscription.id, "sub");
+        assert_eq!(delivery.event.run, run.id);
+        assert!(matches!(
+            &delivery.event.kind,
+            WebhookEventKind::RunSuspended { .. }
+        ));
+    }
+    // Nothing was sent, and the item is the caller's to acknowledge.
+    let sinks = Sinks::new();
+    assert!(sinks.webhooks.deliveries().is_empty());
+    let ids: Vec<u64> = items.iter().map(|item| item.id).collect();
+    engine.journal().ack_feed(&ids).await.unwrap();
+    assert!(
+        engine
+            .journal()
+            .claim_feed(
+                FeedConsumer::Webhooks,
+                "root",
+                ptc_core::Timestamp(now(&engine).0 + 600_000),
+                std::time::Duration::from_secs(300),
+                10,
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
