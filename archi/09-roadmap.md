@@ -178,9 +178,10 @@ other builds running), latencies in milliseconds:
 | 1,000 runs, 100 at once | 17.3 | 69 | 488 / 3,418 | 996 / 4,408 | 176 / 610 | 5,325 / 8,733 | 19 s |
 | 200 runs, 50 at once, 100 KiB payloads | 13.0 | 52 | 370 / 1,551 | 244 / 643 | 122 / 317 | 3,705 / 4,486 | 0.1 s |
 
-No error and no duplicated call in either. In `acceptance/run.sh`, after the merge of the CLI
-and the evals, the same loads gave 20.1 and 8.8 runs/s, end-to-end p99 of 10.5 and 7.0 s, and
-activation p99 of 690 and 960 ms. The floor of a run's end-to-end latency is about 3 s:
+No error and no duplicated call in either. In two runs of `acceptance/run.sh` on the merged
+tree, with more builds running, the same loads gave 12.8–20.1 and 8.8–10.5 runs/s, end-to-end
+p99 of 10.5–12.3 and 5.5–7.0 s, and activation p99 of 690–930 and 460–960 ms: the thresholds
+leave room for a busy machine, not for a regression of several times. The floor of a run's end-to-end latency is about 3 s:
 the sleep, the retry's backoff and the signal's timeout. Starts dominate the rest: each start
 type-checks the script with tsgo in the api server, so a burst of starts queues there. An
 activation (a host tool's result accepted to the run's next MCP call) takes 120–180 ms at the
