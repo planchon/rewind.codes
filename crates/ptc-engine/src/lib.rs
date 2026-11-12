@@ -8,7 +8,9 @@
 //!   (`run_until_idle`, in real or virtual time).
 //! - [`replay`]: rebuilding a script from its history.
 //! - [`projector`]: the feed's consumers: read model, run telemetry ([`telemetry`]) and
-//!   lifecycle webhooks, projected from committed entries.
+//!   lifecycle webhooks, projected from committed entries; the snapshot of a run and the
+//!   service state (task states, quarantine) the read model keeps.
+//! - [`failures`]: the signatures and fingerprints that group failed, cancelled and aborted runs.
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
 //! - [`retention`]: archives, deletion, payload cleanup.
 //! - [`mock`]: mock mode: cassettes, mocks, and scenarios run in virtual time.
@@ -33,6 +35,7 @@ pub mod conformance;
 mod driver;
 mod engine;
 mod export;
+pub mod failures;
 mod fork;
 pub mod metrics;
 pub mod mock;

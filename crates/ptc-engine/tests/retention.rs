@@ -7,12 +7,12 @@ mod support;
 
 use ptc_core::{Digest, JournalDocument, Payload, RunStatus, Timestamp};
 use ptc_engine::adapters::{MemoryReadModel, MemorySpanExporter, MemoryWebhooks};
-use ptc_engine::projector::{Projector, ProjectorConfig};
+use ptc_engine::projector::{Projector, ProjectorConfig, run_snapshot};
 use std::collections::BTreeMap;
 
 use ptc_engine::ports::{
-    BlobStore, Clock, Credentials, JournalStore, ProjectedRun, ReadModel, RunRef, RunSearch,
-    Secret, SecretOwner, SecretStore, ServerCredentials, StoreError, VirtualTime,
+    BlobStore, Clock, Credentials, JournalStore, ProjectedRun, ReadModel, RunOrder, RunQuery,
+    RunRef, Secret, SecretOwner, SecretStore, ServerCredentials, StoreError, VirtualTime,
 };
 use ptc_engine::retention::Housekeeper;
 use ptc_engine::{DriveOptions, EngineConfig, PayloadTiers};
@@ -240,10 +240,13 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
                 &ProjectedRun {
                     run: run.clone(),
                     script: record.script,
+                    headline: String::new(),
                     toolset: record.toolset,
                     labels: record.metadata.labels,
+                    parent: None,
                 },
                 &history,
+                &run_snapshot(&history, None),
             )
             .await
             .unwrap();
@@ -279,7 +282,12 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
         Some(credentials(&kept.id.to_string()))
     );
     let left = read_model
-        .search_runs(&RunSearch::new(erased.tenant.clone(), 10))
+        .search_runs(
+            &RunQuery::new(erased.tenant.clone()),
+            RunOrder::Started,
+            None,
+            10,
+        )
         .await
         .unwrap();
     assert_eq!(left.len(), 1);
@@ -317,15 +325,19 @@ async fn the_read_model_keeps_runs_for_its_retention() {
     };
     let run = finished_run(&engine, json!(1)).await;
     let record = engine.get_run(&run).await.unwrap().unwrap();
+    let history = engine.history(&run).await.unwrap();
     read_model
         .apply(
             &ProjectedRun {
                 run: run.clone(),
                 script: record.script,
+                headline: String::new(),
                 toolset: record.toolset,
                 labels: record.metadata.labels,
+                parent: None,
             },
-            &engine.history(&run).await.unwrap(),
+            &history,
+            &run_snapshot(&history, None),
         )
         .await
         .unwrap();
