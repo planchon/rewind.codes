@@ -95,9 +95,9 @@ fn tool_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
     namespaces.chain(exports.bare).map(str::to_owned).collect()
 }
 
-/// `ptc:tools` for epoch 1: one frozen namespace object per `namespace.tool` group, and one
-/// function per bare tool name. Tool names are kept as the server defines them; a name that
-/// is not an identifier is still reachable with brackets (`github["close-issue"]`).
+/// `ptc:tools` for epoch 1: one frozen namespace object per MCP server or host-tool group, and
+/// one function per host tool without a group. Tool names are kept as the server defines them;
+/// a name that is not an identifier is still reachable with brackets (`github["close-issue"]`).
 fn tools_module_v1(toolset: &Toolset) -> String {
     let ToolExportsV1 { namespaces, bare } = ToolExportsV1::of(toolset);
     let mut module =
