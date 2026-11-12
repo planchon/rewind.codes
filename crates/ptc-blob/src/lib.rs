@@ -5,7 +5,8 @@
 //! live:
 //!
 //! - [`FileBlobs`]: local files, for the embedded server (`.ptc/blobs/`). Writes are atomic: a
-//!   staging file, synced, then renamed.
+//!   staging file, synced, then renamed. A tenant's directory escapes its capital letters, so
+//!   that tenants stay apart on a file system that ignores case.
 //! - [`S3Blobs`]: S3 or any S3-compatible service, for production. Keys are
 //!   `{tenant}/sha256/{digest}`.
 //! - [`CachedBlobs`]: the workers' local cache, in memory and bounded in bytes, in front of

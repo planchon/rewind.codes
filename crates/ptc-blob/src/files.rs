@@ -20,7 +20,9 @@ const STALE_STAGING: Duration = Duration::from_secs(60 * 60);
 /// `BlobStore` on local files.
 ///
 /// A blob lives at `{root}/{tenant}/sha256/{first two hex digits}/{hex digest}`; the embedded
-/// server's root is `.ptc/blobs`. A put writes a staging file in `{root}/.staging`, syncs it,
+/// server's root is `.ptc/blobs`. Tenant ids are case-sensitive and file systems may not be
+/// (macOS, Windows), so a capital letter of a tenant id is written `+` and the letter in
+/// lowercase: `Acme` lives in `+acme`, apart from `acme`. A put writes a staging file in `{root}/.staging`, syncs it,
 /// then renames it to its path without replacing an existing blob, and syncs the directory: a
 /// blob is either absent or complete, and stays on disk once `put` returns. `open` removes the
 /// staging files a crash left behind.
@@ -51,11 +53,12 @@ impl FileBlobs {
         &self.root
     }
 
-    /// The path of a tenant's blob: `{root}/{tenant}/sha256/{ab}/{abcdef…}`.
+    /// The path of a tenant's blob: `{root}/{tenant}/sha256/{ab}/{abcdef…}`, the tenant's
+    /// capital letters escaped.
     pub fn path(&self, tenant: &TenantId, digest: Digest) -> PathBuf {
         let hex = digest.to_hex();
         self.root
-            .join(tenant.as_str())
+            .join(tenant_directory(tenant))
             .join("sha256")
             .join(&hex[..2])
             .join(hex)
@@ -99,6 +102,22 @@ impl BlobStore for FileBlobs {
         let path = self.path(tenant, digest);
         blocking(move || remove(&path).map_err(|error| failed("delete", &path, &error))).await
     }
+}
+
+/// The directory of a tenant: its id, each capital letter written `+` and the letter in
+/// lowercase. Two tenants never share a directory, even on a file system that ignores case: the
+/// name holds no capital letter, and a tenant id holds no `+`.
+fn tenant_directory(tenant: &TenantId) -> String {
+    let mut directory = String::with_capacity(tenant.as_str().len());
+    for letter in tenant.as_str().chars() {
+        if letter.is_ascii_uppercase() {
+            directory.push('+');
+            directory.push(letter.to_ascii_lowercase());
+        } else {
+            directory.push(letter);
+        }
+    }
+    directory
 }
 
 /// Writes a blob atomically and durably, unless it is already there.
@@ -201,6 +220,16 @@ async fn blocking<T: Send + 'static>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tenant_directories_hold_no_capital_letter() {
+        let directory = |id: &str| tenant_directory(&TenantId::new(id).expect("tenant"));
+        assert_eq!(directory("local"), "local");
+        assert_eq!(directory("acme-2_x"), "acme-2_x");
+        assert_eq!(directory("Acme"), "+acme");
+        assert_eq!(directory("ACME"), "+a+c+m+e");
+        assert_ne!(directory("Acme"), directory("acme"));
+    }
 
     #[test]
     fn stale_staging_files_are_removed_and_fresh_ones_kept() {

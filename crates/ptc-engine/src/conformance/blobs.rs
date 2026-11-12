@@ -10,6 +10,7 @@ use crate::ports::{BlobError, BlobStore};
 /// Runs every check, each on a new store.
 pub async fn run_all<S: BlobStore>(new_store: impl Fn() -> S) {
     check!("blobs", new_store(), blobs_are_stored_by_tenant_and_digest);
+    check!("blobs", new_store(), tenants_differing_in_case_are_distinct);
     check!("blobs", new_store(), blobs_are_immutable);
     check!("blobs", new_store(), bytes_must_hash_to_their_digest);
     check!("blobs", new_store(), blobs_are_deleted);
@@ -51,6 +52,35 @@ pub async fn blobs_are_stored_by_tenant_and_digest<S: BlobStore>(store: &S) {
         store.get(&tenant("acme"), digest).await.expect("get"),
         Some(bytes),
         "deleting a tenant's blob leaves the other's"
+    );
+}
+
+/// Tenant ids are case-sensitive: `Acme` and `acme` are two tenants, whatever the backend
+/// (a case-insensitive file system included).
+pub async fn tenants_differing_in_case_are_distinct<S: BlobStore>(store: &S) {
+    let (digest, bytes) = blob("case");
+    store
+        .put(&tenant("Acme"), digest, bytes.clone())
+        .await
+        .expect("put");
+    assert_eq!(
+        store.get(&tenant("acme"), digest).await.expect("get"),
+        None,
+        "acme does not see Acme's blob"
+    );
+    assert!(
+        !store.delete(&tenant("acme"), digest).await.expect("delete"),
+        "acme has no blob to delete"
+    );
+    store
+        .put(&tenant("acme"), digest, bytes.clone())
+        .await
+        .expect("put");
+    assert!(store.delete(&tenant("acme"), digest).await.expect("delete"));
+    assert_eq!(
+        store.get(&tenant("Acme"), digest).await.expect("get"),
+        Some(bytes),
+        "deleting acme's blob leaves Acme's"
     );
 }
 
