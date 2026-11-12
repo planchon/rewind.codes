@@ -154,6 +154,9 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         },
         public_url: config.public_url.clone(),
         build: format!("ptc {VERSION}"),
+        default_ttl: config.default_ttl,
+        max_ttl: config.max_ttl,
+        cache: config.cache,
         ..EngineConfig::default()
     };
     let engine = Engine::new(
@@ -181,6 +184,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         embedded: config.embedded(),
         roles,
         run_quota: config.run_quota,
+        retention: config.retention,
         allow_stdio: config.allow_stdio,
         allow_http_webhooks: config.embedded(),
         projector: ProjectorConfig {

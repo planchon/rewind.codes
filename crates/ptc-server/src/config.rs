@@ -18,7 +18,8 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
-use ptc_engine::ports::{TenantId, TenantScope};
+use ptc_engine::ports::{Retention, TenantId, TenantScope};
+use ptc_engine::{CacheConfig, EngineConfig};
 
 use crate::wiring::blobs::{BlobLocation, S3Options};
 use crate::wiring::store::StoreLocation;
@@ -172,6 +173,45 @@ pub struct ServerArgs {
     /// The OTLP transport: `grpc`, or `http` (protobuf over HTTP, the default).
     #[arg(long, value_enum, env = "PTC_OTLP_PROTOCOL")]
     pub otlp_protocol: Option<OtlpArg>,
+
+    /// The TTL of a run started without one: 30 days by default.
+    #[arg(long, env = "PTC_DEFAULT_TTL", value_parser = parse_duration)]
+    pub default_ttl: Option<Duration>,
+
+    /// The longest TTL a run may ask for: 365 days by default. After an upgrade that changes the
+    /// determinism epoch, the worker pool of the previous epoch stays up at most this long.
+    #[arg(long, env = "PTC_MAX_TTL", value_parser = parse_duration)]
+    pub max_ttl: Option<Duration>,
+
+    /// The script instances a worker keeps in memory after their activation (sticky
+    /// execution): 500 by default. 0 turns the cache off, and every activation replays.
+    #[arg(long, env = "PTC_CACHE_INSTANCES")]
+    pub cache_instances: Option<usize>,
+
+    /// The memory the cached instances may hold together, as V8 measures their heaps: `4GiB`
+    /// by default, or `512MiB`, or bytes. Keep it well below the worker's memory limit.
+    #[arg(long, env = "PTC_CACHE_MEMORY", value_parser = parse_bytes)]
+    pub cache_memory: Option<u64>,
+
+    /// For the tenants this server creates: how long a finished run's journal stays in the
+    /// store before it is archived. 30 days by default.
+    #[arg(long, env = "PTC_JOURNAL_RETENTION", value_parser = parse_duration)]
+    pub journal_retention: Option<Duration>,
+
+    /// For the tenants this server creates: how long an archived journal is kept before the
+    /// run is deleted. 365 days by default.
+    #[arg(long, env = "PTC_ARCHIVE_RETENTION", value_parser = parse_duration)]
+    pub archive_retention: Option<Duration>,
+
+    /// For the tenants this server creates: how long the read model keeps a finished run.
+    /// 90 days by default.
+    #[arg(long, env = "PTC_READ_MODEL_RETENTION", value_parser = parse_duration)]
+    pub read_model_retention: Option<Duration>,
+
+    /// For the tenants this server creates: how long a payload no run references any more is
+    /// kept. 24 hours by default.
+    #[arg(long, env = "PTC_PAYLOAD_GRACE", value_parser = parse_duration)]
+    pub payload_grace: Option<Duration>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -190,6 +230,32 @@ fn parse_duration(text: &str) -> Result<Duration, String> {
     text.parse::<ptc_api::common::Duration>()
         .map(Into::into)
         .map_err(|error| error.to_string())
+}
+
+/// A size in bytes: a number, optionally followed by `KiB`, `MiB` or `GiB`.
+fn parse_bytes(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let split = text
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(text.len());
+    let (number, unit) = text.split_at(split);
+    let number: u64 = number
+        .parse()
+        .map_err(|_| format!("{text:?}: expected a size such as 512MiB or 4GiB"))?;
+    let unit: u64 = match unit.trim() {
+        "" | "B" => 1,
+        "KiB" => 1 << 10,
+        "MiB" => 1 << 20,
+        "GiB" => 1 << 30,
+        other => {
+            return Err(format!(
+                "{text:?}: unknown unit {other:?}; use B, KiB, MiB or GiB"
+            ));
+        }
+    };
+    number
+        .checked_mul(unit)
+        .ok_or_else(|| format!("{text:?} is too large"))
 }
 
 /// How the server listens.
@@ -228,6 +294,12 @@ pub(crate) struct Config {
     pub(crate) tsgo_cache: Option<PathBuf>,
     /// Run telemetry over OTLP, when configured.
     pub(crate) otlp: Option<ptc_otel::OtlpConfig>,
+    pub(crate) default_ttl: Duration,
+    pub(crate) max_ttl: Duration,
+    /// The bounds of the workers' sticky instance cache.
+    pub(crate) cache: CacheConfig,
+    /// The retention of the tenants this server creates.
+    pub(crate) retention: Retention,
 }
 
 impl Config {
@@ -290,6 +362,27 @@ impl ServerArgs {
                 "--activations and --dispatches must be at least 1",
             ));
         }
+        let engine = EngineConfig::default();
+        let default_ttl = self.default_ttl.unwrap_or(engine.default_ttl);
+        let max_ttl = self.max_ttl.unwrap_or(engine.max_ttl);
+        if default_ttl.is_zero() || default_ttl > max_ttl {
+            return Err(ConfigError::new(format!(
+                "--default-ttl ({}) must be above zero and at most --max-ttl ({})",
+                ptc_api::common::Duration::from(default_ttl),
+                ptc_api::common::Duration::from(max_ttl),
+            )));
+        }
+        let cache = CacheConfig {
+            max_instances: self.cache_instances.unwrap_or(engine.cache.max_instances),
+            max_bytes: self.cache_memory.unwrap_or(engine.cache.max_bytes),
+        };
+        let defaults = Retention::default();
+        let retention = Retention {
+            journal: self.journal_retention.unwrap_or(defaults.journal),
+            archive: self.archive_retention.unwrap_or(defaults.archive),
+            read_model: self.read_model_retention.unwrap_or(defaults.read_model),
+            payload_grace: self.payload_grace.unwrap_or(defaults.payload_grace),
+        };
         if let Some(url) = &self.public_url
             && !(url.starts_with("http://") || url.starts_with("https://"))
         {
@@ -333,6 +426,10 @@ impl ServerArgs {
                 idle_timeout: self.idle_timeout,
                 tsgo_cache: self.tsgo_cache,
                 otlp,
+                default_ttl,
+                max_ttl,
+                cache,
+                retention,
             });
         }
 
@@ -404,6 +501,10 @@ impl ServerArgs {
             idle_timeout: self.idle_timeout,
             tsgo_cache: self.tsgo_cache,
             otlp,
+            default_ttl,
+            max_ttl,
+            cache,
+            retention,
         })
     }
 }
@@ -492,5 +593,72 @@ mod tests {
         assert!(matches!(postgres.store, StoreLocation::Postgres(_)));
         assert!(parse(&["--store", "mysql://x", "--master-key", &key]).is_err());
         assert!(parse(&["--store", "turso:/tmp/j.db", "--master-key", "short"]).is_err());
+    }
+
+    #[test]
+    fn ttls_cache_and_retention_default_to_the_engines_and_can_be_set() {
+        let key = BASE64.encode([7u8; 32]);
+        let base = ["--store", "turso:/tmp/j.db", "--master-key", key.as_str()];
+        let config = parse(&base).unwrap_or_else(|error| panic!("{error}"));
+        let engine = EngineConfig::default();
+        assert_eq!(config.default_ttl, engine.default_ttl);
+        assert_eq!(config.max_ttl, engine.max_ttl);
+        assert_eq!(config.cache, engine.cache);
+        assert_eq!(config.retention, Retention::default());
+
+        let mut args = base.to_vec();
+        args.extend([
+            "--default-ttl",
+            "1d",
+            "--max-ttl",
+            "7d",
+            "--cache-instances",
+            "50",
+            "--cache-memory",
+            "512MiB",
+            "--journal-retention",
+            "7d",
+            "--archive-retention",
+            "30d",
+            "--read-model-retention",
+            "14d",
+            "--payload-grace",
+            "1h",
+        ]);
+        let config = parse(&args).unwrap_or_else(|error| panic!("{error}"));
+        const DAY: u64 = 86_400;
+        assert_eq!(config.default_ttl, Duration::from_secs(DAY));
+        assert_eq!(config.max_ttl, Duration::from_secs(7 * DAY));
+        assert_eq!(
+            config.cache,
+            CacheConfig {
+                max_instances: 50,
+                max_bytes: 512 << 20
+            }
+        );
+        assert_eq!(
+            config.retention,
+            Retention {
+                journal: Duration::from_secs(7 * DAY),
+                archive: Duration::from_secs(30 * DAY),
+                read_model: Duration::from_secs(14 * DAY),
+                payload_grace: Duration::from_secs(3_600),
+            }
+        );
+
+        let mut longer = base.to_vec();
+        longer.extend(["--default-ttl", "8d", "--max-ttl", "7d"]);
+        assert!(parse(&longer).is_err(), "the default TTL above the maximum");
+    }
+
+    #[test]
+    fn sizes_take_binary_units() {
+        assert_eq!(parse_bytes("1024"), Ok(1024));
+        assert_eq!(parse_bytes("4GiB"), Ok(4 << 30));
+        assert_eq!(parse_bytes("512 MiB"), Ok(512 << 20));
+        assert_eq!(parse_bytes("8KiB"), Ok(8 << 10));
+        assert!(parse_bytes("4GB").is_err());
+        assert!(parse_bytes("GiB").is_err());
+        assert!(parse_bytes("99999999999999GiB").is_err());
     }
 }

@@ -1,5 +1,6 @@
 //! A Postgres server in Docker for the tests: a container with a unique name on a free local
-//! port, removed when the test ends. Without Docker the tests are skipped, and say so.
+//! port, removed when the test ends. Without Docker the tests are skipped, and say so, unless
+//! `PTC_REQUIRE_DOCKER` is set (CI): they fail then.
 
 #![allow(dead_code, unreachable_pub)]
 
@@ -30,6 +31,10 @@ impl Postgres {
             eprintln!(
                 "SKIPPED: {test} needs Docker to run Postgres, and Docker is absent or its daemon \
                  is not running"
+            );
+            assert!(
+                std::env::var_os("PTC_REQUIRE_DOCKER").is_none(),
+                "PTC_REQUIRE_DOCKER is set: Docker must be running"
             );
             return None;
         }
