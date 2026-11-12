@@ -7,6 +7,8 @@
 //! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, one DNS resolution, private and metadata addresses refused, a connection to the checked address, redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
+//! [`Egress`] lends the egress checks of `http` to the other requests a deployment sends where a
+//! tenant says: the server's lifecycle webhooks.
 //! The dispatchers never write to the journal; credentials go only into the transport, never
 //! into a result, a failure or a log.
 //!
@@ -43,7 +45,7 @@ mod result;
 mod schema;
 
 pub use http::{
-    HttpConfig, HttpTool, NameResolver, Resolving, SystemResolver, http_input_schema,
+    Egress, HttpConfig, HttpTool, NameResolver, Resolving, SystemResolver, http_input_schema,
     http_output_schema, http_tool,
 };
 
