@@ -2,7 +2,7 @@
 //! adapters, and what the HTTP API needs beside it.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use ptc_api::admin::ServerRole;
@@ -19,6 +19,7 @@ use ptc_runtime::V8Executor;
 use tokio::sync::watch;
 
 use crate::auth::Caller;
+use crate::deliveries::{Background, Deliveries};
 use crate::error::ApiError;
 use crate::views::Views;
 use crate::wake::{Activity, POLL, Wake, wait};
@@ -28,7 +29,10 @@ use crate::wiring::clock::ServerClock;
 use crate::wiring::store::Store;
 use crate::wiring::telemetry::Exporter;
 use crate::wiring::tools::{Dispatcher, Tools};
-use crate::wiring::webhooks::Webhooks;
+use crate::wiring::webhooks::{ServerRender, WebhookEgress};
+
+/// The engine's sender of lifecycle webhooks: in the background.
+pub(crate) type Webhooks = Background<ServerRender>;
 
 /// The engine of this server.
 pub(crate) type ServerEngine =
@@ -47,8 +51,8 @@ pub(crate) struct Settings {
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
     pub(crate) allow_stdio: bool,
-    /// Webhook subscriptions may use `http://` URLs (the embedded server, tests).
-    pub(crate) allow_http_webhooks: bool,
+    /// Where lifecycle webhooks may go.
+    pub(crate) webhook_egress: WebhookEgress,
     pub(crate) projector: ProjectorConfig,
 }
 
@@ -65,6 +69,8 @@ pub(crate) struct App {
     pub(crate) checker: Checker,
     pub(crate) tools: Tools,
     pub(crate) exporter: Exporter,
+    /// Every delivery of lifecycle webhooks: those of the feed, and the engine's.
+    pub(crate) deliveries: Arc<Deliveries<ServerRender>>,
     pub(crate) settings: Settings,
     pub(crate) wake: Wake,
     pub(crate) activity: Activity,
@@ -91,6 +97,7 @@ impl App {
         checker: Checker,
         tools: Tools,
         exporter: Exporter,
+        deliveries: Arc<Deliveries<ServerRender>>,
         settings: Settings,
     ) -> Self {
         Self {
@@ -100,6 +107,7 @@ impl App {
             checker,
             tools,
             exporter,
+            deliveries,
             settings,
             wake: Wake::new(),
             activity: Activity::new(),

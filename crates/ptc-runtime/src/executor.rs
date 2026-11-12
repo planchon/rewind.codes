@@ -50,9 +50,15 @@ impl V8Executor {
 }
 
 /// Initializes V8 and ICU (`en-US`), once per process.
+///
+/// V8 runs single-threaded: it compiles and collects garbage on the isolate's thread only. With
+/// concurrent compilation, optimized code was installed at a time that varied between two runs
+/// of the same script, and the size of its frames with it: the depth at which recursion
+/// overflows the stack, which a script can catch and observe, was not deterministic.
 pub(crate) fn init_v8() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
+        deno_core::v8::V8::set_flags_from_string("--single-threaded");
         deno_core::JsRuntime::init_platform(None);
         deno_core::v8::icu::set_default_locale("en-US");
     });

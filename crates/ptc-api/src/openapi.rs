@@ -294,7 +294,7 @@ mod operations {
     use crate::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
     use crate::events::{Entry, EventsQuery, StreamEvent};
     use crate::problem::Problem;
-    use crate::reading::{ToolStatsFilter, ToolStatsPage};
+    use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
     use crate::runs::{
         CancelRun, ForkRun, GetRunQuery, JournalQuery, Run, RunFilter, RunPage, SignalAccepted,
         StartRun, Trace, TraceQuery,
@@ -788,10 +788,11 @@ mod operations {
     /// A payload's value
     #[utoipa::path(
         get, path = "/v1/payloads/{digest}", tag = "reading", operation_id = "getPayload",
-        params(("digest" = String, Path, description = "SHA-256 of the canonical JSON, lowercase hex.")),
+        params(("digest" = String, Path, description = "SHA-256 of the canonical JSON, lowercase hex."), PayloadQuery),
         responses(
             (status = 200, description = "The JSON value itself, in canonical form.", body = Value),
-            (status = 404, description = "No such payload for this tenant.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run.", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such payload for this tenant, or not in the journal of the run given.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn get_payload() {}

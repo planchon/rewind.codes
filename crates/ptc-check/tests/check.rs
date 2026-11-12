@@ -365,6 +365,34 @@ async fn a_script_cannot_add_the_dom_or_node() {
     );
 }
 
+/// TypeScript reads a directive's name in any case, and skips U+FEFF and U+200B as whitespace
+/// before it: none of these may add the DOM either.
+#[tokio::test]
+async fn no_spelling_of_a_directive_adds_the_dom() {
+    for header in [
+        "/// <REFERENCE lib=\"dom\" />",
+        "/// <Reference LIB=\"dom\" />",
+        "// a\n\u{feff}/// <reference lib=\"dom\" />",
+        "// a\n\u{200b}/// <reference lib=\"dom\" />",
+    ] {
+        let script = format!(
+            "{header}\nexport default async function main() {{\n  return document.title;\n}}\n"
+        );
+        let line = 2 + u32::try_from(header.lines().count()).unwrap();
+        let diagnostics = check(&script).await;
+        assert_eq!(
+            summary(&diagnostics),
+            [(
+                line,
+                10,
+                "TS2584".into(),
+                "Cannot find name 'document'. Do you need to change your target library? Try changing the 'lib' compiler option to include 'dom'.".into()
+            )],
+            "{header:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn without_tools_ptc_tools_exports_nothing() {
     let script = "import { github } from \"ptc:tools\";\nexport default async function main() {\n  return github;\n}\n";
@@ -588,5 +616,27 @@ async fn latency() {
         "64 concurrent checks: {:?} in all, {:?} per check",
         started.elapsed(),
         started.elapsed() / 64
+    );
+}
+
+/// A script with errors everywhere gets the first of them by position, not all: their number,
+/// and tsgo's output, are bounded whatever the size of the script.
+#[tokio::test]
+async fn the_diagnostics_of_a_script_are_bounded() {
+    let body = "x;\nfetch;\n".repeat(100_000);
+    let script = format!("export default async function main() {{\n{body}}}\n");
+    let diagnostics = check(&script).await;
+    assert_eq!(diagnostics.len(), TsgoChecker::MAX_DIAGNOSTICS);
+    let lines: Vec<u32> = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.line)
+        .collect();
+    assert!(lines.is_sorted(), "{lines:?}");
+    assert_eq!((lines[0], lines[1]), (2, 3));
+    assert_eq!(
+        sources(&diagnostics[..2]),
+        ["TS2304", "absent-global"],
+        "{:?}",
+        &diagnostics[..2]
     );
 }

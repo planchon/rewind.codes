@@ -147,7 +147,9 @@ describe("run_script", () => {
     server.on("GET", "/v1/payloads/{digest}", json({ rows: [1, 2, 3] }));
     const result = await tools.handle("run_script", { code: "x" });
     expect(result.content).toContain('{"rows":[1,2,3]}');
-    expect(server.calls("GET", `/v1/payloads/${big.output!.digest}`)).toHaveLength(1);
+    const reads = server.calls("GET", `/v1/payloads/${big.output!.digest}`);
+    expect(reads).toHaveLength(1);
+    expect(reads[0]?.query.get("run")).toBe(big.id);
   });
 
   it("says what a suspended run waits for", async () => {

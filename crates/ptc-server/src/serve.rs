@@ -17,6 +17,7 @@ use tokio::task::JoinHandle;
 use crate::app::{App, Settings};
 use crate::auth::key_hash;
 use crate::config::{Config, Listen, ServerArgs};
+use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
 use crate::embedded::Directory;
 use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
@@ -24,7 +25,7 @@ use crate::wiring::clock::ServerClock;
 use crate::wiring::store::Store;
 use crate::wiring::telemetry::{self, Exporter};
 use crate::wiring::tools::Tools;
-use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender};
+use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender, WebhookEgress};
 use crate::{http, worker};
 
 /// The version of the `ptc` binary.
@@ -105,6 +106,8 @@ impl Running {
         if tokio::time::timeout(DRAIN, drain).await.is_err() {
             tracing::warn!("the work in flight did not finish within {DRAIN:?}");
         }
+        // The engine's webhooks still in progress are not sent: none is in the journal.
+        self.app.deliveries.abort();
         self.app.tools.close();
         self.app.exporter.shutdown().await;
         self.app.store.close().await;
@@ -139,13 +142,22 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         &telemetry::service(&config.worker_name),
     )
     .map_err(StartupError::Setup)?;
-    let webhooks = HttpWebhooks::new(
-        ServerRender {
-            store: store.clone(),
-            blobs: blobs.clone(),
-        },
-        Retries::default(),
-    );
+    let webhook_egress = if config.allow_private_webhooks {
+        WebhookEgress::Open
+    } else {
+        WebhookEgress::public()
+    };
+    let deliveries = Arc::new(Deliveries::new(
+        HttpWebhooks::new(
+            ServerRender {
+                store: store.clone(),
+                blobs: blobs.clone(),
+            },
+            Retries::default(),
+            webhook_egress.clone(),
+        ),
+        PER_SUBSCRIPTION,
+    ));
     let engine_config = EngineConfig {
         worker: config.worker_name.clone(),
         tenants: config.tenants.clone(),
@@ -168,7 +180,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
             clock,
             entropy: SystemEntropy,
             secrets: store.clone(),
-            webhooks,
+            webhooks: Background(deliveries.clone()),
         },
         engine_config,
     );
@@ -186,7 +198,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         run_quota: config.run_quota,
         retention: config.retention,
         allow_stdio: config.allow_stdio,
-        allow_http_webhooks: config.embedded(),
+        webhook_egress,
         projector: ProjectorConfig {
             owner: config.worker_name.clone(),
             ..ProjectorConfig::default()
@@ -199,6 +211,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         checker::checker(config.tsgo_cache.clone()),
         tools,
         exporter,
+        deliveries,
         settings,
     ));
     register_admin_key(&app, &config).await?;

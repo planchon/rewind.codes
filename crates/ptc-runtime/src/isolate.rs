@@ -23,6 +23,12 @@ pub struct SandboxLimits {
     pub cpu_per_trigger: Duration,
     /// V8 heap size.
     pub heap_bytes: usize,
+    /// Commands and annotations (logs, signal waits) the script may emit reacting to one
+    /// trigger. What it emits is kept outside V8's heap until the call ends.
+    pub emitted_per_trigger: usize,
+    /// Bytes of text those may carry, reacting to one trigger: log messages, signal names, tool
+    /// arguments and the output as JSON, the error of a failure.
+    pub emitted_bytes_per_trigger: usize,
 }
 
 impl Default for SandboxLimits {
@@ -30,6 +36,9 @@ impl Default for SandboxLimits {
         Self {
             cpu_per_trigger: Duration::from_secs(5),
             heap_bytes: 128 * 1024 * 1024,
+            // The default cap on a run's history: more could never be committed.
+            emitted_per_trigger: 50_000,
+            emitted_bytes_per_trigger: 64 * 1024 * 1024,
         }
     }
 }
@@ -52,7 +61,7 @@ impl Isolate {
         glue: &'static Glue,
         limits: SandboxLimits,
         loader: Rc<dyn ModuleLoader>,
-        state: ExecState,
+        mut state: ExecState,
     ) -> Result<(Self, v8::Global<v8::Object>), ExecutorError> {
         let mut runtime = JsRuntime::try_new(RuntimeOptions {
             module_loader: Some(loader),
@@ -62,11 +71,12 @@ impl Isolate {
             ..Default::default()
         })
         .map_err(internal)?;
+        let handle = runtime.v8_isolate().thread_safe_handle();
+        state.bound(&limits, handle.clone());
         let config = state.init_config().to_string();
         runtime.op_state().borrow_mut().put(state);
 
         let heap_exceeded = Rc::new(Cell::new(false));
-        let handle = runtime.v8_isolate().thread_safe_handle();
         {
             let exceeded = Rc::clone(&heap_exceeded);
             let handle = handle.clone();
@@ -126,6 +136,10 @@ impl Isolate {
                 "the script used more than {} MiB of heap",
                 self.limits.heap_bytes / (1024 * 1024)
             )));
+        }
+        if let Some(overflow) = self.state(ExecState::overflow) {
+            self.dead = true;
+            return Err(ExecutorError::LimitExceeded(overflow));
         }
         if timed_out {
             self.dead = true;

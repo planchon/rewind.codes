@@ -15,6 +15,10 @@
 //! for receivers to deduplicate. An item that cannot be applied stays claimed until its claim
 //! expires, then it is applied again. Run metrics are not idempotent: they are recorded once the
 //! item is acknowledged, so an item applied again after a failure is not counted twice.
+//!
+//! A composition root that schedules its own deliveries (concurrently, under a claim as long as
+//! they may last) claims the `webhooks` items itself and turns each into its deliveries with
+//! [`webhook_deliveries`].
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -27,8 +31,8 @@ use ptc_core::{
 use crate::metrics::RunMeasurement;
 use crate::ports::{
     ExportError, FeedConsumer, FeedItem, JournalStore, PayloadRecord, ProjectedRun, ReadModel,
-    ReadModelError, RunRecord, RunRef, SpanExporter, StoreError, WebhookEvent, WebhookEventKind,
-    WebhookSender,
+    ReadModelError, RunRecord, RunRef, SpanExporter, StoreError, Subscription, WebhookEvent,
+    WebhookEventKind, WebhookSender,
 };
 use crate::telemetry::{RunTelemetry, TelemetryConfig};
 
@@ -64,6 +68,65 @@ pub enum ProjectorError {
     ReadModel(#[from] ReadModelError),
     #[error(transparent)]
     Export(#[from] ExportError),
+}
+
+/// One lifecycle event, for one subscription that accepts it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WebhookDelivery {
+    pub subscription: Subscription,
+    pub event: WebhookEvent,
+}
+
+/// The deliveries a feed item of the `webhooks` consumer calls for: the lifecycle events of its
+/// entries, each to the tenant's subscriptions that accept it. A run deleted or archived since
+/// calls for none.
+pub async fn webhook_deliveries<J: JournalStore>(
+    journal: &J,
+    item: &FeedItem,
+) -> Result<Vec<WebhookDelivery>, ProjectorError> {
+    let Some(record) = journal.get_run(&item.run).await? else {
+        return Ok(Vec::new());
+    };
+    let history = match journal.load_history(&item.run, 0).await {
+        Ok(history) => history,
+        Err(StoreError::Archived(_) | StoreError::RunNotFound(_)) => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+    let to = usize::try_from(item.to_idx)
+        .unwrap_or(usize::MAX)
+        .min(history.len());
+    let from = usize::try_from(item.from_idx).unwrap_or(usize::MAX).min(to);
+    deliveries_of(journal, &record, &history[..to], from).await
+}
+
+/// The deliveries of the lifecycle events of the entries from `from` to the end of `history`.
+async fn deliveries_of<J: JournalStore>(
+    journal: &J,
+    record: &RunRecord,
+    history: &[HistoryEntry],
+    from: usize,
+) -> Result<Vec<WebhookDelivery>, ProjectorError> {
+    let toolset = journal
+        .get_toolset(&record.run.tenant, record.toolset)
+        .await?
+        .map(|stored| stored.toolset);
+    let events = lifecycle_events(record, toolset.as_ref(), history, from);
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let subscriptions = journal.subscriptions(&record.run.tenant).await?;
+    Ok(events
+        .iter()
+        .flat_map(|event| {
+            subscriptions
+                .iter()
+                .filter(|subscription| subscription.accepts(event))
+                .map(|subscription| WebhookDelivery {
+                    subscription: subscription.clone(),
+                    event: event.clone(),
+                })
+        })
+        .collect())
 }
 
 /// What one pass of the projector did, per consumer.
@@ -281,26 +344,18 @@ where
         history: &[HistoryEntry],
         from: usize,
     ) -> Result<(), ProjectorError> {
-        let toolset = self
-            .journal
-            .get_toolset(&record.run.tenant, record.toolset)
-            .await?
-            .map(|stored| stored.toolset);
-        let events = lifecycle_events(record, toolset.as_ref(), history, from);
-        if events.is_empty() {
-            return Ok(());
-        }
-        let subscriptions = self.journal.subscriptions(&record.run.tenant).await?;
-        for event in &events {
-            for subscription in subscriptions.iter().filter(|sub| sub.accepts(event)) {
-                if let Err(error) = self.webhooks.send(subscription, event).await {
-                    tracing::warn!(
-                        subscription = %subscription.id,
-                        event = %event.id,
-                        %error,
-                        "a lifecycle event was not delivered"
-                    );
-                }
+        for WebhookDelivery {
+            subscription,
+            event,
+        } in deliveries_of(self.journal, record, history, from).await?
+        {
+            if let Err(error) = self.webhooks.send(&subscription, &event).await {
+                tracing::warn!(
+                    subscription = %subscription.id,
+                    event = %event.id,
+                    %error,
+                    "a lifecycle event was not delivered"
+                );
             }
         }
         Ok(())

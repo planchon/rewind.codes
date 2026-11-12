@@ -36,16 +36,25 @@ export class Subscriptions {
   }
 }
 
+export interface PayloadOptions extends RequestOptions {
+  /**
+   * A run whose journal holds the payload. Required with a key limited to labels, which reads only
+   * the payloads of the runs it sees.
+   */
+  run?: string | undefined;
+}
+
 /** Payloads by digest: the values left out of run states, streams and webhooks above 256 KiB. */
 export class Payloads {
   constructor(private readonly transport: Transport) {}
 
-  /** The JSON value of a payload. */
-  get(digest: string, options: RequestOptions = {}): Promise<unknown> {
+  /** The JSON value of a payload, read through `run` when given. */
+  get(digest: string, options: PayloadOptions = {}): Promise<unknown> {
+    const query = options.run === undefined ? undefined : { run: options.run };
     return this.transport.send(
       () =>
         this.transport.api.GET("/v1/payloads/{digest}", {
-          params: { path: { digest } },
+          params: { path: { digest }, query },
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },

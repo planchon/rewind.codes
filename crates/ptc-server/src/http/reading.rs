@@ -9,7 +9,7 @@ use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use ptc_api::common::{RunStatus, Timestamp, timestamp};
-use ptc_api::reading::{Latency, ToolStats, ToolStatsFilter, ToolStatsPage};
+use ptc_api::reading::{Latency, PayloadQuery, ToolStats, ToolStatsFilter, ToolStatsPage};
 use ptc_api::scripts::{RunCounts, Script, ScriptFilter, ScriptPage, ScriptSummary};
 use ptc_core::{Digest, canonical_json};
 use ptc_engine::ports::{JournalStore, ReadModel};
@@ -152,6 +152,10 @@ pub(super) async fn script(
         Some(filter) => app.store.scripts(&filter).await?.into_iter().next(),
         None => None,
     };
+    if caller.scoped() && summary.is_none() {
+        // A key limited to labels reads the scripts of the runs it sees, once they are listed.
+        return Err(missing());
+    }
     let source = stored.script.source().to_owned();
     Ok(Json(Script {
         digest: parsed.to_hex(),
@@ -246,15 +250,40 @@ pub(super) async fn tool_stats(
     }))
 }
 
-/// `GET /v1/payloads/{digest}`: the value, as canonical JSON.
+/// `GET /v1/payloads/{digest}`: the value, as canonical JSON. Through `run` when it is given,
+/// which a key limited to labels must do: the run must be one the caller sees, and its journal
+/// must hold the payload.
 pub(super) async fn payload(
     State(app): State<Arc<App>>,
     caller: Caller,
     Path(digest): Path<String>,
+    Query(query): Query<PayloadQuery>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Read)?;
     let missing = || ApiError::not_found(format!("no payload {digest} for this tenant"));
     let parsed = Digest::from_hex(&digest).map_err(|_| missing())?;
+    match &query.run {
+        Some(run) => {
+            let record = app.run(&caller, run).await?;
+            let history = app.views().history(&record).await?;
+            let held = history.iter().any(|entry| {
+                crate::views::payload_of(&entry.event)
+                    .is_some_and(|payload| payload.digest() == parsed)
+            });
+            if !held {
+                return Err(ApiError::not_found(format!(
+                    "no payload {digest} in the journal of run {run}"
+                )));
+            }
+        }
+        None if caller.scoped() => {
+            return Err(ApiError::forbidden(format!(
+                "a key limited to labels reads the payloads of the runs it sees: name the run \
+                 (GET /v1/payloads/{digest}?run=<id>)"
+            )));
+        }
+        None => {}
+    }
     let value = app
         .views()
         .value(&caller.tenant, parsed)

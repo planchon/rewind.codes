@@ -85,8 +85,8 @@ export function JsonValue({ value }: { value: unknown }) {
   );
 }
 
-function LoadedValue({ digest }: { digest: string }) {
-  const value = usePayloadValue(digest, true);
+function LoadedValue({ digest, runId }: { digest: string; runId: string }) {
+  const value = usePayloadValue(digest, runId, true);
   if (value.isPending) {
     return (
       <div className="payload-preview muted">
@@ -109,10 +109,13 @@ function LoadedValue({ digest }: { digest: string }) {
 export function PayloadView({
   name,
   payload,
+  runId,
   extra,
 }: {
   name: string;
   payload: Payload;
+  /** The run whose journal holds the payload: its value is read through it. */
+  runId: string;
   extra?: ReactNode;
 }) {
   const inline = payload.value !== undefined;
@@ -148,7 +151,7 @@ export function PayloadView({
             inline ? (
               <JsonValue value={payload.value} />
             ) : (
-              <LoadedValue digest={payload.digest} />
+              <LoadedValue digest={payload.digest} runId={runId} />
             )
           ) : (
             <div className="payload-preview">

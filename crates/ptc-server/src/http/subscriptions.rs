@@ -32,7 +32,11 @@ pub(super) async fn create(
     Body(request): Body<CreateSubscription>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
-    check_url(&app, &request.url)?;
+    app.settings
+        .webhook_egress
+        .check_subscription(&request.url)
+        .await
+        .map_err(|reason| ApiError::invalid(format!("url {:?}: {reason}", request.url)))?;
     let labels = caller.within(request.labels.0)?;
     let mut key = [0u8; 32];
     getrandom::fill(&mut key).map_err(ApiError::internal)?;
@@ -87,23 +91,6 @@ pub(super) async fn delete(
         return Err(missing());
     }
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// An `https://` URL; `http://` only toward the machine itself, or when the server allows it.
-fn check_url(app: &App, url: &str) -> Result<(), ApiError> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|error| ApiError::invalid(format!("url {url:?}: {error}")))?;
-    let local = matches!(
-        parsed.host_str(),
-        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
-    );
-    match parsed.scheme() {
-        "https" => Ok(()),
-        "http" if local || app.settings.allow_http_webhooks => Ok(()),
-        _ => Err(ApiError::invalid(format!(
-            "url {url:?}: webhooks are sent to https:// URLs"
-        ))),
-    }
 }
 
 fn port_type(kind: WebhookEventType) -> ptc_engine::ports::WebhookEventType {

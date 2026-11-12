@@ -45,14 +45,14 @@ change of the API shows in its diff.
 | Errors | `application/problem+json`: `type` is `urn:ptc:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics` |
 | Query strings | lists repeat their key: `?label=agent:triage&label=conversation:c-42`, `?tool=a&tool=b` |
 | Event stream | `GET /v1/runs/{id}/events` is server-sent events: `event` is the `type` of the `StreamEvent` in `data`, `id` is the entry's index |
-| Payloads | `{ digest, bytes, preview, value? }`; `value` is left out above 256 KiB, read it with `GET /v1/payloads/{digest}` |
+| Payloads | `{ digest, bytes, preview, value? }`; `value` is left out above 256 KiB, read it with `GET /v1/payloads/{digest}?run=<id>` (`run` is required with a key limited to labels) |
 | Webhooks | Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64 HMAC-SHA256>`), secret `whsec_…` |
 
 The problem types:
 
 | Slug | Status | When |
 | --- | --- | --- |
-| `invalid-request` | 400 | A missing or invalid field, header or parameter |
+| `invalid-request` | 400 | A missing or invalid field, header or parameter; a webhook URL the server does not send to |
 | `unauthorized` | 401 | No API key, or an unknown or revoked one |
 | `forbidden` | 403 | The key's role or allowed labels do not cover the request |
 | `not-found` | 404 | No such run, toolset, script, task, payload, subscription or key |
@@ -60,7 +60,7 @@ The problem types:
 | `not-quarantined` | 409 | Releasing or giving up a run that is not quarantined |
 | `task-not-waiting` | 409 | Approving or rejecting a task that does not wait for the harness |
 | `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or its claim was lost |
-| `payload-too-large` | 413 | A body or payload above the server's limits |
+| `payload-too-large` | 413 | A body or payload above the server's limits; a host-tool failure above 64 KiB |
 | `unsupported-media-type` | 415 | A body that is not JSON where JSON is expected |
 | `invalid-script` | 422 | The script was refused before any run exists |
 | `invalid-toolset` | 422 | An invalid schema, a duplicate tool, a transport this server refuses |

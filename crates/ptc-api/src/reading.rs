@@ -65,3 +65,14 @@ pub struct Latency {
     pub p99: u64,
     pub max: u64,
 }
+
+/// `GET /v1/payloads/{digest}`: the run the payload is read through.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
+#[serde(rename_all = "camelCase")]
+#[into_params(parameter_in = Query)]
+pub struct PayloadQuery {
+    /// A run whose journal holds the payload. Required with a key limited to labels, which
+    /// reads only the payloads of the runs it sees; checked whenever it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
+}

@@ -217,6 +217,22 @@ describe("the host-tool worker", () => {
     });
   });
 
+  it("cuts a failure too large for the server", async () => {
+    let fails = 0;
+    server.on("POST", "/v1/tasks/{token}/fail", (): JsonReply => {
+      fails += 1;
+      return fails === 1 ? problem(413, "payload-too-large", "the failure is above 64 KiB") : noContent;
+    });
+    start({
+      ask_user: () => {
+        throw new HostToolError("m".repeat(70_000), { data: { trace: "d".repeat(70_000) } });
+      },
+    });
+    queue.push(task());
+    await until(() => answers("fail").length === 2);
+    expect(answers("fail")[1]?.body).toEqual({ message: `${"m".repeat(2_000)}…` });
+  });
+
   it("runs at most `concurrency` handlers at once", async () => {
     let running = 0;
     let most = 0;

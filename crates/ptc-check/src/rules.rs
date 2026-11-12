@@ -21,6 +21,7 @@ use deno_ast::{
     MediaType, ModuleSpecifier, ParseParams, ParsedSource, ProgramRef, SourcePos, StartSourcePos,
 };
 
+use crate::checker::TsgoChecker;
 use crate::sandbox::absent_globals;
 
 pub(crate) const FLOATING_PROMISE: &str = "floating-promise";
@@ -373,6 +374,9 @@ impl Rules<'_> {
     }
 
     fn report(&mut self, span: Span, rule: &'static str, message: String, hint: String) {
+        if self.is_full() {
+            return;
+        }
         let (start, end) = self.offset(span);
         self.findings.push(Finding {
             start,
@@ -504,7 +508,16 @@ impl Rules<'_> {
         self.report(member.prop.span(), IGNORED_ASYNC_CALLBACK, message, hint);
     }
 
+    /// The check returns the first diagnostics only: past as many findings, the next ones,
+    /// found further in the script, are not kept.
+    fn is_full(&self) -> bool {
+        self.findings.len() >= TsgoChecker::MAX_DIAGNOSTICS
+    }
+
     fn absent(&mut self, name: &str, span: Span) {
+        if self.is_full() {
+            return;
+        }
         let Some(hint) = self.scope.absent(name) else {
             return;
         };
