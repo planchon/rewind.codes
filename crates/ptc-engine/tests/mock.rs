@@ -11,8 +11,7 @@ use std::time::Duration;
 use ptc_core::{Matching, RunStatus, Script, Toolset};
 use ptc_engine::DriveOptions;
 use ptc_engine::mock::{
-    ExpectedError, Expectations, MockDispatcher, Scenario, ScenarioSignal, SignalWhen,
-    run_scenario,
+    Expectations, ExpectedError, MockDispatcher, Scenario, ScenarioSignal, SignalWhen, run_scenario,
 };
 use ptc_engine::ports::Delivery;
 use serde_json::json;
@@ -128,7 +127,10 @@ async fn a_signal_can_be_sent_at_a_time_of_the_run() {
 #[tokio::test]
 async fn a_cassette_recorded_from_a_real_run_replays_it_as_a_scenario() {
     // A "real" run, answered by a tool that is not there in the scenario.
-    let engine = engine(sleepy(), RecordingDispatcher::new(|_| Ok(json!({ "live": 42 }))));
+    let engine = engine(
+        sleepy(),
+        RecordingDispatcher::new(|_| Ok(json!({ "live": 42 }))),
+    );
     let run = engine
         .start_run(request("sleepy", json!({})))
         .await

@@ -165,7 +165,11 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
 }
 
 /// One entry in full, with its payload's value when it has one.
-pub fn render_entry(entry: &HistoryEntry, value: Option<&JsonValue>, started_at: Timestamp) -> String {
+pub fn render_entry(
+    entry: &HistoryEntry,
+    value: Option<&JsonValue>,
+    started_at: Timestamp,
+) -> String {
     let mut out = format!(
         "entry {} · {} · {} ({})\n",
         entry.index,
@@ -302,13 +306,16 @@ impl<'h> Outcomes<'h> {
             timers: BTreeMap::new(),
             timeouts: BTreeMap::new(),
             waits: BTreeMap::new(),
-            ended: history.last().is_some_and(|entry| entry.event.is_terminal()),
+            ended: history
+                .last()
+                .is_some_and(|entry| entry.event.is_terminal()),
         };
         let mut open_waits: Vec<(u64, &str, Option<Seq>)> = Vec::new();
         for entry in history {
             match &entry.event {
                 Event::Completion(
-                    Completion::ToolCallCompleted { seq, .. } | Completion::ToolCallFailed { seq, .. },
+                    Completion::ToolCallCompleted { seq, .. }
+                    | Completion::ToolCallFailed { seq, .. },
                 ) => {
                     outcomes.calls.insert(*seq, entry);
                 }
@@ -316,8 +323,9 @@ impl<'h> Outcomes<'h> {
                 | Event::Command(Command::CancelTimer { seq }) => {
                     outcomes.timers.entry(*seq).or_insert(entry);
                     if matches!(entry.event, Event::Completion(_))
-                        && let Some(position) =
-                            open_waits.iter().position(|(_, _, timeout)| *timeout == Some(*seq))
+                        && let Some(position) = open_waits
+                            .iter()
+                            .position(|(_, _, timeout)| *timeout == Some(*seq))
                     {
                         let (index, ..) = open_waits.remove(position);
                         outcomes.waits.insert(index, entry);
@@ -361,7 +369,8 @@ fn describe(
             outcome,
         })
     };
-    let since = |end: &HistoryEntry| duration(end.recorded_at.0.saturating_sub(entry.recorded_at.0));
+    let since =
+        |end: &HistoryEntry| duration(end.recorded_at.0.saturating_sub(entry.recorded_at.0));
     match &entry.event {
         Event::Lifecycle(Lifecycle::RunStarted(started)) => line(
             format!("run started · input {}", payload(&started.input, payloads)),
@@ -437,7 +446,10 @@ fn describe(
                 Some(outcome),
             )
         }
-        Event::Completion(Completion::SignalReceived { name, payload: value }) => line(
+        Event::Completion(Completion::SignalReceived {
+            name,
+            payload: value,
+        }) => line(
             format!("signal {name:?} ← {}", payload(value, payloads)),
             None,
             None,
@@ -450,7 +462,11 @@ fn describe(
             message,
             callsite,
         }) => line(
-            format!("log {} {}", level.as_str(), truncate(message, MESSAGE_CHARS)),
+            format!(
+                "log {} {}",
+                level.as_str(),
+                truncate(message, MESSAGE_CHARS)
+            ),
             callsite.map(|c| c.line),
             None,
         ),
@@ -460,10 +476,7 @@ fn describe(
             None,
         ),
         Event::Command(Command::FailRun { error }) => {
-            let location = error
-                .stack
-                .as_deref()
-                .and_then(script_line);
+            let location = error.stack.as_deref().and_then(script_line);
             line(
                 format!(
                     "failed · {}: {}",
@@ -553,7 +566,7 @@ fn duration(ms: u64) -> String {
         0..M => format!("{}.{}s", ms / S, (ms % S) / 100),
         M..H => format!("{}m{}s", ms / M, (ms % M) / S),
         H..D => format!("{}h{:02}m", ms / H, (ms % H) / M),
-        _ if ms % D == 0 => format!("{}d", ms / D),
+        _ if ms.is_multiple_of(D) => format!("{}d", ms / D),
         _ => format!("{}d {}h", ms / D, (ms % D) / H),
     }
 }
@@ -593,7 +606,10 @@ mod tests {
 
     #[test]
     fn formats_times_and_durations() {
-        assert_eq!(rfc3339(Timestamp(1_767_225_600_000)), "2026-01-01T00:00:00Z");
+        assert_eq!(
+            rfc3339(Timestamp(1_767_225_600_000)),
+            "2026-01-01T00:00:00Z"
+        );
         assert_eq!(rfc3339(Timestamp(951_782_400_000)), "2000-02-29T00:00:00Z");
         assert_eq!(duration(310), "0.3s");
         assert_eq!(duration(312_000), "5m12s");
@@ -601,6 +617,9 @@ mod tests {
         assert_eq!(duration(3 * 86_400_000), "3d");
         assert_eq!(duration(2 * 86_400_000 + 23 * 3_600_000), "2d 23h");
         assert_eq!(bytes(12_400), "12.4 KB");
-        assert_eq!(script_line("Error: x\n    at main (file:///script.ts:12:5)"), Some(12));
+        assert_eq!(
+            script_line("Error: x\n    at main (file:///script.ts:12:5)"),
+            Some(12)
+        );
     }
 }

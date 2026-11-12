@@ -251,7 +251,10 @@ impl RunTelemetry<'_> {
         let (size, preview) = match payload {
             Payload::Value(value) => {
                 let canonical = canonical_json(value);
-                (Some(canonical.len() as u64), Some(payload.preview(PREVIEW_CHARS)))
+                (
+                    Some(canonical.len() as u64),
+                    Some(payload.preview(PREVIEW_CHARS)),
+                )
             }
             Payload::Digest(_) => match self.payloads.get(&digest) {
                 Some(record) => (
@@ -669,9 +672,16 @@ mod tests {
         assert_eq!(trace.to_string(), "0af7651916cd43dd8448eb211c80319c");
         assert_eq!(parent.unwrap().to_string(), "b7ad6b7169203331");
 
-        for invalid in [None, Some("garbage"), Some("00-00000000000000000000000000000000-b7ad6b7169203331-01")] {
+        for invalid in [
+            None,
+            Some("garbage"),
+            Some("00-00000000000000000000000000000000-b7ad6b7169203331-01"),
+        ] {
             let own = record(invalid);
-            assert_eq!(trace_of(&own), (TraceId(*own.run.id.as_uuid().as_bytes()), None));
+            assert_eq!(
+                trace_of(&own),
+                (TraceId(*own.run.id.as_uuid().as_bytes()), None)
+            );
         }
 
         let context = tool_call_trace_context(&harness, Seq(2), &TelemetryConfig::default());

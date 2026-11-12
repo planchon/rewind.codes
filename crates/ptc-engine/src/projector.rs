@@ -385,7 +385,11 @@ pub(crate) fn lifecycle_events(
 /// What a run that has not ended waits for from the outside world: signals and host tools.
 /// Empty when it is still running something of its own: a call ai-ptc dispatches.
 fn waiting_for(state: &RunState, toolset: Option<&Toolset>) -> Vec<String> {
-    let route = |tool: &str| toolset.and_then(|toolset| toolset.tool(tool)).map(|t| &t.route);
+    let route = |tool: &str| {
+        toolset
+            .and_then(|toolset| toolset.tool(tool))
+            .map(|t| &t.route)
+    };
     let mut waiting: Vec<String> = state
         .awaited_signals()
         .iter()

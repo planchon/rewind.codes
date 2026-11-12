@@ -161,7 +161,11 @@ impl Case {
     fn try_toolset(&self) -> Result<Toolset, ToolsetError> {
         let tools = self.scenario.tools.keys().map(|name| {
             let group = name.split_once('.').map(|(group, _)| group.to_owned());
-            let mut tool = Tool::new(name.clone(), ToolRoute::Host { group }, serde_json::json!({}));
+            let mut tool = Tool::new(
+                name.clone(),
+                ToolRoute::Host { group },
+                serde_json::json!({}),
+            );
             if self.scenario.at_most_once.contains(name) {
                 tool.policy.on_interruption = Interruption::AtMostOnce;
             }

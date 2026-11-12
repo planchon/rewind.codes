@@ -90,7 +90,10 @@ where
                 continue;
             };
             let script = self.journal.get_script(&run.tenant, record.script).await?;
-            let toolset = self.journal.get_toolset(&run.tenant, record.toolset).await?;
+            let toolset = self
+                .journal
+                .get_toolset(&run.tenant, record.toolset)
+                .await?;
             let (Some(script), Some(toolset)) = (script, toolset) else {
                 return Err(RetentionError::Incomplete(run));
             };

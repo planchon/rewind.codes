@@ -97,8 +97,7 @@ impl<I: ScriptInstance> InstanceCache<I> {
             },
         );
         self.bytes += bytes;
-        while self.entries.len() > self.config.max_instances || self.bytes > self.config.max_bytes
-        {
+        while self.entries.len() > self.config.max_instances || self.bytes > self.config.max_bytes {
             let Some((_, oldest)) = self.order.pop_first() else {
                 break;
             };

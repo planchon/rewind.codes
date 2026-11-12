@@ -300,7 +300,11 @@ mod tests {
         let small = json!("small");
         let medium = json!("m".repeat(40));
         let large = json!("l".repeat(100));
-        let mut entries = vec![entry(small.clone()), entry(medium.clone()), entry(large.clone())];
+        let mut entries = vec![
+            entry(small.clone()),
+            entry(medium.clone()),
+            entry(large.clone()),
+        ];
         let records = offload(&blobs, &tenant, &mut entries, tiers).await.unwrap();
 
         assert_eq!(payload_of(&entries[0].event), Some(&Payload::Value(small)));

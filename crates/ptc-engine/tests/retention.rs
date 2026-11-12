@@ -40,11 +40,7 @@ fn encode(document: &JournalDocument) -> String {
 }
 
 async fn finished_run(engine: &TestEngine, input: serde_json::Value) -> RunRef {
-    let run = engine
-        .start_run(request("echo", input))
-        .await
-        .unwrap()
-        .run;
+    let run = engine.start_run(request("echo", input)).await.unwrap().run;
     engine
         .run_until_idle_virtual(&DriveOptions::default())
         .await
@@ -62,13 +58,14 @@ fn later(engine: &TestEngine, days: u64) {
 }
 
 fn tiny_tiers() -> EngineConfig {
-    let mut config = EngineConfig::default();
     // Every payload above 8 bytes goes to the blob store.
-    config.payloads = PayloadTiers {
-        inline: 8,
-        table: 8,
-    };
-    config
+    EngineConfig {
+        payloads: PayloadTiers {
+            inline: 8,
+            table: 8,
+        },
+        ..EngineConfig::default()
+    }
 }
 
 #[tokio::test]
@@ -86,9 +83,21 @@ async fn finished_runs_are_archived_then_deleted() {
 
     // Not before its journal retention (30 days).
     later(&engine, 29);
-    assert_eq!(housekeeper.archive(engine.clock().now(), encode).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .archive(engine.clock().now(), encode)
+            .await
+            .unwrap(),
+        0
+    );
     later(&engine, 2);
-    assert_eq!(housekeeper.archive(engine.clock().now(), encode).await.unwrap(), 1);
+    assert_eq!(
+        housekeeper
+            .archive(engine.clock().now(), encode)
+            .await
+            .unwrap(),
+        1
+    );
     let record = engine.get_run(&run).await.unwrap().unwrap();
     let archive = record.archive.unwrap();
     assert!(matches!(
@@ -97,29 +106,74 @@ async fn finished_runs_are_archived_then_deleted() {
     ));
     let bytes = housekeeper.load_archive(&run).await.unwrap().unwrap();
     assert_eq!(Digest::of(&bytes), archive.document);
-    assert!(String::from_utf8(bytes).unwrap().starts_with(&run.id.to_string()));
+    assert!(
+        String::from_utf8(bytes)
+            .unwrap()
+            .starts_with(&run.id.to_string())
+    );
     // The payloads stay: the archive references them.
     assert_eq!(engine.blobs().len(), blobs_before + 1);
-    assert_eq!(housekeeper.clean_payloads(engine.clock().now()).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .clean_payloads(engine.clock().now())
+            .await
+            .unwrap(),
+        0
+    );
 
     // An archive is kept a year, then the run is deleted with it.
     later(&engine, 364);
-    assert_eq!(housekeeper.delete_expired(engine.clock().now()).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .delete_expired(engine.clock().now())
+            .await
+            .unwrap(),
+        0
+    );
     later(&engine, 2);
-    assert_eq!(housekeeper.delete_expired(engine.clock().now()).await.unwrap(), 1);
+    assert_eq!(
+        housekeeper
+            .delete_expired(engine.clock().now())
+            .await
+            .unwrap(),
+        1
+    );
     assert_eq!(engine.get_run(&run).await.unwrap(), None);
     assert_eq!(
-        engine.blobs().get(&run.tenant, archive.document).await.unwrap(),
+        engine
+            .blobs()
+            .get(&run.tenant, archive.document)
+            .await
+            .unwrap(),
         None
     );
 
     // Its payloads, now unreferenced, are deleted after their grace.
-    assert_eq!(housekeeper.clean_payloads(engine.clock().now()).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .clean_payloads(engine.clock().now())
+            .await
+            .unwrap(),
+        0
+    );
     later(&engine, 1);
-    assert_eq!(housekeeper.clean_payloads(engine.clock().now()).await.unwrap(), 1);
+    assert_eq!(
+        housekeeper
+            .clean_payloads(engine.clock().now())
+            .await
+            .unwrap(),
+        1
+    );
     let digest = Payload::digest_of(&json!({ "text": "a payload of the run" }));
     assert_eq!(engine.blobs().get(&run.tenant, digest).await.unwrap(), None);
-    assert_eq!(engine.journal().get_payload(&run.tenant, digest).await.unwrap(), None);
+    assert_eq!(
+        engine
+            .journal()
+            .get_payload(&run.tenant, digest)
+            .await
+            .unwrap(),
+        None
+    );
     assert_eq!(engine.blobs().len(), 0);
 }
 
@@ -153,8 +207,18 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows() {
             .unwrap();
     }
 
-    assert!(housekeeper.delete_run(&erased, engine.clock().now()).await.unwrap());
-    assert!(!housekeeper.delete_run(&erased, engine.clock().now()).await.unwrap());
+    assert!(
+        housekeeper
+            .delete_run(&erased, engine.clock().now())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !housekeeper
+            .delete_run(&erased, engine.clock().now())
+            .await
+            .unwrap()
+    );
     assert_eq!(engine.get_run(&erased).await.unwrap(), None);
     let left = read_model
         .search_runs(&RunSearch::new(erased.tenant.clone(), 10))
@@ -165,7 +229,13 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows() {
 
     // The payload is still referenced by the other run: it stays.
     later(&engine, 2);
-    assert_eq!(housekeeper.clean_payloads(engine.clock().now()).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .clean_payloads(engine.clock().now())
+            .await
+            .unwrap(),
+        0
+    );
     assert!(
         engine
             .blobs()
@@ -201,7 +271,19 @@ async fn the_read_model_keeps_runs_for_its_retention() {
         .await
         .unwrap();
     later(&engine, 89);
-    assert_eq!(housekeeper.purge_read_model(engine.clock().now()).await.unwrap(), 0);
+    assert_eq!(
+        housekeeper
+            .purge_read_model(engine.clock().now())
+            .await
+            .unwrap(),
+        0
+    );
     later(&engine, 2);
-    assert_eq!(housekeeper.purge_read_model(engine.clock().now()).await.unwrap(), 1);
+    assert_eq!(
+        housekeeper
+            .purge_read_model(engine.clock().now())
+            .await
+            .unwrap(),
+        1
+    );
 }

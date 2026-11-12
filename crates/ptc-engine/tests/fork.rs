@@ -316,7 +316,10 @@ async fn an_at_most_once_call_left_without_an_outcome_fails_with_outcome_unknown
         })
         .unwrap();
     assert_eq!(failure.kind, ToolFailureKind::OutcomeUnknown);
-    assert!(failure.message.contains("without an outcome"), "{failure:?}");
+    assert!(
+        failure.message.contains("without an outcome"),
+        "{failure:?}"
+    );
 }
 
 #[tokio::test]

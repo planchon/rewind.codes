@@ -33,7 +33,9 @@ fn triage() -> FakeExecutor {
 async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     let engine = engine(
         triage(),
-        RecordingDispatcher::new(|_| Ok(json!([{ "number": 1 }, { "number": 2 }, { "number": 3 }]))),
+        RecordingDispatcher::new(|_| {
+            Ok(json!([{ "number": 1 }, { "number": 2 }, { "number": 3 }]))
+        }),
     );
     let run = engine
         .start_run(request("triage", json!({ "repo": "acme/api" })))
@@ -49,9 +51,15 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     let lines: Vec<&str> = trace.lines().collect();
     assert_eq!(
         lines[0],
-        format!("run {}  suspended · waiting for signal \"approval\"", run.id)
+        format!(
+            "run {}  suspended · waiting for signal \"approval\"",
+            run.id
+        )
     );
-    assert!(lines[1].ends_with("· started 2026-01-01T00:00:00Z"), "{trace}");
+    assert!(
+        lines[1].ends_with("· started 2026-01-01T00:00:00Z"),
+        "{trace}"
+    );
     assert_eq!(lines[2], "");
     assert!(
         lines[5].contains("#1 a({\"repo\":\"acme/api\",\"state\":\"open\"})")
@@ -59,7 +67,10 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
             && lines[5].ends_with("→ 3 items · 40 B · 0.0s · entry 2"),
         "{trace}"
     );
-    assert!(lines[7].contains("timer #2 3d") && lines[7].ends_with("→ pending"), "{trace}");
+    assert!(
+        lines[7].contains("timer #2 3d") && lines[7].ends_with("→ pending"),
+        "{trace}"
+    );
 
     engine
         .signal(&run, "approval", json!({ "close": "x".repeat(300) }), None)
@@ -84,7 +95,10 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
         "{trace}"
     );
     // A payload is truncated in the trace.
-    assert!(lines[9].contains("signal \"approval\" ← {\"close\":\"xxx"), "{trace}");
+    assert!(
+        lines[9].contains("signal \"approval\" ← {\"close\":\"xxx"),
+        "{trace}"
+    );
     assert!(lines[9].ends_with("…"), "{trace}");
     assert!(lines[10].contains("failed · TypeError: decision.close is undefined"));
 

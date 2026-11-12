@@ -8,6 +8,7 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{RunMode, RunStatus, Seq};
+use ptc_engine::DriveOptions;
 use ptc_engine::adapters::{MemoryReadModel, MemorySpanExporter, MemoryWebhooks};
 use ptc_engine::ports::{
     Delivery, FeedConsumer, JournalStore, ReadModel, RunMetadata, RunRef, RunSearch, Secret,
@@ -15,7 +16,6 @@ use ptc_engine::ports::{
 };
 use ptc_engine::projector::{Projector, ProjectorConfig};
 use ptc_engine::telemetry::{SpanKey, span_id};
-use ptc_engine::DriveOptions;
 use serde_json::json;
 use support::*;
 
@@ -56,8 +56,13 @@ impl Sinks {
         &'a self,
         engine: &'a TestEngine,
         config: ProjectorConfig,
-    ) -> Projector<'a, ptc_engine::adapters::MemoryJournal, MemoryReadModel, MemorySpanExporter, MemoryWebhooks>
-    {
+    ) -> Projector<
+        'a,
+        ptc_engine::adapters::MemoryJournal,
+        MemoryReadModel,
+        MemorySpanExporter,
+        MemoryWebhooks,
+    > {
         Projector {
             journal: engine.journal(),
             read_model: &self.read_model,
@@ -126,7 +131,10 @@ async fn committed_entries_are_projected_once_whatever_the_deliveries() {
     assert_eq!(
         suspended,
         [
-            (format!("{}/1", run.id).as_str(), vec!["tool a #1".to_owned()]),
+            (
+                format!("{}/1", run.id).as_str(),
+                vec!["tool a #1".to_owned()]
+            ),
             (
                 format!("{}/4", run.id).as_str(),
                 vec!["signal \"go\"".to_owned()]
@@ -181,7 +189,13 @@ async fn committed_entries_are_projected_once_whatever_the_deliveries() {
     for consumer in FeedConsumer::ALL {
         let left = engine
             .journal()
-            .claim_feed(consumer, "x", now(&engine), std::time::Duration::from_secs(1), 10)
+            .claim_feed(
+                consumer,
+                "x",
+                now(&engine),
+                std::time::Duration::from_secs(1),
+                10,
+            )
             .await
             .unwrap();
         assert!(left.is_empty());
@@ -239,8 +253,14 @@ async fn a_run_started_with_a_traceparent_joins_the_harness_s_trace() {
 
     let spans = sinks.exporter.spans();
     let root = spans.iter().find(|span| span.name == "run").unwrap();
-    assert_eq!(root.trace_id.to_string(), "0af7651916cd43dd8448eb211c80319c");
-    assert_eq!(root.parent, Some(SpanId([0xb7, 0xad, 0x6b, 0x71, 0x69, 0x20, 0x33, 0x31])));
+    assert_eq!(
+        root.trace_id.to_string(),
+        "0af7651916cd43dd8448eb211c80319c"
+    );
+    assert_eq!(
+        root.parent,
+        Some(SpanId([0xb7, 0xad, 0x6b, 0x71, 0x69, 0x20, 0x33, 0x31]))
+    );
     // Only allow-listed labels are exported.
     assert!(root.attributes.contains_key("ptc.label.agent"));
     assert!(!root.attributes.contains_key("ptc.label.user"));

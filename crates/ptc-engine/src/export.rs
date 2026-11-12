@@ -6,7 +6,9 @@ use ptc_core::{Cassette, CassetteError, JournalDocument, Matching};
 
 use crate::engine::{Engine, EngineError};
 use crate::payloads;
-use crate::ports::{BlobStore, Clock, Entropy, JournalStore, RunRef, ScriptExecutor, ToolDispatcher};
+use crate::ports::{
+    BlobStore, Clock, Entropy, JournalStore, RunRef, ScriptExecutor, ToolDispatcher,
+};
 
 impl<J, B, X, D, C, E> Engine<J, B, X, D, C, E>
 where

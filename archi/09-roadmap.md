@@ -53,18 +53,15 @@ Not there yet:
   credentials, no execution or heartbeat timeouts, and dispatches every task itself, host tools
   included. Payloads above 1 KiB all go to the `BlobStore`: the table tier is not used.
 - Starting a run does not type-check the script.
-- Every activation replays the full history: there is no instance cache.
-- An activation that fails 5 times in a row does not quarantine the run: it is retried every
-  lease period, forever. The store does not count consecutive failures, nor record why a run
-  is quarantined.
 - The watchdog measures the wall-clock time of a call, not the thread's CPU clock, so a
   heavily loaded host can make a script exceed its budget (live, the run is aborted; during
   replay, the activation is retried).
-- Leases are not renewed during an activation. A replay longer than the lease (30 s) lets
-  another worker take the run over, and with several workers on a very long history they can
-  fence each other off forever.
 - No web-standard globals (`URL`, `TextEncoder`, `atob`…); `queueMicrotask` is present.
-- No `webhook(name)`, no feed, no projector, no OpenTelemetry export, no read model.
+- No `webhook(name)`. The projector, its span derivation and the in-memory read model exist,
+  but no OpenTelemetry exporter (`ptc-otel`) nor a stored read model.
+- The V8 executor does not report the memory of its instances
+  (`ScriptInstance::memory_usage`): the instance cache is bounded by its number of instances
+  only.
 
 ## Contracts frozen first
 

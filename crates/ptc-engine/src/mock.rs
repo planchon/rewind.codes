@@ -26,8 +26,7 @@ use ptc_core::{
 };
 
 use crate::adapters::{
-    MemoryBlobs, MemoryJournal, SeededEntropy, StaticDispatcher, StaticResponsesError,
-    VirtualClock,
+    MemoryBlobs, MemoryJournal, SeededEntropy, StaticDispatcher, StaticResponsesError, VirtualClock,
 };
 use crate::driver::DriveOptions;
 use crate::engine::{Adapters, Engine, EngineConfig, EngineError, StartError, StartRun};
@@ -90,13 +89,14 @@ impl CassetteDispatcher {
                 state.next += 1;
                 position
             }
-            Matching::ByArgs => self
-                .cassette
-                .calls
-                .iter()
-                .enumerate()
-                .find(|(position, recorded)| !state.used.contains(position) && same(recorded))?
-                .0,
+            Matching::ByArgs => {
+                self.cassette
+                    .calls
+                    .iter()
+                    .enumerate()
+                    .find(|(position, recorded)| !state.used.contains(position) && same(recorded))?
+                    .0
+            }
         };
         state.used.insert(position);
         state.answered.insert(key, position);
@@ -620,7 +620,9 @@ mod tests {
         };
         let dispatcher = MockDispatcher::new()
             .with_cassette(cassette(Matching::ByArgs))
-            .with_static_responses(&json!({ "a": "static", "b": "static", "c": { "$error": "nope" } }))
+            .with_static_responses(
+                &json!({ "a": "static", "b": "static", "c": { "$error": "nope" } }),
+            )
             .unwrap()
             .with_mocks(mocks);
         let answer = |call| dispatcher.dispatch(call, None);

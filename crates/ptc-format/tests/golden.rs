@@ -5,8 +5,8 @@
 
 use ptc_core::{
     AbortKind, AbortReason, Annotation, Callsite, CancelReason, Command, Completion, Digest, Epoch,
-    Event, Lifecycle, LogLevel, Payload, RunMode, RunStarted, RunState, RunStatus, ScriptError,
-    RunId, Seed, Seq, Timestamp, ToolFailure, ToolFailureKind,
+    Event, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunState, RunStatus,
+    ScriptError, Seed, Seq, Timestamp, ToolFailure, ToolFailureKind,
 };
 use ptc_format::{FormatError, decode_event, decode_journal, encode_event, encode_journal};
 use serde_json::json;
@@ -56,7 +56,12 @@ fn decodes_to_the_expected_domain_values() {
             .parse::<RunId>()
             .unwrap()
     );
-    assert!(journal.script.source().starts_with("import { github } from \"ptc:tools\";"));
+    assert!(
+        journal
+            .script
+            .source()
+            .starts_with("import { github } from \"ptc:tools\";")
+    );
     assert_eq!(journal.toolset.tools().len(), 7);
     let history = journal.entries;
     assert_eq!(history.len(), 16);

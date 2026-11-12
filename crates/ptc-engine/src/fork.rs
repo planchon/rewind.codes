@@ -265,7 +265,11 @@ where
             },
             created_at: now,
         };
-        match self.journal.create_run(fork, request.idempotency_key).await? {
+        match self
+            .journal
+            .create_run(fork, request.idempotency_key)
+            .await?
+        {
             CreateRun::Created(created) => {
                 tracing::debug!(run = %created.run, parent = %parent, "fork started");
                 Ok(created)
@@ -398,10 +402,11 @@ where
             })
             .unwrap_or(history.len());
         let parent = &history[..followed_len];
-        let mut cursor = ReplayCursor::new(parent).map_err(|error| EngineError::CorruptHistory {
-            run_id: parent_id,
-            error,
-        })?;
+        let mut cursor =
+            ReplayCursor::new(parent).map_err(|error| EngineError::CorruptHistory {
+                run_id: parent_id,
+                error,
+            })?;
         let at = source.parent.at.unwrap_or(u64::MAX);
         let corrupt = |error| EngineError::CorruptHistory {
             run_id: source.run.id,
@@ -539,11 +544,15 @@ where
                 }
             }
             for (seq, tool) in &pending {
-                if !inherited.contains(seq) || reused.iter().any(|c| completion_seq(c) == Some(*seq))
+                if !inherited.contains(seq)
+                    || reused.iter().any(|c| completion_seq(c) == Some(*seq))
                 {
                     continue;
                 }
-                let policy = source.toolset.tool(tool).map(|tool| tool.policy.on_interruption);
+                let policy = source
+                    .toolset
+                    .tool(tool)
+                    .map(|tool| tool.policy.on_interruption);
                 match policy {
                     Some(Interruption::AtMostOnce) => unknown.push(*seq),
                     _ => redispatched.push(*seq),

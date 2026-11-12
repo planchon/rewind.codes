@@ -34,9 +34,7 @@ use ptc_core::{
 use tracing::Instrument;
 
 use crate::cache::Cached;
-use crate::engine::{
-    ActivationOutcome, ActivationReport, Adapters, Engine, EngineError, Limits,
-};
+use crate::engine::{ActivationOutcome, ActivationReport, Adapters, Engine, EngineError, Limits};
 use crate::payloads;
 use crate::ports::{
     AcquireRunnable, Activation, BlobStore, Clock, Emitted, Entropy, ExecutorError, Failures,
@@ -155,9 +153,7 @@ where
             trace_id = tracing::field::Empty,
             span_id = tracing::field::Empty,
         );
-        self.activate_in_span(lease, purpose)
-            .instrument(span)
-            .await
+        self.activate_in_span(lease, purpose).instrument(span).await
     }
 
     async fn activate_in_span(
@@ -304,9 +300,7 @@ where
                             compiled: &stored.compiled,
                             toolset: &toolset,
                         };
-                        instance = self
-                            .start_fork(&mut batch, &mut heartbeat, fork)
-                            .await?;
+                        instance = self.start_fork(&mut batch, &mut heartbeat, fork).await?;
                         continue;
                     }
                     let recorded_at = batch.recorded_at(self.clock.now());
@@ -348,9 +342,13 @@ where
         heartbeat.beat().await?;
         let (mut activation, state) = batch.into_parts();
         let status = state.status();
-        activation.payloads =
-            payloads::offload(&self.blobs, tenant, &mut activation.entries, self.config.payloads)
-                .await?;
+        activation.payloads = payloads::offload(
+            &self.blobs,
+            tenant,
+            &mut activation.entries,
+            self.config.payloads,
+        )
+        .await?;
         derive_effects(&mut activation, &state, &toolset)
             .map_err(|tool| EngineError::UnknownTool { run_id, tool })?;
         let entries = activation.entries.len();
@@ -547,12 +545,7 @@ pub(crate) struct Batch<'l> {
 }
 
 impl<'l> Batch<'l> {
-    fn new(
-        run: &RunRef,
-        state: RunState,
-        last_recorded_at: Timestamp,
-        limits: &'l Limits,
-    ) -> Self {
+    fn new(run: &RunRef, state: RunState, last_recorded_at: Timestamp, limits: &'l Limits) -> Self {
         Self {
             run_id: run.id,
             tenant: run.tenant.clone(),
@@ -775,7 +768,10 @@ mod tests {
             javascript: String::new(),
             source_map: String::new(),
         };
-        journal.put_script(&tenant, &script, &compiled).await.unwrap();
+        journal
+            .put_script(&tenant, &script, &compiled)
+            .await
+            .unwrap();
         journal
             .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
             .await
