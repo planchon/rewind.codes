@@ -627,6 +627,66 @@ async fn receiver() -> (String, Received) {
     (format!("http://{addr}/hook"), received)
 }
 
+/// A receiver that accepts connections and never answers; returns its URL and how many
+/// connections it accepted.
+async fn silent_receiver() -> (String, Arc<Mutex<usize>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let accepted = Arc::new(Mutex::new(0));
+    let counted = accepted.clone();
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            *counted.lock().unwrap() += 1;
+            held.push(socket);
+        }
+    });
+    (format!("http://{addr}/hook"), accepted)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
+    let server = TestServer::start(&[]).await;
+    let stranger = server.key_of("other", Role::Harness, &[]).await;
+    let (url, accepted) = silent_receiver().await;
+    stranger
+        .create_subscription(&CreateSubscription {
+            url,
+            events: Vec::new(),
+            labels: Labels::new(),
+        })
+        .await
+        .unwrap();
+    let mut quick = start(SLEEP);
+    quick.input = json!({ "ms": 10 });
+    quick.wait = wait("20s");
+    stranger.start_run(&quick, None).await.unwrap();
+    eventually(|| async { (*accepted.lock().unwrap() > 0).then_some(()) }).await;
+
+    // While its lifecycle event waits for the silent receiver, the runs of another tenant are
+    // still projected: listed, and counted in the scripts' statistics.
+    let harness = server.key(Role::Harness, &[]).await;
+    let run = harness.start_run(&quick, None).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let page = harness.list_runs(&RunFilter::default()).await.unwrap();
+        if page.runs.iter().any(|listed| listed.id == run.id) {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the run was not listed within 10 s"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let stopping = tokio::time::Instant::now();
+    server.stop().await;
+    assert!(
+        stopping.elapsed() < Duration::from_secs(10),
+        "a delivery in progress does not hold up the stop: it is sent again later"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
     let server = TestServer::start(&[]).await;
