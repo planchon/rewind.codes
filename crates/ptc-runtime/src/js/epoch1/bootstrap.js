@@ -74,6 +74,7 @@
   const {
     op_drain_pending_rejections,
     op_ptc_call_tool,
+    op_ptc_heap_exceeded,
     op_ptc_cancel_timer,
     op_ptc_complete,
     op_ptc_fail,
@@ -91,7 +92,7 @@
   const { URL, URLSearchParams } = core.loadExtScript("ext:deno_web/00_url.js");
   const { TextDecoder, TextEncoder } = core.loadExtScript("ext:deno_web/08_text_encoding.js");
   const { atob, btoa } = core.loadExtScript("ext:deno_web/05_base64.js");
-  const { structuredClone } = core.loadExtScript("ext:deno_web/13_message_port.js");
+  const { structuredClone: cloneStructured } = core.loadExtScript("ext:deno_web/13_message_port.js");
   const { forgivingBase64Decode, forgivingBase64Encode } = core.loadExtScript(
     "ext:deno_web/00_infra.js",
   );
@@ -113,11 +114,305 @@
       ["TextDecoder", TextDecoder],
       ["atob", atob],
       ["btoa", btoa],
-      ["structuredClone", structuredClone],
     ]
   ) {
     defineGlobal(name, value);
   }
+
+  // ---------------------------------------------------------------------------------------
+  // Array buffers. Their memory lives outside V8's heap, under a budget per instance that the
+  // isolate's allocator enforces: past it, an allocation fails with V8's RangeError. A resizable
+  // buffer escapes the allocator (V8 reserves its pages itself), so it takes its maximum length
+  // from the budget when it is created, through a buffer of that length that lives exactly as
+  // long as it does. It does so before V8 reserves anything: V8 aborts the process when one
+  // buffer changes its accounting by 32 GiB. V8 creates a resizable buffer only through the
+  // constructor, `transfer` and `structuredClone`, so those three are covered.
+
+  const NativeArrayBuffer = primordials.ArrayBuffer;
+  const ArrayBufferPrototype = NativeArrayBuffer.prototype;
+  const MAX_SAFE_INTEGER = 2 ** 53 - 1;
+  // A resizable buffer -> the buffer charged with its maximum length.
+  const reservations = new primordials.SafeWeakMap();
+  // Resizable buffers created so far: until there is one, no clone can hold one.
+  let resizableBuffers = 0;
+
+  const toIntegerOrInfinity = (number) => (number !== number ? 0 : primordials.MathTrunc(number));
+  const isIndex = (integer) => integer >= 0 && integer <= MAX_SAFE_INTEGER;
+
+  function reserve(buffer, maxByteLength) {
+    primordials.WeakMapPrototypeSet(reservations, buffer, new NativeArrayBuffer(maxByteLength));
+  }
+
+  // Converts the arguments in the specification's order, and lets V8 itself throw the
+  // RangeError of a length that is not an index.
+  const SandboxArrayBuffer = function ArrayBuffer(length, options) {
+    if (new.target === undefined) return NativeArrayBuffer(length, options);
+    const byteLength = +length;
+    const integer = toIntegerOrInfinity(byteLength);
+    const object = options !== null && (typeof options === "object" || typeof options === "function");
+    if (!isIndex(integer) || !object) {
+      return ReflectConstruct(NativeArrayBuffer, [byteLength], new.target);
+    }
+    const max = options.maxByteLength;
+    if (max === undefined) return ReflectConstruct(NativeArrayBuffer, [byteLength], new.target);
+    const maxByteLength = +max;
+    const maxInteger = toIntegerOrInfinity(maxByteLength);
+    const resizable = { __proto__: null, maxByteLength };
+    if (!isIndex(maxInteger) || integer > maxInteger) {
+      return ReflectConstruct(NativeArrayBuffer, [byteLength, resizable], new.target);
+    }
+    const reservation = new NativeArrayBuffer(maxInteger);
+    const buffer = ReflectConstruct(NativeArrayBuffer, [byteLength, resizable], new.target);
+    primordials.WeakMapPrototypeSet(reservations, buffer, reservation);
+    resizableBuffers++;
+    return buffer;
+  };
+  for (const key of ["isView", primordials.SymbolSpecies]) {
+    ObjectDefineProperty(SandboxArrayBuffer, key, ObjectGetOwnPropertyDescriptor(NativeArrayBuffer, key));
+  }
+  ObjectDefineProperty(SandboxArrayBuffer, "prototype", { value: ArrayBufferPrototype, writable: false });
+  ObjectDefineProperty(SandboxArrayBuffer, "length", { value: 1 });
+  ObjectDefineProperty(ArrayBufferPrototype, "constructor", {
+    value: SandboxArrayBuffer,
+    writable: true,
+    configurable: true,
+  });
+  defineGlobal("ArrayBuffer", SandboxArrayBuffer);
+
+  // A transfer moves the reservation of a resizable buffer to the new buffer, which keeps its
+  // maximum length; `transferToFixedLength` releases it (the new buffer is the allocator's).
+  for (const name of ["transfer", "transferToFixedLength"]) {
+    const native = ArrayBufferPrototype[name];
+    const method = {
+      [name](newLength) {
+        const reservation = primordials.WeakMapPrototypeGet(reservations, this);
+        const buffer = ReflectApply(native, this, [newLength]);
+        primordials.WeakMapPrototypeDelete(reservations, this);
+        if (primordials.ArrayBufferPrototypeGetResizable(buffer)) {
+          if (reservation !== undefined) {
+            primordials.WeakMapPrototypeSet(reservations, buffer, reservation);
+          } else {
+            reserve(buffer, primordials.ArrayBufferPrototypeGetMaxByteLength(buffer));
+          }
+        }
+        return buffer;
+      },
+    }[name];
+    ObjectDefineProperty(method, "length", { value: 0 });
+    ObjectDefineProperty(ArrayBufferPrototype, name, {
+      value: method,
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  // A clone copies the resizable buffers it holds: each copy takes its own reservation. A
+  // clone is plain data made by V8 (no accessor, no proxy), so walking it runs no script code.
+  function reserveClonedBuffers(clone) {
+    const seen = new primordials.SafeSet();
+    const stack = [clone];
+    while (stack.length > 0) {
+      const value = primordials.ArrayPrototypePop(stack);
+      if (value === null || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      const prototype = primordials.ObjectGetPrototypeOf(value);
+      if (prototype === ArrayBufferPrototype) {
+        if (
+          primordials.ArrayBufferPrototypeGetResizable(value) &&
+          !primordials.WeakMapPrototypeHas(reservations, value)
+        ) {
+          reserve(value, primordials.ArrayBufferPrototypeGetMaxByteLength(value));
+        }
+      } else if (ArrayBufferIsView(value)) {
+        ArrayPrototypePush(
+          stack,
+          prototype === primordials.DataView.prototype
+            ? primordials.DataViewPrototypeGetBuffer(value)
+            : TypedArrayPrototypeGetBuffer(value),
+        );
+      } else if (prototype === primordials.Map.prototype) {
+        primordials.MapPrototypeForEach(value, (entry, key) => {
+          ArrayPrototypePush(stack, key);
+          ArrayPrototypePush(stack, entry);
+        });
+      } else if (prototype === primordials.Set.prototype) {
+        primordials.SetPrototypeForEach(value, (entry) => ArrayPrototypePush(stack, entry));
+      } else if (prototype !== primordials.String.prototype) {
+        const keys = primordials.ReflectOwnKeys(value);
+        for (let i = 0; i < keys.length; i++) ArrayPrototypePush(stack, value[keys[i]]);
+      }
+    }
+  }
+
+  const sandboxStructuredClone = {
+    structuredClone(value, options) {
+      const clone = ReflectApply(cloneStructured, undefined, arguments);
+      if (resizableBuffers > 0) reserveClonedBuffers(clone);
+      return clone;
+    },
+  }.structuredClone;
+  ObjectDefineProperty(sandboxStructuredClone, "length", { value: cloneStructured.length });
+  defineGlobal("structuredClone", sandboxStructuredClone);
+
+  // ---------------------------------------------------------------------------------------
+  // Built-ins V8 runs to their end. The CPU budget and the heap limit terminate the execution
+  // at V8's next interrupt check, and some built-ins create elements one by one over a whole
+  // length without one: `new Array(2 ** 27).fill(1.5)` ran 18 s and took 1.9 GiB under a
+  // 64 MiB heap, and past 2^27 elements V8 aborts the process ("invalid size"). An element takes
+  // at least 8 bytes of heap, so a call that must create more than the heap holds can only
+  // exceed the heap limit: it ends the call at once, as the heap limit does. A call is measured
+  // only from what reading cannot run script code: the length of an array that is not a proxy,
+  // or an own data property `length`, and arguments that are primitives. Anything else goes to
+  // V8 unchecked.
+
+  let maxElements = Infinity; // set by init: min(heap limit / 8, 2^27)
+  const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
+  const isProxy = core.isProxy;
+  const isPrimitive = (value) =>
+    value === null || (typeof value !== "object" && typeof value !== "function");
+
+  function exceedHeap() {
+    op_ptc_heap_exceeded();
+    // The termination takes effect at the loop's interrupt check.
+    for (;;) {
+      // Nothing.
+    }
+  }
+
+  const toNumberOrUndefined = (value) =>
+    isPrimitive(value) && typeof value !== "symbol" && typeof value !== "bigint" ? +value : undefined;
+
+  // ToLength of a primitive; undefined when converting could run script code or throw.
+  function toLength(value) {
+    const number = toNumberOrUndefined(value);
+    if (number === undefined) return undefined;
+    const integer = toIntegerOrInfinity(number);
+    return integer <= 0 ? 0 : integer > MAX_SAFE_INTEGER ? MAX_SAFE_INTEGER : integer;
+  }
+
+  // The length a built-in reads from `object`, when reading it cannot run script code.
+  function plainLength(object) {
+    if (isPrimitive(object) || isProxy(object)) return undefined;
+    if (ArrayIsArray(object)) return object.length;
+    const descriptor = ObjectGetOwnPropertyDescriptor(object, "length");
+    if (descriptor === undefined || !primordials.ObjectHasOwn(descriptor, "value")) return undefined;
+    return toLength(descriptor.value);
+  }
+
+  // A relative index (`start`, `end`) resolved against `length`, as the specification does.
+  function relativeIndex(value, length, absent) {
+    if (value === undefined) return absent;
+    const number = toNumberOrUndefined(value);
+    if (number === undefined) return undefined;
+    const relative = toIntegerOrInfinity(number);
+    return relative < 0 ? primordials.MathMax(length + relative, 0) : primordials.MathMin(relative, length);
+  }
+
+  // Whether nothing on `object`'s prototype chain, `object` included, has `key`, and no proxy
+  // is on it: looking `key` up then runs no script code.
+  function plainlyLacks(object, key) {
+    for (let current = object; current !== null; current = primordials.ObjectGetPrototypeOf(current)) {
+      if (isProxy(current) || ObjectGetOwnPropertyDescriptor(current, key) !== undefined) return false;
+    }
+    return true;
+  }
+
+  // Runs `check` with the call's receiver and arguments, then the built-in.
+  function guard(target, name, check) {
+    const native = target[name];
+    const method = {
+      [name]() {
+        ReflectApply(check, this, arguments);
+        return ReflectApply(native, this, arguments);
+      },
+    }[name];
+    ObjectDefineProperty(method, "length", { value: native.length });
+    ObjectDefineProperty(target, name, { value: method, writable: true, configurable: true });
+  }
+
+  // A new array of `length` elements: V8 throws its RangeError past 2^32 - 1.
+  function creates(length) {
+    if (length !== undefined && length > maxElements && length <= MAX_ARRAY_LENGTH) exceedHeap();
+  }
+
+  const ArrayPrototype = primordials.Array.prototype;
+
+  guard(ArrayPrototype, "fill", function (value, start, end) {
+    const length = plainLength(this);
+    if (length === undefined || length <= maxElements) return;
+    const first = relativeIndex(start, length, 0);
+    const final = relativeIndex(end, length, length);
+    if (first !== undefined && final !== undefined && final - first > maxElements) exceedHeap();
+  });
+
+  guard(ArrayPrototype, "toReversed", function () {
+    creates(plainLength(this));
+  });
+
+  guard(ArrayPrototype, "toSorted", function (compareFn) {
+    if (compareFn === undefined || typeof compareFn === "function") creates(plainLength(this));
+  });
+
+  guard(ArrayPrototype, "with", function (index, value) {
+    const length = plainLength(this);
+    if (length === undefined || length <= maxElements) return;
+    const number = toNumberOrUndefined(index);
+    if (number === undefined) return;
+    const relative = toIntegerOrInfinity(number);
+    const actual = relative >= 0 ? relative : length + relative;
+    // V8 throws its RangeError for an index out of range.
+    if (actual >= 0 && actual < length) creates(length);
+  });
+
+  guard(ArrayPrototype, "toSpliced", function (start, skipCount) {
+    const length = plainLength(this);
+    if (length === undefined || length <= maxElements) return;
+    const actualStart = relativeIndex(start, length, 0);
+    if (actualStart === undefined) return;
+    const inserted = primordials.MathMax(arguments.length - 2, 0);
+    let skipped;
+    if (arguments.length === 0) {
+      skipped = 0;
+    } else if (arguments.length === 1) {
+      skipped = length - actualStart;
+    } else {
+      const number = toNumberOrUndefined(skipCount);
+      if (number === undefined) return;
+      skipped = primordials.MathMin(primordials.MathMax(toIntegerOrInfinity(number), 0), length - actualStart);
+    }
+    creates(length + inserted - skipped);
+  });
+
+  const NativeArray = primordials.Array;
+  guard(NativeArray, "from", function (items, mapFn) {
+    // With a function to map elements, each element runs script code, which checks for
+    // interrupts. An iterable goes through the iteration protocol, which does too.
+    if (this !== NativeArray || mapFn !== undefined || isPrimitive(items)) return;
+    if (!plainlyLacks(items, primordials.SymbolIterator)) return;
+    creates(plainLength(items));
+  });
+
+  const StringPrototype = primordials.String.prototype;
+  guard(StringPrototype, "split", function (separator, limit) {
+    if (typeof this !== "string" || typeof separator !== "string") return;
+    if (this.length < maxElements || !plainlyLacks(StringPrototype, primordials.SymbolSplit)) return;
+    const lim = limit === undefined ? MAX_ARRAY_LENGTH : toNumberOrUndefined(limit);
+    if (lim === undefined) return;
+    const most = lim >>> 0;
+    let parts;
+    if (separator === "") {
+      parts = primordials.MathMin(this.length, most);
+    } else {
+      parts = 1;
+      let at = primordials.StringPrototypeIndexOf(this, separator, 0);
+      while (at !== -1 && parts <= maxElements) {
+        parts++;
+        at = primordials.StringPrototypeIndexOf(this, separator, at + separator.length);
+      }
+      parts = primordials.MathMin(parts, most);
+    }
+    if (parts > maxElements) exceedHeap();
+  });
 
   // ---------------------------------------------------------------------------------------
   // Stacks: the script's own frames only. Frames of the runtime's modules (`ptc:…`) and of
@@ -900,10 +1195,11 @@
   // Hooks driven by Rust.
 
   // What belongs to the run, once per instance, before any module is loaded:
-  // { runId, startedAt, mathRandom: [a, b, c, d], http }.
+  // { runId, startedAt, mathRandom: [a, b, c, d], http, maxElements }.
   function init(configJson) {
     const config = JSONParse(configJson);
     startedAt = config.startedAt;
+    maxElements = config.maxElements;
     [a, b, c, d] = ArrayPrototypeMap(config.mathRandom, (word) => word >>> 0);
     for (let i = 0; i < 12; i++) sfc32();
 

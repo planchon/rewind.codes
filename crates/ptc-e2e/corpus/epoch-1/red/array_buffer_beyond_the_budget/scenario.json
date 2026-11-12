@@ -1,0 +1,14 @@
+{
+  "description": "An array buffer of 64 GiB, past the budget of the instance's array buffers (128 MiB by default, outside V8's heap): V8 throws its RangeError, and the run fails with it. This line used to abort the worker's process.",
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "RangeError",
+      "message": "Array buffer allocation failed"
+    },
+    "events": [
+      "run_started",
+      "fail_run"
+    ]
+  }
+}

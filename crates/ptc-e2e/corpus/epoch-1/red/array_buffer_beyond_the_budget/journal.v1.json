@@ -1,0 +1,4 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"export default async function main() {\n  const buffer = new ArrayBuffer(2 ** 36);\n  return buffer.byteLength;\n}\n","toolset":{"servers":[],"tools":[],"v":1},"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"e230f26290305fa76fcf40916b34c1de0acf0450982b96bf0850b0681d9c4b57","toolset":"f3e36efa9bae959bf0e62cf9b1da2adc53de0a970ef5b69f92dcb984a9175843","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"fail_run","error":{"name":"RangeError","message":"Array buffer allocation failed","stack":"RangeError: Array buffer allocation failed\n    at new ArrayBuffer (<anonymous>)\n    at main (file:///script.ts:2:18)"}}}
+]}

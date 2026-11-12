@@ -4,12 +4,14 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use deno_core::{JsRuntime, ModuleLoader, RuntimeOptions, v8};
 use ptc_engine::ports::ExecutorError;
 
 use crate::epochs::Glue;
+use crate::memory;
 use crate::ops::{self, ExecState};
 use crate::snapshot;
 use crate::watchdog::Watchdog;
@@ -23,6 +25,11 @@ pub struct SandboxLimits {
     pub cpu_per_trigger: Duration,
     /// V8 heap size.
     pub heap_bytes: usize,
+    /// Bytes the instance's array buffers may hold at once (an `ArrayBuffer`, the memory of a
+    /// typed array), which V8 keeps outside its heap. An allocation past it fails with V8's
+    /// `RangeError: Array buffer allocation failed`, which the script can catch. A resizable
+    /// buffer takes its maximum length from it when it is created.
+    pub array_buffer_bytes: usize,
     /// Commands and annotations (logs, signal waits) the script may emit reacting to one
     /// trigger. What it emits is kept outside V8's heap until the call ends.
     pub emitted_per_trigger: usize,
@@ -36,6 +43,7 @@ impl Default for SandboxLimits {
         Self {
             cpu_per_trigger: Duration::from_secs(5),
             heap_bytes: 128 * 1024 * 1024,
+            array_buffer_bytes: 128 * 1024 * 1024,
             // The default cap on a run's history: more could never be committed.
             emitted_per_trigger: 50_000,
             emitted_bytes_per_trigger: 64 * 1024 * 1024,
@@ -43,10 +51,16 @@ impl Default for SandboxLimits {
     }
 }
 
+/// Room for V8's largest object, with its page: what V8 may still need to allocate once the heap
+/// limit is reached.
+const LARGEST_OBJECT: usize = (1024 + 64) * 1024 * 1024;
+
 pub(crate) struct Isolate {
     // Dropped first: the watchdog stops before the isolate goes.
     watchdog: Watchdog,
     runtime: JsRuntime,
+    /// The budget of the isolate's array buffers, dropped after it.
+    _array_buffers: Arc<memory::ArrayBufferBudget>,
     limits: SandboxLimits,
     heap_exceeded: Rc<Cell<bool>>,
     /// The isolate was terminated: it cannot run JavaScript any more.
@@ -63,11 +77,16 @@ impl Isolate {
         loader: Rc<dyn ModuleLoader>,
         mut state: ExecState,
     ) -> Result<(Self, v8::Global<v8::Object>), ExecutorError> {
+        let (array_buffers, budget) = memory::capped_allocator(limits.array_buffer_bytes);
         let mut runtime = JsRuntime::try_new(RuntimeOptions {
             module_loader: Some(loader),
             extensions: ops::extensions(),
             startup_snapshot: Some(snapshot::of(glue)?),
-            create_params: Some(v8::CreateParams::default().heap_limits(0, limits.heap_bytes)),
+            create_params: Some(
+                v8::CreateParams::default()
+                    .heap_limits(0, limits.heap_bytes)
+                    .array_buffer_allocator(array_buffers),
+            ),
             ..Default::default()
         })
         .map_err(internal)?;
@@ -76,15 +95,26 @@ impl Isolate {
         let config = state.init_config().to_string();
         runtime.op_state().borrow_mut().put(state);
 
+        memory::track_refusals(runtime.v8_isolate(), &budget);
         let heap_exceeded = Rc::new(Cell::new(false));
         {
             let exceeded = Rc::clone(&heap_exceeded);
             let handle = handle.clone();
+            let budget = Arc::clone(&budget);
             runtime.add_near_heap_limit_callback(move |current, _initial| {
+                // V8 also calls at the start of the collection it runs before it gives up on an
+                // array buffer, whatever the heap's size: the script then gets a RangeError.
+                if budget.took_refusal() && !exceeded.get() {
+                    return current;
+                }
                 exceeded.set(true);
                 handle.terminate_execution();
-                // Room for V8 to unwind the terminated execution.
-                current.saturating_mul(2)
+                // The termination takes effect at the next interrupt check. Until then V8 must
+                // finish what it is doing: the allocation that does not fit, and the rest of a
+                // built-in that never checks for interrupts. If the new limit leaves no room
+                // for it, V8 aborts the process. One object is at most 1 GiB (2^27 elements, or
+                // a string of 2^29 two-byte characters), so that much room is always given.
+                current.saturating_add(LARGEST_OBJECT)
             });
         }
         let watchdog = Watchdog::spawn(handle).map_err(internal)?;
@@ -95,6 +125,7 @@ impl Isolate {
         let mut isolate = Self {
             watchdog,
             runtime,
+            _array_buffers: budget,
             limits,
             heap_exceeded,
             dead: false,
@@ -132,9 +163,8 @@ impl Isolate {
         let timed_out = self.watchdog.disarm();
         if self.heap_exceeded.get() {
             self.dead = true;
-            return Err(ExecutorError::LimitExceeded(format!(
-                "the script used more than {} MiB of heap",
-                self.limits.heap_bytes / (1024 * 1024)
+            return Err(ExecutorError::LimitExceeded(ops::heap_exceeded(
+                self.limits.heap_bytes,
             )));
         }
         if let Some(overflow) = self.state(ExecState::overflow) {
@@ -151,12 +181,14 @@ impl Isolate {
         Ok(())
     }
 
-    /// Calls a function of the glue with string arguments, then drains microtasks.
+    /// Calls a function of the glue with string arguments, then drains microtasks. Both run
+    /// with the stack limit pinned below this frame.
     pub(crate) fn call(
         &mut self,
         function: &v8::Global<v8::Function>,
         args: &[&str],
     ) -> Result<(), ExecutorError> {
+        memory::pin_stack(self.runtime.v8_isolate());
         let runtime = &mut self.runtime;
         deno_core::scope!(scope, runtime);
         v8::tc_scope!(let scope, scope);

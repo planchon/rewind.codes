@@ -345,13 +345,27 @@ of a previous epoch must stay up.
 
 - Per call into the script: CPU time (a watchdog thread calls `terminate_execution`).
 - Per instance: heap size (V8 heap limit + near-heap-limit callback).
+- Per instance: the memory of array buffers, which V8 keeps outside its heap (their
+  allocator's budget).
 - Per activation: number of commands emitted.
 - Per run: history length, payload sizes.
 
 Limit violations end the run with `run_aborted { limit_exceeded }`: the trigger is committed
 with `run_aborted`, and what the script emitted in response to it is dropped.
 
+Array buffers are the exception. An allocation past their budget fails as an allocation fails
+in JavaScript: V8 throws `RangeError: Array buffer allocation failed`, which the script can
+catch. It is deterministic: V8 collects garbage before it gives up, so the allocation fails
+only when the buffers the script still reaches leave no room, the same live and on replay. A
+resizable buffer takes its maximum length from the budget when it is created.
+
+V8 terminates an execution at its next interrupt check, and some built-ins run to their end
+without one: filling or copying an array over a huge length. Such a call that must create more
+elements than the heap holds ends at once, as the heap limit ends it. What V8 still runs to its
+end is bounded by the worker's container
+([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
+
 The CPU budget applies to each call into the script (`main(input)` or one delivery, 5 s by
 default), not to the whole activation: an activation can replay the full history, and a long
 run must not exhaust its budget replaying it. The budget is CPU time of the isolate's thread.
-The heap limit is 128 MiB by default.
+The heap limit is 128 MiB by default, and so is the budget of array buffers.

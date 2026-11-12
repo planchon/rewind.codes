@@ -217,6 +217,10 @@ The same binary takes a role at start:
 - They run in pools per tenant when needed. Trusted tenants share a pool.
 - They reach the outside only through the egress proxy, and have no route to the cloud
   metadata endpoint ([egress](04-tools.md#the-http-tool-and-egress)).
+- Their container has a memory limit. The sandbox bounds each instance's heap and array
+  buffers, but V8 runs some built-ins to their end once the limit is reached, and aborts the
+  process on a few results too large for it
+  ([limits](03-execution.md#resource-limits)): the container bounds what is left.
 - After an upgrade of V8 or ICU, a worker pool of the previous
   [epoch](03-execution.md#determinism-epoch) stays up until its runs end, at their TTL.
 

@@ -278,7 +278,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
 | `ptc-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `ptc-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `ptc-server` and `ptc-cli` |
-| `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog and heap limit, `V8Executor`; the TypeScript mock dispatcher |
+| `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog, heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
 | `ptc-store-turso` | adapter | embedded `JournalStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
 | `ptc-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `ReadModel` and `SecretStore` |
 | `ptc-blob` | adapter | `BlobStore` on local files and S3 |
@@ -308,7 +308,7 @@ checker, telemetry, webhooks, clock), picked by configuration: `--store turso:<p
 
 ## Dependency rules
 
-Checked by `crates/ptc-architecture-tests` from `cargo metadata`:
+Checked by `crates/ptc-architecture-tests`, from `cargo metadata` and the sources:
 
 - Every crate of the workspace is classified in a layer; an unclassified crate fails the check.
 - `ptc-core` depends on no internal crate. Its external dependencies are limited to
@@ -330,6 +330,13 @@ Checked by `crates/ptc-architecture-tests` from `cargo metadata`:
 - Telemetry: `ptc-core` has no telemetry dependency (`tracing` included). The `tracing`
   facade is allowed in `ptc-engine` and the adapters. `opentelemetry*` crates are allowed
   only in `ptc-otel`.
+- No `unsafe` code, with one exception: the `memory` module of `ptc-runtime`, for what V8
+  offers only through raw pointers (the allocator of array buffers, a hook on collections, the
+  stack limit). The workspace denies `unsafe_code` and every crate takes the workspace's lints;
+  every crate root forbids it but `ptc-runtime`'s, which denies it so that `memory` alone may
+  allow it. Every `unsafe` block there carries a `// SAFETY:` comment
+  (`clippy::undocumented_unsafe_blocks` is denied). `ptc-architecture-tests` reads the sources
+  and refuses `unsafe`, or a relaxed lint, anywhere else.
 
 ## Activation, in the engine
 
@@ -371,7 +378,7 @@ Nothing about the script is emitted during replay.
 | `ptc-blob` | The conformance suite of `BlobStore` |
 | `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
 | `ptc-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
-| `ptc-architecture-tests` | Dependency rules, telemetry rules included |
+| `ptc-architecture-tests` | Dependency rules, telemetry rules included; `unsafe` code only in `ptc-runtime`'s `memory` module |
 | `evals` | Every task solved by its reference solution, through the agent tools and the scripted model; the fake servers, the agent tools' texts, the metrics; the model clients against local fakes of the Anthropic and OpenAI APIs |
 
 ## HTTP API `/v1`
