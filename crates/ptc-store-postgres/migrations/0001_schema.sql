@@ -274,6 +274,8 @@ CREATE TABLE tool_calls (
     args_digest bytea,
     result_digest bytea,
     result_shape text,
+    -- The highest attempt recorded by whoever claimed the call's task.
+    attempts bigint,
     PRIMARY KEY (run_id, seq)
 );
 CREATE INDEX tool_calls_by_tool ON tool_calls (tenant, tool);

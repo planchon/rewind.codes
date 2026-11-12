@@ -221,6 +221,9 @@ pub struct TestResult {
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct ScriptFilter {
+    /// Only this script: its digest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
     /// Only scripts that ran with this label, as `key:value`. Repeat to require several.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[param(rename = "label")]
@@ -276,11 +279,36 @@ pub struct RunCounts {
     pub aborted: u64,
 }
 
-/// `GET /v1/scripts/{digest}`: one script's source.
+/// `GET /v1/scripts/{digest}`: one script's source, and what its runs did.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Script {
     pub digest: String,
     /// The TypeScript source, as submitted.
     pub source: String,
+    /// The first line of the source that is not blank, for display.
+    pub headline: String,
+    /// Runs of this script, by status, as the read model keeps them.
+    pub runs: RunCounts,
+    /// The tools its runs called.
+    pub tools: Vec<String>,
+    /// When its first and last runs started; absent when no run is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_run_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_run_at: Option<Timestamp>,
+}
+
+/// The first line of a source that is not blank, trimmed, cut at 120 characters: how a script
+/// is shown in a list.
+pub fn headline(source: &str) -> String {
+    let line = source
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default();
+    match line.char_indices().nth(120) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line.to_owned(),
+    }
 }

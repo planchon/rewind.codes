@@ -37,8 +37,12 @@ impl Subscription {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum WebhookEventType {
     RunCompleted,
-    /// The run ended without success: failed, cancelled or aborted.
+    /// The script failed.
     RunFailed,
+    /// The run ended `cancelled`.
+    RunCancelled,
+    /// The host ended the run.
+    RunAborted,
     /// The run waits for the outside world: a signal, a host tool, an approval.
     RunSuspended,
     /// The run is set aside (`archi/03-execution.md`, "Non-determinism and quarantine").
@@ -48,9 +52,11 @@ pub enum WebhookEventType {
 }
 
 impl WebhookEventType {
-    pub const ALL: [WebhookEventType; 6] = [
+    pub const ALL: [WebhookEventType; 8] = [
         WebhookEventType::RunCompleted,
         WebhookEventType::RunFailed,
+        WebhookEventType::RunCancelled,
+        WebhookEventType::RunAborted,
         WebhookEventType::RunSuspended,
         WebhookEventType::RunQuarantined,
         WebhookEventType::ToolSchemaChanged,
@@ -62,6 +68,8 @@ impl WebhookEventType {
         match self {
             WebhookEventType::RunCompleted => "run.completed",
             WebhookEventType::RunFailed => "run.failed",
+            WebhookEventType::RunCancelled => "run.cancelled",
+            WebhookEventType::RunAborted => "run.aborted",
             WebhookEventType::RunSuspended => "run.suspended",
             WebhookEventType::RunQuarantined => "run.quarantined",
             WebhookEventType::ToolSchemaChanged => "tool.schema_changed",
@@ -119,7 +127,11 @@ impl WebhookEventKind {
     pub fn event_type(&self) -> WebhookEventType {
         match self {
             WebhookEventKind::RunCompleted { .. } => WebhookEventType::RunCompleted,
-            WebhookEventKind::RunFailed { .. } => WebhookEventType::RunFailed,
+            WebhookEventKind::RunFailed { status, .. } => match status {
+                RunStatus::Cancelled => WebhookEventType::RunCancelled,
+                RunStatus::Aborted => WebhookEventType::RunAborted,
+                _ => WebhookEventType::RunFailed,
+            },
             WebhookEventKind::RunSuspended { .. } => WebhookEventType::RunSuspended,
             WebhookEventKind::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
             WebhookEventKind::ToolSchemaChanged { .. } => WebhookEventType::ToolSchemaChanged,

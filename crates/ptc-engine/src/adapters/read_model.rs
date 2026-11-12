@@ -12,10 +12,19 @@ use crate::ports::{
 };
 
 /// `ReadModel` in memory: the projected entries of every run, keyed by `(run, index)`, from
-/// which every query is computed. It passes the conformance suite.
+/// which every query is computed, and the attempts recorded per call. It passes the conformance
+/// suite.
 #[derive(Debug, Default)]
 pub struct MemoryReadModel {
-    runs: Mutex<BTreeMap<RunId, Projected>>,
+    state: Mutex<State>,
+}
+
+#[derive(Debug, Default)]
+struct State {
+    runs: BTreeMap<RunId, Projected>,
+    /// The highest attempt recorded per call, by run: recorded before or after the run's
+    /// entries are projected.
+    attempts: BTreeMap<RunId, BTreeMap<Seq, u32>>,
 }
 
 #[derive(Debug)]
@@ -40,8 +49,8 @@ impl MemoryReadModel {
         Self::default()
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, BTreeMap<RunId, Projected>>, ReadModelError> {
-        self.runs
+    fn lock(&self) -> Result<MutexGuard<'_, State>, ReadModelError> {
+        self.state
             .lock()
             .map_err(|_| ReadModelError::Backend("the memory read model's lock is poisoned".into()))
     }
@@ -152,8 +161,8 @@ impl ReadModel for MemoryReadModel {
         run: &ProjectedRun,
         entries: &[HistoryEntry],
     ) -> Result<(), ReadModelError> {
-        let mut runs = self.lock()?;
-        let projected = runs.entry(run.run.id).or_insert_with(|| Projected {
+        let mut state = self.lock()?;
+        let projected = state.runs.entry(run.run.id).or_insert_with(|| Projected {
             run: run.clone(),
             entries: BTreeMap::new(),
         });
@@ -165,9 +174,11 @@ impl ReadModel for MemoryReadModel {
     }
 
     async fn search_runs(&self, search: &RunSearch) -> Result<Vec<RunSummary>, ReadModelError> {
-        let runs = self.lock()?;
+        let state = self.lock()?;
         let mut found: Vec<RunSummary> =
-            runs.values()
+            state
+                .runs
+                .values()
                 .rev()
                 .filter(|projected| projected.run.run.tenant == search.tenant)
                 .filter(|projected| {
@@ -215,10 +226,18 @@ impl ReadModel for MemoryReadModel {
     }
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
-        let runs = self.lock()?;
+        let state = self.lock()?;
         let mut scripts: BTreeMap<ptc_core::Digest, ScriptSummary> = BTreeMap::new();
-        for projected in runs.values() {
-            if projected.run.run.tenant != filter.tenant {
+        for projected in state.runs.values() {
+            if projected.run.run.tenant != filter.tenant
+                || filter
+                    .digest
+                    .is_some_and(|digest| projected.run.script != digest)
+                || !filter
+                    .labels
+                    .iter()
+                    .all(|(key, value)| projected.run.labels.get(key) == Some(value))
+            {
                 continue;
             }
             let summary = projected.summary();
@@ -234,6 +253,7 @@ impl ReadModel for MemoryReadModel {
                     runs: 0,
                     statuses: BTreeMap::new(),
                     tools: BTreeSet::new(),
+                    labels: BTreeMap::new(),
                     first_started_at: None,
                     last_started_at: None,
                 });
@@ -242,18 +262,30 @@ impl ReadModel for MemoryReadModel {
             script
                 .tools
                 .extend(projected.calls().into_values().filter_map(|call| call.tool));
+            for (key, value) in &projected.run.labels {
+                *script.labels.entry(format!("{key}:{value}")).or_default() += 1;
+            }
             if let Some(at) = summary.started_at {
                 script.first_started_at = Some(script.first_started_at.map_or(at, |t| t.min(at)));
                 script.last_started_at = Some(script.last_started_at.map_or(at, |t| t.max(at)));
             }
         }
-        Ok(scripts.into_values().collect())
+        Ok(scripts
+            .into_values()
+            .filter(|script| {
+                filter
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| script.tools.contains(tool))
+            })
+            .collect())
     }
 
     async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<Vec<ToolStats>, ReadModelError> {
-        let runs = self.lock()?;
+        let state = self.lock()?;
         let mut stats: BTreeMap<String, (ToolStats, Vec<u64>)> = BTreeMap::new();
-        for projected in runs.values() {
+        for projected in state.runs.values() {
+            let attempts = state.attempts.get(&projected.run.run.id);
             if projected.run.run.tenant != filter.tenant
                 || filter
                     .toolset
@@ -261,7 +293,7 @@ impl ReadModel for MemoryReadModel {
             {
                 continue;
             }
-            for call in projected.calls().into_values() {
+            for (seq, call) in projected.calls() {
                 let (Some(tool), Some(scheduled_at)) = (call.tool, call.scheduled_at) else {
                     continue;
                 };
@@ -277,11 +309,14 @@ impl ReadModel for MemoryReadModel {
                         completed: 0,
                         failed: 0,
                         errors_by_kind: BTreeMap::new(),
+                        retries: 0,
                         latency: None,
                     };
                     (stats, Vec::new())
                 });
                 entry.calls += 1;
+                let attempt = attempts.and_then(|attempts| attempts.get(&seq)).copied();
+                entry.retries += u64::from(attempt.unwrap_or(1).saturating_sub(1));
                 if call.completed {
                     entry.completed += 1;
                 }
@@ -305,6 +340,7 @@ impl ReadModel for MemoryReadModel {
                         mean_ms: latencies.iter().sum::<u64>() / count,
                         p50_ms: percentile(&latencies, 50),
                         p95_ms: percentile(&latencies, 95),
+                        p99_ms: percentile(&latencies, 99),
                         max_ms: latencies[latencies.len() - 1],
                     });
                 }
@@ -318,9 +354,9 @@ impl ReadModel for MemoryReadModel {
         tenant: &TenantId,
         tools: &[String],
     ) -> Result<BTreeMap<String, Shape>, ReadModelError> {
-        let runs = self.lock()?;
+        let state = self.lock()?;
         let mut shapes: BTreeMap<String, Shape> = BTreeMap::new();
-        for projected in runs.values().filter(|p| p.run.run.tenant == *tenant) {
+        for projected in state.runs.values().filter(|p| p.run.run.tenant == *tenant) {
             for call in projected.calls().into_values() {
                 let (Some(tool), Some(shape)) = (call.tool, call.result) else {
                     continue;
@@ -340,7 +376,8 @@ impl ReadModel for MemoryReadModel {
         ended_before: Timestamp,
         tenants: &TenantScope,
     ) -> Result<usize, ReadModelError> {
-        let mut runs = self.lock()?;
+        let mut state = self.lock()?;
+        let State { runs, attempts } = &mut *state;
         let before = runs.len();
         runs.retain(|_, projected| {
             let ended_at = projected
@@ -351,16 +388,55 @@ impl ReadModel for MemoryReadModel {
             !(tenants.contains(&projected.run.run.tenant)
                 && ended_at.is_some_and(|at| at < ended_before))
         });
+        attempts.retain(|run, _| runs.contains_key(run));
         Ok(before - runs.len())
     }
 
+    async fn record_attempt(
+        &self,
+        run: &RunRef,
+        seq: Seq,
+        attempt: u32,
+    ) -> Result<(), ReadModelError> {
+        let mut state = self.lock()?;
+        if state
+            .runs
+            .get(&run.id)
+            .is_some_and(|projected| projected.run.run.tenant != run.tenant)
+        {
+            return Ok(());
+        }
+        let recorded = state
+            .attempts
+            .entry(run.id)
+            .or_default()
+            .entry(seq)
+            .or_default();
+        *recorded = (*recorded).max(attempt);
+        Ok(())
+    }
+
+    async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
+        let state = self.lock()?;
+        let projected = state
+            .runs
+            .get(&run.id)
+            .is_some_and(|projected| projected.run.run.tenant == run.tenant);
+        if !projected {
+            return Ok(BTreeMap::new());
+        }
+        Ok(state.attempts.get(&run.id).cloned().unwrap_or_default())
+    }
+
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {
-        let mut runs = self.lock()?;
-        if runs
+        let mut state = self.lock()?;
+        if state
+            .runs
             .get(&run.id)
             .is_some_and(|projected| projected.run.run.tenant == run.tenant)
         {
-            runs.remove(&run.id);
+            state.runs.remove(&run.id);
+            state.attempts.remove(&run.id);
             return Ok(true);
         }
         Ok(false)

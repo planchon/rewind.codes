@@ -21,7 +21,6 @@ use utoipa::ToSchema;
 use crate::Error;
 use crate::common::{Labels, Timestamp};
 use crate::runs::Run;
-use crate::tasks::ParkedReason;
 
 // -------------------------------------------------------------------------------------------
 // Inbound
@@ -221,8 +220,9 @@ pub struct RunEvent {
 
 /// A call parked because the tool no longer matches its pinned schema
 /// (`archi/04-tools.md`, "When a toolset changes during a run"). Approve the task to continue
-/// against the new schema, reject it, fork the run, or cancel it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+/// against the new schema, reject it, fork the run, or cancel it. The pinned schema is in the
+/// toolset; `message` says what changed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSchemaChanged {
     pub run_id: String,
@@ -231,25 +231,15 @@ pub struct ToolSchemaChanged {
     pub task_id: String,
     pub seq: u32,
     pub tool: String,
-    pub server: String,
-    pub toolset: String,
-    pub change: SchemaChange,
-    /// The input schema pinned in the toolset.
-    #[schema(value_type = Object)]
-    pub pinned_schema: serde_json::Value,
-    /// The server's input schema now; absent when the tool was removed.
+    /// The tool's MCP server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>)]
-    pub current_schema: Option<serde_json::Value>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SchemaChange {
-    /// The server no longer has the tool.
-    Removed,
-    /// The tool's input schema changed.
-    Changed,
+    pub server: Option<String>,
+    /// The run's toolset, where the pinned schema is.
+    pub toolset: String,
+    /// What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the
+    /// call's arguments, or its output schema changed. Written for the harness developer and
+    /// the model.
+    pub message: String,
 }
 
 /// A call parked because the server refused the credentials. Renew them with
@@ -263,19 +253,12 @@ pub struct CredentialsExpired {
     pub task_id: String,
     pub seq: u32,
     pub tool: String,
-    pub server: String,
+    /// The tool's MCP server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
     pub toolset: String,
-    /// Whose credentials were used: the run's own, or the toolset's.
-    pub owner: CredentialsOwner,
-    /// Always `credentials_expired`.
-    pub parked: ParkedReason,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum CredentialsOwner {
-    Run,
-    Toolset,
+    /// What the server answered.
+    pub message: String,
 }
 
 // -------------------------------------------------------------------------------------------
@@ -430,7 +413,7 @@ mod tests {
             "timestamp": "2026-11-09T10:02:11Z",
             "data": {
                 "runId": "r1", "labels": {}, "taskId": "t1", "seq": 2, "tool": "github.list_issues",
-                "server": "github", "toolset": "ab", "owner": "toolset", "parked": "credentials_expired"
+                "server": "github", "toolset": "ab", "message": "401 Unauthorized"
             }
         }))
         .unwrap()

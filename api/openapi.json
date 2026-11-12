@@ -69,6 +69,27 @@
         ],
         "type": "object"
       },
+      "CallAttempts": {
+        "description": "How many times a tool call was sent.",
+        "properties": {
+          "attempts": {
+            "description": "From 1.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seq": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "seq",
+          "attempts"
+        ],
+        "type": "object"
+      },
       "Callsite": {
         "description": "A position in the script's TypeScript source (`script.ts`), 1-based.",
         "properties": {
@@ -260,6 +281,17 @@
           ]
         },
         "properties": {
+          "credentials": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Credentials",
+                "description": "Credentials of the MCP servers: used to list their tools, and kept as the toolset's\ncredentials, as `PUT /v1/toolsets/{id}/credentials` sets them. They are not part of the\ntoolset's id."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "host": {
             "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.tool` puts the tool in the `group` namespace of `ptc:tools`.",
             "items": {
@@ -314,13 +346,9 @@
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
-          "owner": {
-            "$ref": "#/components/schemas/CredentialsOwner",
-            "description": "Whose credentials were used: the run's own, or the toolset's."
-          },
-          "parked": {
-            "$ref": "#/components/schemas/ParkedReason",
-            "description": "Always `credentials_expired`."
+          "message": {
+            "description": "What the server answered.",
+            "type": "string"
           },
           "runId": {
             "type": "string"
@@ -331,7 +359,11 @@
             "type": "integer"
           },
           "server": {
-            "type": "string"
+            "description": "The tool's MCP server.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "taskId": {
             "type": "string"
@@ -349,19 +381,10 @@
           "taskId",
           "seq",
           "tool",
-          "server",
           "toolset",
-          "owner",
-          "parked"
+          "message"
         ],
         "type": "object"
-      },
-      "CredentialsOwner": {
-        "enum": [
-          "run",
-          "toolset"
-        ],
-        "type": "string"
       },
       "DeclarationFormat": {
         "enum": [
@@ -1077,7 +1100,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Labels",
-                "description": "The fork's labels. The parent's when absent."
+                "description": "The fork's labels. Absent, the fork keeps its parent's labels, so that whoever sees the\nparent (the agent tools of a conversation, a key limited to labels) sees the fork."
               },
               {
                 "type": "null"
@@ -1206,6 +1229,34 @@
         },
         "required": [
           "allow"
+        ],
+        "type": "object"
+      },
+      "Identity": {
+        "description": "`GET /v1/whoami`: who the API key is. Over the embedded server's socket, which takes no\nkey: the tenant `local`, with the role `admin`.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The key only sees runs carrying all these labels."
+          },
+          "keyId": {
+            "description": "The key's id (`DELETE /v1/api-keys/{id}`); absent without a key.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "tenant": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "role",
+          "allowedLabels"
         ],
         "type": "object"
       },
@@ -1559,6 +1610,13 @@
               }
             ]
           },
+          "attempts": {
+            "description": "How many times each tool call was sent, by seq, for the calls sent more than once: a\ncall retried after a transient failure, or sent again after its worker or dispatcher\ndied. Attempts live in the tool tasks, not in the journal: the read model keeps them.",
+            "items": {
+              "$ref": "#/components/schemas/CallAttempts"
+            },
+            "type": "array"
+          },
           "createdAt": {
             "format": "date-time",
             "type": "string"
@@ -1603,7 +1661,15 @@
             "type": "string"
           },
           "input": {
-            "$ref": "#/components/schemas/Payload"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The input of `main`. Absent while the run is `pending`: its `run_started` waits in its\ninbox for the first activation, which commits it."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "labels": {
             "$ref": "#/components/schemas/Labels"
@@ -1687,7 +1753,6 @@
           "mode",
           "labels",
           "traceId",
-          "input",
           "historyLen",
           "createdAt",
           "updatedAt",
@@ -1868,6 +1933,10 @@
             "minimum": 0,
             "type": "integer"
           },
+          "headline": {
+            "description": "The first line of the script that is not blank, for display.",
+            "type": "string"
+          },
           "historyLen": {
             "format": "int64",
             "minimum": 0,
@@ -1916,6 +1985,7 @@
           "status",
           "quarantined",
           "script",
+          "headline",
           "toolset",
           "labels",
           "startedAt",
@@ -1947,27 +2017,53 @@
         ],
         "type": "object"
       },
-      "SchemaChange": {
-        "enum": [
-          "removed",
-          "changed"
-        ],
-        "type": "string"
-      },
       "Script": {
-        "description": "`GET /v1/scripts/{digest}`: one script's source.",
+        "description": "`GET /v1/scripts/{digest}`: one script's source, and what its runs did.",
         "properties": {
           "digest": {
             "type": "string"
           },
+          "firstRunAt": {
+            "description": "When its first and last runs started; absent when no run is kept.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "headline": {
+            "description": "The first line of the source that is not blank, for display.",
+            "type": "string"
+          },
+          "lastRunAt": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs": {
+            "$ref": "#/components/schemas/RunCounts",
+            "description": "Runs of this script, by status, as the read model keeps them."
+          },
           "source": {
             "description": "The TypeScript source, as submitted.",
             "type": "string"
+          },
+          "tools": {
+            "description": "The tools its runs called.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "required": [
           "digest",
-          "source"
+          "source",
+          "headline",
+          "runs",
+          "tools"
         ],
         "type": "object"
       },
@@ -2422,6 +2518,15 @@
             "minimum": 0,
             "type": "integer"
           },
+          "timeoutMs": {
+            "description": "The tool's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the tool has none, the default of host tools: the run's TTL bounds it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
           "token": {
             "description": "The claim's secret token: `/v1/tasks/{token}/…`. It changes with each claim.",
             "type": "string"
@@ -2755,24 +2860,14 @@
         "type": "object"
       },
       "ToolSchemaChanged": {
-        "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When a toolset changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it.",
+        "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When a toolset changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\ntoolset; `message` says what changed.",
         "properties": {
-          "change": {
-            "$ref": "#/components/schemas/SchemaChange"
-          },
-          "currentSchema": {
-            "description": "The server's input schema now; absent when the tool was removed.",
-            "type": [
-              "object",
-              "null"
-            ]
-          },
           "labels": {
             "$ref": "#/components/schemas/Labels"
           },
-          "pinnedSchema": {
-            "description": "The input schema pinned in the toolset.",
-            "type": "object"
+          "message": {
+            "description": "What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the\ncall's arguments, or its output schema changed. Written for the harness developer and\nthe model.",
+            "type": "string"
           },
           "runId": {
             "type": "string"
@@ -2783,7 +2878,11 @@
             "type": "integer"
           },
           "server": {
-            "type": "string"
+            "description": "The tool's MCP server.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "taskId": {
             "description": "For `POST /v1/tasks/{id}/approve` and `/reject`.",
@@ -2793,6 +2892,7 @@
             "type": "string"
           },
           "toolset": {
+            "description": "The run's toolset, where the pinned schema is.",
             "type": "string"
           }
         },
@@ -2802,10 +2902,8 @@
           "taskId",
           "seq",
           "tool",
-          "server",
           "toolset",
-          "change",
-          "pinnedSchema"
+          "message"
         ],
         "type": "object"
       },
@@ -2827,7 +2925,7 @@
       "ToolStats": {
         "properties": {
           "calls": {
-            "description": "Calls completed in the window.",
+            "description": "Calls scheduled in the window.",
             "format": "int64",
             "minimum": 0,
             "type": "integer"
@@ -2852,7 +2950,7 @@
           },
           "latencyMs": {
             "$ref": "#/components/schemas/Latency",
-            "description": "From `schedule_tool_call` to the completion, in milliseconds."
+            "description": "From `schedule_tool_call` to the completion, in milliseconds, over the calls that have an\noutcome; zeros when none has."
           },
           "retries": {
             "description": "Attempts beyond the first, over every call.",
@@ -2931,6 +3029,48 @@
         ],
         "type": "object"
       },
+      "ToolsetList": {
+        "description": "`GET /v1/toolsets`: the toolsets registered by the tenant, by id.",
+        "properties": {
+          "toolsets": {
+            "items": {
+              "$ref": "#/components/schemas/ToolsetSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "toolsets"
+        ],
+        "type": "object"
+      },
+      "ToolsetSummary": {
+        "description": "A registered toolset, without its schemas and declarations.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/ServerSummary"
+            },
+            "type": "array"
+          },
+          "tools": {
+            "description": "The names of its tools, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "servers",
+          "tools"
+        ],
+        "type": "object"
+      },
       "Trace": {
         "properties": {
           "format": {
@@ -2962,6 +3102,10 @@
           {
             "description": "A tool call in flight, and the state of its task.",
             "properties": {
+              "args": {
+                "$ref": "#/components/schemas/Payload",
+                "description": "The call's arguments: what the harness approves or rejects."
+              },
               "attempt": {
                 "description": "The attempt in progress, from 1.",
                 "format": "int32",
@@ -3014,6 +3158,7 @@
             "required": [
               "seq",
               "tool",
+              "args",
               "taskId",
               "state",
               "attempt",
@@ -5446,6 +5591,15 @@
         "operationId": "listScripts",
         "parameters": [
           {
+            "description": "Only this script: its digest.",
+            "in": "query",
+            "name": "digest",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "description": "Only scripts that ran with this label, as `key:value`. Repeat to require several.",
             "in": "query",
             "name": "label",
@@ -6862,7 +7016,7 @@
             }
           },
           {
-            "description": "Calls completed at or after this time. 24 hours ago by default.",
+            "description": "Calls scheduled at or after this time. 24 hours ago by default.",
             "in": "query",
             "name": "since",
             "required": false,
@@ -6872,7 +7026,7 @@
             }
           },
           {
-            "description": "Calls completed before this time. Now by default.",
+            "description": "Calls scheduled before this time. Now by default.",
             "in": "query",
             "name": "until",
             "required": false,
@@ -6951,6 +7105,76 @@
       }
     },
     "/v1/toolsets": {
+      "get": {
+        "description": "The toolsets the tenant registered, by id, with their servers and tool names.",
+        "operationId": "listToolsets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolsetList"
+                }
+              }
+            },
+            "description": "Every toolset of the tenant."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the toolsets",
+        "tags": [
+          "toolsets"
+        ]
+      },
       "post": {
         "description": "Connects to the MCP servers, lists their tools, pins their schemas and policies, and\nreturns the toolset with its declarations, for the model's prompt. Content-addressed:\nregistering the same toolset again returns it (200).",
         "operationId": "createToolset",
@@ -7372,6 +7596,78 @@
         "summary": "Search the toolset's tools (`search_tools`)",
         "tags": [
           "toolsets"
+        ]
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "description": "Its tenant, role and allowed labels. Over the embedded server's socket: the tenant\n`local`, role `admin`.",
+        "operationId": "whoami",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            },
+            "description": "The key's identity."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Who the API key is",
+        "tags": [
+          "administration"
         ]
       }
     }

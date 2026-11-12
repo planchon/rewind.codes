@@ -2,17 +2,21 @@
 //! toolset file, or from the tools a scenario's mocks answer.
 //!
 //! A toolset file is the body of `POST /v1/toolsets` (`CreateToolset`), pinned as a server pins
-//! it: the tools of each MCP server are discovered by connecting to it (`ptc-mcp`), host tools
-//! and the `http` tool are taken as written, the `webhook` built-in is always there.
+//! it: the tools of each MCP server are discovered by connecting to it (`ptc-mcp`) with the
+//! file's credentials, host tools and the `http` tool are taken as written, the `webhook`
+//! built-in is always there.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use ptc_api::toolsets::{CreateToolset, OnInterruption, ToolPolicy as ApiPolicy};
+use ptc_api::toolsets::{
+    CreateToolset, OnInterruption, ServerCredentials as ApiServerCredentials,
+    ToolPolicy as ApiPolicy,
+};
 use ptc_core::{
     Builtin, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
 };
-use ptc_engine::ports::TenantId;
+use ptc_engine::ports::{Secret, ServerCredentials, TenantId};
 use ptc_mcp::McpDispatcher;
 use serde_json::json;
 
@@ -80,8 +84,13 @@ async fn discover(
             }
         };
         let pinned = McpServer::new(server.name.clone(), transport);
+        let credentials = create
+            .credentials
+            .as_ref()
+            .and_then(|credentials| credentials.servers.get(&server.name))
+            .map(secrets);
         let listed = discovery
-            .list_tools(&TenantId::local(), &pinned, None)
+            .list_tools(&TenantId::local(), &pinned, credentials.as_ref())
             .await
             .map_err(|error| format!("cannot list the tools of {:?}: {error}", server.name))?;
         if let Some(unknown) = server.policies.keys().find(|name| {
@@ -102,6 +111,20 @@ async fn discover(
         servers.push(pinned);
     }
     Ok(())
+}
+
+/// A server's credentials from a toolset file, as the transport takes them.
+fn secrets(credentials: &ApiServerCredentials) -> ServerCredentials {
+    let secret = |values: &BTreeMap<String, String>| {
+        values
+            .iter()
+            .map(|(name, value)| (name.clone(), Secret::new(value.clone())))
+            .collect()
+    };
+    ServerCredentials {
+        headers: secret(&credentials.headers),
+        env: secret(&credentials.env),
+    }
 }
 
 /// `list_issues` for `github.list_issues`.
@@ -177,6 +200,7 @@ mod tests {
     #[tokio::test]
     async fn host_tools_and_http_are_pinned_as_written() {
         let create = CreateToolset {
+            credentials: None,
             mcp: Vec::new(),
             host: vec![HostTool {
                 name: "crm.ask_user".into(),

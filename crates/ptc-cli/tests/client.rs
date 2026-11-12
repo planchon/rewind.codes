@@ -63,12 +63,13 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         labels: Labels::new(),
         trace_id: "0".repeat(32),
         parent: None,
-        input: Payload::of(json!({}), 1024),
+        input: Some(Payload::of(json!({}), 1024)),
         output: None,
         error: None,
         abort: None,
         waiting_for: Vec::new(),
         logs: Vec::new(),
+        attempts: Vec::new(),
         history_len: 2,
         created_at: at(),
         updated_at: at(),
@@ -150,7 +151,7 @@ async fn start(
     let id = format!("run-{}", stub.runs.len() + 1);
     let mut run = base_run(&id, RunStatus::Active);
     run.labels = start.labels.clone();
-    run.input = Payload::of(start.input.clone(), 262_144);
+    run.input = Some(Payload::of(start.input.clone(), 262_144));
     if start.script.contains("fails") {
         run.status = RunStatus::Failed;
         run.error = Some(RunError {
@@ -190,7 +191,11 @@ async fn get_run(
     };
     let left = stub.reads_left.entry(id.clone()).or_insert(0);
     let run = if *left == 0 && run.status == RunStatus::Active {
-        let input = run.input.value.clone().unwrap_or(Value::Null);
+        let input = run
+            .input
+            .as_ref()
+            .and_then(|input| input.value.clone())
+            .unwrap_or(Value::Null);
         completed(run, input)
     } else {
         *left = left.saturating_sub(1);
@@ -304,6 +309,7 @@ async fn list(
             status: run.status,
             quarantined: run.quarantine.is_some(),
             script: run.script.clone(),
+            headline: "export default async () => 1;".into(),
             toolset: run.toolset.clone(),
             labels: run.labels.clone(),
             started_at: run.created_at,

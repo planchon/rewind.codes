@@ -1,8 +1,6 @@
-import { PtcError } from "./errors.js";
 import type { Payloads } from "./resources/admin.js";
-import type { Runs } from "./resources/runs.js";
 import type { Tasks } from "./resources/tasks.js";
-import type { Callsite, ParkedReason, Run, Waiting } from "./types.js";
+import type { Callsite, ParkedReason, Payload, Run, Waiting } from "./types.js";
 
 /**
  * A tool call that waits for the harness: a call under the `approval` policy, or a call parked
@@ -20,6 +18,8 @@ export interface PendingApproval {
   readonly seq: number;
   readonly attempt: number;
   readonly callsite: Callsite | undefined;
+  /** The call's arguments; their value is left out above 256 KiB: see `Approvals.args`. */
+  readonly payload: Payload;
   /** `approval`: the tool's policy asks for consent. `schema_changed`: the tool changed since it was pinned. */
   readonly reason: "approval" | "schema_changed";
 }
@@ -30,7 +30,6 @@ export interface PendingApproval {
  */
 export class Approvals {
   constructor(
-    private readonly runs: Runs,
     private readonly tasks: Tasks,
     private readonly payloads: Payloads,
   ) {}
@@ -51,17 +50,12 @@ export class Approvals {
   }
 
   /**
-   * The arguments of the waiting call, to show the person who decides. They are read from the
-   * run's journal (the `schedule_tool_call` entry of the call).
+   * The arguments of the waiting call, to show the person who decides: from the run's state, or
+   * read by their digest when they are too large to be in it.
    */
   async args(approval: PendingApproval, options: { signal?: AbortSignal } = {}): Promise<unknown> {
-    for await (const event of this.runs.events(approval.runId, { signal: options.signal })) {
-      if (event.type === "entry" && event.event.type === "schedule_tool_call" && event.event.seq === approval.seq) {
-        const { args } = event.event;
-        return "value" in args ? args.value : this.payloads.get(args.digest, options);
-      }
-    }
-    throw new PtcError(`run ${approval.runId} has no call ${approval.seq} in its journal`);
+    const { payload } = approval;
+    return "value" in payload ? payload.value : this.payloads.get(payload.digest, options);
   }
 }
 
@@ -78,6 +72,7 @@ export function pendingApprovals(run: Run): PendingApproval[] {
         seq: waiting.seq,
         attempt: waiting.attempt,
         callsite: waiting.callsite ?? undefined,
+        payload: waiting.args,
         reason,
       });
     }

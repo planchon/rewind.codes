@@ -1,0 +1,353 @@
+//! Starting and stopping the server: the adapters wired by configuration, the engine, the
+//! listeners, the worker's loops, and a stop that lets the work in flight commit.
+
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ptc_api::admin::ServerRole;
+use ptc_engine::adapters::{SystemClock, SystemEntropy, VirtualClock};
+use ptc_engine::ports::{ApiKey, Clock, JournalStore, TaskFilter};
+use ptc_engine::projector::ProjectorConfig;
+use ptc_engine::{Adapters, Engine, EngineConfig};
+use ptc_runtime::{SandboxLimits, V8Executor};
+use tokio::task::JoinHandle;
+
+use crate::app::{App, Settings};
+use crate::auth::key_hash;
+use crate::config::{Config, Listen, ServerArgs};
+use crate::embedded::Directory;
+use crate::wiring::blobs::Blobs;
+use crate::wiring::checker;
+use crate::wiring::clock::ServerClock;
+use crate::wiring::store::Store;
+use crate::wiring::telemetry::{self, Exporter};
+use crate::wiring::tools::Tools;
+use crate::wiring::webhooks::{HttpWebhooks, Retries, ServerRender};
+use crate::{http, worker};
+
+/// The version of the `ptc` binary.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// How long the work in flight may take to commit when the server stops.
+const DRAIN: Duration = Duration::from_secs(30);
+
+/// Why the server could not start.
+#[derive(Debug, thiserror::Error)]
+pub enum StartupError {
+    /// The command line or the environment is not a configuration that can be served.
+    #[error("{0}")]
+    Config(String),
+    /// Another embedded server holds the directory's lock.
+    #[error("another server holds the lock of {}", .0.display())]
+    Locked(PathBuf),
+    /// A file, a socket or a port cannot be used.
+    #[error("{0}")]
+    Io(String),
+    /// The store, the runtime or another adapter cannot be set up.
+    #[error("{0}")]
+    Setup(String),
+}
+
+impl From<crate::config::ConfigError> for StartupError {
+    fn from(error: crate::config::ConfigError) -> Self {
+        StartupError::Config(error.to_string())
+    }
+}
+
+/// A server running in this process.
+#[derive(Debug)]
+pub struct Running {
+    app: Arc<App>,
+    /// The address of the TCP listener.
+    addr: Option<SocketAddr>,
+    /// The embedded server's socket.
+    socket: Option<PathBuf>,
+    listener: JoinHandle<()>,
+    workers: Vec<JoinHandle<()>>,
+    /// Holds the embedded server's lock until the server has stopped.
+    directory: Option<Directory>,
+}
+
+impl Running {
+    /// `http://<addr>` of a server listening on TCP.
+    pub fn url(&self) -> Option<String> {
+        self.addr.map(|addr| format!("http://{addr}"))
+    }
+
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.addr
+    }
+
+    /// The embedded server's socket.
+    pub fn socket(&self) -> Option<&PathBuf> {
+        self.socket.as_ref()
+    }
+
+    /// Waits until something stops the server: `POST /v1/server/stop`, or the idle timeout.
+    pub async fn stopped(&self) {
+        let mut stop = self.app.stop.subscribe();
+        let _ = stop.wait_for(|stop| *stop).await;
+    }
+
+    /// Stops the server: no new request, no new work; the work in flight commits, and the
+    /// embedded server's socket and lock are released.
+    pub async fn stop(self) {
+        self.app.stop.send_replace(true);
+        self.app.wake.bump();
+        let drain = async {
+            let _ = self.listener.await;
+            for worker in self.workers {
+                let _ = worker.await;
+            }
+        };
+        if tokio::time::timeout(DRAIN, drain).await.is_err() {
+            tracing::warn!("the work in flight did not finish within {DRAIN:?}");
+        }
+        self.app.tools.close();
+        self.app.exporter.shutdown().await;
+        self.app.store.close().await;
+        if let Some(socket) = &self.socket {
+            let _ = std::fs::remove_file(socket);
+        }
+        drop(self.directory);
+        tracing::info!("stopped");
+    }
+}
+
+/// Starts a server in this process.
+pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
+    let config = args.resolve()?;
+    let directory = match &config.listen {
+        Listen::Embedded { dir } => Some(Directory::open(dir)?),
+        Listen::Tcp(_) => None,
+    };
+    let master_key = match (&directory, config.master_key) {
+        (Some(directory), _) => directory.master_key,
+        (None, Some(key)) => key,
+        (None, None) => return Err(StartupError::Config("no master key".into())),
+    };
+    let store = Store::open(&config.store, master_key).await?;
+    let blobs = Blobs::open(&config.blobs)?;
+    let clock = clock(&config, &store).await?;
+    let executor = V8Executor::new(SandboxLimits::default())
+        .map_err(|error| StartupError::Setup(error.to_string()))?;
+    let tools = Tools::new().map_err(StartupError::Setup)?;
+    let exporter = Exporter::new(
+        config.otlp.as_ref(),
+        &telemetry::service(&config.worker_name),
+    )
+    .map_err(StartupError::Setup)?;
+    let webhooks = HttpWebhooks::new(
+        ServerRender {
+            store: store.clone(),
+            blobs: blobs.clone(),
+        },
+        Retries::default(),
+    );
+    let engine_config = EngineConfig {
+        worker: config.worker_name.clone(),
+        tenants: config.tenants.clone(),
+        tool_tasks: TaskFilter::Dispatched {
+            tenants: config.tenants.clone(),
+        },
+        public_url: config.public_url.clone(),
+        build: format!("ptc {VERSION}"),
+        ..EngineConfig::default()
+    };
+    let engine = Engine::new(
+        Adapters {
+            journal: store.clone(),
+            blobs: blobs.clone(),
+            executor,
+            dispatcher: tools.dispatcher(),
+            clock,
+            entropy: SystemEntropy,
+            secrets: store.clone(),
+            webhooks,
+        },
+        engine_config,
+    );
+    let mut roles = Vec::new();
+    if config.api {
+        roles.push(ServerRole::Api);
+    }
+    if config.worker {
+        roles.push(ServerRole::Worker);
+    }
+    let settings = Settings {
+        version: VERSION,
+        embedded: config.embedded(),
+        roles,
+        run_quota: config.run_quota,
+        allow_stdio: config.allow_stdio,
+        allow_http_webhooks: config.embedded(),
+        projector: ProjectorConfig {
+            owner: config.worker_name.clone(),
+            ..ProjectorConfig::default()
+        },
+    };
+    let app = Arc::new(App::new(
+        engine,
+        store,
+        blobs,
+        checker::checker(config.tsgo_cache.clone()),
+        tools,
+        exporter,
+        settings,
+    ));
+    register_admin_key(&app, &config).await?;
+
+    let workers = if config.worker {
+        worker::spawn(&app, config.activations, config.dispatches)
+    } else {
+        Vec::new()
+    };
+    let (listener, addr, socket) = listen(&app, &config, directory.as_ref()).await?;
+    let mut workers = workers;
+    if let Some(timeout) = config.idle_timeout {
+        workers.push(tokio::spawn(stop_when_idle(app.clone(), timeout)));
+    }
+    tracing::info!(
+        version = VERSION,
+        addr = ?addr,
+        socket = ?socket,
+        worker = config.worker,
+        virtual_time = app.engine.clock().is_virtual(),
+        "ai-ptc server started"
+    );
+    Ok(Running {
+        app,
+        addr,
+        socket,
+        listener,
+        workers,
+        directory,
+    })
+}
+
+/// Real or virtual time, as the command line and the store say.
+async fn clock(config: &Config, store: &Store) -> Result<ServerClock, StartupError> {
+    let setup = |error: ptc_engine::ports::StoreError| StartupError::Setup(error.to_string());
+    let saved = store.virtual_time().await.map_err(setup)?;
+    Ok(match (config.virtual_time, saved) {
+        (Some(false), _) => {
+            store.set_virtual_time(None).await.map_err(setup)?;
+            ServerClock::System
+        }
+        (Some(true), saved) => {
+            let at = saved.unwrap_or_else(|| SystemClock.now());
+            store.set_virtual_time(Some(at)).await.map_err(setup)?;
+            ServerClock::Virtual(Arc::new(VirtualClock::new(at)))
+        }
+        (None, Some(at)) => ServerClock::Virtual(Arc::new(VirtualClock::new(at))),
+        (None, None) => ServerClock::System,
+    })
+}
+
+/// Registers `--admin-key`, the first key of a deployment.
+async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupError> {
+    let Some(key) = &config.admin_key else {
+        return Ok(());
+    };
+    let setup = |error: crate::error::ApiError| StartupError::Setup(error.0.detail.clone());
+    let hash = key_hash(key);
+    let existing = app
+        .store
+        .find_api_key(hash)
+        .await
+        .map_err(|error| StartupError::Setup(error.to_string()))?;
+    match existing {
+        Some(existing) if existing.revoked_at.is_some() => {
+            tracing::warn!("--admin-key was revoked: it is not registered again");
+        }
+        Some(_) => {}
+        None => {
+            crate::http::ensure_tenant(app, &config.admin_tenant)
+                .await
+                .map_err(setup)?;
+            app.store
+                .put_api_key(&ApiKey {
+                    hash,
+                    tenant: config.admin_tenant.clone(),
+                    role: ptc_api::admin::Role::Admin.as_str().to_owned(),
+                    allowed_labels: std::collections::BTreeMap::new(),
+                    created_at: app.now(),
+                    revoked_at: None,
+                })
+                .await
+                .map_err(|error| StartupError::Setup(error.to_string()))?;
+        }
+    }
+    Ok(())
+}
+
+type Listening = (JoinHandle<()>, Option<SocketAddr>, Option<PathBuf>);
+
+async fn listen(
+    app: &Arc<App>,
+    config: &Config,
+    directory: Option<&Directory>,
+) -> Result<Listening, StartupError> {
+    let mut stop = app.stop.subscribe();
+    let shutdown = async move {
+        let _ = stop.wait_for(|stop| *stop).await;
+    };
+    match (&config.listen, directory) {
+        (Listen::Embedded { .. }, Some(directory)) => {
+            use std::os::unix::fs::PermissionsExt;
+            let socket = directory.socket.clone();
+            let listener = tokio::net::UnixListener::bind(&socket).map_err(|error| {
+                StartupError::Io(format!("cannot listen on {}: {error}", socket.display()))
+            })?;
+            std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
+                .map_err(|error| StartupError::Io(format!("{}: {error}", socket.display())))?;
+            let router = http::router(app.clone(), true);
+            let handle = tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, router)
+                    .with_graceful_shutdown(shutdown)
+                    .await
+                {
+                    tracing::error!(%error, "the socket listener failed");
+                }
+            });
+            Ok((handle, None, Some(socket)))
+        }
+        (Listen::Tcp(addr), _) => {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .map_err(|error| StartupError::Io(format!("cannot listen on {addr}: {error}")))?;
+            let addr = listener
+                .local_addr()
+                .map_err(|error| StartupError::Io(error.to_string()))?;
+            let router = http::router(app.clone(), false);
+            let handle = tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, router)
+                    .with_graceful_shutdown(shutdown)
+                    .await
+                {
+                    tracing::error!(%error, "the TCP listener failed");
+                }
+            });
+            Ok((handle, Some(addr), None))
+        }
+        (Listen::Embedded { .. }, None) => Err(StartupError::Setup(
+            "the embedded server has no directory".into(),
+        )),
+    }
+}
+
+/// Stops the server once nothing has happened for `timeout`: no request, no stream, no work.
+async fn stop_when_idle(app: Arc<App>, timeout: Duration) {
+    let check = (timeout / 4).clamp(Duration::from_millis(100), Duration::from_secs(5));
+    let mut stop = app.stop.subscribe();
+    while !app.stopping() {
+        let _ = tokio::time::timeout(check, stop.changed()).await;
+        if app.activity.idle_for().is_some_and(|idle| idle >= timeout) {
+            tracing::info!(?timeout, "stopping: idle");
+            app.stop.send_replace(true);
+            app.wake.bump();
+        }
+    }
+}

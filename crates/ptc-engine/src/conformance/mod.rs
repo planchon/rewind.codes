@@ -1,5 +1,5 @@
 //! The conformance suites of the ports (feature `conformance`): `JournalStore`, `BlobStore`,
-//! `ReadModel`, `SecretStore`, and `SpanExporter`.
+//! `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender`.
 //!
 //! Every adapter of a port passes its suite: they check the contract of the port, not a table
 //! layout. Each suite is deterministic: time is always passed in, never read, and the only
@@ -24,6 +24,7 @@ pub mod journal;
 pub mod read_model;
 pub mod secrets;
 pub mod spans;
+pub mod webhooks;
 
 use ptc_core::Timestamp;
 

@@ -88,6 +88,7 @@ fn waiting(waiting: &Waiting) -> String {
         Waiting::ToolCall {
             seq,
             tool,
+            args,
             state,
             parked,
             attempt,
@@ -95,7 +96,10 @@ fn waiting(waiting: &Waiting) -> String {
             task_id,
         } => {
             let state = snake_case(&format!("{state:?}"));
-            let mut text = format!("tool call #{seq} {tool}: {state}, attempt {attempt}");
+            let mut text = format!(
+                "tool call #{seq} {tool}({}): {state}, attempt {attempt}",
+                payload(args)
+            );
             if let Some(parked) = parked {
                 let _ = write!(text, " ({})", snake_case(&format!("{parked:?}")));
             }
@@ -155,6 +159,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
         "STARTED".to_owned(),
         "CALLS".to_owned(),
         "ERRORS".to_owned(),
+        "SCRIPT".to_owned(),
         "LABELS".to_owned(),
     ]];
     for run in runs {
@@ -171,6 +176,7 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
             run.started_at.to_string(),
             run.tool_calls.to_string(),
             run.errors.to_string(),
+            shorten(&run.headline, HEADLINE_CHARS),
             run.labels
                 .iter()
                 .map(|(key, value)| format!("{key}={value}"))
@@ -179,6 +185,16 @@ pub(crate) fn runs(runs: &[RunSummary]) -> String {
         ]);
     }
     table(&rows)
+}
+
+/// Characters of a script's first line in `ptc runs`.
+const HEADLINE_CHARS: usize = 40;
+
+fn shorten(text: &str, chars: usize) -> String {
+    match text.char_indices().nth(chars) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_owned(),
+    }
 }
 
 /// Rows in aligned columns, the last one unpadded.
@@ -298,7 +314,7 @@ mod tests {
             labels: Labels::new(),
             trace_id: "0".repeat(32),
             parent: None,
-            input: Payload::of(json!({}), 1024),
+            input: Some(Payload::of(json!({}), 1024)),
             output: None,
             error: None,
             abort: None,
@@ -308,6 +324,7 @@ mod tests {
                 callsite: Some(Callsite { line: 4, column: 9 }),
             }],
             logs: Vec::new(),
+            attempts: Vec::new(),
             history_len: 3,
             created_at: "2026-01-01T00:00:00Z".parse().unwrap(),
             updated_at: "2026-01-01T00:00:00Z".parse().unwrap(),
@@ -386,5 +403,7 @@ mod tests {
         ];
         assert_eq!(table(&rows), "A    LONGER  x\nabc  b       y\n");
         assert_eq!(snake_case("NonDeterminism"), "non_determinism");
+        assert_eq!(shorten("abcdef", 3), "abc…");
+        assert_eq!(shorten("abc", 3), "abc");
     }
 }

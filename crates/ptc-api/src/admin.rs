@@ -21,6 +21,24 @@ pub enum Role {
     Reader,
 }
 
+impl Role {
+    pub const ALL: [Role; 4] = [Role::Admin, Role::Harness, Role::Worker, Role::Reader];
+
+    /// As the store keeps it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Role::Admin => "admin",
+            Role::Harness => "harness",
+            Role::Worker => "worker",
+            Role::Reader => "reader",
+        }
+    }
+
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|role| role.as_str() == text)
+    }
+}
+
 /// `POST /v1/api-keys`: a key `ptc_sk_…` for a tenant. Keys are stored hashed: the key itself
 /// is only in this answer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -53,6 +71,20 @@ pub struct ApiKey {
     /// to `POST /v1/api-keys`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+}
+
+/// `GET /v1/whoami`: who the API key is. Over the embedded server's socket, which takes no
+/// key: the tenant `local`, with the role `admin`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Identity {
+    pub tenant: String,
+    pub role: Role,
+    /// The key only sees runs carrying all these labels.
+    pub allowed_labels: Labels,
+    /// The key's id (`DELETE /v1/api-keys/{id}`); absent without a key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
 }
 
 /// `GET /v1/server`: what this server is. Every response also carries the `Ptc-Version`

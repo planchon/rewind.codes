@@ -138,6 +138,12 @@ pub trait JournalStore: Send + Sync {
         digest: Digest,
     ) -> impl Future<Output = Result<Option<StoredToolset>, StoreError>> + Send;
 
+    /// The tenant's toolsets, by digest.
+    fn list_toolsets(
+        &self,
+        tenant: &TenantId,
+    ) -> impl Future<Output = Result<Vec<StoredToolset>, StoreError>> + Send;
+
     // ---------------------------------------------------------------------------------------
     // The way in
 

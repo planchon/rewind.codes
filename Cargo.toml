@@ -19,12 +19,16 @@ ptc-format = { path = "crates/ptc-format" }
 ptc-mcp = { path = "crates/ptc-mcp" }
 ptc-otel = { path = "crates/ptc-otel" }
 ptc-runtime = { path = "crates/ptc-runtime" }
+ptc-server = { path = "crates/ptc-server" }
+ptc-store-postgres = { path = "crates/ptc-store-postgres" }
+ptc-store-turso = { path = "crates/ptc-store-turso" }
+ptc-cli = { path = "crates/ptc-cli" }
 
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
-# The command line of the `ptc` binary (ptc-cli): derived parsers, values from the environment.
-clap = { version = "4.6", features = ["derive", "env"] }
+# The command line of the `ptc` binary.
+clap = { version = "4", features = ["derive", "env"] }
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
 deno_error = "0.7"
@@ -34,6 +38,9 @@ deno_web = "=0.291.0"
 deno_webidl = "=0.260.0"
 # The user's cache directory, where ptc-check extracts tsgo.
 dirs = "6"
+# The embedded server's exclusive lock on `.ptc/server.lock` (flock, released when the process
+# dies).
+fs4 = { version = "0.13", features = ["sync"] }
 # The tarball of tsgo embedded by ptc-check (gzip, tar).
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false }

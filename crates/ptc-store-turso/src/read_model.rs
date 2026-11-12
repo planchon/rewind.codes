@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{
     Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunStatus, ScriptError,
-    Shape, Timestamp, ToolFailureKind,
+    Seq, Shape, Timestamp, ToolFailureKind,
 };
 use ptc_engine::ports::{
     Latency, ProjectedRun, ReadModel, ReadModelError, RunRef, RunSearch, RunSummary, ScriptFilter,
@@ -280,30 +280,43 @@ impl ReadModel for TursoStore {
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
         let connection = self.connection().await?;
-        let (since, params) = match filter.since {
-            Some(since) => (
-                " AND s.started_at >= ?",
-                vec![tenant(&filter.tenant), ts(since)],
-            ),
-            None => ("", vec![tenant(&filter.tenant)]),
-        };
+        let mut clauses = String::new();
+        let mut params = vec![tenant(&filter.tenant)];
+        if let Some(since) = filter.since {
+            clauses.push_str(" AND s.started_at >= ?");
+            params.push(ts(since));
+        }
+        if let Some(script) = filter.digest {
+            clauses.push_str(" AND s.script = ?");
+            params.push(digest(script));
+        }
         let runs = sql::query_dynamic(
             &connection,
             &format!(
-                "SELECT s.script, s.status, s.started_at FROM run_summaries s \
-                 WHERE s.tenant = ?{since}"
+                "SELECT s.script, s.status, s.started_at, s.labels, s.run_id                  FROM run_summaries s WHERE s.tenant = ?{clauses}"
             ),
             params.clone(),
         )
         .await?;
         let mut scripts: BTreeMap<Digest, ScriptSummary> = BTreeMap::new();
+        let mut counted = BTreeSet::new();
         for row in &runs {
+            let labels = decode_labels(&row.text(3)?)?;
+            if !filter
+                .labels
+                .iter()
+                .all(|(key, value)| labels.get(key) == Some(value))
+            {
+                continue;
+            }
+            counted.insert(row.text(4)?);
             let script = row.digest(0)?;
             let summary = scripts.entry(script).or_insert_with(|| ScriptSummary {
                 script,
                 runs: 0,
                 statuses: BTreeMap::new(),
                 tools: BTreeSet::new(),
+                labels: BTreeMap::new(),
                 first_started_at: None,
                 last_started_at: None,
             });
@@ -316,29 +329,43 @@ impl ReadModel for TursoStore {
                 summary.first_started_at = Some(summary.first_started_at.map_or(at, |t| t.min(at)));
                 summary.last_started_at = Some(summary.last_started_at.map_or(at, |t| t.max(at)));
             }
+            for (key, value) in labels {
+                *summary.labels.entry(format!("{key}:{value}")).or_default() += 1;
+            }
         }
         let tools = sql::query_dynamic(
             &connection,
             &format!(
-                "SELECT DISTINCT s.script, c.tool FROM tool_calls c \
+                "SELECT DISTINCT s.script, c.tool, s.run_id FROM tool_calls c \
                  JOIN run_summaries s ON s.run_id = c.run_id \
-                 WHERE s.tenant = ?{since} AND c.tool IS NOT NULL"
+                 WHERE s.tenant = ?{clauses} AND c.tool IS NOT NULL"
             ),
             params,
         )
         .await?;
         for row in &tools {
+            if !counted.contains(&row.text(2)?) {
+                continue;
+            }
             if let Some(summary) = scripts.get_mut(&row.digest(0)?) {
                 summary.tools.insert(row.text(1)?);
             }
         }
-        Ok(scripts.into_values().collect())
+        Ok(scripts
+            .into_values()
+            .filter(|script| {
+                filter
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| script.tools.contains(tool))
+            })
+            .collect())
     }
 
     async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<Vec<ToolStats>, ReadModelError> {
         let connection = self.connection().await?;
-        let mut query = "SELECT c.tool, c.scheduled_at, c.completed_at, c.outcome, c.error_kind \
-                         FROM tool_calls c JOIN run_summaries s ON s.run_id = c.run_id \
+        let mut query = "SELECT c.tool, c.scheduled_at, c.completed_at, c.outcome, c.error_kind, \
+                         c.attempts FROM tool_calls c JOIN run_summaries s ON s.run_id = c.run_id \
                          WHERE s.tenant = ? AND c.tool IS NOT NULL AND c.scheduled_at IS NOT NULL"
             .to_owned();
         let mut params = vec![tenant(&filter.tenant)];
@@ -366,11 +393,15 @@ impl ReadModel for TursoStore {
                     completed: 0,
                     failed: 0,
                     errors_by_kind: BTreeMap::new(),
+                    retries: 0,
                     latency: None,
                 };
                 (stats, Vec::new())
             });
             entry.calls += 1;
+            if let Some(attempts) = row.opt_u64(5)? {
+                entry.retries += attempts.saturating_sub(1);
+            }
             match row.opt_text(3)?.as_deref() {
                 Some("completed") => entry.completed += 1,
                 Some("failed") => {
@@ -398,6 +429,7 @@ impl ReadModel for TursoStore {
                         mean_ms: latencies.iter().sum::<u64>() / count,
                         p50_ms: percentile(&latencies, 50),
                         p95_ms: percentile(&latencies, 95),
+                        p99_ms: percentile(&latencies, 99),
                         max_ms: latencies[latencies.len() - 1],
                     });
                 }
@@ -470,6 +502,64 @@ impl ReadModel for TursoStore {
             Ok(usize::try_from(purged).unwrap_or(usize::MAX))
         })
         .await
+    }
+
+    async fn record_attempt(
+        &self,
+        run: &RunRef,
+        seq: Seq,
+        attempt: u32,
+    ) -> Result<(), ReadModelError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let owner = sql::query_row(
+                connection,
+                "SELECT tenant FROM run_summaries WHERE run_id = ?",
+                vec![run_id(run.id)],
+            )
+            .await?;
+            if let Some(owner) = owner
+                && owner.text(0)? != run.tenant.as_str()
+            {
+                return Ok(());
+            }
+            sql::execute(
+                connection,
+                "INSERT INTO tool_calls (run_id, seq, attempts) VALUES (?, ?, ?) \
+                 ON CONFLICT (run_id, seq) DO UPDATE SET \
+                 attempts = MAX(COALESCE(attempts, 0), excluded.attempts)",
+                vec![
+                    run_id(run.id),
+                    int(u64::from(seq.0)),
+                    int(u64::from(attempt)),
+                ],
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
+        let connection = self.connection().await?;
+        let rows = sql::query_dynamic(
+            &connection,
+            "SELECT c.seq, c.attempts FROM tool_calls c \
+             JOIN run_summaries s ON s.run_id = c.run_id \
+             WHERE c.run_id = ? AND s.tenant = ? AND c.attempts IS NOT NULL",
+            vec![run_id(run.id), tenant(&run.tenant)],
+        )
+        .await?;
+        let mut attempts = BTreeMap::new();
+        for row in &rows {
+            let seq = u32::try_from(row.u64(0)?)
+                .map_err(|_| Error::Corrupt("a call's seq is out of range".into()))?;
+            let count = u32::try_from(row.u64(1)?)
+                .map_err(|_| Error::Corrupt("a call's attempts are out of range".into()))?;
+            attempts.insert(Seq(seq), count);
+        }
+        Ok(attempts)
     }
 
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {
