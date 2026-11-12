@@ -150,7 +150,15 @@ describe("run_script", () => {
       status: "active",
       waitingFor: [
         { kind: "signal", name: "approval", callsite: { line: 8, column: 26 }, timeoutAt: "2026-11-15T10:00:00Z" },
-        { kind: "tool_call", seq: 4, tool: "github.delete_repo", taskId: "t1", state: "approval", attempt: 1 },
+        {
+          kind: "tool_call",
+          seq: 4,
+          tool: "github.delete_repo",
+          taskId: "t1",
+          state: "approval",
+          attempt: 1,
+          args: payload({}),
+        },
         { kind: "timer", seq: 5, fireAt: "2026-11-20T00:00:00Z" },
       ],
     });
@@ -304,7 +312,17 @@ describe("the tools that take a run id", () => {
     serveRun(
       run({
         status: "active",
-        waitingFor: [{ kind: "tool_call", seq: 2, tool: "slack.post", taskId: "t", state: "claimed", attempt: 2 }],
+        waitingFor: [
+          {
+            kind: "tool_call",
+            seq: 2,
+            tool: "slack.post",
+            taskId: "t",
+            state: "claimed",
+            attempt: 2,
+            args: payload({}),
+          },
+        ],
       }),
     );
     const result = await tools.handle("get_run", { run_id: RUN_ID, wait: "200ms" });

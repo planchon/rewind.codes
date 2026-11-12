@@ -62,7 +62,7 @@ export class Ptc {
     this.runs = new Runs(this.transport);
     this.tasks = new Tasks(this.transport);
     this.payloads = new Payloads(this.transport);
-    this.approvals = new Approvals(this.runs, this.tasks, this.payloads);
+    this.approvals = new Approvals(this.tasks, this.payloads);
     this.subscriptions = new Subscriptions(this.transport);
     this.webhooks = { verify: verifyWebhook };
     this.tools = new Tools(this.transport);

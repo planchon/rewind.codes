@@ -1,0 +1,157 @@
+//! Subscriptions to lifecycle webhooks (`POST`, `GET`, `DELETE /v1/subscriptions`).
+
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use ptc_api::common::Labels;
+use ptc_api::webhooks::{
+    CreateSubscription, Subscription as ApiSubscription, SubscriptionList, WebhookEventType,
+    WebhookSecret,
+};
+use ptc_core::RunId;
+use ptc_engine::adapters::SystemEntropy;
+use ptc_engine::ports::{Entropy, JournalStore, Secret, Subscription};
+
+use crate::app::App;
+use crate::auth::{Access, Caller};
+use crate::error::ApiError;
+use crate::extract::Body;
+
+/// The prefix of a subscription's id, followed by a UUID v7: the id tells when the
+/// subscription was created.
+const PREFIX: &str = "sub_";
+
+/// `POST /v1/subscriptions`.
+pub(super) async fn create(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Body(request): Body<CreateSubscription>,
+) -> Result<Response, ApiError> {
+    caller.allow(Access::Write)?;
+    check_url(&app, &request.url)?;
+    let labels = caller.within(request.labels.0)?;
+    let mut key = [0u8; 32];
+    getrandom::fill(&mut key).map_err(ApiError::internal)?;
+    let secret = WebhookSecret::from_bytes(key).map_err(ApiError::internal)?;
+    let id = format!("{PREFIX}{}", SystemEntropy.run_id());
+    let subscription = Subscription {
+        tenant: caller.tenant.clone(),
+        id,
+        url: request.url,
+        secret: Secret::new(secret.expose()),
+        events: request.events.iter().map(|kind| port_type(*kind)).collect(),
+        labels,
+    };
+    app.store.put_subscription(&subscription).await?;
+    let mut view = view(&subscription);
+    view.secret = Some(secret.expose());
+    Ok((StatusCode::CREATED, Json(view)).into_response())
+}
+
+/// `GET /v1/subscriptions`: without their secrets.
+pub(super) async fn list(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+) -> Result<Json<SubscriptionList>, ApiError> {
+    caller.allow(Access::Read)?;
+    let subscriptions = app
+        .store
+        .subscriptions(&caller.tenant)
+        .await?
+        .iter()
+        .filter(|subscription| caller.sees(&subscription.labels))
+        .map(view)
+        .collect();
+    Ok(Json(SubscriptionList { subscriptions }))
+}
+
+/// `DELETE /v1/subscriptions/{id}`.
+pub(super) async fn delete(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    caller.allow(Access::Write)?;
+    let missing = || ApiError::not_found(format!("no subscription {id}"));
+    let visible = app
+        .store
+        .subscriptions(&caller.tenant)
+        .await?
+        .iter()
+        .any(|subscription| subscription.id == id && caller.sees(&subscription.labels));
+    if !visible || !app.store.delete_subscription(&caller.tenant, &id).await? {
+        return Err(missing());
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// An `https://` URL; `http://` only toward the machine itself, or when the server allows it.
+fn check_url(app: &App, url: &str) -> Result<(), ApiError> {
+    let parsed = reqwest::Url::parse(url)
+        .map_err(|error| ApiError::invalid(format!("url {url:?}: {error}")))?;
+    let local = matches!(
+        parsed.host_str(),
+        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+    );
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if local || app.settings.allow_http_webhooks => Ok(()),
+        _ => Err(ApiError::invalid(format!(
+            "url {url:?}: webhooks are sent to https:// URLs"
+        ))),
+    }
+}
+
+fn port_type(kind: WebhookEventType) -> ptc_engine::ports::WebhookEventType {
+    use ptc_engine::ports::WebhookEventType as Port;
+    match kind {
+        WebhookEventType::RunCompleted => Port::RunCompleted,
+        WebhookEventType::RunFailed => Port::RunFailed,
+        WebhookEventType::RunCancelled => Port::RunCancelled,
+        WebhookEventType::RunAborted => Port::RunAborted,
+        WebhookEventType::RunSuspended => Port::RunSuspended,
+        WebhookEventType::RunQuarantined => Port::RunQuarantined,
+        WebhookEventType::ToolSchemaChanged => Port::ToolSchemaChanged,
+        WebhookEventType::CredentialsExpired => Port::CredentialsExpired,
+    }
+}
+
+fn api_type(kind: ptc_engine::ports::WebhookEventType) -> WebhookEventType {
+    WebhookEventType::ALL
+        .into_iter()
+        .find(|api| api.as_str() == kind.as_str())
+        .unwrap_or(WebhookEventType::RunFailed)
+}
+
+fn view(subscription: &Subscription) -> ApiSubscription {
+    let events: BTreeSet<WebhookEventType> = subscription
+        .events
+        .iter()
+        .map(|kind| api_type(*kind))
+        .collect();
+    let created_at = subscription
+        .id
+        .strip_prefix(PREFIX)
+        .and_then(|id| id.parse::<RunId>().ok())
+        .and_then(|id| id.as_uuid().get_timestamp())
+        .map_or(jiff::Timestamp::UNIX_EPOCH, |at| {
+            let (seconds, nanos) = at.to_unix();
+            jiff::Timestamp::new(
+                i64::try_from(seconds).unwrap_or(0),
+                i32::try_from(nanos).unwrap_or(0),
+            )
+            .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+        });
+    ApiSubscription {
+        id: subscription.id.clone(),
+        url: subscription.url.clone(),
+        events: events.into_iter().collect(),
+        labels: Labels::from(subscription.labels.clone()),
+        created_at,
+        secret: None,
+    }
+}

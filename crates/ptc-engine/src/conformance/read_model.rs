@@ -22,6 +22,10 @@ pub async fn run_all<S: ReadModel>(new_store: impl Fn() -> S) {
     runs_are_summarized_and_searched(&new_store()).await;
     eprintln!("read model conformance: scripts_and_tools_are_aggregated");
     scripts_and_tools_are_aggregated(&new_store()).await;
+    eprintln!("read model conformance: scripts_are_filtered_and_count_labels");
+    scripts_are_filtered_and_count_labels(&new_store()).await;
+    eprintln!("read model conformance: attempts_are_recorded_per_call");
+    attempts_are_recorded_per_call(&new_store()).await;
     eprintln!("read model conformance: shapes_are_observed_per_tenant_and_tool");
     shapes_are_observed_per_tenant_and_tool(&new_store()).await;
     eprintln!("read model conformance: projections_ignore_order_and_repetition");
@@ -315,10 +319,7 @@ pub async fn runs_are_summarized_and_searched<S: ReadModel>(store: &S) {
 pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
     project(store).await;
     let scripts = store
-        .scripts(&ScriptFilter {
-            tenant: acme(),
-            since: None,
-        })
+        .scripts(&ScriptFilter::new(acme()))
         .await
         .expect("scripts");
     let mut expected_order = [script(1), script(2)];
@@ -359,8 +360,8 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
     );
     let recent = store
         .scripts(&ScriptFilter {
-            tenant: acme(),
             since: Some(at(1_000)),
+            ..ScriptFilter::new(acme())
         })
         .await
         .expect("scripts");
@@ -388,11 +389,13 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
                 completed: 0,
                 failed: 1,
                 errors_by_kind: BTreeMap::from([(ToolFailureKind::Error, 1)]),
+                retries: 0,
                 latency: Some(Latency {
                     count: 1,
                     mean_ms: 100,
                     p50_ms: 100,
                     p95_ms: 100,
+                    p99_ms: 100,
                     max_ms: 100
                 }),
             },
@@ -402,11 +405,13 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
                 completed: 3,
                 failed: 0,
                 errors_by_kind: BTreeMap::new(),
+                retries: 0,
                 latency: Some(Latency {
                     count: 3,
                     mean_ms: 233,
                     p50_ms: 200,
                     p95_ms: 400,
+                    p99_ms: 400,
                     max_ms: 400
                 }),
             },
@@ -416,11 +421,13 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
                 completed: 0,
                 failed: 1,
                 errors_by_kind: BTreeMap::from([(ToolFailureKind::Unavailable, 1)]),
+                retries: 0,
                 latency: Some(Latency {
                     count: 1,
                     mean_ms: 200,
                     p50_ms: 200,
                     p95_ms: 200,
+                    p99_ms: 200,
                     max_ms: 200
                 }),
             },
@@ -517,10 +524,7 @@ pub async fn projections_ignore_order_and_repetition<S: ReadModel>(ordered: &S, 
             ordered.search_runs(&query).await.expect("search_runs"),
             shuffled.search_runs(&query).await.expect("search_runs")
         );
-        let filter = ScriptFilter {
-            tenant: tenant.clone(),
-            since: None,
-        };
+        let filter = ScriptFilter::new(tenant.clone());
         assert_eq!(
             ordered.scripts(&filter).await.expect("scripts"),
             shuffled.scripts(&filter).await.expect("scripts")
@@ -547,6 +551,159 @@ pub async fn projections_ignore_order_and_repetition<S: ReadModel>(ordered: &S, 
                 .expect("observed_shapes")
         );
     }
+}
+
+pub async fn scripts_are_filtered_and_count_labels<S: ReadModel>(store: &S) {
+    project(store).await;
+    let counts = |scripts: &[crate::ports::ScriptSummary]| {
+        scripts
+            .iter()
+            .map(|s| (s.script, s.runs))
+            .collect::<BTreeMap<_, _>>()
+    };
+    let all = store
+        .scripts(&ScriptFilter::new(acme()))
+        .await
+        .expect("scripts");
+    let first = all
+        .iter()
+        .find(|s| s.script == script(1))
+        .expect("script 1");
+    assert_eq!(
+        first.labels,
+        BTreeMap::from([
+            ("agent:deploy".to_owned(), 1),
+            ("agent:triage".to_owned(), 1)
+        ]),
+        "each label of its runs, counted"
+    );
+
+    let triage = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
+    let cases: Vec<(ScriptFilter, BTreeMap<Digest, u64>)> = vec![
+        (
+            ScriptFilter {
+                digest: Some(script(2)),
+                ..ScriptFilter::new(acme())
+            },
+            BTreeMap::from([(script(2), 2)]),
+        ),
+        (
+            ScriptFilter {
+                labels: triage.clone(),
+                ..ScriptFilter::new(acme())
+            },
+            BTreeMap::from([(script(1), 1), (script(2), 1)]),
+        ),
+        (
+            ScriptFilter {
+                tool: Some("github.close_issue".into()),
+                ..ScriptFilter::new(acme())
+            },
+            BTreeMap::from([(script(1), 2)]),
+        ),
+        (
+            ScriptFilter {
+                tool: Some("github.close_issue".into()),
+                labels: triage,
+                ..ScriptFilter::new(acme())
+            },
+            BTreeMap::new(),
+        ),
+    ];
+    for (filter, expected) in cases {
+        let scripts = store.scripts(&filter).await.expect("scripts");
+        assert_eq!(counts(&scripts), expected, "{filter:?}");
+    }
+    let labelled = store
+        .scripts(&ScriptFilter {
+            labels: BTreeMap::from([("agent".to_owned(), "deploy".to_owned())]),
+            ..ScriptFilter::new(acme())
+        })
+        .await
+        .expect("scripts");
+    let first = labelled
+        .iter()
+        .find(|s| s.script == script(1))
+        .expect("script 1");
+    assert_eq!(
+        first.labels,
+        BTreeMap::from([("agent:deploy".to_owned(), 1)]),
+        "only the counted runs' labels"
+    );
+}
+
+pub async fn attempts_are_recorded_per_call<S: ReadModel>(store: &S) {
+    let run1 = RunRef::new(acme(), id(1));
+    let run2 = RunRef::new(acme(), id(2));
+    // Recorded before the run is projected: kept for when it is.
+    store
+        .record_attempt(&run1, Seq(2), 2)
+        .await
+        .expect("record_attempt");
+    project(store).await;
+    store
+        .record_attempt(&run1, Seq(2), 1)
+        .await
+        .expect("record_attempt");
+    store
+        .record_attempt(&run2, Seq(1), 3)
+        .await
+        .expect("record_attempt");
+    store
+        .record_attempt(&run2, Seq(1), 3)
+        .await
+        .expect("record_attempt");
+    store
+        .record_attempt(&RunRef::new(tenant("other"), id(1)), Seq(1), 4)
+        .await
+        .expect("record_attempt of another tenant's run");
+
+    assert_eq!(
+        store.attempts(&run1).await.expect("attempts"),
+        BTreeMap::from([(Seq(2), 2)]),
+        "the highest attempt is kept"
+    );
+    assert_eq!(
+        store.attempts(&run2).await.expect("attempts"),
+        BTreeMap::from([(Seq(1), 3)])
+    );
+    assert!(
+        store
+            .attempts(&RunRef::new(tenant("other"), id(1)))
+            .await
+            .expect("attempts")
+            .is_empty(),
+        "another tenant sees nothing"
+    );
+
+    let stats = store
+        .tool_stats(&ToolStatsFilter {
+            tenant: acme(),
+            toolset: None,
+            since: None,
+            until: None,
+        })
+        .await
+        .expect("tool_stats");
+    let retries: BTreeMap<String, u64> = stats
+        .into_iter()
+        .map(|stats| (stats.tool, stats.retries))
+        .collect();
+    assert_eq!(
+        retries,
+        BTreeMap::from([
+            ("github.close_issue".to_owned(), 0),
+            ("github.list_issues".to_owned(), 2),
+            ("slack.post".to_owned(), 1),
+        ]),
+        "attempts beyond the first"
+    );
+
+    assert!(store.delete_run(&run1).await.expect("delete_run"));
+    assert!(
+        store.attempts(&run1).await.expect("attempts").is_empty(),
+        "deleted with the run"
+    );
 }
 
 pub async fn runs_are_purged_and_deleted<S: ReadModel>(store: &S) {

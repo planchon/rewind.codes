@@ -14,7 +14,7 @@ use serde_json::Value;
 use sse_stream::SseByteStream;
 
 use crate::Error;
-use crate::admin::{ApiKey, CreateApiKey, ServerInfo};
+use crate::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
 use crate::common::Duration;
 use crate::events::{Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey};
@@ -33,7 +33,7 @@ use crate::tasks::{
 };
 use crate::toolsets::{
     CreateToolset, Credentials, DeclarationFormat, DeclarationsQuery, DeclarationsText,
-    SearchQuery, ToolSearchResults, Toolset,
+    SearchQuery, ToolSearchResults, Toolset, ToolsetList,
 };
 use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
 
@@ -112,6 +112,12 @@ impl Client {
         let request = self
             .request(Method::POST, routes::TOOLSETS, &[])?
             .json(toolset);
+        self.json(request).await
+    }
+
+    /// `GET /v1/toolsets`.
+    pub async fn list_toolsets(&self) -> Result<ToolsetList, Error> {
+        let request = self.request(Method::GET, routes::TOOLSETS, &[])?;
         self.json(request).await
     }
 
@@ -450,6 +456,12 @@ impl Client {
     pub async fn revoke_api_key(&self, key: &str) -> Result<(), Error> {
         let request = self.request(Method::DELETE, routes::API_KEY, &[key])?;
         self.empty(request).await
+    }
+
+    /// `GET /v1/whoami`.
+    pub async fn whoami(&self) -> Result<Identity, Error> {
+        let request = self.request(Method::GET, routes::WHOAMI, &[])?;
+        self.json(request).await
     }
 
     /// `GET /v1/server`.

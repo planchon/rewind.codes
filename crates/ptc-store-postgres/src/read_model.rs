@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{
     Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunStatus, ScriptError,
-    Shape, Timestamp, ToolFailureKind,
+    Seq, Shape, Timestamp, ToolFailureKind,
 };
 use ptc_engine::ports::{
     Latency, ProjectedRun, ReadModel, ReadModelError, RunRef, RunSearch, RunSummary, ScriptFilter,
@@ -338,12 +338,18 @@ impl ReadModel for PostgresStore {
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
         let since = filter.since.map(ts);
+        let script = filter.digest.map(bytes);
+        let labels = encode_labels(&filter.labels);
         let runs = sqlx::query(
-            "SELECT script, status, started_at FROM run_summaries \
-             WHERE tenant = $1 AND ($2::bigint IS NULL OR started_at >= $2)",
+            "SELECT script, status, started_at, labels::text FROM run_summaries \
+             WHERE tenant = $1 AND ($2::bigint IS NULL OR started_at >= $2) \
+             AND ($3::bytea IS NULL OR script = $3) AND labels @> $4::jsonb",
         )
+        .persistent(false)
         .bind(tenant(&filter.tenant))
         .bind(since)
+        .bind(script.clone())
+        .bind(&labels)
         .fetch_all(&self.pool)
         .await
         .map_err(Error::from)?;
@@ -355,6 +361,7 @@ impl ReadModel for PostgresStore {
                 runs: 0,
                 statuses: BTreeMap::new(),
                 tools: BTreeSet::new(),
+                labels: BTreeMap::new(),
                 first_started_at: None,
                 last_started_at: None,
             });
@@ -367,15 +374,22 @@ impl ReadModel for PostgresStore {
                 summary.first_started_at = Some(summary.first_started_at.map_or(at, |t| t.min(at)));
                 summary.last_started_at = Some(summary.last_started_at.map_or(at, |t| t.max(at)));
             }
+            for (key, value) in decode_labels(&row.text(3)?)? {
+                *summary.labels.entry(format!("{key}:{value}")).or_default() += 1;
+            }
         }
         let tools = sqlx::query(
             "SELECT DISTINCT s.script, c.tool FROM tool_calls c \
              JOIN run_summaries s ON s.run_id = c.run_id \
              WHERE s.tenant = $1 AND ($2::bigint IS NULL OR s.started_at >= $2) \
+             AND ($3::bytea IS NULL OR s.script = $3) AND s.labels @> $4::jsonb \
              AND c.tool IS NOT NULL",
         )
+        .persistent(false)
         .bind(tenant(&filter.tenant))
         .bind(since)
+        .bind(script)
+        .bind(&labels)
         .fetch_all(&self.pool)
         .await
         .map_err(Error::from)?;
@@ -384,12 +398,20 @@ impl ReadModel for PostgresStore {
                 summary.tools.insert(row.text(1)?);
             }
         }
-        Ok(scripts.into_values().collect())
+        Ok(scripts
+            .into_values()
+            .filter(|script| {
+                filter
+                    .tool
+                    .as_ref()
+                    .is_none_or(|tool| script.tools.contains(tool))
+            })
+            .collect())
     }
 
     async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<Vec<ToolStats>, ReadModelError> {
         let rows = sqlx::query(
-            "SELECT c.tool, c.scheduled_at, c.completed_at, c.outcome, c.error_kind \
+            "SELECT c.tool, c.scheduled_at, c.completed_at, c.outcome, c.error_kind, c.attempts \
              FROM tool_calls c JOIN run_summaries s ON s.run_id = c.run_id \
              WHERE c.tenant = $1 AND c.tool IS NOT NULL AND c.scheduled_at IS NOT NULL \
              AND ($2::bytea IS NULL OR s.toolset = $2) \
@@ -415,11 +437,15 @@ impl ReadModel for PostgresStore {
                     completed: 0,
                     failed: 0,
                     errors_by_kind: BTreeMap::new(),
+                    retries: 0,
                     latency: None,
                 };
                 (stats, Vec::new())
             });
             entry.calls += 1;
+            if let Some(attempts) = row.opt_u64(5)? {
+                entry.retries += attempts.saturating_sub(1);
+            }
             match row.opt_text(3)?.as_deref() {
                 Some("completed") => entry.completed += 1,
                 Some("failed") => {
@@ -447,6 +473,7 @@ impl ReadModel for PostgresStore {
                         mean_ms: latencies.iter().sum::<u64>() / count,
                         p50_ms: percentile(&latencies, 50),
                         p95_ms: percentile(&latencies, 95),
+                        p99_ms: percentile(&latencies, 99),
                         max_ms: latencies[latencies.len() - 1],
                     });
                 }
@@ -502,6 +529,49 @@ impl ReadModel for PostgresStore {
         }
         let purged = query.fetch_one(&self.pool).await.map_err(Error::from)?;
         Ok(usize::try_from(purged).unwrap_or(usize::MAX))
+    }
+
+    async fn record_attempt(
+        &self,
+        run: &RunRef,
+        seq: Seq,
+        attempt: u32,
+    ) -> Result<(), ReadModelError> {
+        // A run projected for another tenant keeps its rows: the call is not this tenant's.
+        sqlx::query(
+            "INSERT INTO tool_calls (tenant, run_id, seq, attempts) \
+             SELECT $1, $2, $3, $4 WHERE NOT EXISTS ( \
+                 SELECT 1 FROM run_summaries WHERE run_id = $2 AND tenant <> $1) \
+             ON CONFLICT (run_id, seq) DO UPDATE \
+                 SET attempts = GREATEST(COALESCE(tool_calls.attempts, 0), EXCLUDED.attempts) \
+                 WHERE tool_calls.tenant = EXCLUDED.tenant",
+        )
+        .bind(tenant(&run.tenant))
+        .bind(uuid(run.id))
+        .bind(i64::from(seq.0))
+        .bind(i64::from(attempt))
+        .execute(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(())
+    }
+
+    async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
+        let rows = sqlx::query(
+            "SELECT c.seq, c.attempts FROM tool_calls c \
+             JOIN run_summaries s ON s.run_id = c.run_id \
+             WHERE c.run_id = $1 AND s.tenant = $2 AND c.attempts IS NOT NULL",
+        )
+        .bind(uuid(run.id))
+        .bind(tenant(&run.tenant))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        let mut attempts = BTreeMap::new();
+        for row in &rows {
+            attempts.insert(Seq(row.u32(0)?), row.u32(1)?);
+        }
+        Ok(attempts)
     }
 
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {

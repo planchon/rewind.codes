@@ -488,6 +488,41 @@ pub async fn scripts_and_toolsets_are_stored_by_tenant_and_digest<S: JournalStor
             .expect("get_toolset"),
         None
     );
+
+    let second = Toolset::from_host_tools(["c"]).expect("toolset");
+    store
+        .put_toolset(&acme(), &second, &ToolDeclarations::default())
+        .await
+        .expect("put_toolset");
+    store
+        .put_toolset(&other, &second, &ToolDeclarations::default())
+        .await
+        .expect("put_toolset");
+    let listed = store.list_toolsets(&acme()).await.expect("list_toolsets");
+    let mut expected = vec![toolset.digest(), second.digest()];
+    expected.sort();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|stored| stored.toolset.digest())
+            .collect::<Vec<_>>(),
+        expected,
+        "the tenant's toolsets, by digest"
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|stored| stored.toolset == toolset)
+            .map(|stored| &stored.declarations),
+        Some(&declarations)
+    );
+    assert_eq!(
+        store
+            .list_toolsets(&tenant("nobody"))
+            .await
+            .expect("list_toolsets"),
+        []
+    );
 }
 
 pub async fn create_run_enqueues_run_started<S: JournalStore>(store: &S) {
