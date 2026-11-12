@@ -201,6 +201,30 @@ async fn a_handler_that_spins_is_stopped_and_the_mocks_stop() {
     assert!(after.message.contains("have stopped"), "{after:?}");
 }
 
+/// What a handler logs is kept outside V8's heap until the call ends: a flood is stopped, like
+/// one of the script's.
+#[tokio::test]
+async fn a_handler_that_floods_its_logs_is_stopped() {
+    let source = "export default { noisy: () => { const big = \"x\".repeat(1 << 20); \
+                  for (;;) console.log(big); } };";
+    let mocks = TsMocks::new(
+        &Script::new(source),
+        clock(),
+        SandboxLimits {
+            emitted_bytes_per_trigger: 4 * 1024 * 1024,
+            ..SandboxLimits::default()
+        },
+    )
+    .await
+    .unwrap();
+    let flooded = failure(dispatch(&mocks, "noisy", json!({})).await);
+    assert_eq!(
+        flooded.message,
+        "the mock handler of noisy emitted more than 4 MiB of commands and logs reacting to one \
+         trigger"
+    );
+}
+
 #[tokio::test]
 async fn invalid_modules_are_refused() {
     for (source, expected) in [

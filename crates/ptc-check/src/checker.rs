@@ -50,6 +50,10 @@ impl TsgoChecker {
     /// can take much longer.
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
+    /// The diagnostics a check returns at most: the first, by position. A script with errors
+    /// on every line would otherwise give millions, and as many allocations.
+    pub const MAX_DIAGNOSTICS: usize = 1_000;
+
     /// A checker that extracts tsgo into `cache_dir` at first use. Nothing is read or written
     /// before.
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
@@ -271,6 +275,7 @@ fn diagnostics(
     }
     diagnostics.sort_by(|a, b| key(a).cmp(&key(b)));
     diagnostics.dedup();
+    diagnostics.truncate(TsgoChecker::MAX_DIAGNOSTICS);
     diagnostics
 }
 
