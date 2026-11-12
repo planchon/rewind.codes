@@ -17,11 +17,14 @@ ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
 ptc-mcp = { path = "crates/ptc-mcp" }
+ptc-otel = { path = "crates/ptc-otel" }
 ptc-runtime = { path = "crates/ptc-runtime" }
 
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
+# The command line of the `ptc` binary (ptc-cli): derived parsers, values from the environment.
+clap = { version = "4.6", features = ["derive", "env"] }
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
 deno_error = "0.7"
