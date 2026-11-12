@@ -29,6 +29,10 @@ pub(crate) struct Shared {
     pub(crate) sessions: usize,
     /// Calls of `slow` cancelled by the client.
     pub(crate) cancelled: usize,
+    /// `tools/list` never ends: each page holds one more tool and the cursor of the next.
+    pub(crate) endless_list: bool,
+    /// Pages of `tools/list` served.
+    pub(crate) pages: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -138,10 +142,26 @@ impl ServerHandler for Fixture {
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParams>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.state().tools.clone()))
+        let mut state = self.state();
+        state.pages += 1;
+        if state.endless_list {
+            let page: u64 = request
+                .and_then(|request| request.cursor)
+                .and_then(|cursor| cursor.parse().ok())
+                .unwrap_or(0);
+            let mut result = ListToolsResult::with_all_items(vec![tool(
+                &format!("t{page}"),
+                "One more.",
+                json!({ "type": "object" }),
+                None,
+            )]);
+            result.next_cursor = Some((page + 1).to_string());
+            return Ok(result);
+        }
+        Ok(ListToolsResult::with_all_items(state.tools.clone()))
     }
 
     async fn call_tool(

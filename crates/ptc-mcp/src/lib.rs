@@ -179,10 +179,10 @@ impl McpDispatcher {
             .await
             .map_err(|failure| failure.into_error(&server.name))?;
         let timeout = self.pool.config().connect_timeout;
-        let listed = match tokio::time::timeout(timeout, lease.connection().tools()).await {
+        let listed = match tokio::time::timeout(timeout, lease.connection().tools(&server.name)).await
+        {
             Ok(Ok(listed)) => listed,
-            Ok(Err(error)) => {
-                let (failure, broken) = failure::of_service(&server.name, &error);
+            Ok(Err((failure, broken))) => {
                 if broken {
                     lease.forget();
                 }
@@ -224,7 +224,7 @@ impl McpDispatcher {
         };
         let local = call.tool.local_name();
         if !call.schema_change_approved {
-            match lease.connection().tools().await {
+            match lease.connection().tools(&server.name).await {
                 Ok(tools) => {
                     if let Some(message) =
                         schema::mismatch(&call.tool, tools.get(local), &call.args)
@@ -235,8 +235,7 @@ impl McpDispatcher {
                         });
                     }
                 }
-                Err(error) => {
-                    let (failure, broken) = failure::of_service(&server.name, &error);
+                Err((failure, broken)) => {
                     if broken {
                         lease.forget();
                     }

@@ -25,6 +25,7 @@ use ptc_engine::ports::{ServerCredentials, TenantId};
 use reqwest::header::{HeaderName, HeaderValue};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
+    PaginatedRequestParams,
 };
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
@@ -37,6 +38,12 @@ use tokio::sync::OnceCell;
 
 use crate::McpConfig;
 use crate::failure::{self, Failure, bounded};
+
+/// Pages of `tools/list` read at most: a server whose list never ends is refused, instead of
+/// being read until the timeout.
+pub(crate) const MAX_TOOL_PAGES: usize = 100;
+/// Tools of one server read at most.
+pub(crate) const MAX_TOOLS: usize = 10_000;
 
 /// The open connections, by tenant, server and credentials.
 #[derive(Debug)]
@@ -259,10 +266,12 @@ impl Connection {
         self.client.is_closed()
     }
 
-    /// The server's tools, by name, as it lists them now.
+    /// The server's tools, by name, as it lists them now. A failure says whether the connection
+    /// is broken.
     pub(crate) async fn tools(
         &self,
-    ) -> Result<Arc<BTreeMap<String, rmcp::model::Tool>>, ServiceError> {
+        server: &str,
+    ) -> Result<Arc<BTreeMap<String, rmcp::model::Tool>>, (Failure, bool)> {
         let mut listed = self.listed.lock().await;
         let changed = self.changed.swap(false, Ordering::SeqCst);
         let fresh = listed
@@ -271,7 +280,7 @@ impl Connection {
         if let Some(fresh) = fresh {
             return Ok(fresh.tools.clone());
         }
-        match self.client.peer().list_all_tools().await {
+        match self.list(server).await {
             Ok(tools) => {
                 let tools: BTreeMap<String, rmcp::model::Tool> = tools
                     .into_iter()
@@ -291,6 +300,39 @@ impl Connection {
                 Err(error)
             }
         }
+    }
+
+    /// Every page of `tools/list`, within [`MAX_TOOL_PAGES`] and [`MAX_TOOLS`].
+    async fn list(&self, server: &str) -> Result<Vec<rmcp::model::Tool>, (Failure, bool)> {
+        let mut tools = Vec::new();
+        let mut cursor = None;
+        for _ in 0..MAX_TOOL_PAGES {
+            let page = self
+                .client
+                .peer()
+                .list_tools(Some(PaginatedRequestParams::default().with_cursor(cursor)))
+                .await
+                .map_err(|error| failure::of_service(server, &error))?;
+            tools.extend(page.tools);
+            if tools.len() > MAX_TOOLS {
+                break;
+            }
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(tools);
+            }
+        }
+        Err((
+            Failure::permanent(
+                ToolFailureKind::Unavailable,
+                format!(
+                    "{server} lists more than {MAX_TOOLS} tools, or more than {MAX_TOOL_PAGES} \
+                     pages of them: ai-ptc reads no further"
+                ),
+                None,
+            ),
+            false,
+        ))
     }
 
     pub(crate) async fn call(
