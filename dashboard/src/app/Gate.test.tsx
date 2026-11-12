@@ -1,8 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
 import { createWorld } from "../mocks/fixtures";
+import { createHandlers } from "../mocks/handlers";
 import { NOW, renderApp } from "../test/app";
+import { server } from "../test/server";
 
 describe("Gate", () => {
   it("lets the operator in at once when the server needs no key", async () => {
@@ -47,5 +50,37 @@ describe("Gate", () => {
     expect(await screen.findByLabelText("API key")).toBeInTheDocument();
     expect(window.localStorage.getItem("ptc.key")).toBeNull();
     expect(window.sessionStorage.getItem("ptc.key")).toBeNull();
+  });
+
+  it("shows nothing read with the previous key after signing in with another", async () => {
+    const user = userEvent.setup();
+    const first = createWorld({ now: NOW, requireKey: "ptc_sk_first" });
+    renderApp("/runs", { world: first });
+    await user.type(await screen.findByLabelText("API key"), "ptc_sk_first");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect((await screen.findAllByText("c-42")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await screen.findByLabelText("API key");
+
+    // Another tenant's key, whose runs are slow to come.
+    const second = createWorld({ now: NOW, requireKey: "ptc_sk_second" });
+    let release = () => {};
+    const slow = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/v1/runs", async () => {
+        await slow;
+        return HttpResponse.json({ runs: [] });
+      }),
+      ...createHandlers(second, { now: () => NOW, pollMs: 10 }),
+    );
+    await user.type(screen.getByLabelText("API key"), "ptc_sk_second");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.queryByText("c-42")).toBeNull();
+    release();
+    expect(await screen.findByText("No run matches these filters.")).toBeInTheDocument();
+    expect(screen.queryByText("c-42")).toBeNull();
   });
 });

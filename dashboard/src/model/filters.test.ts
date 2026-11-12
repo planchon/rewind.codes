@@ -35,6 +35,14 @@ describe("run filters", () => {
     expect(filters).toEqual(NO_RUN_FILTERS);
   });
 
+  it("ignore a range named like a property of every object", () => {
+    for (const range of ["toString", "constructor", "__proto__", "valueOf"]) {
+      const filters = readRunFilters(new URLSearchParams({ range }));
+      expect(filters.range).toBeNull();
+      expect(() => toRunsQuery(filters, NOW)).not.toThrow();
+    }
+  });
+
   it("become the query of GET /v1/runs, with a range resolved against now", () => {
     const query = toRunsQuery(
       { ...readRunFilters(new URLSearchParams("label=env:prod&range=24h&quarantined=yes")) },
@@ -65,5 +73,11 @@ describe("tool filters", () => {
       since: "2026-11-11T10:00:00.000Z",
       until: "2026-11-12T10:00:00.000Z",
     });
+  });
+
+  it("ignore a window named like a property of every object", () => {
+    const filters = readToolFilters(new URLSearchParams("window=constructor"));
+    expect(filters.window).toBe("24h");
+    expect(() => toToolStatsQuery(filters, NOW)).not.toThrow();
   });
 });

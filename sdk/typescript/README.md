@@ -67,8 +67,8 @@ script). `isProblem(error, "task-gone")` tests the kind. A server that cannot be
 (`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration, checks and tests, and the requests
 that carry an idempotency key. Starting a run, forking it or sending a signal without a key is never repeated.
 
-**Waiting.** `runs.start`, `runs.fork` and `runs.get` take `wait`: they answer when the run ends or `wait` passes. A
-wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never cut it.
+**Waiting.** `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` take `wait`: they answer when the run ends or
+`wait` passes. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never cut it.
 
 **The event stream.** `runs.events(id, { follow: true })` is an async iterator over the run's journal entries as they
 are committed, ending with `{ type: "end" }`. A dropped connection resumes after the last entry received.
@@ -123,7 +123,7 @@ changed during the run. The run is then suspended; its state says which call wai
 
 ```ts
 for (const approval of ptc.approvals.pending(run)) {
-  const args = await ptc.approvals.args(approval); // read from the run's journal
+  const args = await ptc.approvals.args(approval); // from the run's state, or by its digest when large
   if (await askAHuman(approval.tool, args)) await ptc.approvals.approve(approval);
   else await ptc.approvals.reject(approval, "the user refused");
 }
@@ -160,9 +160,10 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
 
 - Results are plain text written for the model, and bounded: `run_script` returns at most 256 KiB of output, with the
   call that reads the rest (`get_run` with `offset`); a failure shows the error with its line and code frame, the call
-  that failed, and the trace up to the failure.
+  that failed, and the trace up to the failure. Messages, diagnostics and traces are cut too, whatever their size.
 - The model's tool call id is the idempotency key of `run_script`, `retry_run` and `signal_run`: handling the same tool
-  call twice starts one run, or delivers one signal.
+  call twice starts one run, or delivers one signal. Ids must be unique across conversations: a run the server answers
+  for an id already used by another script or other labels is never shown to the model, and a `PtcError` is thrown.
 - `labels` are set on every run the model starts. They filter `list_runs`, and the tools that take a run id answer for
   a run without them as for a run that does not exist. Give the harness an API key limited to these labels so the
   server holds the scope too.
