@@ -1544,6 +1544,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "evals"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "ptc-api",
+ "ptc-check",
+ "ptc-codegen",
+ "ptc-core",
+ "ptc-engine",
+ "ptc-mcp",
+ "ptc-runtime",
+ "reqwest",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
 name = "event-listener"
 version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

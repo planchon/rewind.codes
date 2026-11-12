@@ -46,11 +46,11 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-mcp` | `McpDispatcher`: an MCP client (`rmcp` 3.9) over streamable HTTP and stdio, discovery as a toolset pins it, connections pooled by tenant, server and credentials, the idempotency key and the trace context in `_meta`, credentials in the transport, the schema check at dispatch (a changed tool parks the call), the execution timeout, errors mapped to transient failures, failures and parked calls. `HttpTool`: the `http` built-in and its egress rules (allow-list, one resolution, special-purpose addresses refused, the checked address connected, redirects checked again, 5 MiB and 30 s). Tested against fixture servers over HTTP and stdio. |
 | Sandbox lib | `crates/ptc-runtime/lib/`: `ptc.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. A test checks that the isolate's globals are exactly the declared ones, with and without the `http` tool. |
 | `dashboard` | Scripts, Runs, Run and Tools views over the API `/v1`, with types generated from `api/openapi.json`: filters kept in the URL, the source with each call, timer, signal wait and log next to its line, a timeline that compresses idle gaps, payloads on demand, live through the event stream, light and dark themes. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `ptc-server` embeds ([07](07-code-architecture.md#dashboard)). |
+| `evals` | 22 tasks from easy to hard (fan-out, pagination, `ToolError`, signals with and without timeout, sleeping and polling, webhooks, idempotent retries under a rate limit, outputs above 256 KB, `retry_run`, `cancel_run`) over six deterministic fake MCP servers built with `rmcp`; the engine wired in process in virtual time; the SDK's agent tools ported on `ptc-api`'s DTOs; Claude (Messages API) and OpenAI (Responses API) clients and a scripted model; reports per model and prompt rendering (`compact`, `dts`, `search`) in JSON and Markdown. Every task's reference solution passes through the scripted model in `cargo test` ([08](08-decisions.md#taken-while-building-the-evals-november-2026)). |
 
 Not there yet:
 
-- The other crates: `ptc-otel`, `ptc-cli`, `ptc-server` and the
-  evals.
+- The other crates: `ptc-otel`, `ptc-cli` and `ptc-server`.
 - Starting a run does not type-check the script.
 - The projector and its span derivation exist, but no OpenTelemetry exporter (`ptc-otel`).
   The read model is stored by `ptc-store-turso` only.
