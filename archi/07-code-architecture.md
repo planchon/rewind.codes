@@ -80,12 +80,13 @@ Dependencies only point down. Adapters never depend on each other.
 
 All ports are declared in `ptc-engine` (`crates/ptc-engine/src/ports/`), each with an in-memory
 adapter in `ptc-engine` that is the reference implementation of its contract. The ports with
-state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` have a
-conformance suite in `ptc-engine` (feature `conformance`, modules `conformance::journal`,
-`::blobs`, `::read_model`, `::secrets`, `::spans`), and every adapter of the port passes it.
-`SpanExporter` has no read side: its suite reads the backend through a collector the adapter's
-test provides. The contracts of the other ports are not observable through the port alone (an
-HMAC signature, the egress rules): their adapters test them.
+state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` and
+`WebhookSender` have a conformance suite in `ptc-engine` (feature `conformance`, modules
+`conformance::journal`, `::blobs`, `::read_model`, `::secrets`, `::spans`, `::webhooks`), and
+every adapter of the port passes it. `SpanExporter` and `WebhookSender` have no read side: their
+suites read the backend through a collector or a receiver the adapter's test provides (the
+receiver of the HTTP sender checks each signature). The contracts of the other ports are not
+observable through the port alone (the egress rules): their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
@@ -110,7 +111,7 @@ Methods (declared in `crates/ptc-engine/src/ports/journal/mod.rs`):
 
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
-put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest)
+put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
 create_run(NewRun { run: (tenant, id), started, metadata, created_at }, key?) -> Created { run, created } | QuotaExceeded
 enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
 get_run(run)                       list_runs(RunFilter { tenant, status, labels, quarantined, after, limit })
@@ -244,7 +245,10 @@ Contracts, all covered by the conformance suite:
   ([type-checking](04-tools.md#type-checking)).
 - **`ReadModel`**: `apply(run, entries)`, idempotent and order-independent, keyed by `(run,
   index)`. `search_runs(search)`, `scripts(filter)`, `tool_stats(filter)`,
-  `observed_shapes(tenant, tools)`. `purge(ended_before, tenants)` and `delete_run(run)` serve
+  `observed_shapes(tenant, tools)`. `record_attempt(run, seq, attempt)` keeps the highest
+  attempt of a call, recorded by whoever claims its task (attempts are not in the journal), and
+  `attempts(run)` reads them back; they give `tool_stats` its retries. `purge(ended_before,
+  tenants)` and `delete_run(run)` serve
   [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
@@ -255,8 +259,8 @@ Contracts, all covered by the conformance suite:
   encrypted by a master key from the deployment's configuration. Secrets leave the store only
   toward the dispatcher ([credentials](04-tools.md#credentials)).
 - **`WebhookSender`**: `send(subscription, event)`. Each delivery is signed with HMAC, and
-  retried when it fails. Events are `run.completed`, `run.failed` (failed, cancelled or
-  aborted), `run.suspended`, `run.quarantined`, `tool.schema_changed` and
+  retried when it fails. Events are `run.completed`, `run.failed`, `run.cancelled`,
+  `run.aborted`, `run.suspended`, `run.quarantined`, `tool.schema_changed` and
   `credentials.expired`, with a deterministic id for receivers to deduplicate. Subscriptions
   are kept by the `JournalStore`.
 - **`Clock`** and **`Entropy`**: unchanged.
@@ -292,9 +296,15 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
 One `ptc` binary holds both composition roots. The `ptc` crate is that binary: it depends on
-`ptc-cli` and `ptc-server` and only dispatches the command line. The CLI's code never calls
-the server's: it reaches it only through the API, and starts the embedded server by running
-`ptc server --embedded` as a separate process.
+`ptc-cli` and `ptc-server` and only dispatches the command line, `ptc server …` to
+`ptc_server::main(args)` and every other command to `ptc_cli::main(args)`, each given the
+arguments after its command. The CLI's code never calls the server's: it reaches it only
+through the API, and starts the embedded server by running `ptc server --embedded` as a
+separate process.
+
+`ptc-server` wires each adapter in its own module of `src/wiring/` (store, blobs, tools,
+checker, telemetry, webhooks, clock), picked by configuration: `--store turso:<path>` or
+`postgres://…`, `--blobs <directory>` or `s3://<bucket>`, `--otlp-endpoint`.
 
 ## Dependency rules
 
@@ -384,6 +394,7 @@ Conventions:
 | Group | Endpoint | Does |
 | --- | --- | --- |
 | Toolsets | `POST /v1/toolsets` | Registers and pins a toolset; returns its declarations |
+| | `GET /v1/toolsets` | The tenant's toolsets, with their servers and tool names |
 | | `GET /v1/toolsets/{id}/declarations` | The declarations, `format=dts` or `prompt` |
 | | `GET /v1/toolsets/{id}/search` | `search_tools`, for large toolsets |
 | | `PUT /v1/toolsets/{id}/credentials` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
@@ -420,6 +431,7 @@ Conventions:
 | | `GET /v1/payloads/{digest}` | A payload, on demand |
 | Administration | `POST /v1/api-keys` | Creates an API key for a tenant, with its scope; keys are revocable |
 | | `DELETE /v1/api-keys/{id}` | Revokes a key |
+| | `GET /v1/whoami` | The key's tenant, role and allowed labels |
 | | `GET /v1/server` | The server's version, epochs and roles |
 | | `POST /v1/server/stop` | Stops the embedded server, when the CLI replaces it with one of its own version |
 
@@ -434,17 +446,20 @@ and worker.
 
 | When | What happens |
 | --- | --- |
-| A command needs the server | If `.ptc/server.lock` is free, no server runs: the command starts one, detached. |
+| A command needs the server | If `.ptc/server.lock` is free, no server runs: the command starts one, detached, with `ptc server --embedded --dir <dir> --idle-timeout 10m`. |
 | The server starts | It takes an exclusive lock on `.ptc/server.lock`, opens `journal.db`, and listens on the unix socket `.ptc/server.sock`. Due timers fire at startup. |
-| A second server starts | It fails to take the lock and exits. |
+| A second server starts | It fails to take the lock and exits with code 75. |
 | The server is killed (`kill -9`) | The lock is released. The next command starts a new server, and expired leases give the runs back. |
 | The CLI's version differs from the server's | The CLI asks the server to stop and starts a new one. |
 | 10 minutes pass without requests and without work in progress | The server stops. A sleeping run resumes at the next `ptc` command. |
 
 - The socket is mode 0600 and takes no API key. The embedded server has one implicit tenant,
   `local`.
-- `ptc server` run in the foreground never stops on idle.
-- Virtual time is an option of the server, kept in the `meta` table.
+- `ptc server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
+- Virtual time is an option of the server (`--virtual-time`, `--real-time`), kept in the
+  `meta` table.
+- `ptc server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
+  when another server holds the directory's lock.
 - Local-only commands run in the CLI process, without a server: `ptc check`, `ptc test`, and
   the replay of an exported journal.
 
@@ -459,6 +474,7 @@ project/
     server.sock             the API /v1, mode 0600
     journal.db              Turso: every table of the store; meta holds the schema version and virtual time
     journal.db-wal          Turso's write-ahead log
+    master.key              the master key of the secret store, mode 0600, made at the first start
     blobs/
       local/sha256/ab/cdef… payloads above 64 KiB of the tenant local, named by their digest
       .staging/             where a blob is written and synced before it is renamed
@@ -478,7 +494,7 @@ Commands:
 | `ptc trace <run> [--entry n]` | LLM-readable trace |
 | `ptc runs` | Lists runs |
 | `ptc release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
-| `ptc server [--embedded] [--role api\|worker] [--virtual-time]` | Runs the server in the foreground |
+| `ptc server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`ptc server --help` lists its options) |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a
 second one exits at once.

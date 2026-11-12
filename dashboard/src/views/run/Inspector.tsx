@@ -302,7 +302,7 @@ function Overview({ run }: { run: Run }) {
       <p className="muted" style={{ margin: 0 }}>
         Select a line, a note beside it, a span of the timeline or a journal entry.
       </p>
-      <PayloadView name="input" payload={run.input} />
+      {run.input && <PayloadView name="input" payload={run.input} />}
       {run.output && <PayloadView name="output" payload={run.output} />}
     </div>
   );

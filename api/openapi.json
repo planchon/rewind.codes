@@ -281,6 +281,17 @@
           ]
         },
         "properties": {
+          "credentials": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Credentials",
+                "description": "Credentials of the MCP servers: used to list their tools, and kept as the toolset's\ncredentials, as `PUT /v1/toolsets/{id}/credentials` sets them. They are not part of the\ntoolset's id."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "host": {
             "description": "Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A\nname `group.tool` puts the tool in the `group` namespace of `ptc:tools`.",
             "items": {
