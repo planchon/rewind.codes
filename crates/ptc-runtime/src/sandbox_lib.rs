@@ -12,7 +12,7 @@
 //! | `ptc.d.ts` | The `ptc` module |
 //! | `globals.d.ts` | The sandbox's globals beyond ECMAScript |
 //! | `fetch.d.ts` | `fetch`, only for a toolset that enables the `http` tool |
-//! | `tsconfig.json` | tsgo's options: strict, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
+//! | `tsconfig.json` | tsgo's options: strict, `verbatimModuleSyntax`, ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), without shared memory, weak references and decorators, no DOM |
 //! | `globals.json` | The declared global names, the `ptc` exports, and a hint for each absent global models reach for |
 //!
 //! The checker writes the script as `script.ts` next to these files and the toolset's
@@ -308,6 +308,9 @@ mod tests {
         assert_eq!(options["noEmit"], true);
         assert_eq!(options["target"], "es2025");
         assert_eq!(options["types"], serde_json::json!([]));
+        // The runtime refuses at start an import of a name `ptc:tools` does not export, a type
+        // included: types are imported with `import type`.
+        assert_eq!(options["verbatimModuleSyntax"], true);
         let libs: Vec<&str> = options["lib"]
             .as_array()
             .unwrap()

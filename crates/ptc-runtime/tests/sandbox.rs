@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use ptc_core::{
     AbortKind, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry,
-    RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, Tool,
-    ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
+    McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed,
+    Seq, Timestamp, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
 };
 use ptc_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
@@ -64,9 +64,23 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
             "statusText": "OK",
             "url": call.args["url"],
             "headers": [["Content-Type", "application/json"], ["x-b", "1"], ["x-a", "0"], ["x-b", "2"]],
-            "body": { "text": call.args.to_string() },
+            "redirected": false,
+            "body": call.args.to_string(),
         })),
         "failing" => Err(failure(ToolFailureKind::Error, "boom")),
+        // MCP content, as `ptc-mcp` returns it for a tool pinned without an output schema.
+        "crm.lookup" => Ok(json!({
+            "content": [
+                { "type": "text", "text": "{\"name\":\"Ada\"}" },
+                { "type": "image", "data": "aGk=", "mimeType": "image/png" },
+            ],
+        })),
+        "crm.profile" => Ok(json!({
+            "content": [{ "type": "text", "text": "Ada" }, { "type": "text", "text": "VIP" }],
+            "structuredContent": { "name": "Ada", "vip": true },
+        })),
+        // The structured content of a tool pinned with an output schema.
+        "crm.score" => Ok(json!({ "score": 42 })),
         _ => Ok(json!({ "ok": true })),
     }
 }
@@ -564,8 +578,9 @@ export default async function main() {
     }
 }
 
-/// A toolset with the built-ins `http` and `webhook`, pinned with the schemas of
-/// `ptc_runtime::builtins`, and one host tool.
+/// A toolset with the built-ins `http` and `webhook`, and one host tool. `webhook` is pinned
+/// with the schema of `ptc_runtime::builtins`; `http` with a schema that accepts anything, as
+/// its schema lives in `ptc-mcp` (the corpus of `ptc-e2e` pins that one).
 fn builtins_toolset() -> Toolset {
     Toolset::new(
         [],
@@ -575,7 +590,7 @@ fn builtins_toolset() -> Toolset {
                 ToolRoute::Builtin(Builtin::Http {
                     allowed_hosts: vec!["api.example.com".into()],
                 }),
-                ptc_runtime::builtins::http_input_schema(),
+                json!({}),
             ),
             Tool::new(
                 "webhook",
@@ -1501,6 +1516,88 @@ export default async function main() {
     assert_eq!(run.events(), ["run_started", "complete_run"]);
 }
 
+/// The tools of an MCP server `crm`: two pinned without an output schema, one with.
+fn crm_toolset() -> Toolset {
+    let server = McpServer::new(
+        "crm",
+        McpTransport::Http {
+            url: "https://mcp.example.com/crm".into(),
+        },
+    );
+    let route = || ToolRoute::Mcp {
+        server: "crm".into(),
+    };
+    let mut score = Tool::new("crm.score", route(), json!({}));
+    score.output_schema = Some(json!({ "type": "object" }));
+    Toolset::new(
+        [server],
+        [
+            Tool::new("crm.lookup", route(), json!({})),
+            Tool::new("crm.profile", route(), json!({})),
+            score,
+        ],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn mcp_content_gets_the_text_and_json_helpers() {
+    let harness = harness();
+    let id = harness
+        .start_with(
+            r#"
+import { crm } from "ptc:tools";
+
+export default async function main() {
+  const found = await crm.lookup({ id: "c-1" });
+  const profile = await crm.profile();
+  const score = await crm.score({ id: "c-1" });
+  const keys: string[] = [];
+  for (const key in found) keys.push(key);
+  return {
+    found: [found.json(), found.text(), keys, JSON.stringify(found) === JSON.stringify({ ...found })],
+    profile: [profile.json(), profile.text()],
+    score: [score, typeof (score as { text?: unknown }).text],
+    frozen: Object.isFrozen(Object.getPrototypeOf(found)),
+  };
+}
+"#,
+            json!({}),
+            crm_toolset(),
+        )
+        .await;
+    harness.drive().await;
+    let run = harness.get(&id).await;
+    assert_eq!(
+        run.output(),
+        &json!({
+            "found": [
+                { "name": "Ada" },
+                "{\"name\":\"Ada\"}",
+                ["content"],
+                true,
+            ],
+            "profile": [{ "name": "Ada", "vip": true }, "Ada\nVIP"],
+            "score": [{ "score": 42 }, "undefined"],
+            "frozen": true,
+        })
+    );
+    // A call without arguments sends `{}`.
+    let args: Vec<Value> = run
+        .commands()
+        .into_iter()
+        .filter_map(|command| match command {
+            Command::ScheduleToolCall { args, .. } => args.value().cloned(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        args,
+        [json!({ "id": "c-1" }), json!({}), json!({ "id": "c-1" })]
+    );
+    harness.assert_replays(&run).await;
+}
+
 #[tokio::test]
 async fn fetch_is_a_journaled_call_of_the_http_tool() {
     let harness = harness();
@@ -1542,8 +1639,8 @@ export default async function main() {
     sent,
     again,
     missing: [missing.status, missing.ok, bytes.length > 0],
-    form: (await form.json()).body,
-    binary: (await binary.json()).body,
+    form: await form.json().then((sent) => [sent.body, sent.bodyEncoding]),
+    binary: await binary.json().then((sent) => [sent.body, sent.bodyEncoding]),
     refused,
     getBody,
   };
@@ -1581,7 +1678,7 @@ export default async function main() {
                 ["accept", "application/json"],
                 ["content-type", "text/plain;charset=UTF-8"],
             ],
-            "body": { "text": "{\"name\":\"x\"}" },
+            "body": "{\"name\":\"x\"}",
         })
     );
     assert_eq!(
@@ -1589,8 +1686,8 @@ export default async function main() {
         "the body of this response was already read"
     );
     assert_eq!(output["missing"], json!([404, false, true]));
-    assert_eq!(output["form"], json!({ "text": "a=1" }));
-    assert_eq!(output["binary"], json!({ "base64": "AP8=" }));
+    assert_eq!(output["form"], json!(["a=1", null]));
+    assert_eq!(output["binary"], json!(["AP8=", "base64"]));
     assert_eq!(
         output["refused"],
         "TypeError: fetch only sends http and https requests, not ftp:"

@@ -1,0 +1,31 @@
+{
+  "description": "A tool called without arguments is sent {}: the journal records {}, and {} is checked against the pinned schema, so a tool with required arguments refuses the call with a TypeError at the call site.",
+  "tools": {
+    "audit.list": { "$echo": true },
+    "audit.get": { "$echo": true }
+  },
+  "schemas": {
+    "audit.list": {
+      "type": "object",
+      "properties": { "since": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "audit.get": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "all": {},
+      "again": {},
+      "refused": "TypeError: invalid arguments for audit.get: args: \"id\" is a required property"
+    },
+    "calls": {
+      "audit.list": 2
+    }
+  }
+}

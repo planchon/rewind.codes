@@ -11,10 +11,16 @@ build = "build.rs"
 ptc-core.workspace = true
 ptc-engine.workspace = true
 ptc-format.workspace = true
+ptc-mcp.workspace = true
 ptc-runtime.workspace = true
+jsonschema.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+ptc-check.workspace = true
+ptc-codegen.workspace = true
 
 [[bin]]
 name = "ptc-e2e"
