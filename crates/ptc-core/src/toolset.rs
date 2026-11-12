@@ -236,7 +236,10 @@ impl ToolPolicy {
 /// registers the toolset.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ToolsetError {
-    #[error("invalid server name {0:?}: expected an identifier (letters, digits, _ and $)")]
+    #[error(
+        "invalid server name {0:?}: expected an identifier (letters, digits, _ and $) that is \
+         not a reserved word of JavaScript"
+    )]
     InvalidServerName(String),
     #[error("server {0:?} is declared twice")]
     DuplicateServer(String),
@@ -374,7 +377,7 @@ fn check_server(server: &McpServer) -> Result<(), ToolsetError> {
         server: server.name.clone(),
         message: message.to_owned(),
     };
-    if !is_identifier(&server.name) {
+    if !is_identifier(&server.name) || is_reserved(&server.name) {
         return Err(ToolsetError::InvalidServerName(server.name.clone()));
     }
     if server.concurrency == 0 {
@@ -417,7 +420,15 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
         }
         ToolRoute::Host { group: Some(group) } => {
             if !is_identifier(group) {
-                return Err(invalid(format!("its group {group:?} is not an identifier")));
+                return Err(invalid(format!(
+                    "its group {group:?} is not an identifier (letters, digits, _ and $)"
+                )));
+            }
+            if is_reserved(group) {
+                return Err(invalid(format!(
+                    "its group {group:?} is a reserved word of JavaScript: scripts could not \
+                     import it"
+                )));
             }
             in_namespace(name, group).ok_or_else(|| misplaced(format!("{group}.<tool>")))?;
         }
@@ -427,6 +438,13 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
                 return Err(misplaced(format!(
                     "without a dot, or be put in the host-tool group {group:?}"
                 )));
+            }
+            if is_reserved(name) {
+                return Err(invalid(
+                    "its name is a reserved word of JavaScript: scripts could not import it, \
+                     unless it is put in a host-tool group"
+                        .into(),
+                ));
             }
         }
         ToolRoute::Builtin(builtin) => {
@@ -474,11 +492,75 @@ fn in_namespace<'a>(name: &'a str, namespace: &str) -> Option<&'a str> {
         .filter(|local| !local.is_empty())
 }
 
-/// An ECMAScript identifier in ASCII: what `ptc:tools` can export a namespace as.
+/// An ECMAScript identifier name in ASCII. What `ptc:tools` exports a namespace or a host tool
+/// as must also not be a [reserved word](RESERVED_WORDS).
 fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+/// The names no declaration of `ptc:tools` can take: an ES module is strict mode code, and its
+/// exports are declarations (`export const github`, `export function ask_user`). They are the
+/// reserved words of ECMAScript 2025, those of strict mode, and `eval` and `arguments`, which
+/// strict mode does not let a declaration take. The contextual keywords (`async`, `of`, `type`…)
+/// and the global names (`undefined`, `globalThis`…) are identifiers a module may declare.
+pub const RESERVED_WORDS: &[&str] = &[
+    // ReservedWord.
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "import",
+    "in",
+    "instanceof",
+    "new",
+    "null",
+    "return",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+    // Reserved in strict mode code.
+    "implements",
+    "interface",
+    "let",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "static",
+    // Not the name of a declaration in strict mode code.
+    "arguments",
+    "eval",
+];
+
+fn is_reserved(name: &str) -> bool {
+    RESERVED_WORDS.contains(&name)
 }
 
 // -------------------------------------------------------------------------------------------
@@ -767,5 +849,136 @@ mod tests {
             ),
             ToolsetError::InvalidToolName(String::new())
         );
+    }
+
+    fn server(name: &str) -> McpServer {
+        McpServer::new(
+            name,
+            McpTransport::Http {
+                url: format!("https://mcp.example.com/{name}"),
+            },
+        )
+    }
+
+    /// A toolset where `name` becomes an identifier of `ptc:tools`: as a server, as a host-tool
+    /// group, and as a host tool without a group.
+    fn as_identifier(name: &str) -> [Result<Toolset, ToolsetError>; 3] {
+        let tool = Tool::new(
+            format!("{name}.find"),
+            ToolRoute::Mcp {
+                server: name.to_owned(),
+            },
+            json!({}),
+        );
+        let grouped = Tool::new(
+            format!("{name}.ask"),
+            ToolRoute::Host {
+                group: Some(name.to_owned()),
+            },
+            json!({}),
+        );
+        let bare = Tool::new(name, ToolRoute::Host { group: None }, json!({}));
+        [
+            Toolset::new([server(name)], [tool]),
+            Toolset::new([], [grouped]),
+            Toolset::new([], [bare]),
+        ]
+    }
+
+    #[test]
+    fn reserved_words_are_refused_where_a_name_becomes_an_identifier() {
+        for word in RESERVED_WORDS {
+            let [server, group, bare] = as_identifier(word);
+            assert_eq!(
+                server.unwrap_err(),
+                ToolsetError::InvalidServerName((*word).to_owned()),
+                "{word}"
+            );
+            let group = group.unwrap_err();
+            assert!(
+                matches!(&group, ToolsetError::InvalidTool { message, .. } if message.contains("reserved word")),
+                "{word}: {group}"
+            );
+            let bare = bare.unwrap_err();
+            assert!(
+                matches!(&bare, ToolsetError::InvalidTool { message, .. } if message.contains("reserved word")),
+                "{word}: {bare}"
+            );
+        }
+        // The keywords of the language, the ones of strict mode, and the names strict mode does
+        // not let a declaration take.
+        for word in [
+            "await",
+            "break",
+            "class",
+            "default",
+            "delete",
+            "enum",
+            "export",
+            "import",
+            "new",
+            "null",
+            "this",
+            "true",
+            "typeof",
+            "void",
+            "yield",
+            "let",
+            "static",
+            "implements",
+            "interface",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "eval",
+            "arguments",
+        ] {
+            assert!(RESERVED_WORDS.contains(&word), "{word}");
+        }
+        assert_eq!(
+            ToolsetError::InvalidServerName("delete".into()).to_string(),
+            "invalid server name \"delete\": expected an identifier (letters, digits, _ and $) \
+             that is not a reserved word of JavaScript"
+        );
+    }
+
+    #[test]
+    fn contextual_keywords_and_other_names_are_identifiers() {
+        for name in [
+            "async",
+            "of",
+            "get",
+            "set",
+            "from",
+            "as",
+            "type",
+            "namespace",
+            "module",
+            "declare",
+            "string",
+            "number",
+            "any",
+            "never",
+            "unknown",
+            "undefined",
+            "globalThis",
+            "NaN",
+            "constructor",
+            "prototype",
+            "Delete",
+            "DEFAULT",
+            "delete_",
+            "_class",
+            "$new",
+            "github",
+        ] {
+            for toolset in as_identifier(name) {
+                assert!(toolset.is_ok(), "{name}: {toolset:?}");
+            }
+        }
+        // A host tool whose name is no identifier at all stays out of `ptc:tools`, as before.
+        let dashed = Tool::new("ask-user", ToolRoute::Host { group: None }, json!({}));
+        assert!(Toolset::new([], [dashed]).is_ok());
     }
 }

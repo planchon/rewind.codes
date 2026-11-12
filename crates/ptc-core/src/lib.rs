@@ -49,8 +49,8 @@ pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use toolset::{
-    Builtin, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
-    ToolsetError,
+    Builtin, Interruption, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute,
+    Toolset, ToolsetError,
 };
 
 /// The JSON value type carried by payloads.
