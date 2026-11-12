@@ -91,7 +91,10 @@ async fn cpu_time_is_bounded_per_call_into_the_script() {
     let harness = server.key(Role::Harness, &[]).await;
     // In `main(input)`, and in the delivery of a timer: each call has its own 5 s.
     let in_main = harness
-        .start_run(&start("export default async function main() { for (;;) {} }"), None)
+        .start_run(
+            &start("export default async function main() { for (;;) {} }"),
+            None,
+        )
         .await
         .unwrap();
     let in_delivery = harness
@@ -109,10 +112,7 @@ export default async function main() {
         .unwrap();
     for run in [&in_main, &in_delivery] {
         let run = ended(&harness, &run.id, Duration::from_secs(120)).await;
-        assert_limit(
-            &run,
-            "more than 5000ms of CPU time reacting to one trigger",
-        );
+        assert_limit(&run, "more than 5000ms of CPU time reacting to one trigger");
     }
     assert_eq!(
         events(&harness, &in_main.id).await,
@@ -312,7 +312,9 @@ export default async function main() {
     let args = harness.start_run(&args, None).await.unwrap();
     let output = harness
         .start_run(
-            &start(r#"export default async function main() { return "x".repeat(8 * 1024 * 1024); }"#),
+            &start(
+                r#"export default async function main() { return "x".repeat(8 * 1024 * 1024); }"#,
+            ),
             None,
         )
         .await
@@ -337,25 +339,28 @@ async fn ttls_are_bounded_by_the_deployment() {
 export default async function main() { await signal("never"); }"#;
 
     let run = harness.start_run(&start(script), None).await.unwrap();
-    let ttl = run
-        .expires_at
-        .duration_since(run.created_at)
-        .unsigned_abs();
-    assert_eq!(ttl, Duration::from_secs(3_600), "the deployment's default TTL");
+    let ttl = run.expires_at.duration_since(run.created_at).unsigned_abs();
+    assert_eq!(
+        ttl,
+        Duration::from_secs(3_600),
+        "the deployment's default TTL"
+    );
 
     let mut longer = start(script);
     longer.ttl = Some("2d".parse().unwrap());
     let refused = problem(harness.start_run(&longer, None).await.unwrap_err());
-    assert_eq!(refused.kind(), Some(ProblemType::InvalidRequest), "{refused:?}");
+    assert_eq!(
+        refused.kind(),
+        Some(ProblemType::InvalidRequest),
+        "{refused:?}"
+    );
     assert!(refused.detail.contains("TTL"), "{}", refused.detail);
 
     let mut shorter = start(script);
     shorter.ttl = Some("12h".parse().unwrap());
     let run = harness.start_run(&shorter, None).await.unwrap();
     assert_eq!(
-        run.expires_at
-            .duration_since(run.created_at)
-            .unsigned_abs(),
+        run.expires_at.duration_since(run.created_at).unsigned_abs(),
         Duration::from_secs(12 * 3_600)
     );
     server.stop().await;

@@ -36,7 +36,7 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
 | `ptc-format` | Format v1: one event per row, journal documents (the run's id, script and pinned toolset, then its entries), cassettes, pinned toolsets (canonical, hashing to the toolset's digest), values in canonical form. Golden fixtures pin every variant's spelling; unknown versions, types and fields are refused. |
 | `ptc-engine` | The final ports of 0.1, each with an in-memory adapter; the six conformance suites, of `JournalStore`, `BlobStore`, `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender`, passed by the in-memory adapters. Use cases: start and fork (script checks, the type-check through the `TypeChecker` port unless skipped, idempotency key, TTL, the tenant's quota, credentials), signal with idempotency key, cancel, activate, fire timers, expire runs, quarantine and give up, replay, export of journal documents, forks (with the parent's calls reused, keys of calls left without an outcome, and the compatibility report). Activation with the commit invariant, limits and the cancellation grace; sticky execution in an LRU instance cache bounded by count and memory; the lease renewed every 10 s; quarantine after 5 failed activations, retried once by a new build. Tool tasks: policies and backoff, claims heartbeated up to the execution timeout, credentials resolved at dispatch, parked tasks and their webhooks, approvals, the host-tool worker's claim, heartbeat, deferral and answers by token, the `webhook` built-in, a routing dispatcher. Payloads in three tiers. The projector (read model, run telemetry with deterministic span ids, run metrics, lifecycle webhooks); service telemetry through `tracing`: the activation span under the run span, the tool attempt span under the tool call span, and the measurements of `ptc_engine::metrics`; mock mode (cassettes, mock handlers, static responses, scenarios), retention and deletion, the LLM trace. Driver in real and virtual time, which jumps to timers, tool call retries and deadlines; use-case tests on a fake executor. |
-| `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, started from the epoch's V8 snapshot, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, the web-standard globals of `deno_web`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), a CPU watchdog on the isolate thread's CPU clock and a heap limit; args validated against the pinned schema inside the op; `webhook()`; `fetch` with the `http` tool, in the format of `ptc-mcp`'s; `ptc:tools` generated from routes, MCP content with `text()` and `json()`; TypeScript mock handlers as a `ToolDispatcher` (`TsMocks`); the memory each instance holds, from V8's heap statistics, for the sticky cache's bound. |
+| `ptc-runtime` | `V8Executor`: the checks at start (syntax, imported modules and names, default export), an isolate per instance on its own thread, started from the epoch's V8 snapshot, the epoch-1 glue, logical time, sfc32 and ChaCha20 keyed by the seed, `run.id` and `run.startedAt`, the web-standard globals of `deno_web`, how a script ends (forgotten `await`, unhandled rejection, `DeadlockError`), a CPU watchdog on the isolate thread's CPU clock and a heap limit; args validated against the pinned schema inside the op; `webhook()`; `fetch` with the `http` tool, in the format of `ptc-mcp`'s; `ptc:tools` generated from routes, MCP content with `text()` and `json()`; TypeScript mock handlers as a `ToolDispatcher` (`TsMocks`); the memory each instance holds, from V8's heap statistics, for the sticky cache's bound; the JavaScript of `deno_web` and `deno_webidl` vendored and given to the snapshot build from memory, so the binary runs on a machine without the cargo registry ([08](08-decisions.md#taken-while-building-operations-november-2026)). |
 | `ptc-store-turso` | `JournalStore`, `ReadModel` and `SecretStore` on Turso Database (`turso` 0.8.3): the tables of 06, events in format v1, schema version 1 with migrations embedded and a newer schema refused, settings and virtual time in `meta`, secrets encrypted with a data key per tenant under the master key. Passes the three conformance suites, each check on a new database file; `examples/load.rs` measures commit latency and throughput ([08](08-decisions.md#taken-while-building-the-embedded-store-november-2026)). |
 | `ptc-store-postgres` | `JournalStore`, `ReadModel` and `SecretStore` on Postgres with sqlx 0.8: `FOR UPDATE SKIP LOCKED`, fencing, tenant in every key, fair `acquire_runnable`, advisory locks for the claim limits, embedded migrations run under a lock; `history` and `inbox` keyed by `run_id` and tested hash-partitioned. Passes the conformance suites against Postgres 17 in Docker, and a concurrency test with 3 engines × 4 workers on one database; about 830 activations/s with 4 × 4 on a laptop (`cargo run --release -p ptc-store-postgres --example postgres_load`). |
 | `ptc-blob` | `BlobStore` on local files (`FileBlobs`: atomic writes, staged, synced and renamed, under `{tenant}/sha256/`) and on S3 or any S3-compatible service (`S3Blobs`, through `object_store`, with conditional puts); `CachedBlobs`, the workers' cache in memory, bounded in bytes, in front of either. Digests checked on every put and get. Passes the conformance suite of `BlobStore` on files and on MinIO in Docker ([08](08-decisions.md#taken-while-building-the-blob-stores-november-2026)). |
@@ -49,8 +49,10 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-otel` | OpenTelemetry 0.33, OTLP over gRPC or HTTP with protobuf, both with TLS, configured or from the `OTEL_*` variables. `OtelSpanExporter`, the `SpanExporter` port: run telemetry exported with the projector's ids, under the scope `ai-ptc.run`. `install`: the process's `tracing` subscriber, logs on stderr, and `ServiceTelemetry`, its own layer that turns `tracing` spans into OpenTelemetry spans joined to a run's trace by their fields, events into log records, and measurements into metrics exported periodically; sampled per run like run telemetry. Passes the conformance suite of `SpanExporter` on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; the engine is driven under the subscriber to test its spans and metrics ([08](08-decisions.md#taken-while-building-opentelemetry-november-2026), [08](08-decisions.md#taken-while-finishing-service-telemetry-november-2026)). |
 | Sandbox lib | `crates/ptc-runtime/lib/`: `ptc.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. A test checks that the isolate's globals are exactly the declared ones, with and without the `http` tool. |
 | `dashboard` | Scripts, Runs, Run and Tools views over the API `/v1`, with types generated from `api/openapi.json`: filters kept in the URL, the source with each call, timer, signal wait and log next to its line, a timeline that compresses idle gaps, payloads on demand, live through the event stream, light and dark themes. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `ptc-server` embeds ([07](07-code-architecture.md#dashboard)). |
-| `ptc-server` | The engine host. Every endpoint of `ptc-api` with axum: API keys hashed in the store, roles and label scopes, tenants and their quotas (429), `Idempotency-Key`, problem+json; the event stream of a run; host-tool tasks long-polled; inbound webhooks; outbound webhooks signed following Standard Webhooks (passes the `WebhookSender` suite). The worker role: activations, tool dispatch with its claims' heartbeats, the scheduler, the projector (`run.quarantined` included), retention, the retry of quarantined runs, virtual time kept in the store. The embedded server of a `.ptc/` directory: its lock, its socket, its idle stop. The dashboard's build embedded and served. Adapters wired by configuration: Turso or Postgres, files or S3, `ptc-mcp`, `ptc-codegen`, `ptc-check`, `ptc-otel`. Tested over HTTP on Turso and on Postgres (an api server and two workers), and through the `ptc` binary (lock, socket, idle stop, `kill -9` and restart, virtual time). |
+| `ptc-server` | The engine host. Every endpoint of `ptc-api` with axum: API keys hashed in the store, roles and label scopes, tenants and their quotas (429), `Idempotency-Key`, problem+json; the event stream of a run; host-tool tasks long-polled; inbound webhooks; outbound webhooks signed following Standard Webhooks (passes the `WebhookSender` suite). The worker role: activations, tool dispatch with its claims' heartbeats, the scheduler, the projector (`run.quarantined` included), retention, the retry of quarantined runs, virtual time kept in the store. The embedded server of a `.ptc/` directory: its lock, its socket, its idle stop. The dashboard's build embedded and served. Adapters wired by configuration: Turso or Postgres, files or S3, `ptc-mcp`, `ptc-codegen`, `ptc-check`, `ptc-otel`; the deployment's TTLs, the workers' cache bounds, and the retention of the tenants it creates. Tested over HTTP on Turso and on Postgres (an api server and two workers), and through the `ptc` binary (lock, socket, idle stop, `kill -9` and restart, virtual time). |
 | `ptc`, `ptc-cli` | The `ptc` binary: `ptc server …` to `ptc-server`, everything else to `ptc-cli`, which only answers that its commands are not in this build yet. |
+| `ptc-load` | The load generator: drives a deployment's API with many concurrent runs that call its fake MCP server and its host tool, sleep and read signals; reports throughput, latencies and errors, and checks that every run ends as expected and no call is sent beyond its attempts ([numbers](#load-tests)). |
+| Operations | The image (`Dockerfile`: distroless, non-root, one image for every role); the reference deployment (`deploy/`: Compose with Postgres, MinIO, a Collector, an edge, an api and two workers whose only way out is an egress gateway, gVisor and previous-epoch pools as profiles, `check-walls.sh`); CI (`.github/workflows/ci.yml`: Rust, SDK, dashboard, image, the deployment under load with runc and gVisor); the limits tested through the API (`ptc-server/tests/limits.rs`, the SDK's `test/live.test.ts`). |
 
 Not there yet:
 
@@ -75,18 +77,18 @@ The five were approved in November 2026.
 | --- | --- | --- | --- |
 | Domain and format | `ptc-core`, `ptc-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
 | Engine | `ptc-engine` | Nothing beyond what `ptc-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
-| Runtime (V8) | `ptc-runtime` | Nothing beyond the load and limit tests of operations | Engine ports, pinned toolset, sandbox lib |
+| Runtime (V8) | `ptc-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
 | Stores | `ptc-store-turso`, `ptc-store-postgres` | Nothing: both pass every conformance suite | Engine ports, stored format v1 |
 | Blobs | `ptc-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `ptc-codegen`, `ptc-mcp` | `ptc-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `ptc-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `ptc-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `ptc-otel` | Nothing beyond what `ptc-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `ptc-server`, `ptc-api` | Nothing beyond the load tests of operations | Engine ports, HTTP API `/v1` |
+| Server | `ptc-server`, `ptc-api` | Nothing | Engine ports, HTTP API `/v1` |
 | CLI | `ptc-cli` | Client of the embedded or a remote server, through `ptc-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
 | Dashboard | `dashboard` | Scripts, Runs, Run and Tools views over the public API | HTTP API `/v1` |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
-| Operations | deployment | Sandboxed workers; worker pools of previous epochs; retention and archiving; load and limit tests | Engine ports, HTTP API `/v1` |
+| Operations | `Dockerfile`, `deploy/`, CI, `ptc-load` | Nothing | Engine ports, HTTP API `/v1` |
 
 ## Designs settled (November 2026)
 
@@ -137,6 +139,39 @@ specified.
 - Load tests and limit tests pass.
 - An operator finds any run by label, tool or error in the dashboard, and sees its code next
   to its trace.
+
+## Load tests
+
+`deploy/acceptance.sh` runs the reference deployment (`deploy/`: an api server and two workers
+of 2 CPUs and 1 GiB each, Postgres 17, MinIO, a Collector, the egress gateway) and loads it with
+`ptc-load`. Each run makes an MCP call, a host-tool call, an MCP call that fails transiently once
+and is retried after its backoff (0.5–1 s), sleeps 1 s, reads a signal sent twice with one
+idempotency key, and waits 100 ms for a second one: about seven activations. A load passes when
+every run completed with its expected output, no tool call reached its tool more times than the
+run's attempts, every run was in the read model within 3 minutes of the last run's end, and these
+thresholds hold:
+
+| Load | Runs/s at least | p99 end to end at most | p99 activation at most |
+| --- | --- | --- | --- |
+| 1,000 runs, 100 at once | 10 | 15 s | 2 s |
+| 200 runs, 50 at once, 100 KiB payloads (S3) | 4 | 20 s | 3 s |
+
+Measured in November 2026 on a MacBook (Apple silicon, Docker Desktop with 8 CPUs and 3.9 GiB,
+other builds running), latencies in milliseconds:
+
+| Load | Runs/s | Tool calls/s | Start p50 / p99 | First call p50 / p99 | Activation p50 / p99 | End to end p50 / p99 | Read model complete after |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1,000 runs, 100 at once | 17.3 | 69 | 488 / 3,418 | 996 / 4,408 | 176 / 610 | 5,325 / 8,733 | 19 s |
+| 200 runs, 50 at once, 100 KiB payloads | 13.0 | 52 | 370 / 1,551 | 244 / 643 | 122 / 317 | 3,705 / 4,486 | 0.1 s |
+
+No error and no duplicated call in either. The floor of a run's end-to-end latency is about 3 s:
+the sleep, the retry's backoff and the signal's timeout. Starts dominate the rest: each start
+type-checks the script with tsgo in the api server, so a burst of starts queues there. An
+activation (a host tool's result accepted to the run's next MCP call) takes 120–180 ms at the
+median, most of it the up to 250 ms an api server's write waits before another process's worker
+polls it ([08](08-decisions.md#taken-while-building-the-server-november-2026)). Under the
+heavier load the projector lags the journal by up to 20 s, which `GET /v1/runs` and the
+dashboard show.
 
 ## Open questions
 

@@ -1,0 +1,21 @@
+# The edge: the only published port. Everything goes to the api role, except `POST /v1/test`,
+# which runs a script and therefore runs on the workers (the api role answers it with 503).
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	handle /v1/test {
+		reverse_proxy worker-1-net:8080 worker-2-net:8080 {
+			lb_policy round_robin
+			lb_try_duration 5s
+		}
+	}
+	handle {
+		# Event streams and long polls: no buffering.
+		reverse_proxy api:8080 {
+			flush_interval -1
+		}
+	}
+}

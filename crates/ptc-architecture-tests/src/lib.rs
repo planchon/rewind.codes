@@ -40,7 +40,7 @@ pub fn layer(name: &str) -> Option<Layer> {
         "ptc-runtime" | "ptc-store-turso" | "ptc-store-postgres" | "ptc-blob" | "ptc-mcp"
         | "ptc-check" | "ptc-otel" => Layer::Adapter,
         "ptc-cli" | "ptc-server" => Layer::CompositionRoot,
-        "ptc-architecture-tests" | "ptc-e2e" | "evals" => Layer::Tooling,
+        "ptc-architecture-tests" | "ptc-e2e" | "ptc-load" | "evals" => Layer::Tooling,
         "ptc" => Layer::EntryPoint,
         _ => return None,
     })
