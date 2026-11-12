@@ -333,10 +333,10 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
             .map_err(|DiscoveryError(message)| {
                 ApiError::new(ProblemType::ToolsetUnavailable, message)
             })?;
-        for unknown in server
+        if let Some(unknown) = server
             .policies
             .keys()
-            .filter(|name| !listed.iter().any(|tool| tool.local_name() == name.as_str()))
+            .find(|name| !listed.iter().any(|tool| tool.local_name() == name.as_str()))
         {
             return Err(invalid_toolset(format!(
                 "MCP server {}: a policy names {unknown:?}, which the server does not have",
