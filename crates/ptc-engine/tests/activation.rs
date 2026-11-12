@@ -295,7 +295,28 @@ async fn a_worker_never_retries_the_quarantined_runs_of_tenants_it_does_not_serv
     let reports = engine.retry_quarantined().await.unwrap();
     assert!(reports.is_empty(), "{reports:?}");
     let record = engine.get_run(&run).await.unwrap().unwrap();
-    assert!(record.quarantine.is_some(), "still quarantined");
+    let quarantine = record.quarantine.expect("still quarantined");
+    assert_eq!(quarantine.retried_by, None, "build-2's retry is not spent");
     assert_eq!(record.status, RunStatus::Active);
     assert_eq!(engine.cached_instances(), 0, "no instance of acme's script");
+
+    // A worker of the same build in acme's pool still retries it, once.
+    let mut config = replaying();
+    config.build = "build-2".into();
+    config.tenants = TenantScope::Only(BTreeSet::from([acme]));
+    let engine = ptc_engine::Engine::new(engine.into_adapters(), config);
+    let reports = engine.retry_quarantined().await.unwrap();
+    assert_eq!(reports.len(), 1, "{reports:?}");
+    assert!(
+        matches!(
+            reports[0].outcome,
+            ActivationOutcome::Committed {
+                status: RunStatus::Completed,
+                ..
+            }
+        ),
+        "{reports:?}"
+    );
+    let record = engine.get_run(&run).await.unwrap().unwrap();
+    assert_eq!(record.quarantine, None);
 }

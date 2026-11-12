@@ -201,6 +201,7 @@ CREATE TABLE payloads (
     preview TEXT NOT NULL,
     value TEXT,
     unreferenced_since INTEGER,
+    deletion_started_at INTEGER,
     PRIMARY KEY (tenant, digest)
 ) STRICT;
 

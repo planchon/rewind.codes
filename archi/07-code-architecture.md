@@ -117,7 +117,7 @@ enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
 get_run(run)                       list_runs(RunFilter { tenant, status, labels, quarantined, after, limit })
 acquire_runnable(AcquireRunnable { owner, epochs, tenants, now, lease_duration, sticky_grace, draw }) -> Lease { run, fence }
 acquire_run(run, owner, now, lease_duration) -> Lease   # any run that has not ended, quarantined or not
-acquire_quarantined(owner, build, epochs, now, lease_duration) -> Lease   # each quarantined run once per build
+acquire_quarantined(owner, build, epochs, tenants, now, lease_duration) -> Lease   # each quarantined run once per build
 renew(lease, now, lease_duration)
 load_history(run, from)            take_inbox(lease)
 commit_activation(lease, Activation { entries, consumed, payloads, tool_calls, timers, cancelled_timers, status }, now)
@@ -136,7 +136,9 @@ tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
 get_payload(tenant, digest) -> { digest, size, preview, value? }
+reserve_payloads(tenant, [PayloadRecord], now) -> [digest being deleted]
 unreferenced_payloads(now, limit) -> [(tenant, digest)]    forget_payloads([(tenant, digest)], now)
+drop_payloads([(tenant, digest)], started) -> count
 runs_to_archive(now, limit)        archive_run(run, document, now)
 runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
@@ -180,7 +182,8 @@ Contracts, all covered by the conformance suite:
   ([activations](03-execution.md#activations)).
 - `quarantine` releases the lease without committing anything and records the mismatch (kind
   `non_determinism`); `release_quarantine` makes the run runnable again; `acquire_quarantined`
-  hands each quarantined run of the given epochs to one worker of a new build, once
+  hands each quarantined run of the given epochs and tenants to one worker of a new build, once;
+  a run of a tenant out of scope is left to a worker of its own pool
   ([execution](03-execution.md#non-determinism-and-quarantine)).
 - `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }`, once, for the runs past
   their deadline, as `fire_due_timers` does for timers. It enqueues nothing for a quarantined
@@ -211,10 +214,18 @@ Contracts, all covered by the conformance suite:
   `payload_refs` ([payloads](06-storage-and-scale.md#payloads)). `delete_run` starts the grace
   of the payloads it leaves unreferenced; `unreferenced_payloads` and `forget_payloads` apply
   each tenant's grace.
-- `runs_to_archive` lists the finished runs past their tenant's journal retention;
-  `archive_run` removes their history once their journal document is in the `BlobStore`, and
-  keeps the record and the payload references; `runs_to_delete` lists the archives past their
-  retention; `delete_run` erases a run, its feed items and its payload references
+- No commit references a deleted blob. The engine reserves the rows of large payloads
+  (`reserve_payloads`) before writing their blobs: a reserved row starts its grace again. The
+  cleanup marks the rows it deletes (`forget_payloads`), deletes their blobs, then removes the
+  rows still marked (`drop_payloads`). A commit refuses a payload held by digest whose row is not
+  reserved or is marked (`Conflict`); a payload whose deletion has started is committed with its
+  value in its row, which stops the deletion. A deletion not finished within
+  `PAYLOAD_DELETION_TIMEOUT` (1 h) is started again ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
+- `runs_to_archive` lists the finished runs past their tenant's journal retention whose feed
+  items are all applied; `archive_run` removes their history once their journal document is in
+  the `BlobStore` (never while feed items are left), and keeps the record and the payload
+  references; `runs_to_delete` lists the archives past their retention; `delete_run` erases a
+  run, its feed items and its payload references
   ([retention](06-storage-and-scale.md#retention-and-deletion)).
 - Only scripts that compile are stored: `start_run` refuses the others before creating a run
   ([execution](03-execution.md#starting-a-run)). `ScriptExecutor::compile` takes the toolset,

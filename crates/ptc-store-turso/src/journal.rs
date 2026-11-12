@@ -11,11 +11,11 @@ use ptc_core::{
 use ptc_engine::ports::{
     AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
-    Lease, NewRun, ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES,
-    Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata, RunRecord, RunRef, StoreError,
-    StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, ToolDeclarations, ToolTask, TraceContext, Trigger, WebhookTarget,
-    WebhookToken, deferred_timeout_failure,
+    Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
+    RunRecord, RunRef, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask,
+    TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
 use turso::{Connection, Row, Value};
 
@@ -498,6 +498,14 @@ fn feed_consumer(name: &str) -> Result<FeedConsumer, Error> {
 }
 
 /// A call with a limit of 0 does nothing, and opens no transaction.
+/// The conflict of a commit referencing a blob that may be gone.
+fn unreserved(payload: Digest) -> StoreError {
+    StoreError::Conflict(format!(
+        "payload {} has no reserved row, or is being deleted: its blob may be gone",
+        payload.short()
+    ))
+}
+
 fn nothing(limit: usize) -> bool {
     limit == 0
 }
@@ -954,6 +962,7 @@ impl JournalStore for TursoStore {
         owner: &str,
         build: &str,
         epochs: &[Epoch],
+        tenants: &TenantScope,
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
@@ -964,12 +973,13 @@ impl JournalStore for TursoStore {
             let Some(epochs) = epochs_clause("epoch", epochs, &mut params) else {
                 return Ok(None);
             };
+            let scope = scope_clause("tenant", tenants, &mut params);
             let query = format!(
                 "SELECT tenant, id, fence FROM runs \
                  WHERE status NOT IN {terminal} AND (lease_until IS NULL OR lease_until <= ?) \
                  AND quarantine_kind IS NOT NULL \
                  AND (quarantine_retried_by IS NULL OR quarantine_retried_by <> ?) AND {epochs} \
-                 ORDER BY quarantine_since, tenant, id LIMIT 1",
+                 AND {scope} ORDER BY quarantine_since, tenant, id LIMIT 1",
                 terminal = terminal!(),
             );
             let Some(row) = sql::query_dynamic(connection, &query, params)
@@ -1092,6 +1102,20 @@ impl JournalStore for TursoStore {
                     )));
                 }
             }
+            // A payload of the blob tier needs a reserved row whose deletion has not started:
+            // its blob may be gone otherwise.
+            for payload in activation.payloads.iter().filter(|p| p.value.is_none()) {
+                let reserved = sql::query_row(
+                    connection,
+                    "SELECT 1 FROM payloads WHERE tenant = ? AND digest = ? \
+                     AND deletion_started_at IS NULL",
+                    vec![tenant(&lease.run.tenant), digest(payload.digest)],
+                )
+                .await?;
+                if reserved.is_none() {
+                    return Err(unreserved(payload.digest));
+                }
+            }
 
             for entry in &activation.entries {
                 sql::execute(
@@ -1196,9 +1220,10 @@ impl JournalStore for TursoStore {
                 sql::execute(
                     connection,
                     "INSERT INTO payloads (tenant, digest, bytes, preview, value, \
-                     unreferenced_since) VALUES (?, ?, ?, ?, ?, NULL) \
+                     unreferenced_since, deletion_started_at) VALUES (?, ?, ?, ?, ?, NULL, NULL) \
                      ON CONFLICT (tenant, digest) DO UPDATE SET \
-                     value = COALESCE(payloads.value, excluded.value), unreferenced_since = NULL",
+                     value = COALESCE(payloads.value, excluded.value), unreferenced_since = NULL, \
+                     deletion_started_at = NULL",
                     vec![
                         tenant(&lease.run.tenant),
                         digest(payload.digest),
@@ -2036,6 +2061,60 @@ impl JournalStore for TursoStore {
         }))
     }
 
+    async fn reserve_payloads(
+        &self,
+        tenant_id: &TenantId,
+        payloads: &[PayloadRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let mut deleting = Vec::new();
+            for payload in payloads {
+                let row = sql::query_row(
+                    connection,
+                    "SELECT deletion_started_at IS NOT NULL FROM payloads \
+                     WHERE tenant = ? AND digest = ?",
+                    vec![tenant(tenant_id), digest(payload.digest)],
+                )
+                .await?;
+                match row {
+                    Some(row) if row.boolean(0)? => deleting.push(payload.digest),
+                    // A row without references starts its grace again.
+                    Some(_) => {
+                        sql::execute(
+                            connection,
+                            "UPDATE payloads SET unreferenced_since = MAX(unreferenced_since, ?) \
+                             WHERE tenant = ? AND digest = ? AND unreferenced_since IS NOT NULL",
+                            vec![ts(now), tenant(tenant_id), digest(payload.digest)],
+                        )
+                        .await?;
+                    }
+                    None => {
+                        sql::execute(
+                            connection,
+                            "INSERT INTO payloads (tenant, digest, bytes, preview, value, \
+                             unreferenced_since, deletion_started_at) \
+                             VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                            vec![
+                                tenant(tenant_id),
+                                digest(payload.digest),
+                                int(payload.size),
+                                text(payload.preview.as_str()),
+                                opt_text(payload.value.as_ref().map(codec::encode_value)),
+                                ts(now),
+                            ],
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Ok(deleting)
+        })
+        .await
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,
@@ -2051,10 +2130,17 @@ impl JournalStore for TursoStore {
             "SELECT p.tenant, p.digest FROM payloads p LEFT JOIN tenants t ON t.id = p.tenant \
              WHERE p.unreferenced_since IS NOT NULL \
              AND p.unreferenced_since <= ? - COALESCE(t.payload_grace_ms, ?) \
+             AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= ? - ?) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
              ORDER BY p.tenant, p.digest LIMIT ?",
-            vec![ts(now), Value::Integer(default_grace), limit(max)],
+            vec![
+                ts(now),
+                Value::Integer(default_grace),
+                ts(now),
+                ms(PAYLOAD_DELETION_TIMEOUT),
+                limit(max),
+            ],
         )
         .await?;
         let payloads = rows
@@ -2075,28 +2161,59 @@ impl JournalStore for TursoStore {
         transaction(connection, async {
             let mut forgotten = Vec::new();
             for (owner, payload) in payloads {
-                let deleted = sql::execute(
+                let started = sql::execute(
                     connection,
-                    "DELETE FROM payloads WHERE tenant = ? AND digest = ? \
+                    "UPDATE payloads SET deletion_started_at = ? WHERE tenant = ? AND digest = ? \
                      AND unreferenced_since IS NOT NULL \
                      AND unreferenced_since <= ? - COALESCE( \
                          (SELECT payload_grace_ms FROM tenants WHERE id = payloads.tenant), ?) \
+                     AND (deletion_started_at IS NULL OR deletion_started_at <= ? - ?) \
                      AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                                      WHERE r.tenant = payloads.tenant \
                                      AND r.digest = payloads.digest)",
                     vec![
+                        ts(now),
                         tenant(owner),
                         digest(*payload),
                         ts(now),
                         Value::Integer(default_grace),
+                        ts(now),
+                        ms(PAYLOAD_DELETION_TIMEOUT),
                     ],
                 )
                 .await?;
-                if deleted > 0 {
+                if started > 0 {
                     forgotten.push((owner.clone(), *payload));
                 }
             }
             Ok(forgotten)
+        })
+        .await
+    }
+
+    async fn drop_payloads(
+        &self,
+        payloads: &[(TenantId, Digest)],
+        started: Timestamp,
+    ) -> Result<usize, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let mut dropped = 0;
+            for (owner, payload) in payloads {
+                let deleted = sql::execute(
+                    connection,
+                    "DELETE FROM payloads WHERE tenant = ? AND digest = ? \
+                     AND deletion_started_at = ? \
+                     AND NOT EXISTS (SELECT 1 FROM payload_refs r \
+                                     WHERE r.tenant = payloads.tenant \
+                                     AND r.digest = payloads.digest)",
+                    vec![tenant(owner), digest(*payload), ts(started)],
+                )
+                .await?;
+                dropped += usize::try_from(deleted).unwrap_or(usize::MAX);
+            }
+            Ok(dropped)
         })
         .await
     }
@@ -2118,6 +2235,7 @@ impl JournalStore for TursoStore {
                 terminal!(),
                 " AND r.archive_document IS NULL AND r.ended_at IS NOT NULL \
                  AND r.ended_at <= ? - COALESCE(t.journal_retention_ms, ?) \
+                 AND NOT EXISTS (SELECT 1 FROM feed f WHERE f.run_id = r.id) \
                  ORDER BY r.ended_at, r.tenant, r.id LIMIT ?"
             ),
             vec![ts(now), Value::Integer(default_journal), limit(max)],
@@ -2141,14 +2259,20 @@ impl JournalStore for TursoStore {
         transaction(connection, async {
             let row = sql::query_row(
                 connection,
-                "SELECT status, archive_document IS NOT NULL FROM runs WHERE id = ? AND tenant = ?",
+                "SELECT status, archive_document IS NOT NULL, \
+                 EXISTS (SELECT 1 FROM feed WHERE run_id = runs.id) \
+                 FROM runs WHERE id = ? AND tenant = ?",
                 vec![run_id(run.id), tenant(&run.tenant)],
             )
             .await?;
             let Some(row) = row else {
                 return Ok(false);
             };
-            if !codec::parse_status(&row.text(0)?)?.is_terminal() || row.boolean(1)? {
+            // A run with feed items left keeps its history until they are applied.
+            if !codec::parse_status(&row.text(0)?)?.is_terminal()
+                || row.boolean(1)?
+                || row.boolean(2)?
+            {
                 return Ok(false);
             }
             for statement in [

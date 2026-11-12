@@ -599,9 +599,15 @@ where
                     event,
                 })
                 .collect();
-            let payloads =
-                payloads::offload(&self.blobs, &run.tenant, &mut entries, self.config.payloads)
-                    .await?;
+            let payloads = payloads::offload(
+                &self.journal,
+                &self.blobs,
+                &run.tenant,
+                &mut entries,
+                self.config.payloads,
+                self.clock.now(),
+            )
+            .await?;
             let consumed = inbox.into_iter().map(|item| item.id).collect();
             let mut activation = Activation::new(entries, consumed, RunStatus::Aborted);
             activation.payloads = payloads;

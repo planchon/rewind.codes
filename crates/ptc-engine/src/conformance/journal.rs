@@ -18,12 +18,12 @@ use serde_json::json;
 use super::{T0, check, tenant};
 use crate::ports::{
     AcquireRunnable, Activation, ApiKey, CompiledScript, CreateRun, Enqueued, ExpiredRuns,
-    FeedConsumer, ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, ParkKind,
-    ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention,
-    RunCursor, RunFilter, RunMetadata, RunRef, STICKY_GRACE, Secret, StoreError, Subscription,
-    TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope,
-    ToolDeclarations, TraceContext, Trigger, WebhookEventType, WebhookToken,
-    deferred_timeout_failure,
+    FeedConsumer, ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask,
+    PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
+    QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention, RunCursor, RunFilter, RunMetadata,
+    RunRef, STICKY_GRACE, Secret, StoreError, Subscription, TaskFilter, TaskRef, TaskState,
+    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, TraceContext, Trigger,
+    WebhookEventType, WebhookToken, deferred_timeout_failure,
 };
 
 const LEASE: Duration = Duration::from_secs(30);
@@ -96,6 +96,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         new_store(),
         a_new_build_retries_each_quarantined_run_once
     );
+    check!(
+        "journal",
+        new_store(),
+        quarantined_runs_are_retried_by_workers_of_their_tenant
+    );
     check!("journal", new_store(), timers_fire_once_earliest_first);
     check!(
         "journal",
@@ -163,7 +168,17 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        a_payload_being_deleted_is_never_committed_without_its_value
+    );
+    check!(
+        "journal",
+        new_store(),
         finished_runs_are_archived_then_deleted
+    );
+    check!(
+        "journal",
+        new_store(),
+        runs_with_feed_items_left_are_not_archived
     );
     check!("journal", new_store(), deleting_a_run_erases_it);
     check!("journal", new_store(), tenants_and_api_keys_are_stored);
@@ -1426,7 +1441,7 @@ pub async fn a_new_build_retries_each_quarantined_run_once<S: JournalStore>(stor
 
     let retry = |build: &'static str, at: Timestamp| async move {
         store
-            .acquire_quarantined("w", build, EPOCHS, at, LEASE)
+            .acquire_quarantined("w", build, EPOCHS, &ALL_TENANTS, at, LEASE)
             .await
             .expect("acquire_quarantined")
     };
@@ -1465,6 +1480,48 @@ pub async fn a_new_build_retries_each_quarantined_run_once<S: JournalStore>(stor
         None,
         "a leased run is not offered"
     );
+}
+
+pub async fn quarantined_runs_are_retried_by_workers_of_their_tenant<S: JournalStore>(store: &S) {
+    let globex = tenant("globex");
+    let run = start(store, run_ref(1)).await;
+    let lease = lease_of(store, &run, T0).await;
+    store
+        .quarantine(&lease, "mismatch".into(), T0)
+        .await
+        .expect("quarantine");
+
+    let retry = |scope: TenantScope| async move {
+        store
+            .acquire_quarantined("w", "build-2", EPOCHS, &scope, T0, LEASE)
+            .await
+            .expect("acquire_quarantined")
+    };
+    for scope in [
+        TenantScope::Only(BTreeSet::from([globex.clone()])),
+        TenantScope::Except(BTreeSet::from([acme()])),
+        TenantScope::Only(BTreeSet::new()),
+    ] {
+        assert_eq!(retry(scope.clone()).await, None, "{scope:?}");
+    }
+    let quarantine = record(store, &run).await.quarantine.expect("quarantined");
+    assert_eq!(
+        quarantine.retried_by, None,
+        "a worker of another pool does not spend the build's retry"
+    );
+    let unleased = store
+        .acquire_run(&run, "other", T0, LEASE)
+        .await
+        .expect("acquire_run")
+        .expect("the run was not leased");
+    store.release(&unleased).await.expect("release");
+
+    let lease = retry(TenantScope::Only(BTreeSet::from([globex, acme()])))
+        .await
+        .expect("a worker of acme's pool retries it");
+    assert_eq!(lease.run, run);
+    let quarantine = record(store, &run).await.quarantine.expect("quarantined");
+    assert_eq!(quarantine.retried_by.as_deref(), Some("build-2"));
 }
 
 // -------------------------------------------------------------------------------------------
@@ -2490,24 +2547,59 @@ fn payload(digest: Digest, value: Option<serde_json::Value>) -> PayloadRecord {
     }
 }
 
-/// Commits one log entry referencing these payloads.
+/// Commits one log entry referencing these payloads, those of the blob tier reserved first, as
+/// the engine reserves them before writing their blobs.
 async fn reference<S: JournalStore>(
     store: &S,
     run: &RunRef,
     payloads: Vec<PayloadRecord>,
     at: Timestamp,
 ) {
+    let large: Vec<PayloadRecord> = payloads
+        .iter()
+        .filter(|payload| payload.value.is_none())
+        .cloned()
+        .collect();
+    let deleting = store
+        .reserve_payloads(&run.tenant, &large, at)
+        .await
+        .expect("reserve_payloads");
+    assert_eq!(deleting, [], "no deletion started");
+    let result = commit_payloads(store, run, payloads, at).await;
+    result.expect("commit_activation");
+}
+
+/// Commits one log entry referencing these payloads, as they are.
+async fn commit_payloads<S: JournalStore>(
+    store: &S,
+    run: &RunRef,
+    payloads: Vec<PayloadRecord>,
+    at: Timestamp,
+) -> Result<(), StoreError> {
     let lease = lease_of(store, run, at).await;
     let next = record(store, run).await.history_len;
     let mut activation = Activation::new(vec![log_entry(next)], vec![], RunStatus::Active);
     activation.payloads = payloads;
-    commit(store, &lease, activation, at).await;
+    let committed = store.commit_activation(&lease, activation, at).await;
     store.release(&lease).await.expect("release");
+    committed
 }
 
 pub async fn payloads_are_recorded_and_referenced_at_commit<S: JournalStore>(store: &S) {
     let (blob, table) = (Digest::of(b"blob"), Digest::of(b"table"));
     let run = start(store, run_ref(1)).await;
+    // A payload of the blob tier is committed only once its row is reserved: its blob may be
+    // gone otherwise.
+    let unreserved = commit_payloads(store, &run, vec![payload(blob, None)], T0).await;
+    assert!(
+        matches!(unreserved, Err(StoreError::Conflict(_))),
+        "{unreserved:?}"
+    );
+    assert_eq!(record(store, &run).await.history_len, 1, "nothing written");
+    assert_eq!(
+        store.get_payload(&acme(), blob).await.expect("get_payload"),
+        None
+    );
     reference(
         store,
         &run,
@@ -2631,6 +2723,40 @@ pub async fn unreferenced_payloads_are_forgotten_after_their_grace<S: JournalSto
     expected.sort();
     assert_eq!(forgotten, expected);
     assert_eq!(
+        store
+            .forget_payloads(&all, due)
+            .await
+            .expect("forget_payloads"),
+        [],
+        "a deletion starts once"
+    );
+    assert_eq!(unreferenced(due).await, [], "deletions under way");
+
+    // Their blobs are deleted, then their rows.
+    assert!(
+        store
+            .get_payload(&acme(), a)
+            .await
+            .expect("get_payload")
+            .is_some(),
+        "until it is dropped"
+    );
+    assert_eq!(
+        store
+            .drop_payloads(&forgotten, later(due, 1))
+            .await
+            .expect("drop_payloads"),
+        0,
+        "only the deletion started at that time"
+    );
+    assert_eq!(
+        store
+            .drop_payloads(&forgotten, due)
+            .await
+            .expect("drop_payloads"),
+        2
+    );
+    assert_eq!(
         store.get_payload(&acme(), a).await.expect("get_payload"),
         None
     );
@@ -2642,6 +2768,152 @@ pub async fn unreferenced_payloads_are_forgotten_after_their_grace<S: JournalSto
             .is_some()
     );
     assert_eq!(unreferenced(due).await, []);
+}
+
+pub async fn a_payload_being_deleted_is_never_committed_without_its_value<S: JournalStore>(
+    store: &S,
+) {
+    let blob = Digest::of(b"blob");
+    let grace = Retention::default().payload_grace;
+    let unreferenced = |at: Timestamp| async move {
+        store
+            .unreferenced_payloads(at, 10)
+            .await
+            .expect("unreferenced")
+    };
+    let reserve = |at: Timestamp| async move {
+        store
+            .reserve_payloads(&acme(), &[payload(blob, None)], at)
+            .await
+            .expect("reserve_payloads")
+    };
+    let forget = |at: Timestamp| async move {
+        store
+            .forget_payloads(&[(acme(), blob)], at)
+            .await
+            .expect("forget_payloads")
+    };
+    let drop = |started: Timestamp| async move {
+        store
+            .drop_payloads(&[(acme(), blob)], started)
+            .await
+            .expect("drop_payloads")
+    };
+    let first = start(store, run_ref(1)).await;
+    reference(store, &first, vec![payload(blob, None)], T0).await;
+    store.delete_run(&first, T0).await.expect("delete_run");
+    let due = T0.saturating_add(grace);
+    assert_eq!(unreferenced(due).await, [(acme(), blob)]);
+
+    // Reserved before the cleanup starts: its grace starts again, so the cleanup keeps it and
+    // the commit finds it.
+    let writer = start(store, run_ref(2)).await;
+    let reserved_at = later(due, 1);
+    assert_eq!(reserve(reserved_at).await, []);
+    assert_eq!(unreferenced(reserved_at).await, []);
+    assert_eq!(forget(reserved_at).await, [], "reserved: kept");
+    commit_payloads(store, &writer, vec![payload(blob, None)], reserved_at)
+        .await
+        .expect("commit_activation");
+    store
+        .delete_run(&writer, reserved_at)
+        .await
+        .expect("delete_run");
+
+    // The cleanup started before the reservation: the payload is reported as being deleted and
+    // left as it is. Its value is committed in its row, which stops the deletion.
+    let due = reserved_at.saturating_add(grace);
+    assert_eq!(forget(due).await, [(acme(), blob)]);
+    let writer = start(store, run_ref(3)).await;
+    assert_eq!(reserve(due).await, [blob]);
+    let refused = commit_payloads(store, &writer, vec![payload(blob, None)], due).await;
+    assert!(
+        matches!(refused, Err(StoreError::Conflict(_))),
+        "its blob may be gone: {refused:?}"
+    );
+    let value = json!({ "large": true });
+    commit_payloads(
+        store,
+        &writer,
+        vec![payload(blob, Some(value.clone()))],
+        due,
+    )
+    .await
+    .expect("commit_activation");
+    assert_eq!(drop(due).await, 0, "taken back by the commit");
+    assert_eq!(
+        store
+            .get_payload(&acme(), blob)
+            .await
+            .expect("get_payload")
+            .and_then(|record| record.value),
+        Some(value),
+        "the row holds the value"
+    );
+    store.delete_run(&writer, due).await.expect("delete_run");
+
+    // Reserved, then the writer stalls past the grace: the cleanup deletes the payload, and the
+    // commit that relied on the blob is refused, the row being deleted or gone.
+    let writer = start(store, run_ref(4)).await;
+    let reserved_at = later(due, 1);
+    assert_eq!(reserve(reserved_at).await, []);
+    let stalled = reserved_at.saturating_add(grace);
+    assert_eq!(forget(stalled).await, [(acme(), blob)]);
+    let refused = commit_payloads(store, &writer, vec![payload(blob, None)], stalled).await;
+    assert!(
+        matches!(refused, Err(StoreError::Conflict(_))),
+        "{refused:?}"
+    );
+    assert_eq!(drop(stalled).await, 1);
+    let refused = commit_payloads(store, &writer, vec![payload(blob, None)], stalled).await;
+    assert!(
+        matches!(refused, Err(StoreError::Conflict(_))),
+        "no row: {refused:?}"
+    );
+    assert_eq!(
+        record(store, &writer).await.history_len,
+        1,
+        "nothing written"
+    );
+
+    // A deletion that stopped halfway is started again after the timeout, by another cleanup
+    // that then owns the row.
+    reference(store, &writer, vec![payload(blob, None)], stalled).await;
+    store
+        .delete_run(&writer, stalled)
+        .await
+        .expect("delete_run");
+    let due = stalled.saturating_add(grace);
+    assert_eq!(forget(due).await, [(acme(), blob)]);
+    let timeout = due.saturating_add(PAYLOAD_DELETION_TIMEOUT);
+    assert_eq!(unreferenced(Timestamp(timeout.0 - 1)).await, []);
+    assert_eq!(forget(Timestamp(timeout.0 - 1)).await, []);
+    assert_eq!(unreferenced(timeout).await, [(acme(), blob)]);
+    assert_eq!(forget(timeout).await, [(acme(), blob)]);
+    assert_eq!(
+        drop(due).await,
+        0,
+        "the first deletion no longer owns the row"
+    );
+    assert_eq!(drop(timeout).await, 1);
+    assert_eq!(
+        store.get_payload(&acme(), blob).await.expect("get_payload"),
+        None
+    );
+}
+
+/// Applies every feed item: claims and acknowledges each consumer's items.
+async fn project_all<S: JournalStore>(store: &S, at: Timestamp) {
+    for consumer in FeedConsumer::ALL {
+        let ids: Vec<u64> = store
+            .claim_feed(consumer, "projector", at, LEASE, 1_000)
+            .await
+            .expect("claim_feed")
+            .iter()
+            .map(|item| item.id)
+            .collect();
+        store.ack_feed(&ids).await.expect("ack_feed");
+    }
 }
 
 pub async fn finished_runs_are_archived_then_deleted<S: JournalStore>(store: &S) {
@@ -2664,6 +2936,7 @@ pub async fn finished_runs_are_archived_then_deleted<S: JournalStore>(store: &S)
     }
     let ended_at = Timestamp(T0.0 + 1);
     let retention = Retention::default();
+    project_all(store, ended_at).await;
 
     assert_eq!(
         store
@@ -2754,6 +3027,62 @@ pub async fn finished_runs_are_archived_then_deleted<S: JournalStore>(store: &S)
             .expect("to delete")
             .len(),
         2
+    );
+}
+
+pub async fn runs_with_feed_items_left_are_not_archived<S: JournalStore>(store: &S) {
+    let run = start(store, run_ref(1)).await;
+    let lease = lease_of(store, &run, T0).await;
+    commit(
+        store,
+        &lease,
+        Activation::new(vec![aborted_entry(1)], vec![], RunStatus::Aborted),
+        T0,
+    )
+    .await;
+    let due = Timestamp(T0.0 + 1).saturating_add(Retention::default().journal);
+    let document = Digest::of(b"journal document");
+    let archivable = || async {
+        store
+            .runs_to_archive(due, 10)
+            .await
+            .expect("to archive")
+            .contains(&run)
+    };
+
+    // The projector has not applied the run's last entries: its history stays in the store.
+    assert!(!archivable().await);
+    assert!(
+        !store
+            .archive_run(&run, document, due)
+            .await
+            .expect("archive_run")
+    );
+    // The read model applied them, the other consumers not yet.
+    let applied: Vec<u64> = store
+        .claim_feed(FeedConsumer::ReadModel, "projector", due, LEASE, 10)
+        .await
+        .expect("claim_feed")
+        .iter()
+        .map(|item| item.id)
+        .collect();
+    assert_eq!(applied.len(), 2);
+    store.ack_feed(&applied).await.expect("ack_feed");
+    assert!(!archivable().await);
+    assert!(
+        !store
+            .archive_run(&run, document, due)
+            .await
+            .expect("archive_run")
+    );
+
+    project_all(store, due).await;
+    assert!(archivable().await);
+    assert!(
+        store
+            .archive_run(&run, document, due)
+            .await
+            .expect("archive_run")
     );
 }
 
