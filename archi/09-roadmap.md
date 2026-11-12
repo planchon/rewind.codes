@@ -41,13 +41,14 @@ warnings` and `cargo test --workspace` pass.
 | `ptc-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
 | `ptc-e2e` | The epoch-1 corpus: 28 blue and 29 red cases, forks and tool policies included, recorded and replayed from their journal documents; tests proving the harness cannot pass silently; `cargo run -p ptc-e2e -- replay <case> [--script file.ts]`. |
 | `ptc-api` | The HTTP API `/v1` as a contract: the DTOs of every endpoint, problem+json errors, `Idempotency-Key`, the event stream, webhook payloads signed following Standard Webhooks and their verification, the OpenAPI 3.1 document committed at `api/openapi.json` (a test fails when it is stale), and an async client over HTTP(S) and over the embedded server's unix socket. |
+| `ptc-check` | `TsgoChecker`, the `TypeChecker` port: tsgo 7.0.2 embedded as its npm tarball, pinned by its integrity and extracted to a cache directory at first use; checks in strict mode against the sandbox lib and `ptc-tools.d.ts`, reading nothing outside its directory; diagnostics with a location, a hint and a code frame; the rules `floating-promise`, `ignored-async-callback` and `absent-global` on the swc syntax tree. About 50 ms per check. |
 | Sandbox lib | `crates/ptc-runtime/lib/`: `ptc.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. A test checks that the isolate's globals are exactly the declared ones, with and without the `http` tool. |
 | `dashboard` | Scripts, Runs, Run and Tools views over the API `/v1`, with types generated from `api/openapi.json`: filters kept in the URL, the source with each call, timer, signal wait and log next to its line, a timeline that compresses idle gaps, payloads on demand, live through the event stream, light and dark themes. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `ptc-server` embeds ([07](07-code-architecture.md#dashboard)). |
 
 Not there yet:
 
-- The other crates: `ptc-store-postgres`, `ptc-blob`, `ptc-mcp`, `ptc-codegen`, `ptc-check`,
-  `ptc-otel`, `ptc-cli`, `ptc-server` and the evals.
+- The other crates: `ptc-store-postgres`, `ptc-mcp`, `ptc-codegen`, `ptc-otel`, `ptc-cli`,
+  `ptc-server` and the evals.
 - Starting a run does not type-check the script.
 - The projector and its span derivation exist, but no OpenTelemetry exporter (`ptc-otel`).
   The read model is stored by `ptc-store-turso` only.
