@@ -1,0 +1,189 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { Ptc, PtcConnectionError, type StreamEvent } from "../src/index.js";
+import { RUN_ID, payload } from "./fixtures.js";
+import { MockServer, problem, sse } from "./mock-server.js";
+
+let server: MockServer;
+let ptc: Ptc;
+
+beforeEach(async () => {
+  server = await MockServer.start();
+  ptc = new Ptc({ url: server.url, apiKey: "ptc_sk_test" });
+});
+
+afterEach(async () => {
+  await server.close();
+});
+
+function entry(idx: number) {
+  return {
+    event: "entry",
+    id: String(idx),
+    data: { type: "entry", idx, recordedAt: "2026-11-12T10:00:00Z", event: { type: "timer_fired", seq: idx } },
+  };
+}
+
+const end = { event: "end", data: { type: "end", status: "completed" } };
+
+async function collect(events: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
+  const all: StreamEvent[] = [];
+  for await (const event of events) {
+    all.push(event);
+  }
+  return all;
+}
+
+describe("the event stream", () => {
+  it("reads the committed entries, then the end", async () => {
+    server.on("GET", "/v1/runs/{id}/events", sse([entry(0), entry(1), end]));
+    const events = await collect(ptc.runs.events(RUN_ID));
+    expect(events.map((e) => e.type)).toEqual(["entry", "entry", "end"]);
+    const request = server.requests[0];
+    expect(request?.query.get("from")).toBe("0");
+    expect(request?.query.has("follow")).toBe(false);
+    expect(request?.headers["accept"]).toBe("text/event-stream");
+  });
+
+  it("resumes a followed stream after the last entry received", async () => {
+    let connections = 0;
+    server.on("GET", "/v1/runs/{id}/events", (request) => {
+      connections += 1;
+      return connections === 1 ? sse([entry(0), entry(1)], { end: false })(request) : sse([entry(2), end])(request);
+    });
+    const events = await collect(ptc.runs.events(RUN_ID, { follow: true }));
+    expect(events.map((e) => (e.type === "entry" ? e.idx : e.type))).toEqual([0, 1, 2, "end"]);
+    expect(server.requests.map((r) => r.query.get("from"))).toEqual(["0", "2"]);
+    expect(server.requests.every((r) => r.query.get("follow") === "true")).toBe(true);
+  });
+
+  it("gives up after the reconnections allowed", async () => {
+    server.on("GET", "/v1/runs/{id}/events", sse([], { end: false }));
+    await expect(collect(ptc.runs.events(RUN_ID, { follow: true, maxReconnects: 1 }))).rejects.toBeInstanceOf(
+      PtcConnectionError,
+    );
+    expect(server.requests).toHaveLength(2);
+  });
+
+  it("fails a stream that is not followed and ends early", async () => {
+    server.on("GET", "/v1/runs/{id}/events", sse([entry(0)]));
+    await expect(collect(ptc.runs.events(RUN_ID))).rejects.toThrow(/before its end event/);
+  });
+
+  it("reports an unknown run", async () => {
+    server.on("GET", "/v1/runs/{id}/events", problem(404, "not-found", "no such run"));
+    await expect(collect(ptc.runs.events(RUN_ID))).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("closes the connection when the reader stops early", async () => {
+    server.on("GET", "/v1/runs/{id}/events", sse([entry(0), entry(1), end]));
+    for await (const event of ptc.runs.events(RUN_ID, { from: 4 })) {
+      expect(event.type).toBe("entry");
+      break;
+    }
+    expect(server.requests[0]?.query.get("from")).toBe("4");
+  });
+});
+
+describe("approvals", () => {
+  it("lists the calls that wait for the harness, and reads their arguments", async () => {
+    const waiting = {
+      ...runWaiting(),
+    };
+    const pending = ptc.approvals.pending(waiting);
+    expect(pending.map((p) => [p.taskId, p.reason])).toEqual([
+      ["t-approval", "approval"],
+      ["t-schema", "schema_changed"],
+    ]);
+
+    server.on(
+      "GET",
+      "/v1/runs/{id}/events",
+      sse([
+        {
+          event: "entry",
+          data: {
+            type: "entry",
+            idx: 3,
+            recordedAt: "t",
+            event: {
+              type: "schedule_tool_call",
+              seq: 4,
+              tool: "github.delete_repo",
+              args: payload({ repo: "acme/api" }),
+            },
+          },
+        },
+        {
+          event: "entry",
+          data: {
+            type: "entry",
+            idx: 4,
+            recordedAt: "t",
+            event: { type: "schedule_tool_call", seq: 5, tool: "big", args: payload({ big: 1 }, false) },
+          },
+        },
+        end,
+      ]),
+    );
+    server.on("GET", "/v1/payloads/{digest}", { status: 200, body: { big: 1 } });
+    server.on("POST", "/v1/tasks/{id}/approve", { status: 204 });
+    server.on("POST", "/v1/tasks/{id}/reject", { status: 204 });
+
+    const [first, second] = pending;
+    expect(await ptc.approvals.args(first!)).toEqual({ repo: "acme/api" });
+    expect(await ptc.approvals.args(second!)).toEqual({ big: 1 });
+    await ptc.approvals.approve(first!);
+    await ptc.approvals.reject(second!, "not now");
+    expect(server.calls("POST", "/v1/tasks/t-approval/approve")).toHaveLength(1);
+    expect(server.calls("POST", "/v1/tasks/t-schema/reject")[0]?.body).toEqual({ message: "not now" });
+  });
+});
+
+function runWaiting() {
+  return {
+    id: RUN_ID,
+    status: "active" as const,
+    createdAt: "t",
+    updatedAt: "t",
+    expiresAt: "t",
+    epoch: 1,
+    historyLen: 5,
+    input: payload({}),
+    labels: {},
+    mode: "live" as const,
+    script: "s",
+    toolset: "ts",
+    traceId: "x",
+    waitingFor: [
+      {
+        kind: "tool_call" as const,
+        seq: 4,
+        tool: "github.delete_repo",
+        taskId: "t-approval",
+        state: "approval" as const,
+        attempt: 1,
+      },
+      {
+        kind: "tool_call" as const,
+        seq: 5,
+        tool: "big",
+        taskId: "t-schema",
+        state: "parked" as const,
+        parked: "schema_changed" as const,
+        attempt: 1,
+      },
+      {
+        kind: "tool_call" as const,
+        seq: 6,
+        tool: "x",
+        taskId: "t-creds",
+        state: "parked" as const,
+        parked: "credentials_expired" as const,
+        attempt: 1,
+      },
+      { kind: "tool_call" as const, seq: 7, tool: "y", taskId: "t-ready", state: "ready" as const, attempt: 1 },
+      { kind: "signal" as const, name: "approval" },
+    ],
+  };
+}
