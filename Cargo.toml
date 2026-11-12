@@ -14,6 +14,7 @@ ptc-codegen = { path = "crates/ptc-codegen" }
 ptc-core = { path = "crates/ptc-core" }
 ptc-engine = { path = "crates/ptc-engine" }
 ptc-format = { path = "crates/ptc-format" }
+ptc-mcp = { path = "crates/ptc-mcp" }
 ptc-runtime = { path = "crates/ptc-runtime" }
 
 axum = "0.8"
@@ -27,8 +28,13 @@ getrandom = "0.3"
 hmac = "0.13"
 # Timestamps of the HTTP API (RFC 3339).
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+# JSON Schema validation, without fetching remote schemas.
+jsonschema = { version = "0.61", default-features = false }
+libtest-mimic = "0.8"
 # The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
+# The MCP SDK: clients in ptc-mcp, servers in its tests.
+rmcp = { version = "3.9", default-features = false }
 ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 # Query strings with repeated keys (`label=…&label=…`), as axum-extra's `Query` reads them.
@@ -41,7 +47,9 @@ sse-stream = "0.3"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", default-features = false }
+tokio-util = "0.7"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
 # `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
 uuid = { version = "1", default-features = false }

@@ -1,0 +1,390 @@
+//! What went wrong talking to an MCP server, sorted the way the engine needs it
+//! (`archi/04-tools.md`, "Tool task lifecycle"): refused credentials park the call, transient
+//! failures are retried under `retry`, the others fail the call for good.
+//!
+//! | What happened | Outcome |
+//! | --- | --- |
+//! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_expired` |
+//! | The server cannot be reached, the connection or the process closed, HTTP 429 or 5xx, JSON-RPC internal error (-32603), a session that could not be recovered | transient: `unavailable` |
+//! | No answer within the execution timeout | transient: `timeout` |
+//! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, a command that does not exist | failed |
+
+use std::borrow::Cow;
+use std::error::Error;
+use std::time::Duration;
+
+use ptc_core::{ToolFailure, ToolFailureKind};
+use ptc_engine::ports::{Dispatched, ParkKind, ParkReason};
+use rmcp::ServiceError;
+use rmcp::model::ErrorCode;
+use rmcp::service::ClientInitializeError;
+use rmcp::transport::streamable_http_client::{
+    AuthRequiredError, HttpStatusError, StreamableHttpError,
+};
+use serde_json::Value;
+
+use crate::McpError;
+
+/// Characters of a message from a server kept in a failure: the script and the model read it.
+const MESSAGE: usize = 2000;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Failure {
+    /// The server refused the credentials (HTTP 401).
+    Unauthorized(String),
+    /// Worth retrying: nothing says the server will refuse again.
+    Transient(ToolFailure),
+    /// The same call would fail again.
+    Permanent(ToolFailure),
+}
+
+impl Failure {
+    pub(crate) fn transient(kind: ToolFailureKind, message: impl Into<String>) -> Self {
+        Self::Transient(failure(kind, message, None))
+    }
+
+    pub(crate) fn permanent(
+        kind: ToolFailureKind,
+        message: impl Into<String>,
+        data: Option<Value>,
+    ) -> Self {
+        Self::Permanent(failure(kind, message, data))
+    }
+
+    /// The outcome of the attempt, for the engine.
+    pub(crate) fn into_dispatched(self) -> Dispatched {
+        match self {
+            Failure::Unauthorized(message) => Dispatched::Park(ParkReason {
+                kind: ParkKind::CredentialsExpired,
+                message,
+            }),
+            Failure::Transient(failure) => Dispatched::Transient(failure),
+            Failure::Permanent(failure) => Dispatched::Failed(failure),
+        }
+    }
+
+    /// The error of a discovery, for the harness developer who registers the toolset.
+    pub(crate) fn into_error(self, server: &str) -> McpError {
+        let server = server.to_owned();
+        match self {
+            Failure::Unauthorized(message) => McpError::Unauthorized { server, message },
+            Failure::Transient(failure) if failure.kind == ToolFailureKind::Timeout => {
+                McpError::Timeout {
+                    server,
+                    message: failure.message,
+                }
+            }
+            Failure::Transient(failure) => McpError::Unreachable {
+                server,
+                message: failure.message,
+            },
+            Failure::Permanent(failure) => McpError::Refused {
+                server,
+                message: failure.message,
+            },
+        }
+    }
+}
+
+pub(crate) fn failure(
+    kind: ToolFailureKind,
+    message: impl Into<String>,
+    data: Option<Value>,
+) -> ToolFailure {
+    ToolFailure {
+        kind,
+        message: bounded(&message.into()),
+        data,
+    }
+}
+
+/// A message cut at [`MESSAGE`] characters.
+pub(crate) fn bounded(message: &str) -> String {
+    if message.chars().count() <= MESSAGE {
+        return message.to_owned();
+    }
+    let mut cut: String = message.chars().take(MESSAGE).collect();
+    cut.push('…');
+    cut
+}
+
+/// A failed request on an open connection. The second value says whether the connection is
+/// broken and must be dropped.
+pub(crate) fn of_service(server: &str, error: &ServiceError) -> (Failure, bool) {
+    match error {
+        ServiceError::McpError(data) => {
+            let message = format!("{server} answered with an error: {}", data.message);
+            let failure = if data.code == ErrorCode::INTERNAL_ERROR {
+                Failure::transient(ToolFailureKind::Unavailable, message)
+            } else {
+                Failure::permanent(ToolFailureKind::Error, message, data.data.clone())
+            };
+            (failure, false)
+        }
+        ServiceError::TransportSend(transport) => {
+            if let Some(message) = unauthorized(transport) {
+                return (
+                    Failure::Unauthorized(unauthorized_message(server, &message)),
+                    true,
+                );
+            }
+            (
+                Failure::transient(
+                    ToolFailureKind::Unavailable,
+                    format!("{server} could not be reached: {}", chain(transport)),
+                ),
+                true,
+            )
+        }
+        ServiceError::TransportClosed => (
+            Failure::transient(
+                ToolFailureKind::Unavailable,
+                format!("the connection to {server} closed"),
+            ),
+            true,
+        ),
+        ServiceError::Timeout { timeout } => (timed_out(server, *timeout), false),
+        ServiceError::UnexpectedResponse => (
+            Failure::permanent(
+                ToolFailureKind::Error,
+                format!("{server} did not answer with a tool result"),
+                None,
+            ),
+            false,
+        ),
+        ServiceError::InputRequiredRoundsExceeded { .. } => (
+            Failure::permanent(
+                ToolFailureKind::Error,
+                format!("{server} asked for input that ai-ptc cannot give"),
+                None,
+            ),
+            false,
+        ),
+        other => (
+            Failure::transient(
+                ToolFailureKind::Unavailable,
+                format!("{server} could not answer: {other}"),
+            ),
+            true,
+        ),
+    }
+}
+
+/// A connection that could not be opened.
+pub(crate) fn of_initialize(server: &str, error: &ClientInitializeError) -> Failure {
+    if let Some(message) = initialize_unauthorized(error) {
+        return Failure::Unauthorized(unauthorized_message(server, &message));
+    }
+    match error {
+        ClientInitializeError::NoCompatibleProtocolVersion {
+            server_supported, ..
+        } => Failure::permanent(
+            ToolFailureKind::Unavailable,
+            format!(
+                "{server} speaks no MCP version ai-ptc supports (it supports {})",
+                server_supported
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None,
+        ),
+        other => Failure::transient(
+            ToolFailureKind::Unavailable,
+            format!("{server} could not be reached: {}", chain(other)),
+        ),
+    }
+}
+
+/// A stdio server that could not be started. A missing or forbidden program will not appear
+/// by retrying.
+pub(crate) fn of_spawn(server: &str, error: &std::io::Error) -> Failure {
+    let message = format!("the MCP server {server} could not be started: {error}");
+    match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
+            Failure::permanent(ToolFailureKind::Unavailable, message, None)
+        }
+        _ => Failure::transient(ToolFailureKind::Unavailable, message),
+    }
+}
+
+pub(crate) fn timed_out(server: &str, timeout: Duration) -> Failure {
+    Failure::transient(
+        ToolFailureKind::Timeout,
+        format!("{server} did not answer within {}", human(timeout)),
+    )
+}
+
+/// `30s`, `5m`, `1500ms`.
+pub(crate) fn human(duration: Duration) -> String {
+    let millis = duration.as_millis();
+    if millis >= 60_000 && millis.is_multiple_of(60_000) {
+        format!("{}m", millis / 60_000)
+    } else if millis.is_multiple_of(1000) {
+        format!("{}s", millis / 1000)
+    } else {
+        format!("{millis}ms")
+    }
+}
+
+fn unauthorized_message(server: &str, detail: &str) -> String {
+    format!("{server} refused the credentials (HTTP 401): {detail}")
+}
+
+/// The detail of an HTTP 401 that stopped the initialization. The transport's error is a field
+/// of the variant, not its source.
+fn initialize_unauthorized(error: &ClientInitializeError) -> Option<String> {
+    match error {
+        ClientInitializeError::TransportError { error, .. } => unauthorized(error),
+        ClientInitializeError::LegacyFallbackFailed { discover, fallback } => {
+            initialize_unauthorized(fallback).or_else(|| initialize_unauthorized(discover))
+        }
+        other => unauthorized(other),
+    }
+}
+
+/// The detail of an HTTP 401 somewhere in the error's sources, if there is one.
+fn unauthorized(error: &(dyn Error + 'static)) -> Option<String> {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if let Some(required) = current.downcast_ref::<AuthRequiredError>() {
+            return Some(format!(
+                "authorization required: {}",
+                required.www_authenticate_header
+            ));
+        }
+        if let Some(status) = current.downcast_ref::<HttpStatusError>()
+            && status.status == 401
+        {
+            return Some("unauthorized".to_owned());
+        }
+        if let Some(http) = current.downcast_ref::<StreamableHttpError<reqwest::Error>>() {
+            match http {
+                StreamableHttpError::AuthRequired(required) => {
+                    return Some(format!(
+                        "authorization required: {}",
+                        required.www_authenticate_header
+                    ));
+                }
+                // A 401 without a challenge keeps its status in the message.
+                StreamableHttpError::UnexpectedServerResponse(Cow::Borrowed(message))
+                    if message.starts_with("HTTP 401") =>
+                {
+                    return Some((*message).to_owned());
+                }
+                StreamableHttpError::UnexpectedServerResponse(Cow::Owned(message))
+                    if message.starts_with("HTTP 401") =>
+                {
+                    return Some(message.clone());
+                }
+                StreamableHttpError::HttpStatus(status) if status.status == 401 => {
+                    return Some("unauthorized".to_owned());
+                }
+                _ => {}
+            }
+        }
+        source = current.source();
+    }
+    None
+}
+
+/// The error and its sources, as one line.
+pub(crate) fn chain(error: &(dyn Error + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(current) = source {
+        let text = current.to_string();
+        if !parts.iter().any(|part| part.contains(&text)) {
+            parts.push(text);
+        }
+        source = current.source();
+    }
+    parts.join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::any::TypeId;
+
+    use rmcp::model::ErrorData;
+    use rmcp::transport::DynamicTransportError;
+
+    use super::*;
+
+    fn transport(error: StreamableHttpError<reqwest::Error>) -> ServiceError {
+        ServiceError::TransportSend(DynamicTransportError::from_parts(
+            "streamable-http",
+            TypeId::of::<()>(),
+            Box::new(error),
+        ))
+    }
+
+    #[test]
+    fn a_401_parks_the_call_with_or_without_a_challenge() {
+        for error in [
+            StreamableHttpError::AuthRequired(AuthRequiredError::new("Bearer realm=\"x\"".into())),
+            StreamableHttpError::UnexpectedServerResponse(Cow::Owned(
+                "HTTP 401 Unauthorized: token expired".into(),
+            )),
+        ] {
+            let (failure, broken) = of_service("github", &transport(error));
+            assert!(broken);
+            let Failure::Unauthorized(message) = failure else {
+                panic!("a 401 parks the call: {failure:?}");
+            };
+            assert!(message.starts_with("github refused the credentials (HTTP 401)"));
+        }
+    }
+
+    #[test]
+    fn overloaded_servers_and_internal_errors_are_transient() {
+        let (failure, broken) = of_service(
+            "github",
+            &transport(StreamableHttpError::HttpStatus(HttpStatusError::new(
+                503, None,
+            ))),
+        );
+        assert!(broken);
+        assert!(
+            matches!(failure, Failure::Transient(ref f) if f.kind == ToolFailureKind::Unavailable)
+        );
+
+        let (failure, broken) = of_service(
+            "github",
+            &ServiceError::McpError(ErrorData::internal_error("database down", None)),
+        );
+        assert!(!broken);
+        assert!(matches!(failure, Failure::Transient(_)));
+    }
+
+    #[test]
+    fn other_protocol_errors_fail_for_good() {
+        let (failure, _) = of_service(
+            "github",
+            &ServiceError::McpError(ErrorData::invalid_params(
+                "repo is required",
+                Some(serde_json::json!({ "field": "repo" })),
+            )),
+        );
+        assert_eq!(
+            failure,
+            Failure::permanent(
+                ToolFailureKind::Error,
+                "github answered with an error: repo is required",
+                Some(serde_json::json!({ "field": "repo" }))
+            )
+        );
+        assert!(matches!(
+            of_spawn("local", &std::io::Error::from(std::io::ErrorKind::NotFound)),
+            Failure::Permanent(_)
+        ));
+    }
+
+    #[test]
+    fn long_messages_are_cut() {
+        let message = bounded(&"x".repeat(5000));
+        assert_eq!(message.chars().count(), MESSAGE + 1);
+        assert!(message.ends_with('…'));
+    }
+}
