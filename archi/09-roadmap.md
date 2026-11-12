@@ -151,7 +151,7 @@ does is in [acceptance/README.md](../acceptance/README.md).
 | A real MCP server, types checked beforehand | Passes | `acceptance/tests/c3-c5-mcp-test-fork.spec.ts` with `@modelcontextprotocol/server-everything` 2.2.1 over stdio |
 | The evals' report per model and prompt rendering | Passes with scripted models; the run with Claude and OpenAI models is pending API keys | `acceptance/tests/c4-evals.spec.ts` |
 | `ptc test` of a recorded real run; `ptc fork` without repeating calls | Passes | `acceptance/tests/c3-c5-mcp-test-fork.spec.ts`, checked against the MCP server's own log of the calls it received |
-| Load tests and limit tests | Not run: the operations' load and limit tests are not on `main` yet | `deploy/acceptance.sh`, which `acceptance/run.sh` runs once it exists |
+| Load tests and limit tests | Passes | `deploy/acceptance.sh`: the limits through the API, then the reference deployment loaded by `ptc-load` with the thresholds of [Load tests](#load-tests), and the agent tools' bound against it |
 | The dashboard: find by label, tool or error; code next to the trace | Passes | `acceptance/tests/c7-dashboard.spec.ts`, in Chromium against the dashboard `ptc server` serves |
 
 ## Load tests
@@ -178,7 +178,9 @@ other builds running), latencies in milliseconds:
 | 1,000 runs, 100 at once | 17.3 | 69 | 488 / 3,418 | 996 / 4,408 | 176 / 610 | 5,325 / 8,733 | 19 s |
 | 200 runs, 50 at once, 100 KiB payloads | 13.0 | 52 | 370 / 1,551 | 244 / 643 | 122 / 317 | 3,705 / 4,486 | 0.1 s |
 
-No error and no duplicated call in either. The floor of a run's end-to-end latency is about 3 s:
+No error and no duplicated call in either. In `acceptance/run.sh`, after the merge of the CLI
+and the evals, the same loads gave 20.1 and 8.8 runs/s, end-to-end p99 of 10.5 and 7.0 s, and
+activation p99 of 690 and 960 ms. The floor of a run's end-to-end latency is about 3 s:
 the sleep, the retry's backoff and the signal's timeout. Starts dominate the rest: each start
 type-checks the script with tsgo in the api server, so a burst of starts queues there. An
 activation (a host tool's result accepted to the run's next MCP call) takes 120–180 ms at the
