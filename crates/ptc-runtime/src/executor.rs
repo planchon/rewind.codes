@@ -16,7 +16,8 @@ use tokio::sync::oneshot;
 
 use crate::compile;
 use crate::epochs::{self, EPOCHS, Glue};
-use crate::isolate::{Isolate, SandboxLimits};
+use crate::instance::Instance;
+use crate::isolate::SandboxLimits;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SetupError {
@@ -48,7 +49,8 @@ impl V8Executor {
     }
 }
 
-fn init_v8() {
+/// Initializes V8 and ICU (`en-US`), once per process.
+pub(crate) fn init_v8() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {
         deno_core::JsRuntime::init_platform(None);
@@ -136,14 +138,20 @@ fn run_isolate(
     started: Reply,
     inbox: mpsc::Receiver<Request>,
 ) {
-    let runtime = match tokio::runtime::Builder::new_current_thread().build() {
+    // Module loading runs on this runtime, and V8 schedules its delayed tasks on it for the life
+    // of the isolate.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(err) => {
             let _ = started.send(Err(ExecutorError::Internal(err.to_string())));
             return;
         }
     };
-    let mut isolate = match runtime.block_on(Isolate::load(&start, glue, limits)) {
+    let _context = runtime.enter();
+    let mut isolate = match runtime.block_on(Instance::load(&start, glue, limits)) {
         Ok(isolate) => isolate,
         Err(err) => {
             let _ = started.send(Err(err));

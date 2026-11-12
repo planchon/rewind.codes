@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ptc_core::{
-    AbortKind, Annotation, Callsite, Command, Completion, Epoch, Event, HistoryEntry, RunId,
-    RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, ToolFailure,
-    ToolFailureKind, Toolset, canonical_json,
+    AbortKind, Annotation, Builtin, Callsite, Command, Completion, Epoch, Event, HistoryEntry,
+    RunId, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, Tool,
+    ToolFailure, ToolFailureKind, ToolRoute, Toolset, canonical_json,
 };
 use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
 use ptc_engine::ports::{
@@ -152,13 +152,26 @@ fn toolset() -> Toolset {
 
 impl Harness {
     async fn try_start(&self, source: &str, input: Value) -> Result<RunRef, StartError> {
-        let mut request = StartRun::new(Script::new(source), toolset(), input);
+        self.try_start_with(source, input, toolset()).await
+    }
+
+    async fn try_start_with(
+        &self,
+        source: &str,
+        input: Value,
+        toolset: Toolset,
+    ) -> Result<RunRef, StartError> {
+        let mut request = StartRun::new(Script::new(source), toolset, input);
         request.mode = ptc_core::RunMode::Mock;
         Ok(self.engine.start_run(request).await?.run)
     }
 
     async fn start(&self, source: &str, input: Value) -> RunRef {
         self.try_start(source, input).await.unwrap()
+    }
+
+    async fn start_with(&self, source: &str, input: Value, toolset: Toolset) -> RunRef {
+        self.try_start_with(source, input, toolset).await.unwrap()
     }
 
     async fn drive(&self) {
@@ -482,115 +495,84 @@ impl AdvanceMs for VirtualClock {
     }
 }
 
+/// What type-checks is what exists (`archi/04-tools.md`, "Type-checking"): the isolate's global
+/// names are exactly those `lib/globals.json` declares, with `fetch` only for a toolset that
+/// enables the `http` tool.
 #[tokio::test]
-async fn the_sandbox_has_exactly_the_documented_globals() {
-    let harness = harness();
-    let run = harness
-        .run(
-            r#"
+async fn the_sandbox_has_exactly_the_declared_globals() {
+    const SCRIPT: &str = r#"
 export default async function main() {
-  const absent = ["fetch", "Deno", "WeakRef", "FinalizationRegistry", "SharedArrayBuffer",
-                  "Atomics", "__bootstrap", "__ptcHandoff", "require", "process", "Buffer"];
+  const absent = ["Deno", "WeakRef", "FinalizationRegistry", "SharedArrayBuffer", "Atomics",
+                  "WebAssembly", "__bootstrap", "__ptcHooks", "__ptcHandoff", "require", "process",
+                  "Buffer"];
   return {
     absent: absent.filter((name) => typeof (globalThis as any)[name] !== "undefined"),
     globals: Object.getOwnPropertyNames(globalThis).sort(),
+    blobUrls: typeof (URL as any).createObjectURL,
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     locale: Intl.DateTimeFormat().resolvedOptions().locale,
   };
 }
-"#,
-            json!({}),
-        )
-        .await;
-    let output = run.output();
-    assert_eq!(output["absent"], json!([]));
-    assert_eq!(output["timezone"], "UTC");
-    assert_eq!(output["locale"], "en-US");
+"#;
+    let declared = ptc_runtime::sandbox_lib::declared_globals();
+    for http_tool in [false, true] {
+        let harness = harness();
+        let toolset = if http_tool {
+            builtins_toolset()
+        } else {
+            toolset()
+        };
+        let id = harness.start_with(SCRIPT, json!({}), toolset).await;
+        harness.drive().await;
+        let run = harness.get(&id).await;
+        let output = run.output();
+        assert_eq!(output["absent"], json!([]));
+        assert_eq!(output["blobUrls"], "undefined");
+        assert_eq!(output["timezone"], "UTC");
+        assert_eq!(output["locale"], "en-US");
+        let globals: std::collections::BTreeSet<&str> = output["globals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(globals, declared.names(http_tool), "http tool: {http_tool}");
+    }
+}
 
-    // Beyond the ECMAScript built-ins, only what archi/01-product.md lists.
-    let ecmascript = [
-        "AggregateError",
-        "Array",
-        "ArrayBuffer",
-        "AsyncDisposableStack",
-        "BigInt",
-        "BigInt64Array",
-        "BigUint64Array",
-        "Boolean",
-        "DataView",
-        "Date",
-        "DisposableStack",
-        "Error",
-        "EvalError",
-        "Float16Array",
-        "Float32Array",
-        "Float64Array",
-        "Function",
-        "Infinity",
-        "Int16Array",
-        "Int32Array",
-        "Int8Array",
-        "Intl",
-        "Iterator",
-        "JSON",
-        "Map",
-        "Math",
-        "NaN",
-        "Number",
-        "Object",
-        "Promise",
-        "Proxy",
-        "RangeError",
-        "ReferenceError",
-        "Reflect",
-        "RegExp",
-        "Set",
-        "String",
-        "SuppressedError",
-        "Symbol",
-        "SyntaxError",
-        "Temporal",
-        "TypeError",
-        "URIError",
-        "Uint16Array",
-        "Uint32Array",
-        "Uint8Array",
-        "Uint8ClampedArray",
-        "WeakMap",
-        "WeakSet",
-        "WebAssembly",
-        "decodeURI",
-        "decodeURIComponent",
-        "encodeURI",
-        "encodeURIComponent",
-        "escape",
-        "eval",
-        "globalThis",
-        "isFinite",
-        "isNaN",
-        "parseFloat",
-        "parseInt",
-        "undefined",
-        "unescape",
-    ];
-    let documented = [
-        "clearInterval",
-        "clearTimeout",
-        "console",
-        "crypto",
-        "performance",
-        "queueMicrotask",
-        "setInterval",
-        "setTimeout",
-    ];
-    let unexpected: Vec<&str> = output["globals"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(Value::as_str)
-        .filter(|name| !ecmascript.contains(name) && !documented.contains(name))
-        .collect();
-    assert_eq!(unexpected, Vec::<&str>::new(), "undocumented globals");
+/// A toolset with the built-ins `http` and `webhook`, pinned with the schemas of
+/// `ptc_runtime::builtins`, and one host tool.
+fn builtins_toolset() -> Toolset {
+    Toolset::new(
+        [],
+        [
+            Tool::new(
+                "http",
+                ToolRoute::Builtin(Builtin::Http {
+                    allowed_hosts: vec!["api.example.com".into()],
+                }),
+                ptc_runtime::builtins::http_input_schema(),
+            ),
+            Tool::new(
+                "webhook",
+                ToolRoute::Builtin(Builtin::Webhook),
+                ptc_runtime::builtins::webhook_input_schema(),
+            ),
+            Tool::new(
+                "github.get_issue",
+                ToolRoute::Host {
+                    group: Some("github".into()),
+                },
+                json!({
+                    "type": "object",
+                    "properties": { "number": { "type": "integer", "minimum": 1 } },
+                    "required": ["number"],
+                    "additionalProperties": false,
+                }),
+            ),
+        ],
+    )
+    .unwrap()
 }
 
 #[tokio::test]
@@ -1250,4 +1232,57 @@ async fn cancelling_a_wait_built_on_set_timeout_ends_the_run_cancelled() {
         ("CancelledError", "run cancelled: user asked")
     );
     harness.assert_replays(&run).await;
+}
+
+/// Each piece of TypeScript's lib beyond ES2024 that `lib/tsconfig.json` lists is shipped by
+/// V8: what type-checks exists.
+#[tokio::test]
+async fn the_ecmascript_lib_beyond_es2024_exists() {
+    let harness = harness();
+    let run = harness
+        .run(
+            r#"
+export default async function main() {
+  const g: any = globalThis;
+  const L = g.Intl.Locale.prototype;
+  const libs: Record<string, unknown[]> = {
+    "es2025.collection": [g.Set.prototype.union, g.Set.prototype.isDisjointFrom],
+    "es2025.float16": [g.Float16Array, g.Math.f16round, g.DataView.prototype.getFloat16],
+    "es2025.intl": [g.Intl.DurationFormat],
+    "es2025.iterator": [g.Iterator.from, g.Iterator.prototype.map, g.Iterator.prototype.toArray],
+    "es2025.promise": [g.Promise.try],
+    "es2025.regexp": [g.RegExp.escape],
+    "esnext.array": [g.Array.fromAsync],
+    "esnext.collection": [g.Map.prototype.getOrInsert, g.Map.prototype.getOrInsertComputed,
+                          g.WeakMap.prototype.getOrInsert, g.WeakMap.prototype.getOrInsertComputed],
+    "esnext.date": [g.Date.prototype.toTemporalInstant],
+    "esnext.disposable": [g.DisposableStack, g.AsyncDisposableStack, g.SuppressedError],
+    "esnext.error": [g.Error.isError],
+    "esnext.intl": [L.getCalendars, L.getCollations, L.getHourCycles, L.getNumberingSystems,
+                    L.getTextInfo, L.getTimeZones, L.getWeekInfo],
+    "esnext.temporal": [g.Temporal.Instant, g.Temporal.Now.instant],
+    "esnext.typedarrays": [g.Uint8Array.prototype.toHex, g.Uint8Array.prototype.setFromHex,
+                           g.Uint8Array.fromHex, g.Uint8Array.prototype.toBase64,
+                           g.Uint8Array.prototype.setFromBase64, g.Uint8Array.fromBase64],
+  };
+  return Object.fromEntries(
+    Object.entries(libs).map(([lib, members]) => [lib, members.every((m) => typeof m === "function")]),
+  );
+}
+"#,
+            json!({}),
+        )
+        .await;
+    let config: Value = serde_json::from_str(ptc_runtime::sandbox_lib::TSCONFIG_JSON).unwrap();
+    let listed: Vec<&str> = config["compilerOptions"]["lib"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|lib| lib.starts_with("es2025") || lib.starts_with("esnext"))
+        .collect();
+    let checked = run.output().as_object().unwrap();
+    for lib in listed {
+        assert_eq!(checked.get(lib), Some(&json!(true)), "{lib}");
+    }
 }

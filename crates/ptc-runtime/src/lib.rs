@@ -19,14 +19,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod builtins;
 mod compile;
 mod epochs;
 mod executor;
+mod instance;
 mod isolate;
 mod loader;
+mod mocks;
 mod ops;
 pub mod sandbox_lib;
+mod snapshot;
 mod watchdog;
 
 pub use executor::{SetupError, V8Executor, V8Instance};
 pub use isolate::SandboxLimits;
+pub use mocks::{MockError, TsMocks};

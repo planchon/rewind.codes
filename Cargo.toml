@@ -21,13 +21,23 @@ chacha20 = "0.10"
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
 deno_error = "0.7"
+# The web-standard globals of the sandbox (archi/01-product.md). Pinned exactly: their JavaScript is
+# observable by scripts, so a new version is a change of the determinism epoch.
+deno_web = "=0.291.0"
+deno_webidl = "=0.260.0"
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hmac = "0.13"
 # Timestamps of the HTTP API (RFC 3339).
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+# Args of tool calls are validated against the pinned JSON Schema inside the op. Pinned exactly: its
+# messages reach scripts, so a new version is a change of the determinism epoch. No default
+# features: a schema never loads a remote or local `$ref`.
+jsonschema = { version = "=0.61.1", default-features = false }
 # The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
+# The CPU clock of the isolate's thread (`CLOCK_THREAD_CPUTIME_ID`), without unsafe code.
+rustix = { version = "1", default-features = false, features = ["std"] }
 ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 # Query strings with repeated keys (`label=…&label=…`), as axum-extra's `Query` reads them.

@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use ptc_core::{Epoch, Toolset};
+use ptc_core::{Epoch, ToolRoute, Toolset};
 
 /// The glue of one epoch.
 #[derive(Debug)]
@@ -38,7 +38,14 @@ const EPOCH_1: Glue = Glue {
     entry: include_str!("js/epoch1/entry.js"),
     internal: include_str!("js/epoch1/internal.js"),
     std: include_str!("js/epoch1/std.js"),
-    std_exports: &["CancelledError", "ToolError", "run", "signal", "sleep"],
+    std_exports: &[
+        "CancelledError",
+        "ToolError",
+        "run",
+        "signal",
+        "sleep",
+        "webhook",
+    ],
     tools: tools_module_v1,
     tool_exports: tool_exports_v1,
 };
@@ -55,8 +62,9 @@ pub(crate) fn latest() -> &'static Glue {
     const { &EPOCHS[EPOCHS.len() - 1] }
 }
 
-/// The tools of a toolset as `ptc:tools` exposes them in epoch 1: one namespace per
-/// `namespace.tool` group, and bare tool names.
+/// The tools of a toolset as `ptc:tools` exposes them in epoch 1, from their routes: one
+/// namespace per MCP server or host-tool group, and the host tools without a group by name.
+/// The built-ins are not exported: scripts reach them through `fetch` and `webhook`.
 struct ToolExportsV1<'a> {
     namespaces: BTreeMap<&'a str, Vec<&'a str>>,
     bare: Vec<&'a str>,
@@ -67,13 +75,14 @@ impl<'a> ToolExportsV1<'a> {
         let mut namespaces: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         let mut bare = Vec::new();
         for tool in toolset.tools() {
-            match tool.name.split_once('.') {
-                Some((namespace, name)) if is_identifier(namespace) && !name.is_empty() => {
-                    namespaces.entry(namespace).or_default().push(&tool.name);
-                }
-                _ if is_identifier(&tool.name) => bare.push(tool.name.as_str()),
+            if matches!(tool.route, ToolRoute::Builtin(_)) {
+                continue;
+            }
+            match tool.namespace() {
+                Some(namespace) => namespaces.entry(namespace).or_default().push(&tool.name),
+                None if is_identifier(&tool.name) => bare.push(tool.name.as_str()),
                 // Unreachable from a script: there is no name to import it by.
-                _ => {}
+                None => {}
             }
         }
         Self { namespaces, bare }
@@ -170,6 +179,50 @@ mod tests {
             names.sort_unstable();
             assert_eq!(names, glue.std_exports, "{}", glue.epoch);
         }
+    }
+
+    #[test]
+    fn built_ins_are_not_exported() {
+        use ptc_core::{Builtin, McpServer, McpTransport, Tool};
+        let github = McpServer::new(
+            "github",
+            McpTransport::Http {
+                url: "https://mcp.example.com/github".into(),
+            },
+        );
+        let toolset = Toolset::new(
+            [github],
+            [
+                Tool::new(
+                    "github.list_issues",
+                    ToolRoute::Mcp {
+                        server: "github".into(),
+                    },
+                    serde_json::json!({}),
+                ),
+                Tool::new(
+                    "http",
+                    ToolRoute::Builtin(Builtin::Http {
+                        allowed_hosts: vec!["api.example.com".into()],
+                    }),
+                    serde_json::json!({}),
+                ),
+                Tool::new(
+                    "webhook",
+                    ToolRoute::Builtin(Builtin::Webhook),
+                    serde_json::json!({}),
+                ),
+            ],
+        )
+        .unwrap();
+        let exports: Vec<String> = tool_exports_v1(&toolset).into_iter().collect();
+        assert_eq!(exports, ["github"]);
+        let module = tools_module_v1(&toolset);
+        assert!(module.contains("export const github"), "{module}");
+        assert!(
+            !module.contains("\"http\"") && !module.contains("webhook"),
+            "{module}"
+        );
     }
 
     #[test]
