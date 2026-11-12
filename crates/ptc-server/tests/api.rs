@@ -343,6 +343,65 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
     server.stop().await;
 }
 
+/// A run that fails on a `ToolError` it did not catch says which call failed: the runtime's
+/// message (`ask_user failed: …`) is not the tool's, so the call is found through its recorded
+/// failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_run_failed_by_an_uncaught_tool_error_names_the_call() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let worker = server.key(Role::Worker, &[]).await;
+    let toolset = harness
+        .create_toolset(&ask_toolset(ToolPolicy::default()))
+        .await
+        .unwrap();
+    // The first failure is caught; the second is not.
+    let script = r#"import { ask_user } from "ptc:tools";
+export default async function main() {
+  try {
+    await ask_user({ question: "first?" });
+  } catch {}
+  const answer = await ask_user({ question: "second?" });
+  return { answer };
+}
+"#;
+    let mut request = start(script);
+    request.toolset = Some(toolset.id.clone());
+    let run = harness.start_run(&request, None).await.unwrap();
+    let query = TaskQuery {
+        toolset: Some(toolset.id.clone()),
+        tools: vec!["ask_user".into()],
+        limit: Some(1),
+        wait: Some("10s".parse().unwrap()),
+    };
+    for message in ["the user is away", "the user left"] {
+        let task = worker.claim_tasks(&query).await.unwrap().tasks.remove(0);
+        worker
+            .fail_task(
+                &task.token,
+                &FailTask {
+                    message: message.into(),
+                    data: Some(json!({ "retryAfter": "1h" })),
+                    retryable: false,
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let ended = harness.get_run(&run.id, wait("20s")).await.unwrap();
+    assert_eq!(ended.status, RunStatus::Failed, "{ended:?}");
+    let error = ended.error.unwrap();
+    assert_eq!(error.name, "ToolError");
+    assert_eq!(error.message, "ask_user failed: the user left");
+    let call = error.failed_call.expect("the call that failed");
+    assert_eq!((call.seq, call.tool.as_str()), (2, "ask_user"));
+    assert_eq!(call.args.value, Some(json!({ "question": "second?" })));
+    assert_eq!(call.error.message, "the user left");
+    assert_eq!(call.error.data, Some(json!({ "retryAfter": "1h" })));
+    assert_eq!(call.callsite.map(|callsite| callsite.line), Some(6));
+    server.stop().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
     let server = TestServer::start(&[]).await;

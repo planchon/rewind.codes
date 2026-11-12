@@ -316,6 +316,46 @@ impl ScriptError {
     /// The name of the error that rejects every pending await on cancellation. A run that
     /// fails with it is `cancelled`.
     pub const CANCELLED: &'static str = "CancelledError";
+    /// The name of the error a failed tool call rejects with.
+    pub const TOOL_ERROR: &'static str = "ToolError";
+
+    /// The message of the `ToolError` the runtime builds from a failed call of `tool`:
+    /// `{tool} failed: {message}`, where `message` is the recorded failure's.
+    pub fn tool_error_message(tool: &str, failure: &ToolFailure) -> String {
+        format!("{tool} failed: {}", failure.message)
+    }
+
+    /// The tool call whose uncaught `ToolError` this error is, read from the run's history.
+    ///
+    /// The error records no `seq`: the runtime builds it from the call's recorded
+    /// `tool_call_failed` completion and the tool its `schedule_tool_call` names. The call is
+    /// the last recorded failure that builds exactly this error. `None` when the error is not a
+    /// `ToolError`, or when no recorded failure builds it (the script threw one it made itself
+    /// from another error's message, say).
+    pub fn failed_call(&self, history: &[HistoryEntry]) -> Option<Seq> {
+        if self.name != Self::TOOL_ERROR {
+            return None;
+        }
+        let tools: std::collections::BTreeMap<Seq, &str> = history
+            .iter()
+            .filter_map(|entry| match &entry.event {
+                Event::Command(Command::ScheduleToolCall { seq, tool, .. }) => {
+                    Some((*seq, tool.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        history.iter().rev().find_map(|entry| match &entry.event {
+            Event::Completion(Completion::ToolCallFailed { seq, error })
+                if tools
+                    .get(seq)
+                    .is_some_and(|tool| Self::tool_error_message(tool, error) == self.message) =>
+            {
+                Some(*seq)
+            }
+            _ => None,
+        })
+    }
 }
 
 /// Position in the script's TypeScript source, 1-based.
@@ -596,6 +636,77 @@ mod tests {
                 .matches(&fail("x is undefined", "at main (script.ts:4:1)"))
         );
         assert!(!fail("x is undefined", "").matches(&fail("y is undefined", "")));
+    }
+
+    /// The call an uncaught `ToolError` came from is found through its recorded completion, not
+    /// by comparing the error's message with the tool's: the runtime prefixes the tool's name.
+    #[test]
+    fn an_uncaught_tool_error_names_its_call() {
+        let entry = |index: u64, event: Event| HistoryEntry {
+            index,
+            recorded_at: Timestamp(index),
+            event,
+        };
+        let schedule = |seq: u32, tool: &str| {
+            Event::Command(Command::ScheduleToolCall {
+                seq: Seq(seq),
+                tool: tool.into(),
+                args: json!({}).into(),
+                callsite: None,
+            })
+        };
+        let failed = |seq: u32, message: &str| {
+            Event::Completion(Completion::ToolCallFailed {
+                seq: Seq(seq),
+                error: ToolFailure {
+                    kind: ToolFailureKind::Error,
+                    message: message.into(),
+                    data: None,
+                },
+            })
+        };
+        // The script caught the first failure, then left the third uncaught.
+        let history = [
+            entry(1, schedule(1, "payments.charge")),
+            entry(2, failed(1, "card declined")),
+            entry(3, schedule(2, "audit.record")),
+            entry(4, failed(2, "card declined")),
+            entry(5, schedule(3, "payments.charge")),
+            entry(6, failed(3, "card expired")),
+        ];
+        let error = |name: &str, message: &str| ScriptError {
+            name: name.into(),
+            message: message.into(),
+            stack: None,
+        };
+        let uncaught = |message| error(ScriptError::TOOL_ERROR, message).failed_call(&history);
+        assert_eq!(
+            uncaught("payments.charge failed: card expired"),
+            Some(Seq(3))
+        );
+        assert_eq!(
+            uncaught("payments.charge failed: card declined"),
+            Some(Seq(1))
+        );
+        assert_eq!(uncaught("audit.record failed: card declined"), Some(Seq(2)));
+        // The tool's own message is not the error's.
+        assert_eq!(uncaught("card expired"), None);
+        assert_eq!(
+            error("Error", "payments.charge failed: card expired").failed_call(&history),
+            None,
+            "not a ToolError"
+        );
+        assert_eq!(
+            ScriptError::tool_error_message(
+                "github.close_issue",
+                &ToolFailure {
+                    kind: ToolFailureKind::Timeout,
+                    message: "no answer in 30s".into(),
+                    data: None,
+                }
+            ),
+            "github.close_issue failed: no answer in 30s"
+        );
     }
 
     #[test]

@@ -403,9 +403,9 @@ impl Views<'_> {
                 .and_then(|stored| code_frame(stored.script.source(), line, column)),
             None => None,
         };
-        let failed_call = (failure.name == "ToolError")
-            .then(|| failed_call(history, &failure.message, payload))
-            .flatten();
+        let failed_call = failure
+            .failed_call(history)
+            .and_then(|seq| failed_call(history, seq, payload));
         Ok(RunError {
             name: failure.name.clone(),
             message: failure.message.clone(),
@@ -563,18 +563,16 @@ fn logs(history: &[HistoryEntry]) -> Vec<LogLine> {
     lines
 }
 
-/// The call whose failure the script did not catch: the last failed call with the error's
-/// message.
+/// The call whose failure the script did not catch: its `seq`, as `ScriptError::failed_call`
+/// finds it, with its arguments and recorded failure.
 fn failed_call(
     history: &[HistoryEntry],
-    message: &str,
+    seq: ptc_core::Seq,
     payload: &impl Fn(&ptc_core::Payload) -> Payload,
 ) -> Option<FailedCall> {
-    let (seq, error) = history.iter().rev().find_map(|entry| match &entry.event {
-        Event::Completion(Completion::ToolCallFailed { seq, error })
-            if error.message == message =>
-        {
-            Some((*seq, error))
+    let error = history.iter().find_map(|entry| match &entry.event {
+        Event::Completion(Completion::ToolCallFailed { seq: failed, error }) if *failed == seq => {
+            Some(error)
         }
         _ => None,
     })?;
