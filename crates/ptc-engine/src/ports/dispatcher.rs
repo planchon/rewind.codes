@@ -24,6 +24,9 @@ pub struct ToolCall {
     pub idempotency_key: String,
     /// 1 for the first attempt.
     pub attempt: u32,
+    /// The harness approved the call after a schema change (`tool.schema_changed`): send it
+    /// against the tool's current schema, without checking it against the pinned one again.
+    pub schema_change_approved: bool,
     /// The token of the claim. A handler that answers later keeps it and answers through it
     /// ([`Dispatched::Deferred`]).
     pub token: TaskToken,

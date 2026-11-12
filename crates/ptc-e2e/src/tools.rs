@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use ptc_core::{JsonValue, ToolFailure, ToolFailureKind};
-use ptc_engine::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use ptc_engine::ports::{Credentials, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher};
 use serde_json::Value;
 
 /// Answers tool calls from the `tools` of a scenario. A superset of `ptc.tools.json`:
@@ -14,6 +14,9 @@ use serde_json::Value;
 /// | any value | that value |
 /// | `{"$echo": true}` | the call's arguments |
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
+/// | `{"$transient": "message", "$kind": …}` | a transient failure: retried with backoff under `retry` |
+/// | `{"$unauthorized": "message"}` | the server refuses the credentials: the call is parked until they are renewed |
+/// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its claim expires |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
 #[derive(Debug)]
 pub struct ScenarioTools {
@@ -24,6 +27,16 @@ pub struct ScenarioTools {
 enum Responses {
     Always(Value),
     Sequence(VecDeque<Value>),
+}
+
+/// What a scenario's tool does with one call.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Answer {
+    Result(JsonValue),
+    Failed(ToolFailure),
+    Transient(ToolFailure),
+    Unauthorized(String),
+    Crash,
 }
 
 impl ScenarioTools {
@@ -45,49 +58,62 @@ impl ScenarioTools {
         }
     }
 
-    fn respond(&self, call: &ToolCall) -> Result<JsonValue, ToolFailure> {
+    /// The next answer of `tool` to a call with these args.
+    pub fn answer(&self, tool: &str, args: &JsonValue) -> Answer {
         let mut responses = self
             .responses
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let response = match responses.get_mut(&call.tool.name) {
+        let response = match responses.get_mut(tool) {
             Some(Responses::Always(response)) => response.clone(),
-            Some(Responses::Sequence(sequence)) => sequence.pop_front().ok_or_else(|| {
-                failure(
-                    ToolFailureKind::Unavailable,
-                    format!("{} has no response left", call.tool.name),
-                    None,
-                )
-            })?,
+            Some(Responses::Sequence(sequence)) => match sequence.pop_front() {
+                Some(response) => response,
+                None => {
+                    return Answer::Failed(failure(
+                        ToolFailureKind::Unavailable,
+                        format!("{tool} has no response left"),
+                        None,
+                    ));
+                }
+            },
             None => {
-                return Err(failure(
+                return Answer::Failed(failure(
                     ToolFailureKind::Unavailable,
-                    format!("{} has no response in the scenario", call.tool.name),
+                    format!("{tool} has no response in the scenario"),
                     None,
                 ));
             }
         };
-        answer(&response, call)
+        answer(&response, args)
     }
 }
 
-fn answer(response: &Value, call: &ToolCall) -> Result<JsonValue, ToolFailure> {
-    if response.get("$echo") == Some(&Value::Bool(true)) {
-        return Ok(call.args.clone());
-    }
-    if let Some(message) = response.get("$error") {
-        let kind = match response.get("$kind").and_then(Value::as_str) {
-            Some("unavailable") => ToolFailureKind::Unavailable,
-            Some("timeout") => ToolFailureKind::Timeout,
-            Some("outcome_unknown") => ToolFailureKind::OutcomeUnknown,
-            _ => ToolFailureKind::Error,
-        };
-        let message = message
+fn answer(response: &Value, args: &JsonValue) -> Answer {
+    let text = |value: &Value| {
+        value
             .as_str()
-            .map_or_else(|| message.to_string(), str::to_owned);
-        return Err(failure(kind, message, response.get("$data").cloned()));
+            .map_or_else(|| value.to_string(), str::to_owned)
+    };
+    let kind = match response.get("$kind").and_then(Value::as_str) {
+        Some("unavailable") => ToolFailureKind::Unavailable,
+        Some("timeout") => ToolFailureKind::Timeout,
+        Some("outcome_unknown") => ToolFailureKind::OutcomeUnknown,
+        _ => ToolFailureKind::Error,
+    };
+    let data = response.get("$data").cloned();
+    if response.get("$echo") == Some(&Value::Bool(true)) {
+        Answer::Result(args.clone())
+    } else if response.get("$crash") == Some(&Value::Bool(true)) {
+        Answer::Crash
+    } else if let Some(message) = response.get("$error") {
+        Answer::Failed(failure(kind, text(message), data))
+    } else if let Some(message) = response.get("$transient") {
+        Answer::Transient(failure(kind, text(message), data))
+    } else if let Some(message) = response.get("$unauthorized") {
+        Answer::Unauthorized(text(message))
+    } else {
+        Answer::Result(response.clone())
     }
-    Ok(response.clone())
 }
 
 fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolFailure {
@@ -100,9 +126,22 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 
 impl ToolDispatcher for ScenarioTools {
     async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
-        match self.respond(&call) {
-            Ok(result) => Dispatched::Result(result),
-            Err(failure) => Dispatched::Failed(failure),
+        match self.answer(&call.tool.name, &call.args) {
+            Answer::Result(result) => Dispatched::Result(result),
+            Answer::Failed(failure) => Dispatched::Failed(failure),
+            Answer::Transient(failure) => Dispatched::Transient(failure),
+            Answer::Unauthorized(message) => Dispatched::Park(ParkReason {
+                kind: ParkKind::CredentialsExpired,
+                message,
+            }),
+            Answer::Crash => Dispatched::Failed(failure(
+                ToolFailureKind::Error,
+                format!(
+                    "{}: a $crash response needs a harness's worker (\"host_worker\": true)",
+                    call.tool.name
+                ),
+                None,
+            )),
         }
     }
 }

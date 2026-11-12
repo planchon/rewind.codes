@@ -1,0 +1,8 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"28dd6213f7164649534eae476515daee63d17331c8b74d51afc51c4bcef0ab0f","toolset":"f8f15b9e4f462cc51205b0aa2a25df77d0eff91cc4e154c345226706011d19e8","input":{"value":{"amount":100}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"payments.charge","args":{"value":{"amount":100}},"callsite":{"line":6,"column":20}}},
+{"index":2,"recorded_at":1767225720000,"event":{"type":"tool_call_failed","seq":1,"error":{"kind":"outcome_unknown","message":"the call to payments.charge was interrupted and may or may not have taken effect; the tool is at_most_once, so it is not called again"}}},
+{"index":3,"recorded_at":1767225720000,"event":{"type":"schedule_tool_call","seq":2,"tool":"payments.status","args":{"value":{"amount":100}},"callsite":{"line":10,"column":37}}},
+{"index":4,"recorded_at":1767225720000,"event":{"type":"tool_call_completed","seq":2,"result":{"value":{"charged":true}}}},
+{"index":5,"recorded_at":1767225720000,"event":{"type":"complete_run","output":{"value":{"charged":true,"message":"payments.charge failed: the call to payments.charge was interrupted and may or may not have taken effect; the tool is at_most_once, so it is not called again","outcomeUnknown":true}}}}
+]}

@@ -21,8 +21,8 @@ use crate::ports::{
     FeedConsumer, JournalStore, Lease, NewRun, NewTimer, NewToolTask, ParkKind, ParkReason,
     ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention, RunCursor,
     RunFilter, RunMetadata, RunRef, STICKY_GRACE, Secret, StoreError, Subscription, TaskFilter,
-    TaskRef, TaskState, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, TraceContext,
-    Trigger, WebhookEventType, WebhookToken, deferred_timeout_failure,
+    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
+    TraceContext, Trigger, WebhookEventType, WebhookToken, deferred_timeout_failure,
 };
 
 const LEASE: Duration = Duration::from_secs(30);
@@ -126,6 +126,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         new_store(),
         approval_and_parked_tasks_wait_for_the_harness
     );
+    check!("journal", new_store(), a_token_names_its_task);
     check!(
         "journal",
         new_store(),
@@ -1832,11 +1833,9 @@ pub async fn approval_and_parked_tasks_wait_for_the_harness<S: JournalStore>(sto
         seq: Seq(seq),
     };
 
-    assert_eq!(
-        seqs(&claim(store, "a", &TaskFilter::All, T0, 10).await),
-        [3],
-        "approval tasks wait"
-    );
+    let first = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(seqs(&first), [3], "approval tasks wait");
+    assert!(!first[0].task.schema_change_approved);
     let approved_at = later(T0, 100);
     assert_eq!(
         store
@@ -1845,11 +1844,16 @@ pub async fn approval_and_parked_tasks_wait_for_the_harness<S: JournalStore>(sto
             .expect("approve"),
         TaskUpdate::Applied
     );
+    let approved = store.tool_tasks(&run).await.expect("tool_tasks").remove(0);
     assert_eq!(
-        store.tool_tasks(&run).await.expect("tool_tasks")[0].state,
+        approved.state,
         TaskState::Ready {
             next_attempt_at: approved_at
         }
+    );
+    assert!(
+        !approved.schema_change_approved,
+        "an approval is not a schema change"
     );
     let rejection = ToolFailure {
         kind: ToolFailureKind::Error,
@@ -1915,6 +1919,10 @@ pub async fn approval_and_parked_tasks_wait_for_the_harness<S: JournalStore>(sto
         .await
         .remove(0);
     assert_eq!(again.task.task.seq, Seq(1));
+    assert!(
+        again.task.schema_change_approved,
+        "approved after a schema change, the call goes on against the new schema"
+    );
     assert_eq!(
         store
             .approve_tool_task(&task(1), approved_at)
@@ -1937,6 +1945,76 @@ pub async fn approval_and_parked_tasks_wait_for_the_harness<S: JournalStore>(sto
             .expect("approve"),
         TaskUpdate::NotFound
     );
+}
+
+pub async fn a_token_names_its_task<S: JournalStore>(store: &S) {
+    let run = start_with_tasks(
+        store,
+        run_ref(1),
+        vec![
+            host_task(1, "t"),
+            host_task(2, "t"),
+            host_task(3, "t"),
+            host_task(4, "t"),
+        ],
+    )
+    .await;
+    let claimed = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(seqs(&claimed), [1, 2, 3, 4]);
+    let task_of = |token| async move { store.tool_task(token).await.expect("tool_task") };
+
+    // A live claim names its task, as `tool_tasks` shows it.
+    let found = task_of(&claimed[0].token).await.expect("the claim's task");
+    assert_eq!(found, store.tool_tasks(&run).await.expect("tool_tasks")[0]);
+    assert_eq!(found.task, claimed[0].task.task);
+    assert_eq!(found.attempt, 1);
+    assert!(matches!(found.state, TaskState::Claimed { .. }));
+
+    // A deferred task keeps its token.
+    let until = later(T0, DAY);
+    store
+        .defer_tool_task(&claimed[0].token, until)
+        .await
+        .expect("defer");
+    assert_eq!(
+        task_of(&claimed[0].token).await.map(|task| task.state),
+        Some(TaskState::Deferred { until })
+    );
+
+    // Retried, parked, completed: the token holds nothing any more.
+    store
+        .retry_tool_task(&claimed[1].token, later(T0, 1_000))
+        .await
+        .expect("retry");
+    assert_eq!(task_of(&claimed[1].token).await, None);
+    let reason = ParkReason {
+        kind: ParkKind::CredentialsExpired,
+        message: "401".into(),
+    };
+    store
+        .park_tool_task(&claimed[2].token, reason)
+        .await
+        .expect("park");
+    assert_eq!(task_of(&claimed[2].token).await, None);
+    store
+        .complete_tool_task(&claimed[3].token, result(4), T0)
+        .await
+        .expect("complete");
+    assert_eq!(task_of(&claimed[3].token).await, None);
+
+    // Claimed again after its claim expired: the old token is dead, the new one names it.
+    let again = claim(store, "b", &TaskFilter::All, later(T0, 1_000), 10).await;
+    assert_eq!(seqs(&again), [2]);
+    assert_eq!(task_of(&claimed[1].token).await, None);
+    assert_eq!(
+        task_of(&again[0].token).await.map(|task| task.attempt),
+        Some(2)
+    );
+    let expired = later(T0, 1_000).saturating_add(again[0].task.policy.heartbeat_timeout);
+    let third = claim(store, "c", &TaskFilter::All, expired, 10).await;
+    assert_eq!(seqs(&third), [2]);
+    assert_eq!(task_of(&again[0].token).await, None);
+    assert_eq!(task_of(&TaskToken("ptc_tt_unknown".into())).await, None);
 }
 
 pub async fn renewed_credentials_resume_parked_tasks<S: JournalStore>(store: &S) {

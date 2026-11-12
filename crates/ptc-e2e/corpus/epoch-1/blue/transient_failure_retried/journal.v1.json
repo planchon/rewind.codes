@@ -1,0 +1,6 @@
+{"v":1,"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"6173ba109d8d0c0f3468cf2ce0f2689cf95e260fc877980f1148ffd1e2005767","toolset":"62090bc9452fbb80bf8b4d00bba33d3339caec7aa4d17d9a3c187b6245e36f16","input":{"value":{"city":"Lyon"}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"weather.forecast","args":{"value":{"city":"Lyon"}},"callsite":{"line":5,"column":34}}},
+{"index":2,"recorded_at":1767225603689,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"temp":21}}}},
+{"index":3,"recorded_at":1767225603689,"event":{"type":"complete_run","output":{"value":{"forecast":{"temp":21},"waited":true}}}}
+]}

@@ -130,7 +130,7 @@ heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)
 defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
 approve_tool_task(task, now) / reject_tool_task(task, failure, now)    resume_parked(Run(run) | Toolset { tenant, toolset }, now)
-tool_tasks(run)
+tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
 get_payload(tenant, digest) -> { digest, size, preview, value? }
@@ -194,9 +194,11 @@ Contracts, all covered by the conformance suite:
   the same tool in flight per run, and the server's calls in flight per worker for an MCP tool;
   a claimed task not expired and a deferred task are in flight. A claim lasts the policy's
   heartbeat timeout and has its own token: once the task is claimed again, the old token is
-  refused. `complete_tool_task` writes the outcome to the run's inbox, and drops the outcome of
-  a task that no longer exists. `resume_parked` makes ready again the tasks parked by
-  `credentials_expired`, once the run's or the toolset's credentials are renewed.
+  refused; `tool_task` finds the task a live token holds. `complete_tool_task` writes the outcome
+  to the run's inbox, and drops the outcome of a task that no longer exists. Approving a task
+  parked by `schema_changed` marks it `schema_change_approved`. `resume_parked` makes ready again
+  the tasks parked by `credentials_expired`, once the run's or the toolset's credentials are
+  renewed.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
   failure.
 - A webhook token is unguessable, the same for a run and a signal name, and maps to one run and
@@ -226,8 +228,9 @@ Contracts, all covered by the conformance suite:
 - **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, unchanged. The
   executor knows nothing about the instance cache, which lives in the engine.
 - **`ToolDispatcher`**: `dispatch(call, credentials) -> Dispatched`. The call carries the run,
-  the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, the
-  claim's token and the trace context. `Dispatched` is one of: `Result` and `Failed` (the
+  the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, whether
+  the harness approved a schema change (then the call is sent without checking the schema
+  again), the claim's token and the trace context. `Dispatched` is one of: `Result` and `Failed` (the
   outcome); `Transient`, after which the engine puts the task back to `ready` with backoff, or
   fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
   token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher

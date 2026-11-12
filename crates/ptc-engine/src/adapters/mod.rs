@@ -1,6 +1,6 @@
 //! Adapters that need no infrastructure: in-memory storage, read model, secrets, telemetry
-//! and webhooks; static tool responses and type-checking; system and virtual time; system and
-//! seeded entropy. Wired together with a virtual clock, they make the engine's mock mode and its
+//! and webhooks; static tool responses, routing of tool calls by route, and type-checking;
+//! system and virtual time; system and seeded entropy. Wired together with a virtual clock, they make the engine's mock mode and its
 //! test harness (`archi/07-code-architecture.md`, principle 6). Each adapter of a port with a
 //! conformance suite passes it: they are the reference implementations of the contracts.
 
@@ -10,6 +10,7 @@ mod dispatcher;
 mod entropy;
 mod journal;
 mod read_model;
+mod routing;
 mod secrets;
 mod telemetry;
 mod time;
@@ -21,6 +22,7 @@ pub use dispatcher::{StaticDispatcher, StaticResponsesError};
 pub use entropy::{SeededEntropy, SystemEntropy};
 pub use journal::MemoryJournal;
 pub use read_model::MemoryReadModel;
+pub use routing::{RoutingDispatcher, Unrouted};
 pub use secrets::MemorySecrets;
 pub use telemetry::MemorySpanExporter;
 pub use time::{SystemClock, VirtualClock};

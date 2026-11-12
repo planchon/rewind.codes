@@ -371,7 +371,8 @@ pub trait JournalStore: Send + Sync {
         now: Timestamp,
     ) -> impl Future<Output = Result<TaskUpdate, StoreError>> + Send;
 
-    /// `approval` or `parked` → `ready` at `now`: the harness lets the call go on.
+    /// `approval` or `parked` → `ready` at `now`: the harness lets the call go on. Approving a
+    /// task parked by `SchemaChanged` sets its `schema_change_approved`.
     fn approve_tool_task(
         &self,
         task: &TaskRef,
@@ -407,6 +408,15 @@ pub trait JournalStore: Send + Sync {
         &self,
         run: &RunRef,
     ) -> impl Future<Output = Result<Vec<ToolTask>, StoreError>> + Send;
+
+    /// The task holding `token`: a claimed task, or a deferred one. `None` once the token holds
+    /// nothing any more: the task is done, its run ended, it was claimed again, retried or
+    /// parked. The API's calls on a claim carry only its token; the engine needs the task to
+    /// apply its policy, its attempt and its run's deadline.
+    fn tool_task(
+        &self,
+        token: &TaskToken,
+    ) -> impl Future<Output = Result<Option<ToolTask>, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
     // Webhooks

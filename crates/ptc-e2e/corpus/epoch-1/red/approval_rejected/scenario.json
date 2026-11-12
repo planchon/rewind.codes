@@ -1,0 +1,18 @@
+{
+  "description": "A tool under the approval policy waits for the harness; rejected, the call fails with a ToolError carrying the harness's message, which the script does not catch.",
+  "input": { "order": "A-17", "amount": 250 },
+  "tools": { "payments.refund": { "id": "re_1" } },
+  "policies": { "payments.refund": { "approval": true } },
+  "steps": [
+    { "reject": { "tool": "payments.refund", "message": "refunds above 100 need a manager" } }
+  ],
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ToolError",
+      "message": "payments.refund failed: refunds above 100 need a manager"
+    },
+    "calls": { "payments.refund": 1 },
+    "events": ["run_started", "schedule_tool_call", "tool_call_failed", "fail_run"]
+  }
+}

@@ -676,7 +676,8 @@ async fn a_call_interrupted_too_many_times_has_an_unknown_outcome() {
             seq: Seq(1),
             error: ToolFailure {
                 kind: ToolFailureKind::OutcomeUnknown,
-                message: "the call was interrupted 5 times and may or may not have taken effect"
+                message: "the call to a was interrupted after 5 attempts and may or may not \
+                          have taken effect"
                     .into(),
                 data: None,
             },

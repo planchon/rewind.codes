@@ -73,6 +73,7 @@ struct Task {
     server_concurrency: Option<u32>,
     state: TaskState,
     attempt: u32,
+    schema_change_approved: bool,
     /// The token of the current claim, or of the deferral.
     token: Option<String>,
     created_at: Timestamp,
@@ -217,6 +218,7 @@ impl Run {
             policy: task.policy,
             state: task.state.clone(),
             attempt: task.attempt,
+            schema_change_approved: task.schema_change_approved,
             created_at: task.created_at,
         }
     }
@@ -667,6 +669,7 @@ impl JournalStore for MemoryJournal {
                     server_concurrency: task.server_concurrency,
                     state,
                     attempt: 0,
+                    schema_change_approved: false,
                     token: None,
                     created_at: now,
                 },
@@ -1061,14 +1064,18 @@ impl JournalStore for MemoryJournal {
         let Some(found) = run.tasks.get_mut(&task.seq) else {
             return Ok(TaskUpdate::NotFound);
         };
-        Ok(match found.state {
+        Ok(match &found.state {
             TaskState::Approval | TaskState::Parked(_) => {
+                if matches!(&found.state, TaskState::Parked(reason) if reason.kind == ParkKind::SchemaChanged)
+                {
+                    found.schema_change_approved = true;
+                }
                 found.state = TaskState::Ready {
                     next_attempt_at: now,
                 };
                 TaskUpdate::Applied
             }
-            ref other => TaskUpdate::InvalidState(other.clone()),
+            other => TaskUpdate::InvalidState(other.clone()),
         })
     }
 
@@ -1159,6 +1166,17 @@ impl JournalStore for MemoryJournal {
             .iter()
             .map(|(seq, task)| found.view(*seq, task))
             .collect())
+    }
+
+    async fn tool_task(&self, token: &TaskToken) -> Result<Option<ToolTask>, StoreError> {
+        let mut state = self.lock()?;
+        let Some((run_id, seq)) = state.task_by_token(token) else {
+            return Ok(None);
+        };
+        Ok(state
+            .runs
+            .get(&run_id)
+            .and_then(|run| run.tasks.get(&seq).map(|task| run.view(seq, task))))
     }
 
     async fn create_webhook_token(

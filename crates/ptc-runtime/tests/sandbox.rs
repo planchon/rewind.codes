@@ -11,7 +11,9 @@ use ptc_core::{
     RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, Seq, Timestamp, ToolFailure,
     ToolFailureKind, Toolset, canonical_json,
 };
-use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
+use ptc_engine::adapters::{
+    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+};
 use ptc_engine::ports::{
     CompiledScript, Credentials, Dispatched, ExecutorError, RunFilter, RunRef, ScriptExecutor,
     StartScript, TenantId, ToolCall, ToolDispatcher,
@@ -58,7 +60,16 @@ fn issue_tools(call: &ToolCall) -> Result<Value, ToolFailure> {
     }
 }
 
-type V8Engine = Engine<MemoryJournal, MemoryBlobs, V8Executor, Tools, VirtualClock, SeededEntropy>;
+type V8Engine = Engine<
+    MemoryJournal,
+    MemoryBlobs,
+    V8Executor,
+    Tools,
+    VirtualClock,
+    SeededEntropy,
+    MemorySecrets,
+    MemoryWebhooks,
+>;
 
 struct Harness {
     engine: V8Engine,
@@ -79,6 +90,8 @@ fn harness_with(limits: SandboxLimits, entropy: u64) -> Harness {
                 dispatcher: Tools(Arc::new(issue_tools)),
                 clock: VirtualClock::new(T0),
                 entropy: SeededEntropy::new(entropy),
+                secrets: MemorySecrets::new(),
+                webhooks: MemoryWebhooks::new(),
             },
             EngineConfig::default(),
         ),

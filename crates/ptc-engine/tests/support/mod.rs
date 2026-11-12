@@ -10,7 +10,9 @@ use ptc_core::{
     Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script, ScriptError, Seq,
     Timestamp, ToolFailure, Toolset,
 };
-use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
+use ptc_engine::adapters::{
+    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+};
 use ptc_engine::ports::{
     CompiledScript, Credentials, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
     ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
@@ -29,6 +31,8 @@ pub type TestEngine = Engine<
     RecordingDispatcher,
     VirtualClock,
     SeededEntropy,
+    MemorySecrets,
+    MemoryWebhooks,
 >;
 
 pub fn engine(programs: FakeExecutor, dispatcher: RecordingDispatcher) -> TestEngine {
@@ -48,6 +52,8 @@ pub fn engine_with(
             dispatcher,
             clock: VirtualClock::new(T0),
             entropy: SeededEntropy::new(42),
+            secrets: MemorySecrets::new(),
+            webhooks: MemoryWebhooks::new(),
         },
         config,
     )
@@ -286,13 +292,14 @@ impl ScriptInstance for FakeInstance {
 // -------------------------------------------------------------------------------------------
 // Dispatcher
 
-type Handler = dyn Fn(&ToolCall) -> Result<JsonValue, ToolFailure> + Send + Sync;
+type Handler = dyn Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync;
+type Calls = Arc<Mutex<Vec<(ToolCall, Option<Credentials>)>>>;
 
-/// Answers with a handler and records every call.
+/// Answers with a handler and records every call, with the credentials it was given.
 #[derive(Clone)]
 pub struct RecordingDispatcher {
     handler: Arc<Handler>,
-    calls: Arc<Mutex<Vec<ToolCall>>>,
+    calls: Calls,
 }
 
 impl std::fmt::Debug for RecordingDispatcher {
@@ -306,6 +313,17 @@ impl RecordingDispatcher {
     pub fn new(
         handler: impl Fn(&ToolCall) -> Result<JsonValue, ToolFailure> + Send + Sync + 'static,
     ) -> Self {
+        Self::dispatching(move |call, _| match handler(call) {
+            Ok(result) => Dispatched::Result(result),
+            Err(failure) => Dispatched::Failed(failure),
+        })
+    }
+
+    /// Answers with whatever the handler says, given the call and its credentials: transient
+    /// failures, deferrals, parked calls.
+    pub fn dispatching(
+        handler: impl Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync + 'static,
+    ) -> Self {
         Self {
             handler: Arc::new(handler),
             calls: Arc::default(),
@@ -318,18 +336,25 @@ impl RecordingDispatcher {
     }
 
     pub fn calls(&self) -> Vec<ToolCall> {
-        self.calls.lock().unwrap().clone()
+        let calls = self.calls.lock().unwrap();
+        calls.iter().map(|(call, _)| call.clone()).collect()
+    }
+
+    /// The credentials each call was dispatched with, in order.
+    pub fn credentials(&self) -> Vec<Option<Credentials>> {
+        let calls = self.calls.lock().unwrap();
+        calls
+            .iter()
+            .map(|(_, credentials)| credentials.clone())
+            .collect()
     }
 }
 
 impl ToolDispatcher for RecordingDispatcher {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
-        let outcome = (self.handler)(&call);
-        self.calls.lock().unwrap().push(call);
-        match outcome {
-            Ok(result) => Dispatched::Result(result),
-            Err(failure) => Dispatched::Failed(failure),
-        }
+    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
+        let outcome = (self.handler)(&call, credentials.as_ref());
+        self.calls.lock().unwrap().push((call, credentials));
+        outcome
     }
 }
 
