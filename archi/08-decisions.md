@@ -189,3 +189,16 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The OpenAPI operations are declared in `ptc-api` by bodiless functions; their paths are `ptc_api::routes`, which the server's router uses; tests check both name the same operations, and that every route fits one axum router | Annotating the server's handlers | The document is a contract written before the server, and the CLI depends on it, never on the server. |
 | The client is `reqwest` (rustls, unix sockets natively), with `sse-stream` for the event stream | hyper with `hyperlocal`; `eventsource-stream` | One client for both transports; `sse-stream` is maintained, and `rmcp` uses it. |
 | A deployed server refuses stdio MCP servers unless its configuration allows them; the embedded server accepts them | Accepting any command | A stdio server is a process the tenant chooses, started by ai-ptc. |
+
+### Taken while building the dashboard (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| React 19, Vite, TypeScript 7 in strict mode, pnpm; types from `openapi-typescript`, calls through `openapi-fetch`, caching with TanStack Query, routes with React Router; Biome for lint and format | A hand-written client; ESLint | The generated types follow the API's diff. `typescript-eslint` needs TypeScript 5's compiler API, which TypeScript 7 does not have. |
+| Routes in the URL fragment and relative paths in the build; `dashboard/dist/` is not committed, `ptc-server` embeds it when compiled | History routes with a fallback route on the server; committing the build | The server serves a plain directory under any prefix. Hashed build files would change in every diff. |
+| The event stream is read with `fetch` and `eventsource-parser`, resumed with `from` after a drop | `EventSource` | `EventSource` cannot send the `Authorization` header. |
+| The operator types an API key; it stays in `sessionStorage`, or `localStorage` when asked; the dashboard only sends `GET` | A login page and a cookie on the server | The API has no session: a cookie would be a second way in. A `reader` key is enough. |
+| The timeline compresses a gap into a marked break when it is longer than 30 s and four times longer than all the shorter gaps together | A linear or a logarithmic axis | A run that sleeps 10 days must still show its 300 ms calls, and a slow call must still look slow. |
+| The source is highlighted with Lezer's TypeScript grammar | Shiki; Monaco | Small and synchronous, and it gives tokens line by line, which the notes beside each line need. |
+| The mocked API is a set of MSW handlers over fixtures: vitest runs them with `msw/node`, and `pnpm dev:mock` serves them from the Vite dev server | MSW's service worker | Nothing of the mock reaches the build. |
+| IBM Plex Sans and Mono are bundled from `@fontsource`, Latin only | Fonts from a CDN; system fonts | The dashboard loads nothing from another origin, and looks the same on every machine. |

@@ -9,6 +9,7 @@ The journal gives durable execution (`await sleep("10d")`, signals), replay, tes
 against recorded runs, and observability.
 
 - Architecture: [archi/](archi/README.md), the specification the code follows.
+- Dashboard: [dashboard/](dashboard/README.md), the operator's view of every run, served by `ptc-server`.
 
 ## Crates
 
