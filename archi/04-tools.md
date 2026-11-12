@@ -124,9 +124,14 @@ start, before any run exists: `Type 'number' is not assignable to type 'string'
 (script.ts:3:28)`.
 
 Tool names are kept as the server defines them (`github.list_issues`) so they match the
-descriptions the model reads. Args are also validated at run time, against the same JSON
-Schema, inside the op, before any command is recorded. Invalid args throw a `TypeError` at
-the call site. This is deterministic, since the schema is pinned.
+descriptions the model reads. The names `ptc:tools` declares, a server, a host-tool group and a
+host tool without a group, are identifiers that are not reserved words of JavaScript (`default`,
+`delete`, `class`…), nor the words strict mode reserves (`let`, `static`, `eval`…): a toolset
+naming one is refused when it is registered.
+
+Args are also validated at run time, against the same JSON Schema, inside the op, before any
+command is recorded. Invalid args throw a `TypeError` at the call site. This is deterministic,
+since the schema is pinned.
 
 The JSON Schema → TypeScript converter is ours, written in Rust in `ptc-codegen`: no
 maintained crate exists. It covers objects, `required`, enums, `anyOf`/`oneOf`/`allOf`,
@@ -194,6 +199,29 @@ Each request goes through these steps, in order:
 
 A refused request fails with a `ToolError`. In production, egress also goes through an
 egress proxy ([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
+
+### Where MCP servers may be
+
+A tenant names the URLs of its MCP servers, and ai-ptc connects to them: the API role at
+registration, to list their tools, and the workers at each call. On a deployed server, these
+connections go through the egress checks of the `http` tool, at registration and at every
+connection:
+
+1. The name is resolved once.
+2. Private, loopback, link-local and cloud-metadata IPs are refused.
+3. The connection goes to the IP that was checked.
+4. A redirect is followed only within the server's origin, with a 307 or a 308, up to 5 times,
+   each new connection checked again. A redirect elsewhere is refused: the credentials would
+   follow it.
+
+An operator may let internal MCP servers through, by configuration: host names
+(`mcp.internal.example`, `*.svc.cluster.local`) and networks (`10.20.0.0/16`), never a switch
+for the whole private network (`ptc server --allow-internal-mcp`). What such an internal server
+answers is never quoted to the tenant: an error gives the HTTP status, not the body.
+
+A refused server fails the registration (`toolset-unavailable`), and a call with a `ToolError`
+(`unavailable`), for good. The embedded server reaches any address, as it starts stdio servers:
+one developer names the servers of their own machine.
 
 ## Type-checking
 

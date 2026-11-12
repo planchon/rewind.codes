@@ -207,6 +207,15 @@ capability comes from the toolset, and secrets never enter the isolate
 A run's seed keys its random generators, `crypto` included. It is protected like the
 payloads.
 
+A deployed server also sends requests where a tenant says: to its MCP servers (from the API
+role at registration, from the workers at each call) and to its lifecycle webhooks. Neither goes
+to the internal network: both go through the egress checks of the `http` tool, a name resolved
+once, private, loopback, link-local and metadata addresses refused, the connection to the
+checked address ([MCP servers](04-tools.md#where-mcp-servers-may-be)). Only the operator opens
+the way: to internal MCP servers by host or network (`--allow-internal-mcp`), whose answers are
+then never quoted to the tenant, and to webhook receivers on the private network
+(`--allow-private-webhooks`). The embedded server, for one local developer, reaches any address.
+
 ### Sandboxed workers
 
 A V8 isolate is not a hard boundary against V8 vulnerabilities. Only workers run code

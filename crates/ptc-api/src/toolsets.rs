@@ -52,9 +52,11 @@ pub struct CreateToolset {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct McpServer {
-    /// The namespace of its tools in `ptc:tools`: an identifier.
+    /// The namespace of its tools in `ptc:tools`: an identifier that is not a reserved word of
+    /// JavaScript (`default`, `delete`, `let`…).
     pub name: String,
-    /// The URL of a streamable HTTP server.
+    /// The URL of a streamable HTTP server. A server of a deployment reaches it only at a public
+    /// address, unless its configuration allows the internal host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// The program of a stdio server.
@@ -75,6 +77,8 @@ pub struct McpServer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostTool {
+    /// `group.tool` puts the tool in a group, the namespace `ptc:tools` exports it under. The
+    /// group, and a name without a dot, may not be a reserved word of JavaScript.
     pub name: String,
     /// Shown to the model in the declarations.
     pub description: String,
