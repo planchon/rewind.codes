@@ -3276,6 +3276,10 @@ version = "0.1.0"
 dependencies = [
  "ptc-cli",
  "ptc-server",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

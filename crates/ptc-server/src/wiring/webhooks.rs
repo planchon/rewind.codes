@@ -264,3 +264,220 @@ async fn mcp_server(
 
 /// The server's sender.
 pub(crate) type Webhooks = HttpWebhooks<ServerRender>;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use axum::body::Bytes;
+    use axum::extract::Path;
+    use axum::http::{HeaderMap, StatusCode};
+    use ptc_api::webhooks::{SignedHeaders, WebhookSecret};
+    use ptc_engine::conformance::webhooks::{Receiver, run_all};
+    use ptc_engine::ports::{
+        Secret, Subscription, TenantId, WebhookError, WebhookEvent, WebhookEventKind,
+        WebhookEventType, WebhookSender,
+    };
+
+    use super::{HttpWebhooks, Render, Retries};
+
+    /// Writes the port's event as `{"id", "type"}`: what the receiver reads back.
+    #[derive(Debug, Clone, Copy)]
+    struct Plain;
+
+    impl Render for Plain {
+        async fn render(
+            &self,
+            _subscription: &Subscription,
+            event: &WebhookEvent,
+        ) -> Result<Vec<u8>, WebhookError> {
+            Ok(serde_json::to_vec(&serde_json::json!({
+                "id": event.id,
+                "type": event.kind.event_type().as_str(),
+            }))
+            .unwrap_or_default())
+        }
+    }
+
+    /// An HTTP receiver: it verifies each delivery's signature with its subscription's secret,
+    /// keeps what it accepted, and refuses everything sent to `/down/…`.
+    struct HttpReceiver {
+        base: String,
+        secrets: Arc<Mutex<BTreeMap<String, WebhookSecret>>>,
+        received: Arc<Mutex<Vec<(String, String, WebhookEventType)>>>,
+    }
+
+    impl HttpReceiver {
+        /// Called inside the runtime: binds synchronously, serves on a task.
+        fn start() -> Self {
+            let secrets: Arc<Mutex<BTreeMap<String, WebhookSecret>>> = Arc::default();
+            let received: Arc<Mutex<Vec<(String, String, WebhookEventType)>>> = Arc::default();
+            let (keys, kept) = (secrets.clone(), received.clone());
+            let app = axum::Router::new()
+                .route(
+                    "/up/{id}",
+                    axum::routing::post(
+                        move |Path(id): Path<String>, headers: HeaderMap, body: Bytes| {
+                            let (keys, kept) = (keys.clone(), kept.clone());
+                            async move {
+                                let Some(secret) =
+                                    keys.lock().ok().and_then(|keys| keys.get(&id).cloned())
+                                else {
+                                    return StatusCode::NOT_FOUND;
+                                };
+                                let header = |name: &str| {
+                                    headers
+                                        .get(name)
+                                        .and_then(|value| value.to_str().ok())
+                                        .unwrap_or_default()
+                                        .to_owned()
+                                };
+                                let (webhook_id, timestamp, signature) = (
+                                    header("webhook-id"),
+                                    header("webhook-timestamp"),
+                                    header("webhook-signature"),
+                                );
+                                let signed = SignedHeaders {
+                                    id: &webhook_id,
+                                    timestamp: &timestamp,
+                                    signature: &signature,
+                                };
+                                // The body is not an API event: check the signature by hand.
+                                let Ok(at) = timestamp.parse::<i64>() else {
+                                    return StatusCode::BAD_REQUEST;
+                                };
+                                if secret.sign(signed.id, at, &body) != signed.signature {
+                                    return StatusCode::UNAUTHORIZED;
+                                }
+                                let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body)
+                                else {
+                                    return StatusCode::BAD_REQUEST;
+                                };
+                                let kind = WebhookEventType::ALL
+                                    .into_iter()
+                                    .find(|kind| value["type"] == kind.as_str());
+                                match (kind, value["id"].as_str()) {
+                                    (Some(kind), Some(event)) if event == webhook_id => {
+                                        if let Ok(mut kept) = kept.lock() {
+                                            kept.push((id, event.to_owned(), kind));
+                                        }
+                                        StatusCode::NO_CONTENT
+                                    }
+                                    _ => StatusCode::BAD_REQUEST,
+                                }
+                            }
+                        },
+                    ),
+                )
+                .route(
+                    "/down/{id}",
+                    axum::routing::post(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+                );
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .and_then(|listener| listener.set_nonblocking(true).map(|()| listener))
+                .and_then(tokio::net::TcpListener::from_std)
+                .unwrap_or_else(|error| panic!("{error}"));
+            let addr = listener
+                .local_addr()
+                .unwrap_or_else(|error| panic!("{error}"));
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            Self {
+                base: format!("http://{addr}"),
+                secrets,
+                received,
+            }
+        }
+    }
+
+    impl Receiver for HttpReceiver {
+        fn subscription(&self, tenant: &TenantId, id: &str, accepting: bool) -> Subscription {
+            let secret = WebhookSecret::from_bytes([id.len() as u8; 32])
+                .unwrap_or_else(|error| panic!("{error}"));
+            if let Ok(mut secrets) = self.secrets.lock() {
+                secrets.insert(id.to_owned(), secret.clone());
+            }
+            let path = if accepting { "up" } else { "down" };
+            Subscription {
+                tenant: tenant.clone(),
+                id: id.to_owned(),
+                url: format!("{}/{path}/{id}", self.base),
+                secret: Secret::new(secret.expose()),
+                events: BTreeSet::new(),
+                labels: BTreeMap::new(),
+            }
+        }
+
+        async fn received(&self, id: &str) -> Vec<(String, WebhookEventType)> {
+            self.received
+                .lock()
+                .map(|received| {
+                    received
+                        .iter()
+                        .filter(|(subscription, _, _)| subscription == id)
+                        .map(|(_, event, kind)| (event.clone(), *kind))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_http_sender_conforms() {
+        let retries = Retries {
+            attempts: 3,
+            first_delay: Duration::from_millis(10),
+            timeout: Duration::from_secs(5),
+        };
+        run_all(|| (HttpWebhooks::new(Plain, retries), HttpReceiver::start())).await;
+    }
+
+    #[tokio::test]
+    async fn a_receiver_that_refuses_for_good_is_not_retried() {
+        let app =
+            axum::Router::new().route("/gone", axum::routing::post(|| async { StatusCode::GONE }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let addr = listener
+            .local_addr()
+            .unwrap_or_else(|error| panic!("{error}"));
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        let sender = HttpWebhooks::new(
+            Plain,
+            Retries {
+                attempts: 5,
+                first_delay: Duration::from_secs(60),
+                timeout: Duration::from_secs(5),
+            },
+        );
+        let subscription = Subscription {
+            tenant: TenantId::local(),
+            id: "s".into(),
+            url: format!("http://{addr}/gone"),
+            secret: Secret::new(
+                WebhookSecret::from_bytes([1u8; 32])
+                    .unwrap_or_else(|error| panic!("{error}"))
+                    .expose(),
+            ),
+            events: BTreeSet::new(),
+            labels: BTreeMap::new(),
+        };
+        let event = WebhookEvent {
+            id: "r/1".into(),
+            tenant: TenantId::local(),
+            run: ptc_core::RunId::from_u128(1),
+            labels: BTreeMap::new(),
+            occurred_at: ptc_core::Timestamp(0),
+            kind: WebhookEventKind::RunQuarantined { reason: "x".into() },
+        };
+        let started = std::time::Instant::now();
+        let refused = sender.send(&subscription, &event).await;
+        assert!(matches!(refused, Err(WebhookError::Delivery { .. })));
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "a 410 is final"
+        );
+    }
+}

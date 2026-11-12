@@ -16,5 +16,13 @@ ptc-server.workspace = true
 name = "ptc"
 path = "src/main.rs"
 
+# The embedded server's lifecycle is tested through this binary. The tests reach its socket with
+# an HTTP client of their own: the binary crate depends on no other internal crate.
+[dev-dependencies]
+reqwest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
 [lints]
 workspace = true
