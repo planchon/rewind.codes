@@ -21,7 +21,7 @@ import {
   type OpenAIFunctionCallOutput,
   type OpenAIResponsesTool,
 } from "./adapters.js";
-import { OUTPUT_LIMIT } from "./bound.js";
+import { OUTPUT_LIMIT, truncateEnd, truncateMiddle } from "./bound.js";
 import {
   AGENT_TOOL_NAMES,
   definitionOf,
@@ -199,47 +199,55 @@ export class AgentTools {
     if (!isAgentToolName(name) || !this.names.has(name)) {
       throw new PtcError(`${JSON.stringify(name)} is not one of these agent tools`);
     }
+    let result: AgentToolResult;
     try {
-      const values = parseInput(name, input);
-      switch (name) {
-        case "run_script":
-          return await this.runScript(values, options);
-        case "check_script":
-          return await this.checkScript(values, options);
-        case "test_script":
-          return await this.testScript(values, options);
-        case "get_run":
-          return await this.getRun(values, options);
-        case "list_runs":
-          return await this.listRuns(values, options);
-        case "signal_run":
-          return await this.signalRun(values, options);
-        case "cancel_run":
-          return await this.cancelRun(values, options);
-        case "retry_run":
-          return await this.retryRun(values, options);
-        case "search_tools":
-          return await this.searchTools(values, options);
-      }
+      result = await this.dispatch(name, parseInput(name, input), options);
     } catch (error) {
-      return failure(name, error);
+      result = failure(name, error, this.limits);
+    }
+    // Each part is bounded; this bounds what a script, a server or a tool wrote unbounded.
+    return { ...result, content: truncateMiddle(result.content, this.limits.total) };
+  }
+
+  private dispatch(name: AgentToolName, values: Values, options: HandleOptions): Promise<AgentToolResult> {
+    switch (name) {
+      case "run_script":
+        return this.runScript(values, options);
+      case "check_script":
+        return this.checkScript(values, options);
+      case "test_script":
+        return this.testScript(values, options);
+      case "get_run":
+        return this.getRun(values, options);
+      case "list_runs":
+        return this.listRuns(values, options);
+      case "signal_run":
+        return this.signalRun(values, options);
+      case "cancel_run":
+        return this.cancelRun(values, options);
+      case "retry_run":
+        return this.retryRun(values, options);
+      case "search_tools":
+        return this.searchTools(values, options);
     }
   }
 
   private async runScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const code = requireString(input, "code");
     const wait = this.waitOf(input["wait"]);
+    const idempotencyKey = await idempotencyKeyOf(options.toolCallId);
     const run = await this.client.runs.start({
       script: code,
       toolset: this.options.toolset,
       input: input["input"],
       wait,
-      idempotencyKey: await idempotencyKeyOf(options.toolCallId),
+      idempotencyKey,
       labels: this.options.labels,
       ttl: this.options.ttl,
       ...this.traceContext(options),
       signal: options.signal,
     });
+    await this.checkAnswered(run, code, idempotencyKey, options.toolCallId);
     return this.report(run, { errorWhenFailed: true, trace: run.status === "failed", signal: options.signal });
   }
 
@@ -249,7 +257,7 @@ export class AgentTools {
       toolset: this.options.toolset,
       signal: options.signal,
     });
-    return { content: describeCheck(result), isError: !result.ok };
+    return { content: describeCheck(result, this.limits), isError: !result.ok };
   }
 
   private async testScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
@@ -374,15 +382,17 @@ export class AgentTools {
     const runId = requireString(input, "run_id");
     const code = requireString(input, "code");
     await this.scopedRun(runId, options.signal);
+    const idempotencyKey = await idempotencyKeyOf(options.toolCallId);
     const run = await this.client.runs.fork(runId, {
       script: code,
       labels: this.options.labels,
       wait: this.defaultWaitMs,
-      idempotencyKey: await idempotencyKeyOf(options.toolCallId),
+      idempotencyKey,
       ttl: this.options.ttl,
       ...this.traceContext(options),
       signal: options.signal,
     });
+    await this.checkAnswered(run, code, idempotencyKey, options.toolCallId);
     return this.report(run, { errorWhenFailed: true, trace: run.status === "failed", signal: options.signal });
   }
 
@@ -419,6 +429,29 @@ export class AgentTools {
     }
     const value = "value" in payload ? payload.value : await this.client.payloads.get(payload.digest, { signal });
     return json(value);
+  }
+
+  /**
+   * A key the server already knows returns the run it started, whoever started it: with tool call
+   * ids that repeat (a harness numbering them per turn), another conversation's run, or the run of
+   * an earlier script. Such a run is the harness's fault, never shown to the model: it must carry
+   * the agent's labels and be a run of this very script.
+   */
+  private async checkAnswered(
+    run: Run,
+    code: string,
+    idempotencyKey: string | undefined,
+    toolCallId: string | undefined,
+  ): Promise<void> {
+    if (idempotencyKey === undefined) {
+      return;
+    }
+    if (hasLabels(run.labels, this.options.labels) && run.script === (await sha256Hex(code))) {
+      return;
+    }
+    throw new PtcError(
+      `the tool call id ${JSON.stringify(toolCallId)} is already the idempotency key of another run (of another script, or with other labels): give each tool call a unique id`,
+    );
   }
 
   /** The run, if it carries the agent's labels; otherwise the same answer as a run that does not exist. */
@@ -477,16 +510,16 @@ function parseInput(name: AgentToolName, input: unknown): Values {
   return values;
 }
 
-function failure(name: AgentToolName, error: unknown): AgentToolResult {
+function failure(name: AgentToolName, error: unknown, limits: Limits): AgentToolResult {
   if (error instanceof InputError) {
     return { content: `${name}: ${error.message}`, isError: true };
   }
   if (error instanceof PtcApiError) {
     if (error.slug === "invalid-script") {
-      return { content: describeRefusal(error.detail, error.diagnostics), isError: true };
+      return { content: describeRefusal(error.detail, error.diagnostics, limits), isError: true };
     }
     if (error.status !== 401 && error.status < 500) {
-      return { content: `${name} failed: ${error.detail}`, isError: true };
+      return { content: `${name} failed: ${truncateEnd(error.detail, limits.value)}`, isError: true };
     }
   }
   throw error;
@@ -533,9 +566,11 @@ export async function idempotencyKeyOf(toolCallId: string | undefined): Promise<
   if (toolCallId === undefined || toolCallId === "") {
     return undefined;
   }
-  if (isValidIdempotencyKey(toolCallId)) {
-    return toolCallId;
-  }
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(toolCallId));
+  return isValidIdempotencyKey(toolCallId) ? toolCallId : sha256Hex(toolCallId);
+}
+
+/** The SHA-256 of a text's UTF-8, in hexadecimal: a script's digest, as the server computes it. */
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

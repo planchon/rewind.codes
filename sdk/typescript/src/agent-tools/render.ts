@@ -16,7 +16,7 @@ import type {
   ToolMatch,
   Waiting,
 } from "../types.js";
-import { sliceUtf8, truncateEnd, truncateMiddle } from "./bound.js";
+import { sliceUtf8, truncateEnd, truncateMiddle, utf8Length } from "./bound.js";
 
 /** The bounds of each part of a tool result, in bytes. */
 export interface Limits {
@@ -28,14 +28,18 @@ export interface Limits {
   value: number;
   /** One log line, a stack. */
   line: number;
+  /** A whole result: room for the parts above, and a last bound on any text left unbounded. */
+  total: number;
 }
 
 export function limitsFor(output: number): Limits {
+  const trace = Math.max(4096, Math.floor(output / 2));
   return {
     output,
-    trace: Math.max(4096, Math.floor(output / 2)),
+    trace,
     value: Math.max(1024, Math.floor(output / 64)),
     line: 2048,
+    total: output + trace + 64 * 1024,
   };
 }
 
@@ -49,7 +53,7 @@ export interface RunExtras {
 
 /** A run's state for the model: its outcome, or what it waits for. */
 export function describeRun(run: Run, extras: RunExtras, limits: Limits): string {
-  const lines: string[] = [headline(run)];
+  const lines: string[] = [headline(run, limits)];
   switch (run.status) {
     case "completed":
       if (extras.output !== undefined) {
@@ -86,7 +90,7 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
   return lines.join("\n");
 }
 
-function headline(run: Run): string {
+function headline(run: Run, limits: Limits): string {
   const fork = run.parent ? ` (a fork of run ${run.parent.run})` : "";
   const name = `Run ${run.id}${fork}`;
   switch (run.status) {
@@ -98,13 +102,13 @@ function headline(run: Run): string {
       return `${name} was cancelled.`;
     case "aborted":
       return run.abort
-        ? `${name} was aborted by the host (${run.abort.kind}): ${run.abort.message}`
+        ? `${name} was aborted by the host (${run.abort.kind}): ${truncateEnd(run.abort.message, limits.value)}`
         : `${name} was aborted by the host.`;
     case "pending":
       return `${name} is pending: it has not started executing yet.`;
     case "active":
       if (run.quarantine) {
-        return `${name} is quarantined (${run.quarantine.cause}): ${run.quarantine.reason}. It waits for the platform to be fixed; it is not a fault of the script.`;
+        return `${name} is quarantined (${run.quarantine.cause}): ${truncateEnd(run.quarantine.reason, limits.value)}. It waits for the platform to be fixed; it is not a fault of the script.`;
       }
       return isSuspended(run) ? `${name} is suspended, waiting for:` : `${name} is still running.`;
   }
@@ -172,9 +176,11 @@ function outputSection(runId: string, output: string, limit: number): string[] {
 }
 
 function errorSection(error: NonNullable<Run["error"]>, limits: Limits): string[] {
-  const lines = [`${error.name}: ${error.message}${at(error.location)}`];
+  const lines = [
+    `${truncateEnd(error.name, limits.line)}: ${truncateEnd(error.message, limits.value)}${at(error.location)}`,
+  ];
   if (error.frame) {
-    lines.push(error.frame.trimEnd());
+    lines.push(truncateEnd(error.frame.trimEnd(), limits.value));
   }
   if (error.failedCall) {
     lines.push(...failedCallSection(error.failedCall, limits));
@@ -188,7 +194,7 @@ function errorSection(error: NonNullable<Run["error"]>, limits: Limits): string[
 function failedCallSection(call: FailedCall, limits: Limits): string[] {
   return [
     `The call that failed: ${call.tool} (call ${call.seq}${at(call.callsite)}) with ${payloadText(call.args, limits.value)}`,
-    `  ${call.error.kind}: ${call.error.message}${call.error.data === undefined ? "" : ` ${truncateEnd(json(call.error.data), limits.value)}`}`,
+    `  ${call.error.kind}: ${truncateEnd(call.error.message, limits.value)}${call.error.data === undefined ? "" : ` ${truncateEnd(json(call.error.data), limits.value)}`}`,
   ];
 }
 
@@ -217,38 +223,46 @@ export function entryText(entry: Entry): string {
 }
 
 /** The diagnostics of a check, for the model. */
-export function describeCheck(result: CheckResult): string {
+export function describeCheck(result: CheckResult, limits: Limits): string {
   const errors = result.diagnostics.filter((d) => d.severity === "error").length;
   const warnings = result.diagnostics.length - errors;
   const counts = [plural(errors, "error"), plural(warnings, "warning")].filter((part) => !part.startsWith("0 "));
   if (result.ok) {
     return warnings === 0
       ? "The script type-checks."
-      : `The script type-checks, with ${counts.join(" and ")}:\n${diagnosticsText(result.diagnostics)}`;
+      : `The script type-checks, with ${counts.join(" and ")}:\n${diagnosticsText(result.diagnostics, limits)}`;
   }
-  return `The script does not type-check: ${counts.join(" and ")}.\n${diagnosticsText(result.diagnostics)}`;
+  return `The script does not type-check: ${counts.join(" and ")}.\n${diagnosticsText(result.diagnostics, limits)}`;
 }
 
 /** A script refused before any run exists. */
-export function describeRefusal(detail: string, diagnostics: Diagnostic[]): string {
-  const text = `The script was refused before anything ran: ${detail}`;
-  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics)}`;
+export function describeRefusal(detail: string, diagnostics: Diagnostic[], limits: Limits): string {
+  const text = `The script was refused before anything ran: ${truncateEnd(detail, limits.value)}`;
+  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
 }
 
-export function diagnosticsText(diagnostics: Diagnostic[]): string {
-  return diagnostics
-    .map((d) => {
-      const location = d.location ? `script.ts:${d.location.line}:${d.location.column} ` : "";
-      const lines = [`${location}${d.severity} ${d.code}: ${d.message}`];
-      if (d.frame) {
-        lines.push(d.frame.trimEnd());
-      }
-      if (d.hint) {
-        lines.push(`hint: ${d.hint}`);
-      }
-      return lines.join("\n");
-    })
-    .join("\n\n");
+/** The diagnostics, in order, as many as the room of a trace holds. */
+export function diagnosticsText(diagnostics: Diagnostic[], limits: Limits): string {
+  const shown: string[] = [];
+  let bytes = 0;
+  for (const d of diagnostics) {
+    const location = d.location ? `script.ts:${d.location.line}:${d.location.column} ` : "";
+    const lines = [`${location}${d.severity} ${d.code}: ${truncateEnd(d.message, limits.value)}`];
+    if (d.frame) {
+      lines.push(truncateEnd(d.frame.trimEnd(), limits.value));
+    }
+    if (d.hint) {
+      lines.push(`hint: ${truncateEnd(d.hint, limits.line)}`);
+    }
+    const text = lines.join("\n");
+    bytes += utf8Length(text) + 2;
+    if (bytes > limits.trace && shown.length > 0) {
+      shown.push(`… and ${plural(diagnostics.length - shown.length, "more diagnostic")}.`);
+      break;
+    }
+    shown.push(text);
+  }
+  return shown.join("\n\n");
 }
 
 /** The outcome of a scenario. */
@@ -260,17 +274,17 @@ export function describeTest(result: TestResult, limits: Limits): string {
     lines.push("The test failed.");
   } else {
     lines.push(`The test failed: ${plural(result.failures.length, "expectation")} do not hold:`);
-    lines.push(...result.failures.map((failure) => `- ${failure}`));
+    lines.push(...result.failures.map((failure) => `- ${truncateEnd(failure, limits.value)}`));
   }
   lines.push(`The run ${statusPhrase(result.status)}.`);
   if (result.output !== undefined && result.status === "completed") {
     lines.push(`Output: ${truncateEnd(json(result.output), limits.output)}`);
   }
   if (result.error) {
-    lines.push(`${result.error.name}: ${result.error.message}`);
+    lines.push(`${truncateEnd(result.error.name, limits.line)}: ${truncateEnd(result.error.message, limits.value)}`);
   }
   if (result.abort) {
-    lines.push(`Aborted (${result.abort.kind}): ${result.abort.message}`);
+    lines.push(`Aborted (${result.abort.kind}): ${truncateEnd(result.abort.message, limits.value)}`);
   }
   const calls = Object.entries(result.calls);
   lines.push(

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AGENT_TOOL_NAMES, Ptc, PtcApiError, PtcError, type AgentTools, type Run } from "../src/index.js";
 import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
-import { MockServer, json, problem } from "./mock-server.js";
+import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
 const LABELS = { conversation: "c-42" };
 let server: MockServer;
@@ -25,6 +25,14 @@ beforeEach(async () => {
 afterEach(async () => {
   await server.close();
 });
+
+/** A start or a fork answered as the server answers it: a run of the script it was sent. */
+function started(overrides: Partial<Run> = {}): MockHandler {
+  return (request) => {
+    const script = (request.body as { script: string }).script;
+    return json(run({ script: createHash("sha256").update(script).digest("hex"), ...overrides }), 201);
+  };
+}
 
 function serveRun(state: Run): void {
   server.on("GET", "/v1/runs/{id}", (request) =>
@@ -75,13 +83,10 @@ describe("run_script", () => {
     server.on(
       "POST",
       "/v1/runs",
-      json(
-        run({
-          output: payload({ closed: 3 }),
-          logs: [{ at: "t", idx: 2, level: "info", message: "found 12 issues", callsite: { line: 4, column: 3 } }],
-        }),
-        201,
-      ),
+      started({
+        output: payload({ closed: 3 }),
+        logs: [{ at: "t", idx: 2, level: "info", message: "found 12 issues", callsite: { line: 4, column: 3 } }],
+      }),
     );
     const result = await tools.handle(
       "run_script",
@@ -249,7 +254,7 @@ describe("run_script", () => {
   });
 
   it("hashes a tool call id the server would refuse as an idempotency key", async () => {
-    server.on("POST", "/v1/runs", json(run(), 201));
+    server.on("POST", "/v1/runs", started());
     const id = "call_é".padEnd(300, "x");
     await tools.handle("run_script", { code: "x" }, { toolCallId: id });
     expect(server.requests[0]?.headers["idempotency-key"]).toBe(createHash("sha256").update(id).digest("hex"));
@@ -281,6 +286,112 @@ describe("run_script", () => {
     server.on("POST", "/v1/runs", problem(401, "unauthorized", "unknown key"));
     await expect(tools.handle("run_script", { code: "x" })).rejects.toMatchObject({ status: 401 });
     await expect(tools.handle("delete_everything", {})).rejects.toBeInstanceOf(PtcError);
+  });
+});
+
+describe("a run answered for the tool call's idempotency key", () => {
+  const digest = (code: string) => createHash("sha256").update(code).digest("hex");
+
+  it("is reported when it is the run this call asked for", async () => {
+    server.on("POST", "/v1/runs", json(run({ script: digest("x"), output: payload(1) })));
+    const result = await tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    expect(result.content).toBe(`Run ${RUN_ID} completed.\nOutput:\n1`);
+  });
+
+  it("is never shown when another agent's labels started it, nor when another script did", async () => {
+    // A harness whose tool call ids repeat (call_0, call_1…) across conversations or turns.
+    for (const other of [
+      run({ script: digest("x"), labels: { conversation: "someone-else" }, output: payload("their secret") }),
+      run({ script: digest("an earlier script"), output: payload("an earlier output") }),
+    ]) {
+      server.on("POST", "/v1/runs", json(other));
+      const started = tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+      await expect(started).rejects.toBeInstanceOf(PtcError);
+      await expect(started).rejects.toThrow(/tool call id "call_0".*another run/);
+    }
+  });
+
+  it("is checked by retry_run too", async () => {
+    serveRun(run({ status: "failed" }));
+    server.on(
+      "POST",
+      "/v1/runs/{id}/fork",
+      json(
+        run({ id: "fork-1", script: digest("fixed"), labels: { conversation: "someone-else" }, output: payload(2) }),
+      ),
+    );
+    await expect(
+      tools.handle("retry_run", { run_id: RUN_ID, code: "fixed" }, { toolCallId: "call_1" }),
+    ).rejects.toThrow(/tool call id "call_1".*another run/);
+  });
+});
+
+describe("a tool result", () => {
+  const BOUND = 512 * 1024;
+  const huge = "x".repeat(3_000_000);
+  const bytes = (text: string) => Buffer.byteLength(text);
+
+  it("stays bounded whatever the script throws", async () => {
+    server.on(
+      "POST",
+      "/v1/runs",
+      json(
+        run({
+          status: "failed",
+          error: {
+            name: huge,
+            message: huge,
+            stack: huge,
+            frame: huge,
+            failedCall: {
+              tool: "github.get_issue",
+              seq: 1,
+              args: payload({ number: 7 }),
+              error: { kind: "error", message: huge, data: huge },
+            },
+          },
+          logs: Array.from({ length: 20 }, (_, idx) => ({ at: "t", idx, level: "info" as const, message: huge })),
+        }),
+        201,
+      ),
+    );
+    const result = await tools.handle("run_script", { code: "x" });
+    expect(bytes(result.content)).toBeLessThan(BOUND);
+    expect(result.content).toContain("The call that failed: github.get_issue");
+    expect(result.content).toContain("Trace up to the failure:\n#0 run_started");
+  });
+
+  it("stays bounded whatever the diagnostics, the test or the server say", async () => {
+    const diagnostics = Array.from({ length: 2_000 }, () => ({
+      code: "TS2322",
+      message: "x".repeat(2_000),
+      severity: "error" as const,
+      frame: "x".repeat(2_000),
+    }));
+    server.on("POST", "/v1/runs", problem(422, "invalid-script", huge, { diagnostics }));
+    const refused = await tools.handle("run_script", { code: "x" });
+    expect(refused.isError).toBe(true);
+    expect(bytes(refused.content)).toBeLessThan(BOUND);
+
+    server.on("POST", "/v1/check", json({ ok: false, diagnostics }));
+    expect(bytes((await tools.handle("check_script", { code: "x" })).content)).toBeLessThan(BOUND);
+
+    server.on(
+      "POST",
+      "/v1/test",
+      json({
+        passed: false,
+        status: "failed",
+        calls: {},
+        failures: [huge, huge],
+        error: { name: "Error", message: huge },
+        trace: "",
+      }),
+    );
+    expect(bytes((await tools.handle("test_script", { code: "x", scenario: {} })).content)).toBeLessThan(BOUND);
+
+    server.on("GET", "/v1/runs/{id}", problem(400, "invalid-request", huge));
+    expect(bytes((await tools.handle("get_run", { run_id: RUN_ID })).content)).toBeLessThan(BOUND);
   });
 });
 
@@ -410,11 +521,7 @@ describe("the tools that take a run id", () => {
 
   it("retry_run: forks the run with the corrected script", async () => {
     serveRun(run({ status: "failed" }));
-    server.on(
-      "POST",
-      "/v1/runs/{id}/fork",
-      json(run({ id: "fork-1", parent: { run: RUN_ID }, output: payload("ok") }), 201),
-    );
+    server.on("POST", "/v1/runs/{id}/fork", started({ id: "fork-1", parent: { run: RUN_ID }, output: payload("ok") }));
     const result = await tools.handle("retry_run", { run_id: RUN_ID, code: "fixed" }, { toolCallId: "call_9" });
     expect(result.content).toBe(`Run fork-1 (a fork of run ${RUN_ID}) completed.\nOutput:\n"ok"`);
     const fork = server.calls("POST", `/v1/runs/${RUN_ID}/fork`)[0];
@@ -575,7 +682,7 @@ describe("the adapters", () => {
     server.on(
       "POST",
       "/v1/runs",
-      json(run({ status: "aborted", abort: { kind: "limit_exceeded", message: "the history cap" } }), 201),
+      started({ status: "aborted", abort: { kind: "limit_exceeded", message: "the history cap" } }),
     );
     const block = await tools.anthropic.handle({
       type: "tool_use",
