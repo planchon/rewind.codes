@@ -17,8 +17,8 @@
 use std::time::Duration;
 
 use ptc_core::{
-    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Timestamp, ToolFailure,
-    ToolFailureKind, ToolOutcome, ToolRoute,
+    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp,
+    ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute,
 };
 use serde_json::json;
 
@@ -246,14 +246,15 @@ where
         Ok(update)
     }
 
-    /// Puts a claimed task back to `ready` after the backoff of its attempt.
+    /// Puts a claimed task back to `ready` after the backoff of its attempt. The jitter is
+    /// drawn from the call's `{run_id}/{seq}`.
     pub(super) async fn retry_later(
         &self,
         task: &ToolTask,
         token: &TaskToken,
     ) -> Result<TaskUpdate, EngineError> {
-        let key = self.task_key(task).await?;
-        let delay = self.config.backoff.delay(&key, task.attempt);
+        let call = idempotency_key(task.task.run.id, task.task.seq);
+        let delay = self.config.backoff.delay(&call, task.attempt);
         let next_attempt_at = self.clock.now().saturating_add(delay);
         let update = self.journal.retry_tool_task(token, next_attempt_at).await?;
         if update == TaskUpdate::Applied {
@@ -268,13 +269,17 @@ where
     }
 
     /// The idempotency key every attempt of the call carries: `"{run_id}/{seq}"`.
-    pub(super) async fn task_key(&self, task: &ToolTask) -> Result<String, EngineError> {
-        Ok(idempotency_key(task.task.run.id, task.task.seq))
+    pub(super) async fn task_key(
+        &self,
+        record: &RunRecord,
+        task: &ToolTask,
+    ) -> Result<String, EngineError> {
+        Ok(idempotency_key(record.run.id, task.task.seq))
     }
 
     /// The trace context the call forwards: the run's, so that the tool's own spans join the
     /// harness's trace.
-    pub(super) fn call_trace_context(record: &RunRecord) -> Option<TraceContext> {
+    pub(super) fn call_trace_context(&self, record: &RunRecord, _seq: Seq) -> Option<TraceContext> {
         record.metadata.trace_context.clone()
     }
 
@@ -347,11 +352,11 @@ where
             tool,
             server,
             args: self.task_args(task).await?,
-            idempotency_key: self.task_key(task).await?,
+            idempotency_key: self.task_key(&record, task).await?,
             attempt: task.attempt,
             schema_change_approved: task.schema_change_approved,
             token: token.clone(),
-            trace_context: Self::call_trace_context(&record),
+            trace_context: self.call_trace_context(&record, task.task.seq),
         };
         let engine_webhook = self.is_engine_webhook(task, &call).await?;
         Ok(Some(Prepared {
