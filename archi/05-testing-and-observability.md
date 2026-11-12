@@ -213,7 +213,7 @@ columnar read model is out of 0.1.
 ### Query language
 
 The runs of the read model are searched with one query language, the same in the API
-(`q`), the dashboard's query bar, the SDK and the agent tools. Terms are separated by spaces
+(`q`), the dashboard's query bar and the SDK. Terms are separated by spaces
 and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 
 | Term | Matches runs |

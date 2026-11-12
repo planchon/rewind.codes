@@ -121,6 +121,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/runs/failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Failures grouped by cause
+         * @description The failed, cancelled and aborted runs a query matches, ended in the window, grouped
+         *     by fingerprint: across scripts, the runs that ended with the same error.
+         */
+        get: operations["listRunFailures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/runs/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Statistics of the runs a query matches
+         * @description Counts by status, a series over time, durations and facets of the runs started in the
+         *     window; the runs waiting now by what they wait for, and the quarantined ones.
+         */
+        get: operations["getRunStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/runs/{id}": {
         parameters: {
             query?: never;
@@ -1107,6 +1149,19 @@ export interface components {
         };
         /** @description A duration: a number and a unit (ms, s, m, h, d, w), possibly several ("1h30m"), or a number of milliseconds. */
         Duration: string | number;
+        /** @description Nearest-rank percentiles, in milliseconds. */
+        DurationStats: {
+            /** Format: int64 */
+            count: number;
+            /** Format: int64 */
+            max: number;
+            /** Format: int64 */
+            p50: number;
+            /** Format: int64 */
+            p95: number;
+            /** Format: int64 */
+            p99: number;
+        };
         /** @description One journal entry. */
         Entry: {
             event: components["schemas"]["Event"];
@@ -1228,6 +1283,28 @@ export interface components {
             message?: string | null;
             name: string;
         };
+        FacetValue: {
+            /** Format: int64 */
+            runs: number;
+            value: string;
+        };
+        /**
+         * @description The most frequent values among the runs, most frequent first: what to suggest in a query
+         *     bar, and the counts beside a list.
+         */
+        Facets: {
+            /** @description Errors the runs ended with (names and abort kinds), and kinds their calls failed with. */
+            errors: components["schemas"]["FacetValue"][];
+            /** @description The most frequent label keys, each with its most frequent values. */
+            labels: components["schemas"]["LabelFacet"][];
+            /** @description Script digests. */
+            scripts: components["schemas"]["FacetValue"][];
+            /** @description Signals waited for. */
+            signals: components["schemas"]["FacetValue"][];
+            statuses: components["schemas"]["FacetValue"][];
+            tools: components["schemas"]["FacetValue"][];
+            waiting: components["schemas"]["FacetValue"][];
+        };
         /**
          * @description `POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the
          *     failure is retryable and the tool's policy is `retry`: the call is then made again, with
@@ -1248,6 +1325,67 @@ export interface components {
             /** Format: int32 */
             seq: number;
             tool: string;
+        };
+        /**
+         * @description The runs that ended the same way: the same error name, and the same message once numbers,
+         *     ids, times and double-quoted strings are set aside.
+         */
+        FailureGroup: {
+            /** @description The error's name, or the abort's kind. */
+            error: string;
+            /** @description 16 hexadecimal digits: `fingerprint:` in a query. */
+            fingerprint: string;
+            /** Format: date-time */
+            firstEndedAt: string;
+            /** @description Its runs' most frequent labels, as `key:value`. */
+            labels: components["schemas"]["FacetValue"][];
+            /** Format: date-time */
+            lastEndedAt: string;
+            /** @description The run that ended last. */
+            latest: components["schemas"]["FailureSample"];
+            /**
+             * Format: int32
+             * @description The line of `script.ts` most of its runs ended at.
+             */
+            line?: number | null;
+            /** Format: int64 */
+            runs: number;
+            /**
+             * Format: int64
+             * @description Distinct scripts.
+             */
+            scripts: number;
+            /** @description One count per bucket from `since`: the runs that ended in it. */
+            series?: number[];
+            /**
+             * @description The error's name and message with placeholders (`<n>`, `<id>`, `<uuid>`, `<time>`,
+             *     `<str>`) where they vary.
+             */
+            signature: string;
+        };
+        FailureGroupPage: {
+            bucket?: string | null;
+            /** @description The most runs first, then the latest ending first. */
+            groups: components["schemas"]["FailureGroup"][];
+            /**
+             * Format: int64
+             * @description Runs in every group.
+             */
+            runs: number;
+            /** Format: date-time */
+            since?: string | null;
+            /**
+             * Format: int64
+             * @description Groups in all, beyond `limit` included.
+             */
+            totalGroups: number;
+            /** Format: date-time */
+            until: string;
+        };
+        FailureSample: {
+            id: string;
+            message: string;
+            status: components["schemas"]["RunStatus"];
         };
         /** @description The run a fork was started from. */
         ForkParent: {
@@ -1325,6 +1463,15 @@ export interface components {
             keyId?: string | null;
             role: components["schemas"]["Role"];
             tenant: string;
+        };
+        LabelFacet: {
+            key: string;
+            /**
+             * Format: int64
+             * @description Runs carrying the key.
+             */
+            runs: number;
+            values: components["schemas"]["FacetValue"][];
         };
         /**
          * @description Run labels: a bounded string map set when a run starts (agent, conversation, end user…).
@@ -1449,6 +1596,7 @@ export interface components {
             diagnostics?: components["schemas"]["Diagnostic"][];
             /** @description The path of the request, or of the resource the problem is about. */
             instance?: string | null;
+            query?: components["schemas"]["QuerySpan"] | null;
             /**
              * Format: int32
              * @description The HTTP status code.
@@ -1467,6 +1615,13 @@ export interface components {
         };
         /** @enum {string} */
         QuarantineCause: "non_determinism" | "repeated_failures";
+        /** @description A position in a query, in characters (Unicode scalar values) from 0, `end` excluded. */
+        QuerySpan: {
+            /** Format: int32 */
+            end: number;
+            /** Format: int32 */
+            start: number;
+        };
         /** @description `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message. */
         RejectTask: {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
@@ -1579,6 +1734,30 @@ export interface components {
             runs: components["schemas"]["RunSummary"][];
         };
         /**
+         * @description The runs a query matches. Counts, series, durations and facets are over the runs started
+         *     in the window; `waiting` and `quarantined` are over the runs that match the query now,
+         *     whenever they started.
+         */
+        RunStats: {
+            /** @description The width of the series' buckets, if any. */
+            bucket?: string | null;
+            durations?: components["schemas"]["DurationStats"] | null;
+            facets: components["schemas"]["Facets"];
+            /** Format: int64 */
+            quarantined: number;
+            /** Format: int64 */
+            runs: number;
+            /** @description One bucket per `bucket` from `since`, the runs started in it by status. */
+            series?: components["schemas"]["SeriesBucket"][];
+            /** Format: date-time */
+            since?: string | null;
+            statuses: components["schemas"]["StatusCounts"];
+            /** Format: date-time */
+            until: string;
+            /** @description Waiting runs by what they wait for; a run waiting for several kinds counts in each. */
+            waiting: components["schemas"]["WaitCounts"];
+        };
+        /**
          * @description The status of a run, a function of its journal (`archi/02-journal.md`, "Run state").
          *     Quarantine is not a status: see `Run.quarantine`.
          * @enum {string}
@@ -1591,10 +1770,19 @@ export interface components {
             /** @description With `failed` or `cancelled`: the error's name. With `aborted`: the abort's kind. */
             error?: string | null;
             /**
+             * Format: int32
+             * @description With `error`: the innermost line of `script.ts` in the error's stack, if any.
+             */
+            errorLine?: number | null;
+            /** @description With `error`: the error's or the abort's message. */
+            errorMessage?: string | null;
+            /**
              * Format: int64
              * @description Tool calls that failed.
              */
             errors: number;
+            /** @description With `error`: the failure group (`GET /v1/runs/failures`, `fingerprint:` in a query). */
+            fingerprint?: string | null;
             /** @description The first line of the script that is not blank, for display. */
             headline: string;
             /** Format: int64 */
@@ -1612,6 +1800,35 @@ export interface components {
             /** Format: int64 */
             toolCalls: number;
             toolset: string;
+            /** @description With `active`: what the run waits for. */
+            waitingFor?: components["schemas"]["RunWait"][];
+            /**
+             * Format: date-time
+             * @description With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
+             */
+            wakesAt?: string | null;
+        };
+        /** @description Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`). */
+        RunWait: {
+            callsite?: components["schemas"]["Callsite"] | null;
+            kind: components["schemas"]["WaitKind"];
+            /** @description The signal's name, or the call's tool. */
+            name?: string | null;
+            /**
+             * Format: int32
+             * @description The timer's or the call's seq.
+             */
+            seq?: number | null;
+            /**
+             * Format: date-time
+             * @description When the wait began.
+             */
+            since: string;
+            /**
+             * Format: date-time
+             * @description When the wait ends by itself: a timer's due time, a signal's timeout.
+             */
+            until?: string | null;
         };
         /** @description A signal sent during a scenario. */
         ScenarioSignal: {
@@ -1675,6 +1892,14 @@ export interface components {
             runs: components["schemas"]["RunCounts"];
             /** @description The tools its runs called. */
             tools: string[];
+        };
+        SeriesBucket: {
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            at: string;
+            statuses: components["schemas"]["StatusCounts"];
         };
         ServerCredentials: {
             /** @description Environment variables of a stdio server. */
@@ -1763,6 +1988,20 @@ export interface components {
             tracestate?: string | null;
             ttl?: components["schemas"]["Duration"] | null;
             wait?: components["schemas"]["Duration"] | null;
+        };
+        StatusCounts: {
+            /** Format: int64 */
+            aborted: number;
+            /** Format: int64 */
+            active: number;
+            /** Format: int64 */
+            cancelled: number;
+            /** Format: int64 */
+            completed: number;
+            /** Format: int64 */
+            failed: number;
+            /** Format: int64 */
+            pending: number;
         };
         /**
          * @description One event of the stream. On the wire, each is a server-sent event whose `event` field is
@@ -2029,6 +2268,27 @@ export interface components {
         };
         /** @enum {string} */
         TraceFormat: "llm";
+        WaitCounts: {
+            /** Format: int64 */
+            approval: number;
+            /** Format: int64 */
+            call: number;
+            /** Format: int64 */
+            deferred: number;
+            /** Format: int64 */
+            host: number;
+            /** Format: int64 */
+            parked: number;
+            /** Format: int64 */
+            signal: number;
+            /** Format: int64 */
+            timer: number;
+        };
+        /**
+         * @description What a waiting run waits for (`archi/05-testing-and-observability.md`, "Read model").
+         * @enum {string}
+         */
+        WaitKind: "signal" | "timer" | "call" | "host" | "approval" | "parked" | "deferred";
         /** @description Something an active run waits for. */
         Waiting: {
             /** @description The call's arguments: what the harness approves or rejects. */
@@ -2522,6 +2782,15 @@ export interface operations {
     listRuns: {
         parameters: {
             query?: {
+                /**
+                 * @description A query (`archi/05-testing-and-observability.md`, "Query language"): terms separated by
+                 *     spaces, all of which must hold, as `@agent:triage status:failed,aborted -@env:test
+                 *     "rate limit"`. Joined to the other parameters by "and". A query that cannot be read is
+                 *     refused with `invalid-query`, which says where the term at fault is.
+                 */
+                q?: string;
+                /** @description `started` by default. */
+                sort?: "started" | "activity" | "wakes";
                 status?: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
                 /** @description Only runs carrying this label, as `key:value`. Repeat to require several. */
                 label?: string[];
@@ -2553,7 +2822,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of runs, most recently started first. */
+            /** @description A page of runs, in the order of `sort`. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2562,7 +2831,7 @@ export interface operations {
                     "application/json": components["schemas"]["RunPage"];
                 };
             };
-            /** @description The request is malformed (`invalid-request`). */
+            /** @description `q` cannot be read (`invalid-query`, with `query`), or another parameter is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2699,6 +2968,164 @@ export interface operations {
             };
             /** @description The tenant already has its maximum of active runs (`quota-exceeded`). */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listRunFailures: {
+        parameters: {
+            query?: {
+                /** @description A query, as in `GET /v1/runs`. */
+                q?: string;
+                /** @description Runs ended at or after this time. No lower bound by default. */
+                since?: string;
+                /** @description Runs ended before this time. Now by default. */
+                until?: string;
+                /**
+                 * @description The width of each group's series' buckets, from `since`, which it requires; 500
+                 *     buckets at most.
+                 */
+                bucket?: string;
+                /** @description Groups at most (50 by default, 500 at most). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The groups, the largest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FailureGroupPage"];
+                };
+            };
+            /** @description `q` cannot be read (`invalid-query`, with `query`), or the window is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getRunStats: {
+        parameters: {
+            query?: {
+                /** @description A query, as in `GET /v1/runs`. */
+                q?: string;
+                /** @description Runs started at or after this time. No lower bound by default. */
+                since?: string;
+                /** @description Runs started before this time. Now by default. */
+                until?: string;
+                /**
+                 * @description The width of the series' buckets (`"1h"`), from `since`, which it requires; 500 buckets
+                 *     at most. No series without it.
+                 */
+                bucket?: string;
+                /** @description Values per facet (10 by default, 50 at most). */
+                top?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The statistics. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunStats"];
+                };
+            };
+            /** @description `q` cannot be read (`invalid-query`, with `query`), or the window is invalid. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

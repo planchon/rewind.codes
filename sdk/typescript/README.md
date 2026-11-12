@@ -42,26 +42,26 @@ const run = await ptc.runs.start({
 });
 ```
 
-| Namespace           | Calls                                                                                                                                                                    |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ptc.toolsets`      | `create`, `declarations`, `search`, `setCredentials`                                                                                                                     |
-| `ptc.scripts`       | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                      |
-| `ptc.runs`          | `start`, `get`, `list`, `listAll`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
-| `ptc.tasks`         | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                   |
-| `ptc.approvals`     | `pending(run)`, `args`, `approve`, `reject`                                                                                                                              |
-| `ptc.payloads`      | `get`: a value left out above 256 KiB                                                                                                                                    |
-| `ptc.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                           |
-| `ptc.webhooks`      | `verify`                                                                                                                                                                 |
-| `ptc.tools`         | `stats`                                                                                                                                                                  |
-| `ptc.apiKeys`       | `create`, `revoke`                                                                                                                                                       |
-| `ptc.server`        | `info`, `stop`                                                                                                                                                           |
+| Namespace           | Calls                                                                                                                                                                                                                              |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ptc.toolsets`      | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
+| `ptc.scripts`       | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
+| `ptc.runs`          | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `ptc.tasks`         | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
+| `ptc.approvals`     | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
+| `ptc.payloads`      | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
+| `ptc.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
+| `ptc.webhooks`      | `verify`                                                                                                                                                                                                                           |
+| `ptc.tools`         | `stats`                                                                                                                                                                                                                            |
+| `ptc.apiKeys`       | `create`, `revoke`                                                                                                                                                                                                                 |
+| `ptc.server`        | `info`, `stop`                                                                                                                                                                                                                     |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `PtcApiError`, with
-`status`, `slug` (`"run-ended"`, `"invalid-script"`…), `detail` (written for a model) and `diagnostics` (for a refused
-script). `isProblem(error, "task-gone")` tests the kind. A server that cannot be reached gives a `PtcConnectionError`.
+`status`, `slug` (`"run-ended"`, `"invalid-script"`…), `detail` (written for a model), `diagnostics` (for a refused
+script) and `query` (for a query that cannot be read: where the term at fault is). `isProblem(error, "task-gone")` tests the kind. A server that cannot be reached gives a `PtcConnectionError`.
 
 **Retries.** A request that is safe to repeat is sent again after a network error or a 503, twice by default
 (`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration, checks and tests, and the requests
