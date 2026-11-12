@@ -31,7 +31,8 @@ const ERROR_NAMES = [
   "internal",
 ];
 
-const HEX = /^[0-9a-f]{6,64}$/;
+/** A script digest, as the API takes it: the whole SHA-256. */
+const DIGEST = /^[0-9a-f]{64}$/;
 
 /** `datetime-local` values read in the zone the dashboard shows. */
 function toIso(local: string, zone: TimeZoneMode): string | null {
@@ -106,7 +107,7 @@ export function RunsView() {
     {
       name: "script",
       placeholder: "script digest",
-      check: (v) => (HEX.test(v) ? null : "A script digest is hexadecimal"),
+      check: (v) => (DIGEST.test(v) ? null : "A script digest is 64 hexadecimal digits"),
     },
     { name: "parent", placeholder: "run id: its forks" },
   ];

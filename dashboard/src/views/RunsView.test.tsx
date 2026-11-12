@@ -20,6 +20,12 @@ describe("RunsView", () => {
     expect(within(triage as HTMLElement).getByText("active")).toBeInTheDocument();
   });
 
+  it("lists runs on a link whose range or digest it cannot read", async () => {
+    renderApp("/runs?range=toString");
+    await screen.findByRole("table");
+    expect(rows().length).toBe(50);
+  });
+
   it("filters by status through the API, and keeps the filter in the URL", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/runs");
@@ -80,6 +86,17 @@ describe("RunsView", () => {
     await screen.findByRole("table");
     await user.type(screen.getByLabelText("Filter value for label"), "triage{Enter}");
     expect(screen.getByRole("alert")).toHaveTextContent("A label filter is key:value");
+  });
+
+  it("refuses a script filter that is not a whole digest, as the server does", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/runs");
+    await screen.findByRole("table");
+    await user.selectOptions(screen.getByLabelText("Filter on"), "script");
+    // The short digest the views show.
+    await user.type(screen.getByLabelText("Filter value for script"), "9f2c4e1a07b3{Enter}");
+    expect(screen.getByRole("alert")).toHaveTextContent("64 hexadecimal digits");
+    expect(search(router).get("script")).toBeNull();
   });
 
   it("reads quarantined runs and a time window from the URL", async () => {
