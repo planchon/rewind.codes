@@ -49,7 +49,7 @@ warnings` and `cargo test --workspace` pass.
 
 Not there yet:
 
-- The other crates: `ptc-store-postgres`, `ptc-otel`, `ptc-cli`, `ptc-server` and the
+- The other crates: `ptc-otel`, `ptc-cli`, `ptc-server` and the
   evals.
 - Starting a run does not type-check the script.
 - The projector and its span derivation exist, but no OpenTelemetry exporter (`ptc-otel`).
