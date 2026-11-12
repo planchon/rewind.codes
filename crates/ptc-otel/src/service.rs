@@ -13,7 +13,8 @@
 //! | `traceparent` | a W3C `traceparent` | The span is a child of that span, in that trace: a tool call's trace context. |
 //!
 //! A span without these fields belongs to the trace of the span it is nested in, under it; a
-//! span nested in none starts a trace of its own. Ids are looked up when a span closes, so
+//! span nested in none starts a trace of its own. A span that names a trace but no parent sits
+//! under the span it is nested in when that one is in the same trace, else at the trace's root. Ids are looked up when a span closes, so
 //! the spans nested in an activation follow the identity it records once it has read its run.
 //! Whether a trace is exported is decided from its id, as for run telemetry: every worker, the
 //! projector included, agrees on a run.
@@ -243,15 +244,23 @@ impl Pipeline {
             (state.identity, state.random_trace, state.random_span)
         };
         let own = identity.span.unwrap_or(random_span);
+        let outer = || span.parent().and_then(|outer| self.resolve(&outer));
         let (trace, parent, remote_parent) = if let Some(trace) = identity.trace {
-            let parent = identity.parent.or(identity
+            let named = identity.parent.or(identity
                 .traceparent
                 .filter(|(of, _)| *of == trace)
                 .map(|(_, parent)| parent));
-            (trace, parent, parent.is_some())
+            match named {
+                Some(parent) => (trace, Some(parent), true),
+                // Under the span it is nested in, if that one is in the same trace.
+                None => {
+                    let outer = outer().filter(|outer| outer.trace == trace);
+                    (trace, outer.map(|outer| outer.span), false)
+                }
+            }
         } else if let Some((trace, parent)) = identity.traceparent {
             (trace, Some(identity.parent.unwrap_or(parent)), true)
-        } else if let Some(outer) = span.parent().and_then(|outer| self.resolve(&outer)) {
+        } else if let Some(outer) = outer() {
             (
                 outer.trace,
                 Some(identity.parent.unwrap_or(outer.span)),
@@ -620,6 +629,7 @@ mod tests {
             tracing::info_span!("replay", entries = 12_u64).in_scope(|| {
                 tracing::info!(cached = false, "instance rebuilt");
             });
+            tracing::info_span!("same_trace", trace_id = %trace).in_scope(|| {});
         });
 
         let activation = backend.span("activation");
@@ -647,6 +657,11 @@ mod tests {
             assert_eq!(nested.parent_span_id.to_string(), hex(own), "{name}");
             assert!(!nested.parent_span_is_remote);
         }
+        // A span naming the trace it is nested in stays under the span it is nested in.
+        let same = backend.span("same_trace");
+        assert_eq!(same.span_context.trace_id(), trace);
+        assert_eq!(same.parent_span_id.to_string(), hex(own));
+        assert!(!same.parent_span_is_remote);
         let replay = backend.span("replay");
         // The log is correlated with the span it happened in.
         let log = backend.log("instance rebuilt");

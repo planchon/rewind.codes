@@ -267,12 +267,12 @@ fn hex<const N: usize>(value: &Value) -> Option<[u8; N]> {
     (bytes != [0; N]).then_some(bytes)
 }
 
-fn nanos_to_ms(value: &Value) -> Timestamp {
+fn millis(value: &Value) -> Timestamp {
     let nanos: u64 = match value {
         Value::String(text) => text.parse().expect("nanoseconds"),
         other => other.as_u64().expect("nanoseconds"),
     };
-    assert_eq!(nanos % 1_000_000, 0, "whole milliseconds");
+    // Run telemetry has whole milliseconds; service spans are timed by the process.
     Timestamp(nanos / 1_000_000)
 }
 
@@ -318,8 +318,8 @@ fn parse_span(span: &Value) -> Span {
             Some(3) => SpanKind::Client,
             other => panic!("a span kind the projector does not export: {other:?}"),
         },
-        start: nanos_to_ms(&span["startTimeUnixNano"]),
-        end: nanos_to_ms(&span["endTimeUnixNano"]),
+        start: millis(&span["startTimeUnixNano"]),
+        end: millis(&span["endTimeUnixNano"]),
         status: match span["status"]["code"].as_i64() {
             None | Some(0) => SpanStatus::Unset,
             Some(1) => SpanStatus::Ok,
@@ -350,7 +350,7 @@ fn parse_log(log: &Value) -> LogRecord {
     LogRecord {
         trace_id: TraceId(hex(&log["traceId"]).expect("a trace id")),
         span_id: hex(&log["spanId"]).map(SpanId),
-        time: nanos_to_ms(&log["timeUnixNano"]),
+        time: millis(&log["timeUnixNano"]),
         level,
         message,
         attributes: attributes(&log["attributes"]),
