@@ -3723,6 +3723,26 @@ dependencies = [
 [[package]]
 name = "ptc-cli"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "libtest-mimic",
+ "ptc-api",
+ "ptc-check",
+ "ptc-codegen",
+ "ptc-core",
+ "ptc-engine",
+ "ptc-format",
+ "ptc-mcp",
+ "ptc-otel",
+ "ptc-runtime",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
 
 [[package]]
 name = "ptc-codegen"
