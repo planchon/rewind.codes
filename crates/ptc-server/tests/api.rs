@@ -952,3 +952,53 @@ async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     assert_eq!(empty.kind(), Some(ProblemType::InvalidToolset));
     server.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn text_with_a_nul_character_is_refused_with_400() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let invalid = |error: ptc_api::Error| {
+        let problem = problem(error);
+        assert_eq!(
+            problem.kind(),
+            Some(ProblemType::InvalidRequest),
+            "{problem:?}"
+        );
+        assert_eq!(problem.status, 400);
+        assert!(
+            problem.detail.contains("NUL character"),
+            "{}",
+            problem.detail
+        );
+    };
+
+    let mut labelled = start(SLEEP);
+    labelled.input = json!({ "ms": 1 });
+    labelled.labels = Labels::from_iter([("agent", "tri\u{0}age")]);
+    invalid(harness.start_run(&labelled, None).await.unwrap_err());
+    let mut source = start(&format!("{SLEEP}// \u{0}\n"));
+    source.input = json!({ "ms": 1 });
+    invalid(harness.start_run(&source, None).await.unwrap_err());
+    let mut toolset = ask_toolset(ToolPolicy::default());
+    toolset.host[0].description = "Ask the end user\u{0}".into();
+    invalid(harness.create_toolset(&toolset).await.unwrap_err());
+    let subscription = CreateSubscription {
+        url: "https://hooks.example.com/ptc".into(),
+        events: vec![WebhookEventType::RunCompleted],
+        labels: Labels::from_iter([("conversation", "\u{0}")]),
+    };
+    invalid(
+        harness
+            .create_subscription(&subscription)
+            .await
+            .unwrap_err(),
+    );
+
+    // Values are JSON in the store, where it is escaped: they keep it.
+    let mut request = start(SLEEP);
+    request.input = json!({ "ms": 1, "note": "a\u{0}b" });
+    request.wait = wait("20s");
+    let run = harness.start_run(&request, None).await.unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+    server.stop().await;
+}

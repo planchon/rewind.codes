@@ -170,6 +170,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         new_store(),
         a_payload_being_deleted_is_never_committed_without_its_value
     );
+    check!("journal", new_store(), json_values_keep_nul_characters);
     check!(
         "journal",
         new_store(),
@@ -2914,6 +2915,53 @@ async fn project_all<S: JournalStore>(store: &S, at: Timestamp) {
             .collect();
         store.ack_feed(&ids).await.expect("ack_feed");
     }
+}
+
+/// Values are JSON in the stored format, where U+0000 is escaped: every store keeps them as they
+/// are, Postgres included. Text outside JSON never holds one: the engine refuses it.
+pub async fn json_values_keep_nul_characters<S: JournalStore>(store: &S) {
+    let value = json!({ "text": "a\u{0}b", "key\u{0}": ["\u{0}"] });
+    let signal = Completion::SignalReceived {
+        name: "go".into(),
+        payload: value.clone().into(),
+    };
+    let run = start(store, run_ref(1)).await;
+    store
+        .enqueue(&run, signal.clone(), None, T0)
+        .await
+        .expect("enqueue");
+    assert_eq!(
+        inbox(store, &run, T0).await,
+        [Trigger::Completion(signal.clone())]
+    );
+
+    let lease = lease_of(store, &run, T0).await;
+    let consumed = inbox_ids(store, &lease).await;
+    let delivered = entry(1, Event::Completion(signal));
+    let mut activation = Activation::new(vec![delivered.clone()], consumed, RunStatus::Active);
+    let digest = Digest::of(b"a value with a NUL character");
+    activation.payloads = vec![payload(digest, Some(value.clone()))];
+    let mut task = host_task(2, "t");
+    task.args = value.clone().into();
+    activation.tool_calls = vec![task];
+    commit(store, &lease, activation, T0).await;
+    store.release(&lease).await.expect("release");
+
+    assert_eq!(
+        store.load_history(&run, 1).await.expect("load_history"),
+        [delivered]
+    );
+    assert_eq!(
+        store
+            .get_payload(&acme(), digest)
+            .await
+            .expect("get_payload")
+            .and_then(|record| record.value),
+        Some(value.clone())
+    );
+    let tasks = store.tool_tasks(&run).await.expect("tool_tasks");
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].args, value.into());
 }
 
 pub async fn finished_runs_are_archived_then_deleted<S: JournalStore>(store: &S) {

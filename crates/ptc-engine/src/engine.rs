@@ -24,6 +24,7 @@ use crate::ports::{
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
 use crate::telemetry::TelemetryConfig;
+use crate::text::{self, NulCharacter};
 
 /// Resource limits enforced by the engine (`archi/03-execution.md`, "Resource limits"). CPU
 /// time and heap size are enforced by the executor.
@@ -206,6 +207,10 @@ pub enum StartError {
     InvalidTtl { requested: Duration, max: Duration },
     #[error("the input is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     InputTooLarge { size: usize, max: usize },
+    /// A text to store (the script, a label, the idempotency key, the trace context, the
+    /// toolset's declarations) holds a NUL character.
+    #[error(transparent)]
+    NulCharacter(#[from] NulCharacter),
     #[error("the executor supports no determinism epoch")]
     NoEpoch,
     /// The tenant already has its maximum of active runs.
@@ -242,6 +247,9 @@ pub enum EngineError {
     /// A tool result above the engine's payload limit.
     #[error("the result is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     ResultTooLarge { size: usize, max: usize },
+    /// A text to store (a signal's idempotency key) holds a NUL character.
+    #[error(transparent)]
+    NulCharacter(#[from] NulCharacter),
     #[error("run {0} has ended")]
     RunEnded(RunId),
     #[error("script {0} not found")]
@@ -409,6 +417,10 @@ where
                 max: self.config.limits.max_payload_bytes,
             });
         }
+        text::refuse_nul("the script", request.script.source())?;
+        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.typescript)?;
+        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.prompt)?;
+        refuse_nul_in_metadata(&request.metadata, request.idempotency_key.as_deref())?;
         let epoch = *self.executor.epochs().last().ok_or(StartError::NoEpoch)?;
         let compiled = self
             .executor
@@ -501,6 +513,9 @@ where
         completion: Completion,
         idempotency_key: Option<String>,
     ) -> Result<Enqueued, EngineError> {
+        if let Some(key) = &idempotency_key {
+            text::refuse_nul("the idempotency key", key)?;
+        }
         Ok(self
             .journal
             .enqueue(run, completion, idempotency_key, self.clock.now())
@@ -745,6 +760,18 @@ fn first_error(diagnostics: &[Diagnostic]) -> String {
         .iter()
         .find(|diagnostic| diagnostic.severity == Severity::Error)
         .map_or_else(String::new, ToString::to_string)
+}
+
+/// Refuses run metadata, or an idempotency key, holding a NUL character.
+pub(crate) fn refuse_nul_in_metadata(
+    metadata: &RunMetadata,
+    idempotency_key: Option<&str>,
+) -> Result<(), NulCharacter> {
+    text::refuse_nul_in_labels(&metadata.labels)?;
+    if let Some(trace) = &metadata.trace_context {
+        text::refuse_nul_in_trace(trace)?;
+    }
+    idempotency_key.map_or(Ok(()), |key| text::refuse_nul("the idempotency key", key))
 }
 
 /// `"{run_id}/{seq}"`, the key every attempt of a tool call carries.

@@ -150,7 +150,9 @@ Stores never read a clock: every method that depends on time takes `now`, and th
 of `acquire_runnable` is passed in too. Tokens (tool tasks, webhooks) are the only values a store
 draws from a CSPRNG. Every method is scoped by the tenant: a run (`RunRef { tenant, id }`), a
 script, a toolset, a payload or a task of one tenant is never visible to another. Run ids are
-unique across tenants.
+unique across tenants. Text a store keeps never holds a NUL character (U+0000), which Postgres
+refuses: the engine refuses it at its entry points (`NulCharacter`), and values are JSON, where
+it is escaped ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
 
 `metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`), stored with
 the run and never part of its events. `commit_activation` also writes one feed item per
@@ -364,7 +366,9 @@ The lease is renewed about every 10 s while this runs. The activation itself is 
 `H(run, "run")`, recorded as fields.
 Nothing about the script is emitted during replay.
 
-- Script checks at start fail → `StartError::InvalidScript`, and no run is created.
+- Script checks at start fail → `StartError::InvalidScript`, and no run is created. A text to
+  store with a NUL character → `StartError::NulCharacter` (a signal's key:
+  `EngineError::NulCharacter`), before anything is stored.
 - Executor start errors (top-level exception) → `run_aborted { invalid_script }`.
 - Replay mismatch → nothing is committed; `journal.quarantine(lease, mismatch)`.
 - Any other failure → nothing is committed; `journal.record_failure(lease, error, now)`.

@@ -43,7 +43,7 @@ use crate::ports::{
 };
 use crate::replay::{self, Heartbeat, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::telemetry::{SpanKey, span_id, trace_of};
-use crate::{metrics, payloads};
+use crate::{metrics, payloads, text};
 
 /// Why a run is activated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -435,6 +435,7 @@ where
         mismatch: String,
     ) -> Result<ActivationOutcome, EngineError> {
         tracing::error!(%mismatch, "replay mismatch: run quarantined");
+        let mismatch = text::storable(mismatch);
         self.journal
             .quarantine(lease, mismatch.clone(), self.clock.now())
             .await?;
@@ -467,7 +468,7 @@ where
         }
         let failures = self
             .journal
-            .record_failure(lease, error.to_string(), self.clock.now())
+            .record_failure(lease, text::storable(error.to_string()), self.clock.now())
             .await;
         match failures {
             Ok(Failures {
