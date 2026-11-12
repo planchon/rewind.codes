@@ -726,7 +726,11 @@ mod tests {
         }))
         .unwrap();
         let text = describe_run(&run, &RunExtras::default(), &limits);
-        assert!(text.len() < 4 * limits.value + limits.line, "{}", text.len());
+        assert!(
+            text.len() < 4 * limits.value + limits.line,
+            "{}",
+            text.len()
+        );
         assert!(text.contains("more bytes]"));
 
         let test: TestResult = serde_json::from_value(json!({
@@ -747,10 +751,16 @@ mod tests {
         let refusal = describe_refusal(&long, &[diagnostic("bad")], &limits);
         assert!(refusal.len() < 3 * limits.value + limits.line + 100);
         // Diagnostics take the room of a trace, then say how many are left out.
-        let many: Vec<Diagnostic> = (0..1000).map(|n| diagnostic(&format!("error {n}"))).collect();
+        let many: Vec<Diagnostic> = (0..1000)
+            .map(|n| diagnostic(&format!("error {n}")))
+            .collect();
         let text = diagnostics_text(&many, &limits);
         assert!(text.len() <= limits.trace + limits.value + limits.line + 100);
-        assert!(text.ends_with("more diagnostics."), "{}", &text[text.len() - 60..]);
+        assert!(
+            text.ends_with("more diagnostics."),
+            "{}",
+            &text[text.len() - 60..]
+        );
     }
 
     #[test]

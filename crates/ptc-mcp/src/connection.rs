@@ -490,7 +490,10 @@ mod tests {
         let key = Key::new(&TenantId::new("acme").unwrap(), &server, Some(&credentials));
         let debug = format!("{key:?}");
         // An unsalted digest of a short secret can be reversed by trying them all.
-        assert!(!debug.contains(&format!("{:?}", key.fingerprint)), "{debug}");
+        assert!(
+            !debug.contains(&format!("{:?}", key.fingerprint)),
+            "{debug}"
+        );
         assert!(debug.contains("acme") && debug.contains("crm"), "{debug}");
     }
 }

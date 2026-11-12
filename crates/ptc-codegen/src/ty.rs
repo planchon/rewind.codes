@@ -396,7 +396,12 @@ fn needs_parentheses_in_array(ty: &Ty) -> bool {
     }
 }
 
-fn write_object(out: &mut String, object: &Object, qualifier: Option<&str>, layout: Layout) -> bool {
+fn write_object(
+    out: &mut String,
+    object: &Object,
+    qualifier: Option<&str>,
+    layout: Layout,
+) -> bool {
     if object.properties.is_empty() && object.index.is_none() {
         // `{}` would accept any value but `null` and `undefined`.
         out.push_str("{ [key: string]: never }");

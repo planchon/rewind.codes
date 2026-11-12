@@ -69,7 +69,8 @@ fn nested_objects(depth: usize) -> Value {
     let mut schema = json!({ "type": "string" });
     for level in 0..depth {
         let name = format!("a_property_of_level_{level}");
-        schema = json!({ "type": "object", "properties": { name.clone(): schema }, "required": [name] });
+        schema =
+            json!({ "type": "object", "properties": { name.clone(): schema }, "required": [name] });
     }
     schema
 }
@@ -79,7 +80,11 @@ fn deeply_nested_objects_are_written_once() {
     // Each object tried the one-line form of everything it holds before writing it out on
     // several lines: twice the work per level.
     let declarations = generate_for(nested_objects(48));
-    assert!(declarations.typescript.contains("{ a_property_of_level_0: string }"));
+    assert!(
+        declarations
+            .typescript
+            .contains("{ a_property_of_level_0: string }")
+    );
 }
 
 #[test]
@@ -97,7 +102,10 @@ fn named_types_that_refer_to_each_other_many_times_over_stay_cheap_in_the_prompt
                 { "$ref": format!("#/$defs/b{}", level + 1) }
             ] })
         };
-        definitions.insert(format!("b{level}"), json!({ "anyOf": [next.clone(), { "type": "null" }] }));
+        definitions.insert(
+            format!("b{level}"),
+            json!({ "anyOf": [next.clone(), { "type": "null" }] }),
+        );
         definitions.insert(format!("a{level}"), next);
     }
     let declarations = generate_for(json!({
@@ -106,7 +114,11 @@ fn named_types_that_refer_to_each_other_many_times_over_stay_cheap_in_the_prompt
         "required": ["x"],
         "$defs": definitions
     }));
-    assert!(declarations.prompt.starts_with("import { crm } from \"ptc:tools\";\ncrm.find({ x: "));
+    assert!(
+        declarations
+            .prompt
+            .starts_with("import { crm } from \"ptc:tools\";\ncrm.find({ x: ")
+    );
 }
 
 #[test]
@@ -132,9 +144,18 @@ fn many_definitions_with_the_same_name_are_named_in_linear_time() {
         })
         .collect();
     let declarations = generate_for_tools(tools);
-    for name in ["Item", "T0Item", "T0Item2", "T0Item499", "T39Item", "T39Item499"] {
+    for name in [
+        "Item",
+        "T0Item",
+        "T0Item2",
+        "T0Item499",
+        "T39Item",
+        "T39Item499",
+    ] {
         assert!(
-            declarations.typescript.contains(&format!("export type {name} = ")),
+            declarations
+                .typescript
+                .contains(&format!("export type {name} = ")),
             "{name}"
         );
     }
@@ -161,7 +182,11 @@ fn a_definition_referred_to_many_times_is_read_once() {
         "type": "object",
         "properties": { "next": { "anyOf": references } }
     }));
-    assert!(declarations.typescript.contains("export interface FindArgs {"));
+    assert!(
+        declarations
+            .typescript
+            .contains("export interface FindArgs {")
+    );
 }
 
 #[test]
@@ -172,13 +197,20 @@ fn a_document_designating_too_many_definitions_keeps_its_references_unknown() {
         for n in 0..count {
             properties.insert(format!("p{n}"), json!({ "$ref": format!("#/$defs/d{n}") }));
             // Each definition refers to all the others through the root.
-            definitions.insert(format!("d{n}"), json!({ "anyOf": [{ "type": "string" }, { "$ref": "#" }] }));
+            definitions.insert(
+                format!("d{n}"),
+                json!({ "anyOf": [{ "type": "string" }, { "$ref": "#" }] }),
+            );
         }
         json!({ "type": "object", "properties": properties, "$defs": definitions })
     };
     // 511 definitions and the root: still named types.
     let declarations = generate_for(schema(511));
-    assert!(declarations.typescript.contains("export type D510 = string | FindArgs;"));
+    assert!(
+        declarations
+            .typescript
+            .contains("export type D510 = string | FindArgs;")
+    );
     // One more: each reference is `unknown`.
     let declarations = generate_for(schema(512));
     assert!(!declarations.typescript.contains("export type D"));

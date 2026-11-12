@@ -935,10 +935,19 @@ mod tests {
             tracing::info_span!(target: "rmcp::service", "serve_inner").in_scope(|| {});
             tracing::info!(target: "rmcp_like", "kept");
         });
-        assert!(backend.spans.get_finished_spans().expect("spans").is_empty());
+        assert!(
+            backend
+                .spans
+                .get_finished_spans()
+                .expect("spans")
+                .is_empty()
+        );
         let logs = backend.logs.get_emitted_logs().expect("logs");
         assert_eq!(logs.len(), 1);
-        assert_eq!(logs[0].record.target().map(|t| t.as_ref()), Some("rmcp_like"));
+        assert_eq!(
+            logs[0].record.target().map(|t| t.as_ref()),
+            Some("rmcp_like")
+        );
     }
 
     #[test]

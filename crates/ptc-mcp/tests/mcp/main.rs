@@ -258,7 +258,10 @@ async fn a_tool_list_without_end_is_refused() {
         ..McpConfig::default()
     });
     let started = Instant::now();
-    let error = dispatcher.list_tools(&tenant(), &mcp, None).await.unwrap_err();
+    let error = dispatcher
+        .list_tools(&tenant(), &mcp, None)
+        .await
+        .unwrap_err();
     assert!(
         matches!(&error, McpError::Refused { message, .. } if message.contains("more than 100 pages")),
         "{error:?}"
@@ -274,9 +277,16 @@ async fn a_tool_list_without_end_is_refused() {
         },
         json!({ "type": "object" }),
     );
-    let failure = failed(dispatcher.dispatch(call(&mcp, &tool, json!({})), None).await);
+    let failure = failed(
+        dispatcher
+            .dispatch(call(&mcp, &tool, json!({})), None)
+            .await,
+    );
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
-    assert!(failure.message.contains("ai-ptc reads no further"), "{failure:?}");
+    assert!(
+        failure.message.contains("ai-ptc reads no further"),
+        "{failure:?}"
+    );
 }
 
 async fn content_and_structured_results() {

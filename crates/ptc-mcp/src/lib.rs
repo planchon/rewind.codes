@@ -179,19 +179,19 @@ impl McpDispatcher {
             .await
             .map_err(|failure| failure.into_error(&server.name))?;
         let timeout = self.pool.config().connect_timeout;
-        let listed = match tokio::time::timeout(timeout, lease.connection().tools(&server.name)).await
-        {
-            Ok(Ok(listed)) => listed,
-            Ok(Err((failure, broken))) => {
-                if broken {
-                    lease.forget();
+        let listed =
+            match tokio::time::timeout(timeout, lease.connection().tools(&server.name)).await {
+                Ok(Ok(listed)) => listed,
+                Ok(Err((failure, broken))) => {
+                    if broken {
+                        lease.forget();
+                    }
+                    return Err(failure.into_error(&server.name));
                 }
-                return Err(failure.into_error(&server.name));
-            }
-            Err(_) => {
-                return Err(failure::timed_out(&server.name, timeout).into_error(&server.name));
-            }
-        };
+                Err(_) => {
+                    return Err(failure::timed_out(&server.name, timeout).into_error(&server.name));
+                }
+            };
         Ok(listed
             .values()
             .map(|tool| pinned(&server.name, tool))
