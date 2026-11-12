@@ -6,10 +6,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{
-    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunStatus, Shape,
+    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode, RunStatus, Shape,
     ToolFailureKind, ToolRoute, canonical_json,
 };
-use ptc_engine::ports::{ParkKind, QuarantineKind, Trigger, WebhookEventType};
+use ptc_engine::ports::{
+    ParkKind, QuarantineKind, TaskPhase, Trigger, WaitKind, WaitingFor, WebhookEventType,
+};
 use serde_json::{Map, Value, json};
 
 use crate::Error;
@@ -70,6 +72,75 @@ pub(crate) fn parse_interruption(name: &str) -> Result<Interruption, Error> {
         "at_most_once" => Interruption::AtMostOnce,
         other => return Err(corrupt("interruption policy", other)),
     })
+}
+
+pub(crate) fn mode(mode: RunMode) -> &'static str {
+    match mode {
+        RunMode::Live => "live",
+        RunMode::Mock => "mock",
+    }
+}
+
+pub(crate) fn parse_mode(name: &str) -> Result<RunMode, Error> {
+    Ok(match name {
+        "live" => RunMode::Live,
+        "mock" => RunMode::Mock,
+        other => return Err(corrupt("run mode", other)),
+    })
+}
+
+/// A wait's kind: the name of what it waits for, as queries name it (`WaitingFor`).
+pub(crate) fn wait_kind(kind: WaitKind) -> &'static str {
+    match kind {
+        WaitKind::Signal => WaitingFor::Signal.as_str(),
+        WaitKind::Timer => WaitingFor::Timer.as_str(),
+        WaitKind::Call => WaitingFor::Call.as_str(),
+        WaitKind::Host => WaitingFor::Host.as_str(),
+    }
+}
+
+pub(crate) fn parse_wait_kind(name: &str) -> Result<WaitKind, Error> {
+    [
+        WaitKind::Signal,
+        WaitKind::Timer,
+        WaitKind::Call,
+        WaitKind::Host,
+    ]
+    .into_iter()
+    .find(|kind| wait_kind(*kind) == name)
+    .ok_or_else(|| corrupt("wait kind", name))
+}
+
+pub(crate) fn parse_waiting_for(name: &str) -> Result<WaitingFor, Error> {
+    WaitingFor::ALL
+        .into_iter()
+        .find(|kind| kind.as_str() == name)
+        .ok_or_else(|| corrupt("wait", name))
+}
+
+/// A task's state, as `tool_tasks` names it. The states a call waits in (approval, parked,
+/// deferred) have the names of what its run waits for (`WaitingFor`).
+pub(crate) fn task_phase(phase: TaskPhase) -> &'static str {
+    match phase {
+        TaskPhase::Approval => WaitingFor::Approval.as_str(),
+        TaskPhase::Ready => "ready",
+        TaskPhase::Claimed => "claimed",
+        TaskPhase::Deferred => WaitingFor::Deferred.as_str(),
+        TaskPhase::Parked => WaitingFor::Parked.as_str(),
+    }
+}
+
+pub(crate) fn parse_task_phase(name: &str) -> Result<TaskPhase, Error> {
+    [
+        TaskPhase::Approval,
+        TaskPhase::Ready,
+        TaskPhase::Claimed,
+        TaskPhase::Deferred,
+        TaskPhase::Parked,
+    ]
+    .into_iter()
+    .find(|phase| task_phase(*phase) == name)
+    .ok_or_else(|| corrupt("task state", name))
 }
 
 pub(crate) fn parse_failure_kind(name: &str) -> Result<ToolFailureKind, Error> {
@@ -368,6 +439,34 @@ mod tests {
         let (digest, held) = payload_columns(&digest_only);
         assert_eq!(held, None);
         assert_eq!(decode_payload(&digest, None), Ok(digest_only));
+    }
+
+    #[test]
+    fn enumerations_round_trip() {
+        for mode in [RunMode::Live, RunMode::Mock] {
+            assert_eq!(parse_mode(super::mode(mode)), Ok(mode));
+        }
+        for kind in [
+            WaitKind::Signal,
+            WaitKind::Timer,
+            WaitKind::Call,
+            WaitKind::Host,
+        ] {
+            assert_eq!(parse_wait_kind(wait_kind(kind)), Ok(kind));
+        }
+        for kind in WaitingFor::ALL {
+            assert_eq!(parse_waiting_for(kind.as_str()), Ok(kind));
+        }
+        for phase in [
+            TaskPhase::Approval,
+            TaskPhase::Ready,
+            TaskPhase::Claimed,
+            TaskPhase::Deferred,
+            TaskPhase::Parked,
+        ] {
+            assert_eq!(parse_task_phase(task_phase(phase)), Ok(phase));
+        }
+        assert!(parse_task_phase("pending").is_err());
     }
 
     #[test]
