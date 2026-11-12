@@ -10,7 +10,9 @@ use ptc_core::{
     RunId, RunMode, RunOutcome, RunState, Script, Seq, Timestamp, Tool, ToolFailure,
     ToolFailureKind, ToolRoute, Toolset,
 };
-use ptc_engine::adapters::{MemoryBlobs, MemoryJournal, SeededEntropy, VirtualClock};
+use ptc_engine::adapters::{
+    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+};
 use ptc_engine::ports::{Clock, Dispatched, RunRef, TaskToken, TenantId, ToolCall, ToolDispatcher};
 use ptc_engine::{Adapters, DriveOptions, Engine, EngineConfig, ReplayVerdict, StartRun};
 use ptc_runtime::{MockError, SandboxLimits, TsMocks, V8Executor};
@@ -76,6 +78,7 @@ fn call(tool: &str, args: Value) -> ToolCall {
         args,
         idempotency_key: format!("{run}/3"),
         attempt: 2,
+        schema_change_approved: false,
         token: TaskToken("token".into()),
         trace_context: None,
     }
@@ -240,6 +243,8 @@ async fn a_run_in_mock_mode_is_answered_by_the_handlers_and_replays() {
             dispatcher: mocks(MOCKS).await.unwrap(),
             clock: VirtualClock::new(T0),
             entropy: SeededEntropy::new(1),
+            secrets: MemorySecrets::new(),
+            webhooks: MemoryWebhooks::new(),
         },
         EngineConfig::default(),
     );
