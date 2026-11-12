@@ -56,6 +56,7 @@ pub(super) async fn run(
         }
     };
     // Answered as soon as the run exists, so that its id is known at once; the wait follows.
+    interrupt::before_change("the start of the run")?;
     let run = client.start_run(&start, key.as_ref()).await?;
     started(console, &run);
     let run = wait_for_end(&client, run, deadline).await?;
@@ -86,6 +87,7 @@ pub(super) async fn fork(
     let client = server.client().await?;
     let deadline = Instant::now() + args.start.wait.get();
     // Answered as soon as the fork exists; the wait follows.
+    interrupt::before_change("the fork")?;
     let run = client.fork_run(&args.run, &fork, key.as_ref()).await?;
     started(console, &run);
     let run = wait_for_end(&client, run, deadline).await?;
@@ -118,6 +120,7 @@ pub(super) async fn signal(
     };
     let key = idempotency_key(args.key.as_deref())?;
     let client = server.client().await?;
+    interrupt::before_change("the signal")?;
     let accepted = client
         .signal_run(&args.run, &args.name, &payload, key.as_ref())
         .await?;
@@ -148,6 +151,7 @@ pub(super) async fn cancel(
         reason: args.reason,
         wait: args.wait.map(first_wait).unwrap_or_default(),
     };
+    interrupt::before_change("the cancellation")?;
     let run = client.cancel_run(&args.run, &request).await?;
     match args.wait {
         Some(_) => {
@@ -168,6 +172,11 @@ pub(super) async fn release(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let client = server.client().await?;
+    interrupt::before_change(if args.give_up {
+        "the give-up"
+    } else {
+        "the release"
+    })?;
     let run = if args.give_up {
         client.give_up_run(&args.run).await?
     } else {

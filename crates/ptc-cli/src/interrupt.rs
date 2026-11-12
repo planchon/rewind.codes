@@ -3,14 +3,17 @@
 //!
 //! A call that changes something (a start, a signal, a fork, a cancellation, a release, a
 //! local scenario or replay) is always finished: abandoning it would leave the user not knowing
-//! whether it happened. What only reads or waits (waiting for a run to end, listing pages) is
-//! abandoned at the first Ctrl-C, and the command reports what it knows.
+//! whether it happened. No such call starts after the first Ctrl-C: `ptc run` interrupted while
+//! it registers its toolset starts no run, and exits with 130. What only reads or waits (waiting
+//! for a run to end, listing pages) is abandoned at the first Ctrl-C, and the command reports
+//! what it knows.
 
 use std::future::Future;
 use std::sync::OnceLock;
 
 use tokio::sync::watch;
 
+use crate::error::CliError;
 use crate::exit::Exit;
 
 fn flag() -> &'static watch::Sender<bool> {
@@ -42,6 +45,15 @@ pub(crate) fn request() {
 /// Whether Ctrl-C was pressed: the command starts nothing new.
 pub(crate) fn requested() -> bool {
     *flag().borrow()
+}
+
+/// Before a call that changes something: refused once Ctrl-C was pressed, so that the command
+/// finishes the call in flight and sends nothing new. `what` says what was not done.
+pub(crate) fn before_change(what: &str) -> Result<(), CliError> {
+    if requested() {
+        return Err(CliError::Interrupted(format!("{what} was not sent")));
+    }
+    Ok(())
 }
 
 /// Resolves at the first Ctrl-C.

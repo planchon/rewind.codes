@@ -573,7 +573,11 @@ async fn a_refused_script_exits_65_with_its_diagnostics() {
         err.contains("error: The script was refused: the script does not type-check"),
         "{err}"
     );
-    assert!(err.contains("script.ts:3:28 error TS2322"), "{err}");
+    assert_eq!(
+        err.matches("script.ts:3:28 error TS2322").count(),
+        1,
+        "each diagnostic is printed once: {err}"
+    );
 
     let (exit, _, err) = server
         .ptc(&["--json", "run", script.to_str().unwrap()])
