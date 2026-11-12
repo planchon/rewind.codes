@@ -13,7 +13,8 @@ export const RANGES = {
 export type RangeKey = keyof typeof RANGES;
 
 function isRange(value: string | null): value is RangeKey {
-  return value !== null && value in RANGES;
+  // Own keys only: `"toString" in RANGES` holds too, and its "range" is a function.
+  return value !== null && Object.hasOwn(RANGES, value);
 }
 
 export interface RunFilters {

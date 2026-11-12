@@ -151,6 +151,20 @@ describe("the client", () => {
     expect(server.requests[0]?.body).toMatchObject({ wait: expect.stringMatching(/^(5s|4s\d+ms)$/) });
   });
 
+  it("splits a long wait for a cancellation as for a start", async () => {
+    let gets = 0;
+    server.on("POST", "/v1/runs/{id}/cancel", json(run({ status: "active" }), 202)).on("GET", "/v1/runs/{id}", () => {
+      gets += 1;
+      return json(run({ status: gets < 2 ? "active" : "cancelled" }));
+    });
+    const cancelled = await ptc.runs.cancel(RUN_ID, { wait: "2m" });
+    expect(cancelled.status).toBe("cancelled");
+    expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "50s" });
+    const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
+    expect(waits).toHaveLength(2);
+    expect(waits.every((wait) => wait !== null && /^(50s|1m\d)/.test(wait))).toBe(true);
+  });
+
   it("returns a run still active when the wait passes", async () => {
     server
       .on("POST", "/v1/runs", json(run({ status: "active" }), 201))

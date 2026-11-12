@@ -58,7 +58,16 @@ function retry(count: number, error: unknown): boolean {
   return count < 2;
 }
 
+/**
+ * A query cache per key: what one key read is never shown under another, not even while the new
+ * key's first answers are on their way (another tenant's runs, scripts or payloads).
+ */
 function Queries({ children }: { children: ReactNode }) {
+  const { key } = useSession();
+  return <KeyQueries key={key ?? ""}>{children}</KeyQueries>;
+}
+
+function KeyQueries({ children }: { children: ReactNode }) {
   const { signOut } = useSession();
   const signOutRef = useRef(signOut);
   signOutRef.current = signOut;

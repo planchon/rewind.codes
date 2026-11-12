@@ -57,6 +57,36 @@ describe("the event stream", () => {
     expect(server.requests.every((r) => r.query.get("follow") === "true")).toBe(true);
   });
 
+  it("reconnects to a server it cannot reach for a while, as to a dropped stream", async () => {
+    // A server restarting: the stream drops, then connections are refused for a moment.
+    let connections = 0;
+    server.on("GET", "/v1/runs/{id}/events", (request) => {
+      connections += 1;
+      if (connections === 1) {
+        return sse([entry(0), entry(1)], { end: false })(request);
+      }
+      if (connections <= 5) {
+        return (response) => {
+          response.destroy();
+        };
+      }
+      return sse([entry(2), end])(request);
+    });
+    const events = await collect(ptc.runs.events(RUN_ID, { follow: true }));
+    expect(events.map((e) => (e.type === "entry" ? e.idx : e.type))).toEqual([0, 1, 2, "end"]);
+    expect(server.requests.at(-1)?.query.get("from")).toBe("2");
+  });
+
+  it("does not reconnect to a run that is gone", async () => {
+    let connections = 0;
+    server.on("GET", "/v1/runs/{id}/events", (request) => {
+      connections += 1;
+      return connections === 1 ? sse([entry(0)], { end: false })(request) : problem(404, "not-found", "no such run");
+    });
+    await expect(collect(ptc.runs.events(RUN_ID, { follow: true }))).rejects.toMatchObject({ status: 404 });
+    expect(connections).toBe(2);
+  });
+
   it("gives up after the reconnections allowed", async () => {
     server.on("GET", "/v1/runs/{id}/events", sse([], { end: false }));
     await expect(collect(ptc.runs.events(RUN_ID, { follow: true, maxReconnects: 1 }))).rejects.toBeInstanceOf(
