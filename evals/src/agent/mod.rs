@@ -33,7 +33,7 @@ use crate::view;
 use crate::world::World;
 use render::{
     Limits, RunExtras, args, describe_check, describe_matches, describe_page, describe_refusal,
-    describe_run, describe_runs, describe_test, entry_text, json,
+    describe_run, describe_runs, describe_test, entry_text, json, truncate_end, truncate_middle,
 };
 
 /// What a tool call returns to the model.
@@ -138,7 +138,8 @@ impl<'w> AgentTools<'w> {
     }
 
     /// Executes a tool call of the model. `input` is the call's arguments, an object or its
-    /// JSON text; `call_id` is the model's tool call id, the idempotency key of what it starts.
+    /// JSON text; `call_id` is the model's tool call id, which makes the idempotency key of what
+    /// it starts.
     pub async fn handle(
         &self,
         name: &str,
@@ -166,25 +167,34 @@ impl<'w> AgentTools<'w> {
             name,
             "run_script" | "check_script" | "test_script" | "retry_run"
         );
-        match handled {
+        let mut handled = match handled {
             Ok(mut handled) => {
                 if carries_script && handled.script.is_none() {
                     handled.script = Some(ScriptVerdict::Passed);
                 }
-                Ok(handled)
+                handled
             }
-            Err(Failure::Input(message)) => Ok(result(format!("{name}: {message}"), true)),
-            Err(Failure::Problem(detail)) => Ok(result(format!("{name} failed: {detail}"), true)),
+            Err(Failure::Input(message)) => result(format!("{name}: {message}"), true),
+            Err(Failure::Problem(detail)) => result(
+                format!(
+                    "{name} failed: {}",
+                    truncate_end(&detail, self.limits.value)
+                ),
+                true,
+            ),
             Err(Failure::Refused {
                 detail,
                 diagnostics,
-            }) => Ok(AgentToolResult {
-                content: describe_refusal(&detail, &diagnostics),
+            }) => AgentToolResult {
+                content: describe_refusal(&detail, &diagnostics, &self.limits),
                 is_error: true,
                 script: Some(ScriptVerdict::Refused),
-            }),
-            Err(Failure::Platform(error)) => Err(error),
-        }
+            },
+            Err(Failure::Platform(error)) => return Err(error),
+        };
+        // Each part is bounded; this bounds what a script, a server or a tool wrote unbounded.
+        handled.content = truncate_middle(&handled.content, self.limits.total);
+        Ok(handled)
     }
 
     // ---------------------------------------------------------------------------------------
@@ -197,7 +207,7 @@ impl<'w> AgentTools<'w> {
             Script::new(code),
             input.get("input").cloned().unwrap_or_else(|| json!({})),
         );
-        request.idempotency_key = Some(idempotency_key(call_id));
+        request.idempotency_key = Some(run_key(&self.world.labels, call_id));
         let started = self
             .world
             .engine
@@ -226,7 +236,7 @@ impl<'w> AgentTools<'w> {
             ScriptVerdict::Refused
         };
         Ok(AgentToolResult {
-            content: describe_check(&checked),
+            content: describe_check(&checked, &self.limits),
             is_error: !checked.ok,
             script: Some(verdict),
         })
@@ -477,7 +487,7 @@ impl<'w> AgentTools<'w> {
         let parent = self.scoped_run(&run_id).await?;
         let mut request = ForkRun::new(parent, Script::new(code));
         request.labels = Some(self.world.labels.clone());
-        request.idempotency_key = Some(idempotency_key(call_id));
+        request.idempotency_key = Some(run_key(&self.world.labels, call_id));
         let forked = self
             .world
             .engine
@@ -776,15 +786,31 @@ pub fn search(
 }
 
 /// The idempotency key of a tool call: its id when the API takes it as a key, otherwise the
-/// SHA-256 of the id.
+/// SHA-256 of the id. `signal_run` uses it: a signal's key is unique per run.
 pub fn idempotency_key(call_id: &str) -> String {
     match ptc_api::headers::IdempotencyKey::new(call_id) {
         Ok(key) => key.as_str().to_owned(),
-        Err(_) => Sha256::digest(call_id.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
+        Err(_) => sha256_hex(call_id),
     }
+}
+
+/// The idempotency key of the run a tool call starts (`run_script`, `retry_run`), as the SDK's
+/// `runIdempotencyKey` makes it: the SHA-256 of `[labels, call_id]` in compact JSON, the labels
+/// as `[key, value]` pairs sorted by key. A run's key is unique per tenant: agents with other
+/// labels never share one, however their tool calls are numbered.
+pub fn run_key(labels: &BTreeMap<String, String>, call_id: &str) -> String {
+    let scope: Vec<Value> = labels
+        .iter()
+        .map(|(key, value)| json!([key, value]))
+        .collect();
+    sha256_hex(&json!([scope, call_id]).to_string())
+}
+
+fn sha256_hex(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn parse_input(name: &str, input: &Value) -> Result<Map<String, Value>, Failure> {
@@ -837,6 +863,29 @@ mod tests {
         let hashed = idempotency_key("call\u{e9}");
         assert_eq!(hashed.len(), 64);
         assert_eq!(hashed, idempotency_key("call\u{e9}"));
+    }
+
+    #[test]
+    fn a_run_s_key_is_scoped_by_the_agent_s_labels() {
+        let labels = |pairs: &[(&str, &str)]| -> BTreeMap<String, String> {
+            pairs
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect()
+        };
+        // The same vectors as the SDK's tests (`sdk/typescript/test/agent-tools.test.ts`).
+        assert_eq!(
+            run_key(&labels(&[("agent", "a")]), "call_0"),
+            "60b258a9b3d4fedc3e76a4687e2f18f3a6b35dd43a5afde3743c2484c38598a5"
+        );
+        assert_eq!(
+            run_key(&labels(&[("agent", "b")]), "call_0"),
+            "57b1f343b2298f8dca3d00127f9f7b7b280934708c580ea73c339dff509f7eb1"
+        );
+        assert_eq!(
+            run_key(&labels(&[("b", "2"), ("a", "1")]), "call_0"),
+            "3976d8a6de96175c872c79d0bba946217ef5b466d838926513bd53cdee626186"
+        );
     }
 
     #[test]

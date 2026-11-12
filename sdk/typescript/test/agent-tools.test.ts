@@ -7,6 +7,12 @@ import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
 import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
 const LABELS = { conversation: "c-42" };
+
+/** The key of the run an agent with `LABELS` starts for a tool call. */
+const runKey = (toolCallId: string) =>
+  createHash("sha256")
+    .update(JSON.stringify([[["conversation", "c-42"]], toolCallId]))
+    .digest("hex");
 let server: MockServer;
 let ptc: Ptc;
 let tools: AgentTools;
@@ -105,7 +111,7 @@ describe("run_script", () => {
       ].join("\n"),
     );
     const request = server.calls("POST", "/v1/runs")[0];
-    expect(request?.headers["idempotency-key"]).toBe("toolu_01");
+    expect(request?.headers["idempotency-key"]).toBe(runKey("toolu_01"));
     expect(request?.body).toEqual({
       script: "export default async () => ({ closed: 3 })",
       toolset: TOOLSET,
@@ -253,11 +259,26 @@ describe("run_script", () => {
     );
   });
 
-  it("hashes a tool call id the server would refuse as an idempotency key", async () => {
+  it("derives the idempotency key from the agent's labels and the tool call id", async () => {
     server.on("POST", "/v1/runs", started());
     const id = "call_é".padEnd(300, "x");
     await tools.handle("run_script", { code: "x" }, { toolCallId: id });
-    expect(server.requests[0]?.headers["idempotency-key"]).toBe(createHash("sha256").update(id).digest("hex"));
+    expect(server.requests[0]?.headers["idempotency-key"]).toBe(runKey(id));
+    // Two agents whose harnesses number their tool calls alike never share a key.
+    server.on("POST", "/v1/runs", (request) => {
+      const body = request.body as { script: string; labels: Run["labels"] };
+      const script = createHash("sha256").update(body.script).digest("hex");
+      return json(run({ script, labels: body.labels }), 201);
+    });
+    await ptc.agentTools({ labels: { agent: "a" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await ptc.agentTools({ labels: { agent: "b" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await ptc.agentTools({ labels: { b: "2", a: "1" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    // The same vectors as the evals' Rust port (`evals/src/agent/mod.rs`).
+    expect(server.requests.slice(1).map((request) => request.headers["idempotency-key"])).toEqual([
+      "60b258a9b3d4fedc3e76a4687e2f18f3a6b35dd43a5afde3743c2484c38598a5",
+      "57b1f343b2298f8dca3d00127f9f7b7b280934708c580ea73c339dff509f7eb1",
+      "3976d8a6de96175c872c79d0bba946217ef5b466d838926513bd53cdee626186",
+    ]);
   });
 
   it("bounds the model's wait", async () => {
@@ -525,7 +546,7 @@ describe("the tools that take a run id", () => {
     const result = await tools.handle("retry_run", { run_id: RUN_ID, code: "fixed" }, { toolCallId: "call_9" });
     expect(result.content).toBe(`Run fork-1 (a fork of run ${RUN_ID}) completed.\nOutput:\n"ok"`);
     const fork = server.calls("POST", `/v1/runs/${RUN_ID}/fork`)[0];
-    expect(fork?.headers["idempotency-key"]).toBe("call_9");
+    expect(fork?.headers["idempotency-key"]).toBe(runKey("call_9"));
     expect(fork?.body).toEqual({ script: "fixed", labels: LABELS, wait: "30s" });
   });
 });
@@ -696,7 +717,7 @@ describe("the adapters", () => {
       content: `Run ${RUN_ID} was aborted by the host (limit_exceeded): the history cap`,
       is_error: true,
     });
-    expect(server.requests[0]?.headers["idempotency-key"]).toBe("toolu_9");
+    expect(server.requests[0]?.headers["idempotency-key"]).toBe(runKey("toolu_9"));
   });
 
   it("answer OpenAI tool calls, whose arguments are a JSON string", async () => {

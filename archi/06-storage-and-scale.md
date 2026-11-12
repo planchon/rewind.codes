@@ -106,8 +106,8 @@ retries without knowing.
   must outlive the delivery of the signal, or a late retry would pass.
 - Keys are run metadata. They never appear in events, so they are neither replayed nor
   exported in cassettes.
-- Defaults in the SDK: the agent tools use the model's tool call id for `run_script`,
-  and a webhook uses the sender's delivery id when there is one.
+- Defaults in the SDK: the agent tools derive `run_script`'s key from the model's tool call
+  id and the agent's labels, and a webhook uses the sender's delivery id when there is one.
 
 ## Payloads
 

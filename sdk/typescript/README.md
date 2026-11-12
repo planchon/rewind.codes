@@ -161,9 +161,11 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
 - Results are plain text written for the model, and bounded: `run_script` returns at most 256 KiB of output, with the
   call that reads the rest (`get_run` with `offset`); a failure shows the error with its line and code frame, the call
   that failed, and the trace up to the failure. Messages, diagnostics and traces are cut too, whatever their size.
-- The model's tool call id is the idempotency key of `run_script`, `retry_run` and `signal_run`: handling the same tool
-  call twice starts one run, or delivers one signal. Ids must be unique across conversations: a run the server answers
-  for an id already used by another script or other labels is never shown to the model, and a `PtcError` is thrown.
+- The model's tool call id makes the idempotency key of `run_script`, `retry_run` and `signal_run`: handling the same
+  tool call twice starts one run, or delivers one signal. A run's key is the SHA-256 of the agent's `labels` and the id
+  (`runIdempotencyKey`), so agents with other labels never share one, however their harness numbers its tool calls. A
+  run the server answers for a key already used by another script or other labels is never shown to the model, and a
+  `PtcError` is thrown.
 - `labels` are set on every run the model starts. They filter `list_runs`, and the tools that take a run id answer for
   a run without them as for a run that does not exist. Give the harness an API key limited to these labels so the
   server holds the scope too.
