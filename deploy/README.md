@@ -10,12 +10,14 @@ Kubernetes egress policy instead of the gateway container).
 | `edge` | `caddy:2-alpine` | public, core | The only published port. Sends `POST /v1/test` to the workers, everything else to the api |
 | `api` | `ai-ptc` | public, core | `ptc server --role api`: the HTTP API, keys, the dashboard. No V8 |
 | `worker-1`, `worker-2` | `ai-ptc` | a holder's namespace | `ptc server --role worker`: activations (V8), tool dispatch, scheduler, projector, retention |
-| `worker-N-net` | `ai-ptc-egress` | core | Holds a worker's network namespace, with its default route through `egress` |
+| `worker-N-net` | `ai-ptc-egress` | core | Holds a worker's network namespace, with its default route through `egress`; healthy once the route is set |
 | `egress` | `ai-ptc-egress` | core, public | The workers' only way out: forwards to the addresses of allowed names only |
+| `worker-dns` | `ai-ptc-egress` | core | Profile `gvisor`: the DNS server of the workers under gVisor, a relay to Docker's ([gVisor](#workers-the-walls)) |
+| `walls`, `walls-net` | `ai-ptc-egress` | a holder's namespace | Profile `walls`: the gVisor sandbox `check-walls.sh` checks the gVisor workers' walls from, and its holder; started for the check only |
 | `postgres` | `postgres:17` | core | Journal, read model, secrets (`ptc-store-postgres`) |
 | `minio`, `minio-init` | Chainguard's MinIO | core | Large payloads and archived journals (S3), and the bucket's creation |
 | `otel-collector` | `otel/opentelemetry-collector` | core | Traces, metrics and logs of the api and the workers, over OTLP |
-| `worker-previous` | `ai-ptc`, a previous build | a holder's namespace | Profile `previous-epoch`: the pool of a previous determinism epoch ([upgrades](#upgrades)) |
+| `worker-previous` | `ai-ptc`, a previous build | a holder's namespace | Profile `previous-epoch` (`previous-epoch-gvisor` under gVisor): the pool of a previous determinism epoch ([upgrades](#upgrades)) |
 | `loadgen` | `ai-ptc-load` | public | Profile `load`: the load generator and its fake MCP server ([load tests](#load-and-limit-tests)) |
 
 `core` is an internal network: nothing on it has a route out. `public` is an ordinary bridge.
@@ -26,7 +28,7 @@ Kubernetes egress policy instead of the gateway container).
 cd deploy
 ./init.sh                         # .env with fresh secrets, once (./init.sh <file> writes another file)
 docker compose up -d --build      # builds the image from the repository (a release build: minutes)
-./check-walls.sh                  # the workers' network walls hold
+./check-walls.sh                  # the workers' network walls hold (worker-1's; ./check-walls.sh worker-2-net)
 ```
 
 The API and the dashboard are then at <http://localhost:8080> (`PTC_PORT`, `PTC_BIND`). The
@@ -65,8 +67,8 @@ the ones the deployment needs; `.env` (written by `init.sh`) or your shell sets 
 | `PTC_WORKER_MEMORY`, `PTC_WORKER_CPUS` | `1g`, `2` | A worker container's limits |
 | `PTC_CACHE_INSTANCES`, `PTC_CACHE_MEMORY` | `500`, `384MiB` | The sticky instance cache of a worker: keep its memory well below the container's limit, under each isolate's 128 MiB heap limit |
 | `PTC_LOG` | `info` | What the servers log on standard error, as `RUST_LOG` writes it |
-| `COMPOSE_PROFILES` | `runc` | `runc` or `gvisor`, plus `previous-epoch` during an upgrade |
-| `PTC_CORE_SUBNET`, `PTC_CORE_RANGE`, `PTC_EGRESS_ADDRESS` | `172.29.213.0/24`, `172.29.213.128/25`, `172.29.213.2` | The core network, the part of it Docker hands out, and the gateway's fixed address below that part |
+| `COMPOSE_PROFILES` | `runc` | `runc` or `gvisor`, plus `previous-epoch` (under gVisor `previous-epoch-gvisor`) during an upgrade |
+| `PTC_CORE_SUBNET`, `PTC_CORE_RANGE`, `PTC_EGRESS_ADDRESS`, `PTC_WORKER_DNS_ADDRESS` | `172.29.213.0/24`, `172.29.213.128/25`, `172.29.213.2`, `172.29.213.3` | The core network, the part of it Docker hands out, and the fixed addresses below that part of the gateway and of `worker-dns`. `egress/resolv.conf` names `PTC_WORKER_DNS_ADDRESS`: change it there too |
 
 `ptc server` has more options (`--allow-stdio`, `--otlp-protocol`, `--tenant` pools…): see
 `docker run --rm ai-ptc:local server --help`.
@@ -125,17 +127,35 @@ Workers run code written by a model. Three walls stand between two tenants: V8, 
 separate pools (`archi/06-storage-and-scale.md`, "Sandboxed workers").
 
 - **Network.** A worker joins the network namespace of its holder (`worker-N-net`), whose only
-  routes are the core network and a default route through `egress`, which is also its DNS
-  server. `egress` answers only the names of `PTC_EGRESS_ALLOW`, adds each address it answers
-  to the set of allowed addresses, and forwards new TCP connections from the core network to
-  that set only, never to `169.254.0.0/16` (the cloud metadata endpoint). The workers need no
-  proxy setting: the gateway is a rule of their network. The `http` tool still checks its own
-  allow-list and refuses private addresses (`archi/04-tools.md`). `./check-walls.sh` checks it
-  all from inside a worker's namespace.
+  routes are the core network and a default route through `egress`. Its DNS server answers
+  the names of the core network and asks `egress` for every other one. `egress` answers only
+  the names of `PTC_EGRESS_ALLOW`, adds each address it answers to the set of allowed
+  addresses, and forwards new TCP connections from the core network to that set only, never to
+  `169.254.0.0/16` (the cloud metadata endpoint). The workers need no proxy setting: the
+  gateway is a rule of their network. The `http` tool still checks its own allow-list and
+  refuses private addresses (`archi/04-tools.md`). `./check-walls.sh` checks it all from inside
+  a worker's namespace (under gVisor, from a sandbox like the workers'). The gateway needs a
+  host that does not pass bridged traffic through iptables: with `br_netfilter` and
+  `net.bridge.bridge-nf-call-iptables=1`, Docker's rules for the internal network `core` drop
+  the workers' packets to the gateway, and allowed names are unreachable too.
 - **Process.** Read-only root, no capability, `no-new-privileges`, a memory and CPU limit, no
   admin key. The holder alone has `NET_ADMIN`, to set its route at start.
 - **gVisor.** `docker compose --profile gvisor up -d` runs the same workers under `runsc`, on a
-  host whose Docker has the runtime ([install](https://gvisor.dev/docs/user_guide/install/)).
+  host whose Docker has the runtime ([install](https://gvisor.dev/docs/user_guide/install/)),
+  behind the same walls. A gVisor sandbox runs its own network stack, so three things differ:
+  - The sandbox copies the addresses and routes of its holder's namespace when it starts, and
+    removes them from the namespace. So a gVisor worker starts once its holder is healthy,
+    with its route set, and the holder is left with an empty namespace.
+  - The sandbox cannot reach Docker's DNS server, at `127.0.0.11`: that address is the
+    sandbox's own loopback ([gVisor's FAQ](https://gvisor.dev/docs/user_guide/faq/#docker-bridge)).
+    The workers' DNS server is `worker-dns` instead (`egress/resolv.conf`). It stands where a
+    holder stands, on the core network only with `egress` as its DNS server, and relays every
+    question to Docker's DNS server. So it answers what Docker's answers a worker under runc:
+    the core network's names, and every other name through `egress`.
+  - Nothing else can run in a worker's namespace. `./check-walls.sh` checks the walls from
+    `walls`, a gVisor sandbox with the workers' network settings in a holder of its own. It
+    starts both for the check and removes them after.
+
   The profile is not tested on Docker Desktop, which has no `runsc`; CI runs it on Linux.
 
 **The workers' allow-list.** Add your MCP servers, the hosts your toolsets' `http` tools allow,
@@ -159,7 +179,8 @@ database without meeting:
 
 1. Keep the current image under its own tag: `docker tag ai-ptc:local ai-ptc:previous` (or pin
    its registry digest), and set `PTC_PREVIOUS_IMAGE=ai-ptc:previous` and
-   `COMPOSE_PROFILES=runc,previous-epoch` in `.env`.
+   `COMPOSE_PROFILES=runc,previous-epoch` in `.env` (`gvisor,previous-epoch-gvisor` under
+   gVisor).
 2. Build or pull the new image as `PTC_IMAGE`, then `docker compose up -d`: the api and the
    workers run the new build, and `worker-previous` the previous one.
 3. Watch the previous epoch drain (here epoch 1):
@@ -171,7 +192,8 @@ database without meeting:
 
    Every run has a deadline, so this reaches 0 at most `PTC_MAX_TTL` after the upgrade; a run
    still quarantined at its deadline is aborted.
-4. Remove `previous-epoch` from `COMPOSE_PROFILES` and `docker compose up -d --remove-orphans`.
+4. Remove `previous-epoch` (or `previous-epoch-gvisor`) from `COMPOSE_PROFILES` and
+   `docker compose up -d --remove-orphans`.
 
 The previous pool shares the database: a build refuses a schema newer than its own, so a
 release that migrates the schema cannot keep a pool of a build older than the migration. Such a

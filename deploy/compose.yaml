@@ -4,13 +4,16 @@
 #   ./init.sh                                   # writes .env with fresh secrets, once
 #   docker compose up -d --build                # workers under runc
 #   docker compose --profile gvisor up -d       # workers under gVisor (needs runsc)
+#   ./check-walls.sh                            # the workers' walls hold
 #
 # Networks:
 #   public  the edge, the api's outbound calls (MCP discovery), services outside the deployment
 #   core    internal, no route out: the stores, the collector, the api, the workers, the egress
 #
 # Workers hold no network of their own: each joins the namespace of a holder (`worker-N-net`)
-# whose default route goes through the egress gateway, their only way out.
+# whose default route goes through the egress gateway, their only way out. Under gVisor, a
+# worker's sandbox takes over that namespace, and its DNS server is the relay `worker-dns`
+# (README, "Workers: the walls").
 
 name: ai-ptc
 
@@ -71,8 +74,29 @@ x-holder: &holder
     PTC_EGRESS_ADDRESS: ${PTC_EGRESS_ADDRESS:-172.29.213.2}
   dns: ["${PTC_EGRESS_ADDRESS:-172.29.213.2}"]
   networks: [core]
+  tmpfs:
+    - /run:size=64k
   mem_limit: 16m
+  # Healthy once its route is set (route.sh).
+  healthcheck:
+    test: [CMD, test, -e, /run/routed]
+    interval: 1m
+    start_period: 1m
+    start_interval: 1s
   depends_on: [egress]
+
+# A worker under gVisor. Its sandbox runs its own network stack, which copies the addresses and
+# routes of the holder's namespace when it starts and takes them from the namespace: it starts
+# once the holder has set its route. That stack cannot reach Docker's DNS server (127.0.0.11),
+# so its DNS server is the relay `worker-dns`, which answers what Docker's answers a worker
+# under runc.
+x-gvisor: &gvisor
+  runtime: runsc
+  volumes: [./egress/resolv.conf:/etc/resolv.conf:ro]
+
+x-gvisor-depends: &gvisor-depends
+  <<: *worker-depends
+  worker-dns: { condition: service_started }
 
 networks:
   public: {}
@@ -162,6 +186,24 @@ services:
       public: {}
     mem_limit: 64m
 
+  # The DNS server of the workers under gVisor (egress/dns.sh, egress/resolv.conf).
+  worker-dns:
+    build: ./egress
+    image: ai-ptc-egress:local
+    entrypoint: [/usr/local/bin/dns.sh]
+    profiles: [gvisor, previous-epoch-gvisor, walls]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE, SETUID, SETGID]
+    environment:
+      PTC_WORKER_DNS_ADDRESS: ${PTC_WORKER_DNS_ADDRESS:-172.29.213.3}
+    dns: ["${PTC_EGRESS_ADDRESS:-172.29.213.2}"]
+    networks:
+      core: { ipv4_address: "${PTC_WORKER_DNS_ADDRESS:-172.29.213.3}" }
+    mem_limit: 32m
+    depends_on: [egress]
+
   api:
     <<: *ptc
     build:
@@ -227,41 +269,39 @@ services:
   # The same workers under gVisor: `docker compose --profile gvisor up -d` on a host whose
   # Docker has the runsc runtime (https://gvisor.dev/docs/user_guide/install/).
   worker-1-gvisor:
-    <<: *worker
+    <<: [*worker, *gvisor]
     profiles: [gvisor]
-    runtime: runsc
     network_mode: service:worker-1-net
     environment:
       <<: *worker-env
       PTC_WORKER_NAME: worker-1
     depends_on:
-      <<: *worker-depends
-      worker-1-net: { condition: service_started }
+      <<: *gvisor-depends
+      worker-1-net: { condition: service_healthy }
 
   worker-2-gvisor:
-    <<: *worker
+    <<: [*worker, *gvisor]
     profiles: [gvisor]
-    runtime: runsc
     network_mode: service:worker-2-net
     environment:
       <<: *worker-env
       PTC_WORKER_NAME: worker-2
     depends_on:
-      <<: *worker-depends
-      worker-2-net: { condition: service_started }
+      <<: *gvisor-depends
+      worker-2-net: { condition: service_healthy }
 
   # The worker pool of the previous build, kept after an upgrade that changed the determinism
   # epoch until the runs of its epochs end (README, "Upgrades"). Its build only runs the epochs
-  # it supports, so it only takes their runs.
+  # it supports, so it only takes their runs. `previous-epoch` runs it under runc,
+  # `previous-epoch-gvisor` under gVisor.
   worker-previous-net:
     <<: *holder
-    profiles: [previous-epoch]
+    profiles: [previous-epoch, previous-epoch-gvisor]
 
   worker-previous:
     <<: *worker
     image: ${PTC_PREVIOUS_IMAGE:-ai-ptc:local}
     profiles: [previous-epoch]
-    runtime: ${PTC_PREVIOUS_RUNTIME:-runc}
     network_mode: service:worker-previous-net
     environment:
       <<: *worker-env
@@ -269,6 +309,41 @@ services:
     depends_on:
       <<: *worker-depends
       worker-previous-net: { condition: service_started }
+
+  worker-previous-gvisor:
+    <<: [*worker, *gvisor]
+    image: ${PTC_PREVIOUS_IMAGE:-ai-ptc:local}
+    profiles: [previous-epoch-gvisor]
+    network_mode: service:worker-previous-net
+    environment:
+      <<: *worker-env
+      PTC_WORKER_NAME: worker-previous
+    depends_on:
+      <<: *gvisor-depends
+      worker-previous-net: { condition: service_healthy }
+
+  # The walls of the workers under gVisor, checked by check-walls.sh, which starts and removes
+  # these two. A worker's sandbox takes over its namespace, where nothing else can run: the
+  # walls are checked from a sandbox of their own, with the same network settings (`x-gvisor`)
+  # in the namespace of a holder like theirs.
+  walls-net:
+    <<: *holder
+    profiles: [walls]
+
+  walls:
+    <<: *gvisor
+    image: ai-ptc-egress:local
+    profiles: [walls]
+    entrypoint: [sleep, "2147483647"]
+    stop_signal: SIGKILL
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    network_mode: service:walls-net
+    depends_on:
+      walls-net: { condition: service_healthy }
+      worker-dns: { condition: service_started }
 
   # The load generator (`ptc-load`), with its fake MCP server at http://loadgen:9100/mcp, which
   # the workers reach through the egress gateway: `docker compose --profile load run --rm
