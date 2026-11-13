@@ -215,6 +215,7 @@ pub(super) async fn credentials(
     app.engine
         .set_toolset_credentials(&caller.tenant, digest, &secrets(credentials))
         .await?;
+    app.record_parked_tasks(&caller.tenant, digest).await;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }

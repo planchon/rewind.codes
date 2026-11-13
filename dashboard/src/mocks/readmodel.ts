@@ -3,23 +3,35 @@
 // visible yet, so a run of the world can go on live.
 import type {
   Entry,
+  FacetValue,
+  FailureGroup,
+  FailureGroupPage,
+  FailuresQuery,
+  LabelFacet,
   ListRunsQuery,
   ListScriptsQuery,
   Run,
   RunCounts,
   RunPage,
+  RunStats,
+  RunStatsQuery,
   RunStatus,
   RunSummary,
+  RunWait,
   ScriptPage,
   ScriptSummary,
+  StatusCounts,
   ToolStats,
   ToolStatsPage,
   ToolStatsQuery,
+  WaitCounts,
   Waiting,
+  WaitKind,
 } from "../api/types";
 import { buildRunModel, type RunModel } from "../model/run";
 import type { RunFixture, World } from "./fixtures";
 import { fakeDigest } from "./journal";
+import { compileQuery, type MockRun, parseDuration } from "./query";
 
 export function visibleEntries(fixture: RunFixture, now: number): Entry[] {
   const entries = fixture.journal.entries;
@@ -146,16 +158,83 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
   return run;
 }
 
-export function summarize(
-  fixture: RunFixture,
-  now: number,
-): RunSummary & { tools: string[]; failedKinds: string[] } {
+/** Host tools: the harness's worker answers them. The others, ai-ptc calls itself. */
+const HOST_TOOLS = new Set(["ask_user"]);
+
+/**
+ * An error's signature: its name and message with what varies (UUIDs, times, long hexadecimal
+ * ids, double-quoted strings, numbers) replaced by placeholders, as the projector computes it.
+ */
+export function signature(name: string, message: string): string {
+  const normalized = message
+    .replace(/"(?:[^"\\]|\\.)*"/g, "<str>")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})?/g, "<time>")
+    .replace(/\b[0-9a-f]{8,}\b/gi, "<id>")
+    .replace(/\d+(?:\.\d+)?/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${name}: ${normalized}`.slice(0, 200);
+}
+
+export function fingerprint(sig: string): string {
+  return fakeDigest(sig).slice(0, 16);
+}
+
+function waitKind(w: Extract<Waiting, { kind: "tool_call" }>): WaitKind {
+  if (w.state === "approval") return "approval";
+  if (w.state === "parked") return "parked";
+  if (w.state === "deferred") return "deferred";
+  return HOST_TOOLS.has(w.tool) ? "host" : "call";
+}
+
+function runWaits(run: Run, model: RunModel): RunWait[] {
+  if (run.status !== "active") return [];
+  const iso = (ms: number) => new Date(ms).toISOString();
+  return (run.waitingFor ?? []).map((w): RunWait => {
+    switch (w.kind) {
+      case "tool_call": {
+        const call = model.calls.find((c) => c.seq === w.seq);
+        return {
+          kind: waitKind(w),
+          seq: w.seq,
+          name: w.tool,
+          since: iso(call?.at ?? Date.parse(run.updatedAt)),
+          until: null,
+          callsite: w.callsite ?? null,
+        };
+      }
+      case "timer": {
+        const timer = model.timers.find((t) => t.seq === w.seq);
+        return {
+          kind: "timer",
+          seq: w.seq,
+          name: null,
+          since: iso(timer?.at ?? Date.parse(run.updatedAt)),
+          until: w.fireAt,
+          callsite: w.callsite ?? null,
+        };
+      }
+    }
+    const wait = model.signals.find((s) => s.name === w.name && s.end === null);
+    return {
+      kind: "signal",
+      seq: null,
+      name: w.name,
+      since: iso(wait?.at ?? Date.parse(run.updatedAt)),
+      until: w.timeoutAt ?? null,
+      callsite: w.callsite ?? null,
+    };
+  });
+}
+
+export function summarize(fixture: RunFixture, now: number): MockRun {
   const run = deriveRun(fixture, now);
   const model = buildRunModel(visibleEntries(fixture, now));
   const failedKinds = model.calls.flatMap((c) =>
     c.end?.outcome === "failed" ? [c.end.error.kind] : [],
   );
-  const summary: RunSummary & { tools: string[]; failedKinds: string[] } = {
+  const summary: MockRun = {
     id: run.id,
     status: run.status,
     script: run.script,
@@ -174,11 +253,39 @@ export function summarize(
     quarantined: run.quarantine != null,
     tools: [...new Set(model.calls.map((c) => c.tool))],
     failedKinds,
+    mode: run.mode,
   };
   if (run.endedAt) summary.endedAt = run.endedAt;
   if (run.parent) summary.parent = run.parent.run;
-  if (run.error) summary.error = run.error.name;
-  if (run.abort) summary.error = run.abort.kind;
+  const ending = run.error
+    ? { name: run.error.name, message: run.error.message, stack: run.error.stack ?? "" }
+    : run.abort
+      ? { name: run.abort.kind, message: run.abort.message, stack: "" }
+      : null;
+  if (ending) {
+    summary.error = ending.name;
+    summary.errorMessage = ending.message;
+    const line = /script\.ts:(\d+):\d+/.exec(ending.stack)?.[1];
+    if (line) summary.errorLine = Number(line);
+    else if (run.error?.location) summary.errorLine = run.error.location.line;
+    summary.fingerprint = fingerprint(signature(ending.name, ending.message));
+  }
+  const waits = runWaits(run, model);
+  if (waits.length > 0) {
+    summary.waitingFor = waits;
+    const wakes = waits.flatMap((w) => (w.until ? [Date.parse(w.until)] : []));
+    if (wakes.length > 0) summary.wakesAt = new Date(Math.min(...wakes)).toISOString();
+  }
+  return summary;
+}
+
+/** The fields of a summary the API serves, without what only the mock keeps. */
+export function publicSummary({
+  tools: _t,
+  failedKinds: _k,
+  mode: _m,
+  ...summary
+}: MockRun): RunSummary {
   return summary;
 }
 
@@ -208,28 +315,243 @@ function started(world: World, now: number): RunFixture[] {
     );
 }
 
+/** The runs that have started and match a query, as summaries; throws a `QueryError`. */
+export function matchingRuns(world: World, q: string | undefined, now: number): MockRun[] {
+  const predicate = compileQuery(q, now);
+  return started(world, now)
+    .map((r) => summarize(r, now))
+    .filter(predicate);
+}
+
 export function listRuns(world: World, query: ListRunsQuery, now: number): RunPage {
   const after = query.startedAfter ? Date.parse(query.startedAfter) : null;
   const before = query.startedBefore ? Date.parse(query.startedBefore) : null;
-  const matching = started(world, now)
-    .map((r) => summarize(r, now))
-    .filter((s) => {
-      const at = Date.parse(s.startedAt);
-      if (query.status && s.status !== query.status) return false;
-      if (!hasLabels(s.labels, query.label)) return false;
-      if (query.tool && !s.tools.includes(query.tool)) return false;
-      if (query.script && s.script !== query.script) return false;
-      if (query.error && s.error !== query.error && !s.failedKinds.includes(query.error))
-        return false;
-      if (query.quarantined !== undefined && s.quarantined !== query.quarantined) return false;
-      if (query.parent && s.parent !== query.parent) return false;
-      if (after !== null && at < after) return false;
-      if (before !== null && at >= before) return false;
-      return true;
-    });
+  const matching = matchingRuns(world, query.q, now).filter((s) => {
+    const at = Date.parse(s.startedAt);
+    if (query.status && s.status !== query.status) return false;
+    if (!hasLabels(s.labels, query.label)) return false;
+    if (query.tool && !s.tools.includes(query.tool)) return false;
+    if (query.script && s.script !== query.script) return false;
+    if (query.error && s.error !== query.error && !s.failedKinds.includes(query.error as never))
+      return false;
+    if (query.quarantined !== undefined && s.quarantined !== query.quarantined) return false;
+    if (query.parent && s.parent !== query.parent) return false;
+    if (after !== null && at < after) return false;
+    if (before !== null && at >= before) return false;
+    return true;
+  });
+  if (query.sort === "activity") {
+    matching.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  } else if (query.sort === "wakes") {
+    const wakes = (r: MockRun) => (r.wakesAt ? Date.parse(r.wakesAt) : Number.POSITIVE_INFINITY);
+    matching.sort((a, b) => wakes(a) - wakes(b) || b.startedAt.localeCompare(a.startedAt));
+  }
   const { slice, next } = page(matching, query.limit, query.cursor);
-  const runs: RunSummary[] = slice.map(({ tools: _t, failedKinds: _k, ...summary }) => summary);
+  const runs: RunSummary[] = slice.map(publicSummary);
   return next ? { runs, nextCursor: next } : { runs };
+}
+
+function statusCounts(): StatusCounts {
+  return { pending: 0, active: 0, completed: 0, failed: 0, cancelled: 0, aborted: 0 };
+}
+
+/** The most frequent values first, then by value; at most `top`. */
+function topValues(counts: Map<string, number>, top: number): FacetValue[] {
+  return [...counts.entries()]
+    .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+    .slice(0, top)
+    .map(([value, runs]) => ({ value, runs }));
+}
+
+function tally(counts: Map<string, number>, values: Iterable<string>) {
+  for (const value of new Set(values)) counts.set(value, (counts.get(value) ?? 0) + 1);
+}
+
+/** The window of a stats or failures query, and its buckets. */
+function windowOf(query: { since?: string; until?: string; bucket?: string }, now: number) {
+  const since = query.since ? Date.parse(query.since) : null;
+  const until = query.until ? Date.parse(query.until) : now;
+  const width = query.bucket ? parseDuration(query.bucket) : null;
+  const buckets =
+    since !== null && width ? Math.min(500, Math.max(1, Math.ceil((until - since) / width))) : 0;
+  const bucketOf = (at: number) =>
+    since !== null && width ? Math.floor((at - since) / width) : -1;
+  return { since, until, width, buckets, bucketOf };
+}
+
+export function runStats(world: World, query: RunStatsQuery, now: number): RunStats {
+  const all = matchingRuns(world, query.q, now);
+  const w = windowOf(query, now);
+  const top = Math.min(50, query.top ?? 10);
+  const inWindow = all.filter((r) => {
+    const at = Date.parse(r.startedAt);
+    return (w.since === null || at >= w.since) && at < w.until;
+  });
+  const statuses = statusCounts();
+  for (const r of inWindow) statuses[r.status] += 1;
+  const series = Array.from({ length: w.buckets }, (_, i) => ({
+    at: new Date((w.since ?? 0) + i * (w.width ?? 0)).toISOString(),
+    statuses: statusCounts(),
+  }));
+  for (const r of inWindow) {
+    const bucket = series[w.bucketOf(Date.parse(r.startedAt))];
+    if (bucket) bucket.statuses[r.status] += 1;
+  }
+  const durations = inWindow
+    .flatMap((r) => (r.endedAt ? [Date.parse(r.endedAt) - Date.parse(r.startedAt)] : []))
+    .sort((a, b) => a - b);
+  const waiting: WaitCounts = {
+    signal: 0,
+    timer: 0,
+    call: 0,
+    host: 0,
+    approval: 0,
+    parked: 0,
+    deferred: 0,
+  };
+  for (const r of all)
+    if (r.status === "active")
+      for (const kind of new Set((r.waitingFor ?? []).map((x) => x.kind))) waiting[kind] += 1;
+
+  const byStatus = new Map<string, number>();
+  const keys = new Map<string, Map<string, number>>();
+  const tools = new Map<string, number>();
+  const errors = new Map<string, number>();
+  const scripts = new Map<string, number>();
+  const waits = new Map<string, number>();
+  const signals = new Map<string, number>();
+  for (const r of inWindow) {
+    tally(byStatus, [r.status]);
+    for (const [k, v] of Object.entries(r.labels)) {
+      let values = keys.get(k);
+      if (!values) {
+        values = new Map();
+        keys.set(k, values);
+      }
+      tally(values, [v]);
+    }
+    tally(tools, r.tools);
+    tally(errors, [...(r.error ? [r.error] : []), ...r.failedKinds]);
+    tally(scripts, [r.script]);
+    if (r.status === "active") {
+      tally(
+        waits,
+        (r.waitingFor ?? []).map((x) => x.kind),
+      );
+      tally(
+        signals,
+        (r.waitingFor ?? []).flatMap((x) => (x.kind === "signal" && x.name ? [x.name] : [])),
+      );
+    }
+  }
+  const labels: LabelFacet[] = [...keys.entries()]
+    .map(([key, values]) => ({
+      key,
+      runs: [...values.values()].reduce((a, b) => a + b, 0),
+      values: topValues(values, top),
+    }))
+    .sort((a, b) => b.runs - a.runs || a.key.localeCompare(b.key))
+    .slice(0, top);
+
+  const stats: RunStats = {
+    until: new Date(w.until).toISOString(),
+    runs: inWindow.length,
+    statuses,
+    series,
+    durations:
+      durations.length === 0
+        ? null
+        : {
+            count: durations.length,
+            p50: percentile(durations, 50),
+            p95: percentile(durations, 95),
+            p99: percentile(durations, 99),
+            max: durations[durations.length - 1] ?? 0,
+          },
+    waiting,
+    quarantined: all.filter((r) => r.quarantined).length,
+    facets: {
+      statuses: topValues(byStatus, top),
+      labels,
+      tools: topValues(tools, top),
+      errors: topValues(errors, top),
+      scripts: topValues(scripts, top),
+      waiting: topValues(waits, top),
+      signals: topValues(signals, top),
+    },
+  };
+  if (w.since !== null) stats.since = new Date(w.since).toISOString();
+  if (query.bucket && w.since !== null) stats.bucket = query.bucket;
+  return stats;
+}
+
+const FAILED: readonly RunStatus[] = ["failed", "cancelled", "aborted"];
+
+export function failureGroups(world: World, query: FailuresQuery, now: number): FailureGroupPage {
+  const w = windowOf(query, now);
+  const runs = matchingRuns(world, query.q, now).filter((r) => {
+    if (!FAILED.includes(r.status) || !r.endedAt || !r.fingerprint) return false;
+    const at = Date.parse(r.endedAt);
+    return (w.since === null || at >= w.since) && at < w.until;
+  });
+  const byFingerprint = new Map<string, MockRun[]>();
+  for (const r of runs) {
+    const fp = r.fingerprint as string;
+    const list = byFingerprint.get(fp);
+    if (list) list.push(r);
+    else byFingerprint.set(fp, [r]);
+  }
+  const groups: FailureGroup[] = [...byFingerprint.entries()].map(([fp, list]) => {
+    const ends = list.map((r) => r.endedAt as string).sort();
+    const latest = [...list].sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""))[0];
+    const first = list[0] as MockRun;
+    const lines = new Map<string, number>();
+    tally(
+      lines,
+      list.flatMap((r) => (r.errorLine != null ? [String(r.errorLine)] : [])),
+    );
+    const line = topValues(lines, 1)[0]?.value;
+    const labels = new Map<string, number>();
+    for (const r of list)
+      tally(
+        labels,
+        Object.entries(r.labels).map(([k, v]) => `${k}:${v}`),
+      );
+    const series = Array.from({ length: w.buckets }, () => 0);
+    for (const r of list) {
+      const i = w.bucketOf(Date.parse(r.endedAt as string));
+      if (i >= 0 && i < series.length) series[i] = (series[i] ?? 0) + 1;
+    }
+    const group: FailureGroup = {
+      fingerprint: fp,
+      signature: signature(first.error ?? "Error", first.errorMessage ?? ""),
+      error: first.error ?? "Error",
+      runs: list.length,
+      scripts: new Set(list.map((r) => r.script)).size,
+      firstEndedAt: ends[0] as string,
+      lastEndedAt: ends[ends.length - 1] as string,
+      labels: topValues(labels, 5),
+      latest: {
+        id: latest?.id ?? first.id,
+        status: latest?.status ?? first.status,
+        message: latest?.errorMessage ?? "",
+      },
+      line: line === undefined ? null : Number(line),
+    };
+    if (w.buckets > 0) group.series = series;
+    return group;
+  });
+  groups.sort((a, b) => b.runs - a.runs || b.lastEndedAt.localeCompare(a.lastEndedAt));
+  const limit = Math.min(500, query.limit ?? 50);
+  const page: FailureGroupPage = {
+    until: new Date(w.until).toISOString(),
+    runs: runs.length,
+    totalGroups: groups.length,
+    groups: groups.slice(0, limit),
+  };
+  if (w.since !== null) page.since = new Date(w.since).toISOString();
+  if (query.bucket && w.since !== null) page.bucket = query.bucket;
+  return page;
 }
 
 function emptyCounts(): RunCounts {

@@ -34,10 +34,26 @@ export type ServerInfo = Schemas["ServerInfo"];
 export type Problem = Schemas["Problem"];
 export type Trace = Schemas["Trace"];
 export type Quarantine = Schemas["Quarantine"];
+export type RunWait = Schemas["RunWait"];
+export type WaitKind = Schemas["WaitKind"];
+export type RunStats = Schemas["RunStats"];
+export type StatusCounts = Schemas["StatusCounts"];
+export type WaitCounts = Schemas["WaitCounts"];
+export type SeriesBucket = Schemas["SeriesBucket"];
+export type DurationStats = Schemas["DurationStats"];
+export type Facets = Schemas["Facets"];
+export type FacetValue = Schemas["FacetValue"];
+export type LabelFacet = Schemas["LabelFacet"];
+export type FailureGroup = Schemas["FailureGroup"];
+export type FailureGroupPage = Schemas["FailureGroupPage"];
+export type QuerySpan = Schemas["QuerySpan"];
+export type RunSort = NonNullable<ListRunsQuery["sort"]>;
 
 export type ListRunsQuery = NonNullable<paths["/v1/runs"]["get"]["parameters"]["query"]>;
 export type ListScriptsQuery = NonNullable<paths["/v1/scripts"]["get"]["parameters"]["query"]>;
 export type ToolStatsQuery = NonNullable<paths["/v1/tools/stats"]["get"]["parameters"]["query"]>;
+export type RunStatsQuery = NonNullable<paths["/v1/runs/stats"]["get"]["parameters"]["query"]>;
+export type FailuresQuery = NonNullable<paths["/v1/runs/failures"]["get"]["parameters"]["query"]>;
 
 export const RUN_STATUSES: readonly RunStatus[] = [
   "pending",
@@ -46,6 +62,16 @@ export const RUN_STATUSES: readonly RunStatus[] = [
   "failed",
   "cancelled",
   "aborted",
+];
+
+export const WAIT_KINDS: readonly WaitKind[] = [
+  "signal",
+  "timer",
+  "call",
+  "host",
+  "approval",
+  "parked",
+  "deferred",
 ];
 
 export const TOOL_FAILURE_KINDS: readonly ToolFailureKind[] = [

@@ -48,6 +48,8 @@ use crate::webhooks::{
         operations::get_script,
         operations::start_run,
         operations::list_runs,
+        operations::get_run_stats,
+        operations::list_run_failures,
         operations::get_run,
         operations::delete_run,
         operations::get_run_trace,
@@ -296,8 +298,8 @@ mod operations {
     use crate::problem::Problem;
     use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
     use crate::runs::{
-        CancelRun, ForkRun, GetRunQuery, JournalQuery, Run, RunFilter, RunPage, SignalAccepted,
-        StartRun, Trace, TraceQuery,
+        CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalQuery, Run,
+        RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
     };
     use crate::scripts::{
         CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest, TestResult,
@@ -453,9 +455,40 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/runs", tag = "runs", operation_id = "listRuns",
         params(RunFilter),
-        responses((status = 200, description = "A page of runs, most recently started first.", body = RunPage))
+        responses(
+            (status = 200, description = "A page of runs, in the order of `sort`.", body = RunPage),
+            (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or another parameter is invalid.", body = Problem, content_type = "application/problem+json"),
+        )
     )]
     pub(super) fn list_runs() {}
+
+    /// Statistics of the runs a query matches
+    ///
+    /// Counts by status, a series over time, durations and facets of the runs started in the
+    /// window; the runs waiting now by what they wait for, and the quarantined ones.
+    #[utoipa::path(
+        get, path = "/v1/runs/stats", tag = "runs", operation_id = "getRunStats",
+        params(RunStatsQuery),
+        responses(
+            (status = 200, description = "The statistics.", body = RunStats),
+            (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_run_stats() {}
+
+    /// Failures grouped by cause
+    ///
+    /// The failed, cancelled and aborted runs a query matches, ended in the window, grouped
+    /// by fingerprint: across scripts, the runs that ended with the same error.
+    #[utoipa::path(
+        get, path = "/v1/runs/failures", tag = "runs", operation_id = "listRunFailures",
+        params(FailureQuery),
+        responses(
+            (status = 200, description = "The groups, the largest first.", body = FailureGroupPage),
+            (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_run_failures() {}
 
     /// A run's state (`get_run`)
     #[utoipa::path(

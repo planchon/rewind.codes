@@ -178,14 +178,64 @@ up in a cassette.
 `JournalStore` is shaped by the write path's invariants. Questions across runs go to a
 separate **read model** behind the `ReadModel` port, filled by the projector:
 
-- `run_summaries`: status, script, toolset, labels, start and end, last activity, number
-  of tool calls and errors, history length.
+- `run_summaries`: status, script and its first line, toolset, labels, mode, the parent of a
+  fork, start and end, last activity, number of tool calls and errors, history length; for a
+  run that waits, what it waits for and when it wakes; for a run that ended badly, the error's
+  name, message, line and fingerprint; whether it is quarantined.
+- `run_labels`: one row per label of a run, for equality, prefix and presence.
+- `run_waits`: what an active run waits for: a signal (its name, the timeout as wake time), a
+  timer (its due time), a tool call dispatched by ai-ptc, or a host tool's call; each with
+  the entry that opened it and its callsite.
 - `tool_calls`: run, `seq`, tool, callsite line, scheduled and completed at, outcome,
-  error kind, payload digests.
+  error kind, payload digests, and the furthest state its task reached: its attempt, and
+  whether it waits for an approval, is parked or deferred.
 
 It answers "which runs called `github.close_issue`", "failures by error kind", "latency
-and error rate per tool", "every script agent X ran this week". Its projections are tables
-in Postgres, or in Turso for the embedded server; a columnar read model is out of 0.1.
+and error rate per tool", "every script agent X ran this week", "which runs wait for an
+approval". Its projections are tables in Postgres, or in Turso for the embedded server; a
+columnar read model is out of 0.1.
+
+- **Snapshots.** The projector already loads a run's history to project a feed item. It folds
+  it into a snapshot of the run (status, open waits, how it ended) and gives it with the
+  entries; the read model keeps the snapshot with the highest history length, so items
+  applied out of order or twice give the same projection. No query reads a journal.
+- **Fingerprints.** A run that failed, was cancelled or was aborted gets a fingerprint: its
+  error's name and its message with numbers, UUIDs, long hexadecimal ids, times and
+  double-quoted strings replaced by placeholders (for an abort, the abort's kind and message).
+  Runs with the same fingerprint are one failure group, across the many scripts models write.
+  The projector computes it, so every adapter stores the same value.
+- **Service state.** Quarantine and the state of a tool task are not in the journal. Whoever
+  changes them records them in the read model, as attempts are recorded: the worker that
+  quarantines a run, the endpoints that release or give it up; whoever claims, defers,
+  approves, parks or resumes a task. A task's records only move forward (its attempt, then
+  its state within the attempt), so they too can arrive in any order.
+
+### Query language
+
+The runs of the read model are searched with one query language, the same in the API
+(`q`), the dashboard's query bar, the SDK and `ptc runs`. Terms are separated by spaces
+and all must hold; a comma inside a term means "or"; a leading `-` excludes.
+
+| Term | Matches runs |
+| --- | --- |
+| `@agent:triage` | carrying the label `agent` with value `triage`. `@customer:acme*`: a value starting with `acme`; `@conversation:*`: the label is set |
+| `status:failed,aborted` | with one of these statuses |
+| `tool:github.close_issue`, `tool:github.*` | that scheduled a call to this tool, or to a tool starting with `github.` |
+| `error:timeout`, `error:TypeError` | with a tool call that failed with this kind, or that ended with this error name (or abort kind) |
+| `waiting:*`, `waiting:signal,approval` | active, and waiting for: `signal`, `timer`, `call` (a tool ai-ptc calls), `host` (a host tool), `approval`, `parked`, `deferred` |
+| `signal:approval` | waiting for this signal |
+| `started:>2026-11-01`, `started:>now-24h`, `ended:<…`, `activity:>…` | by time: a date, a time, or `now` minus a duration; `>`, `>=`, `<`, `<=`, or a range `a..b` |
+| `duration:>5m`, `calls:>=20`, `errors:>0` | by duration (ended runs), number of tool calls, number of failed calls |
+| `script:9f2c4e1a`, `toolset:…`, `id:0193a5c4` | by digest or id prefix: 8 hexadecimal digits at least |
+| `parent:<run id>` | forks of this run |
+| `fingerprint:<fingerprint>` | in this failure group |
+| `quarantined:yes`, `mode:mock` | quarantined (`no` for the others), by mode |
+| `rate`, `"rate limit"` | containing this text, case-insensitive, in the error's message, the script's first line, a label's value or the run's id |
+
+Field names are case-sensitive and a term that cannot be read is refused with its position
+(`invalid-query`), so a client can underline it. Logs and payloads are never searched: they may
+hold what a tool returned, which the read model does not index. The server limits every query
+to the caller's tenant, and for a key limited to labels, to its labels.
 
 ### Dashboard
 
@@ -194,11 +244,25 @@ single-page application, served by `ptc-server`.
 
 | View | Shows |
 | --- | --- |
+| Overview | The home page: runs by outcome over time, success rate, durations, runs waiting now, quarantined runs, what fails most, failing tools; every mark opens the runs behind it |
+| Waiting | Every run paused on the outside world, grouped by what it waits for (signals, approvals, timers, tools), with the line it is paused on and when it wakes |
+| Failures | Failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run |
+| Runs | The query bar, with suggestions drawn from the values that exist, and the counts of each value (facets) beside the results |
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used |
-| Runs | Filters by status, label, script, tool, error kind and time |
-| Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE |
+| Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor |
 | Tools | Latency, error rate and retries, per tool and per toolset |
 
+- **The time cursor.** The commit invariant makes a history a sequence of steps: a trigger
+  (the start, a tool result, a timer, a signal, a cancellation) and the commands committed
+  with it. The Run page steps through them like a debugger: at each step the source marks the
+  awaits that just resumed, the calls issued, those still open and those done; hovering a call
+  shows its arguments and result as known at that step, and a variable bound to an awaited
+  call (`const x = await call()`, one level of destructuring) or `input` shows its value; a
+  click pins it as a watch. The cursor is in the URL (`?step=`), the timeline shows it, and on
+  a live run it follows the head. Only values that crossed the journal are known: what the
+  script computes in between is not recorded, and the dashboard does not execute code.
+- **Searches.** The query follows the operator from one view to another in the URL. Saved
+  searches are kept in the browser, like the key.
 - It is a client of the **public HTTP API**, with no direct access to the store. The SDK,
   the agent tools and the dashboard see the same thing.
 - Access is scoped by tenant, since it exposes code and payloads.

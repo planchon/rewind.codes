@@ -9,7 +9,15 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { useApi } from "../app/session";
 import { followRun, type StreamState } from "./events";
-import type { Entry, ListRunsQuery, ListScriptsQuery, RunStatus, ToolStatsQuery } from "./types";
+import type {
+  Entry,
+  FailuresQuery,
+  ListRunsQuery,
+  ListScriptsQuery,
+  RunStatsQuery,
+  RunStatus,
+  ToolStatsQuery,
+} from "./types";
 
 /** Runs matching a query, page after page. `makeQuery` resolves relative times at fetch time. */
 export function useRuns(
@@ -25,6 +33,36 @@ export function useRuns(
     initialPageParam: "",
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchInterval: refetchMs,
+  });
+}
+
+/** Counts, series, durations and facets of the runs a query matches. */
+export function useRunStats(
+  key: string,
+  makeQuery: () => RunStatsQuery,
+  refetchMs: number | false = false,
+) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["run-stats", key],
+    queryFn: ({ signal }) => api.runStats(makeQuery(), signal),
+    refetchInterval: refetchMs,
+    placeholderData: keepPreviousData,
+  });
+}
+
+/** Failed, cancelled and aborted runs grouped by fingerprint. */
+export function useFailures(
+  key: string,
+  makeQuery: () => FailuresQuery,
+  refetchMs: number | false = false,
+) {
+  const api = useApi();
+  return useQuery({
+    queryKey: ["failures", key],
+    queryFn: ({ signal }) => api.failures(makeQuery(), signal),
+    refetchInterval: refetchMs,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -55,12 +93,16 @@ export function useScript(digest: string | undefined) {
   });
 }
 
-export function useToolStats(key: string, makeQuery: () => ToolStatsQuery) {
+export function useToolStats(
+  key: string,
+  makeQuery: () => ToolStatsQuery,
+  refetchMs: number | false = 30_000,
+) {
   const api = useApi();
   return useQuery({
     queryKey: ["tool-stats", key],
     queryFn: ({ signal }) => api.toolStats(makeQuery(), signal),
-    refetchInterval: 30_000,
+    refetchInterval: refetchMs,
   });
 }
 

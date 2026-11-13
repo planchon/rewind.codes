@@ -9,11 +9,14 @@ import {
 } from "react-router";
 import { ApiError } from "../api/client";
 import { ProblemView } from "../components/bits";
+import { FailuresView } from "../views/FailuresView";
+import { OverviewView } from "../views/OverviewView";
 import { RunsView } from "../views/RunsView";
 import { RunView } from "../views/run/RunView";
 import { ScriptsView } from "../views/ScriptsView";
 import { ScriptView } from "../views/ScriptView";
 import { ToolsView } from "../views/ToolsView";
+import { WaitingView } from "../views/WaitingView";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { SessionProvider, type SessionProviderProps, useSession } from "./session";
@@ -41,8 +44,11 @@ export const routes: RouteObject[] = [
     element: <Layout />,
     errorElement: <RouteError />,
     children: [
-      { index: true, element: <Navigate to="/runs" replace /> },
+      { index: true, element: <Navigate to="/overview" replace /> },
+      { path: "overview", element: <OverviewView /> },
       { path: "runs", element: <RunsView /> },
+      { path: "waiting", element: <WaitingView /> },
+      { path: "failures", element: <FailuresView /> },
       { path: "runs/:id", element: <RunView /> },
       { path: "scripts", element: <ScriptsView /> },
       { path: "scripts/:digest", element: <ScriptView /> },

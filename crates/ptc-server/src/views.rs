@@ -14,6 +14,7 @@ use ptc_core::{
     Annotation, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, RunOutcome, RunState,
     ScriptError, Seq,
 };
+use ptc_engine::failures::script_location;
 use ptc_engine::ports::{
     BlobStore, JournalStore, ParkKind, PayloadRecord, QuarantineKind, ReadModel, RunRecord, RunRef,
     StoreError, TaskRef, TenantId,
@@ -58,24 +59,6 @@ pub(crate) fn payload_of(event: &Event) -> Option<&ptc_core::Payload> {
         Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
         _ => None,
     }
-}
-
-/// The first `script.ts:<line>:<column>` of a message or a stack.
-pub(crate) fn script_location(text: &str) -> Option<(u32, u32)> {
-    let mut rest = text;
-    while let Some(at) = rest.find("script.ts:") {
-        rest = &rest[at + "script.ts:".len()..];
-        let mut parts = rest.splitn(3, ':');
-        let line = parts.next().and_then(|line| line.parse().ok());
-        let column = parts.next().and_then(|column| {
-            let digits: String = column.chars().take_while(char::is_ascii_digit).collect();
-            digits.parse().ok()
-        });
-        if let (Some(line), Some(column)) = (line, column) {
-            return Some((line, column));
-        }
-    }
-    None
 }
 
 /// A few lines of the source around a position, the column marked.
@@ -596,19 +579,6 @@ fn failed_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn locations_are_read_from_messages_and_stacks() {
-        assert_eq!(
-            script_location("cannot import \"fs\" (script.ts:2:1): scripts can only import"),
-            Some((2, 1))
-        );
-        assert_eq!(
-            script_location("TypeError: x\n    at main (file:///script.ts:7:13)"),
-            Some((7, 13))
-        );
-        assert_eq!(script_location("no location"), None);
-    }
 
     #[test]
     fn a_frame_marks_the_column() {

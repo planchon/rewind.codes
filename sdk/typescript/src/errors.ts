@@ -1,8 +1,9 @@
-import type { Diagnostic, Problem } from "./types.js";
+import type { Diagnostic, Problem, QuerySpan } from "./types.js";
 
 /** The kinds of problem the API answers with: the slug of `urn:ptc:problem:<slug>`. */
 export type ProblemSlug =
   | "invalid-request"
+  | "invalid-query"
   | "unauthorized"
   | "forbidden"
   | "not-found"
@@ -53,6 +54,11 @@ export class PtcApiError extends PtcError {
   /** With `invalid-script`: why the script was refused. Empty otherwise. */
   get diagnostics(): Diagnostic[] {
     return this.problem.diagnostics ?? [];
+  }
+
+  /** With `invalid-query`: where the term at fault is in the query, in characters. */
+  get query(): QuerySpan | undefined {
+    return this.problem.query ?? undefined;
   }
 }
 

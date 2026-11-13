@@ -243,27 +243,122 @@ CREATE TABLE feed (
 CREATE INDEX feed_by_consumer ON feed (consumer, id);
 CREATE INDEX feed_by_run ON feed (run_id);
 
--- The read model, written only by the projector.
+-- The read model (`archi/05-testing-and-observability.md`, "Read model"), written by the
+-- projector, and by whoever changes a task's state or a run's quarantine. Every table names its
+-- run's tenant: every query is scoped by it, and the indexes that serve them start with it.
 
+-- Free text is found with trigrams (`run_search`): a trusted extension since Postgres 13, which
+-- the owner of the database may create.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- One row per run. Its status, times and counts come from the entries projected, keyed by
+-- `(run, index)`; its mode, ending and `wakes_at` from the snapshot of the longest history
+-- (`snapshot_len`), whose waits are in `run_waits`. `wakes_at` is the earliest `until` of those
+-- waits while the run is active. An ending has all of its columns, or none.
 CREATE TABLE run_summaries (
     run_id uuid PRIMARY KEY,
     tenant text COLLATE "C" NOT NULL,
     script bytea NOT NULL,
     toolset bytea NOT NULL,
-    status text NOT NULL,
+    headline text NOT NULL,
+    parent uuid,
     labels jsonb NOT NULL,
+    status text COLLATE "C" NOT NULL
+        CHECK (status IN ('active', 'completed', 'failed', 'cancelled', 'aborted')),
     started_at bigint,
     ended_at bigint,
     last_activity_at bigint NOT NULL,
     tool_calls bigint NOT NULL,
     errors bigint NOT NULL,
-    history_len bigint NOT NULL
+    history_len bigint NOT NULL,
+    snapshot_len bigint NOT NULL,
+    mode text COLLATE "C" CHECK (mode IN ('live', 'mock')),
+    wakes_at bigint,
+    error text COLLATE "C",
+    message text,
+    line bigint,
+    signature text,
+    fingerprint text COLLATE "C",
+    CHECK ((error IS NULL) = (fingerprint IS NULL)),
+    CHECK ((error IS NULL) = (message IS NULL) AND (error IS NULL) = (signature IS NULL))
 );
+-- The orders of a search: newest run, latest activity, earliest wake (nulls last).
 CREATE INDEX run_summaries_by_tenant ON run_summaries (tenant, run_id);
-CREATE INDEX run_summaries_by_end ON run_summaries (ended_at) WHERE ended_at IS NOT NULL;
+CREATE INDEX run_summaries_by_activity ON run_summaries (tenant, last_activity_at, run_id);
+CREATE INDEX run_summaries_by_wake ON run_summaries (tenant, wakes_at, run_id);
+-- The runs that may wait, few among the others, in the order of their wake.
+CREATE INDEX run_summaries_active ON run_summaries (tenant, wakes_at, run_id)
+    WHERE status = 'active';
+-- Windows and predicates: started (statistics, scripts), ended (failure groups), script,
+-- failure group, forks.
+CREATE INDEX run_summaries_by_start ON run_summaries (tenant, started_at);
+CREATE INDEX run_summaries_by_end ON run_summaries (tenant, ended_at) WHERE ended_at IS NOT NULL;
+CREATE INDEX run_summaries_by_script ON run_summaries (tenant, script);
+CREATE INDEX run_summaries_by_fingerprint ON run_summaries (tenant, fingerprint)
+    WHERE fingerprint IS NOT NULL;
+CREATE INDEX run_summaries_by_parent ON run_summaries (tenant, parent) WHERE parent IS NOT NULL;
+-- Retention, across tenants.
+CREATE INDEX run_summaries_to_purge ON run_summaries (ended_at) WHERE ended_at IS NOT NULL;
+
+-- One row per label of a run: equality, prefix (the "C" collation lets `LIKE 'prefix%'` use the
+-- index) and presence.
+CREATE TABLE run_labels (
+    run_id uuid NOT NULL,
+    key text COLLATE "C" NOT NULL,
+    value text COLLATE "C" NOT NULL,
+    tenant text COLLATE "C" NOT NULL,
+    PRIMARY KEY (run_id, key)
+);
+CREATE INDEX run_labels_by_value ON run_labels (tenant, key, value, run_id);
+-- Label values, like tools, are a tenant's own: the planner learns the frequent ones per tenant,
+-- and pages through a frequent one in order rather than reading all its runs.
+CREATE STATISTICS run_labels_per_tenant (mcv) ON tenant, key, value FROM run_labels;
+
+-- The waits of a run's latest snapshot, at their position in it. A call's task state is not
+-- here but in `tool_calls`: it outlives the snapshot.
+CREATE TABLE run_waits (
+    run_id uuid NOT NULL,
+    position integer NOT NULL,
+    tenant text COLLATE "C" NOT NULL,
+    kind text COLLATE "C" NOT NULL CHECK (kind IN ('signal', 'timer', 'call', 'host')),
+    seq bigint,
+    name text COLLATE "C",
+    since bigint NOT NULL,
+    until bigint,
+    callsite_line bigint,
+    callsite_column bigint,
+    PRIMARY KEY (run_id, position)
+);
+CREATE INDEX run_waits_by_name ON run_waits (tenant, kind, name);
+
+-- What free text is searched in: the run's id, the script's first line, the ending's error and
+-- message, the labels' values, each in lowercase, joined by an uppercase A, which no lowercased
+-- text holds. Apart from `run_summaries`, whose row each batch of entries rewrites: this one
+-- changes when the run is projected first and when it ends, and so does its trigram index.
+CREATE TABLE run_search (
+    run_id uuid PRIMARY KEY,
+    tenant text COLLATE "C" NOT NULL,
+    search_text text NOT NULL
+);
+CREATE INDEX run_search_by_text ON run_search USING gin (search_text gin_trgm_ops);
+
+-- The latest record of a run's quarantine, at `recorded_at`: quarantined with its kind, reason
+-- and time, or released (no kind). Recorded before or after the run is projected.
+CREATE TABLE run_quarantine (
+    run_id uuid PRIMARY KEY,
+    tenant text COLLATE "C" NOT NULL,
+    recorded_at bigint NOT NULL,
+    kind text CHECK (kind IN ('non_determinism', 'failures')),
+    reason text,
+    since bigint,
+    CHECK ((kind IS NULL) = (reason IS NULL) AND (kind IS NULL) = (since IS NULL))
+);
+CREATE INDEX run_quarantine_by_tenant ON run_quarantine (tenant) WHERE kind IS NOT NULL;
 
 -- One row per call, each column set by the entry that knows it; `result_shape` is the shape of a
--- result whose value was projected.
+-- result whose value was projected. The task's furthest state, recorded by whoever changed it
+-- before or after the call is projected: its highest attempt, and the state of the highest rank
+-- (by attempt, then approval or claim, parked or deferred, ready).
 CREATE TABLE tool_calls (
     tenant text COLLATE "C" NOT NULL,
     run_id uuid NOT NULL,
@@ -272,13 +367,17 @@ CREATE TABLE tool_calls (
     callsite_line bigint,
     scheduled_at bigint,
     completed_at bigint,
-    outcome text CHECK (outcome IN ('completed', 'failed')),
-    error_kind text,
+    outcome text COLLATE "C" CHECK (outcome IN ('completed', 'failed')),
+    error_kind text COLLATE "C",
     args_digest bytea,
     result_digest bytea,
     result_shape text,
-    -- The highest attempt recorded by whoever claimed the call's task.
     attempts bigint,
-    PRIMARY KEY (run_id, seq)
+    task_state text COLLATE "C"
+        CHECK (task_state IN ('approval', 'ready', 'claimed', 'deferred', 'parked')),
+    PRIMARY KEY (run_id, seq),
+    CHECK ((attempts IS NULL) = (task_state IS NULL))
 );
 CREATE INDEX tool_calls_by_tool ON tool_calls (tenant, tool);
+CREATE STATISTICS tool_calls_per_tenant (mcv) ON tenant, tool FROM tool_calls;
+CREATE INDEX tool_calls_by_schedule ON tool_calls (tenant, scheduled_at);

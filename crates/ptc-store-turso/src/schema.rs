@@ -16,6 +16,23 @@
 //!   `tenants`: a tenant without settings (the embedded `local`) still has secrets;
 //! - `tool_calls.result_shape` holds the shape of a result whose value was projected, which
 //!   `observed_shapes` merges per tool.
+//!
+//! The read model's tables, written only through `ReadModel`:
+//!
+//! - `run_summaries` keeps what the entries give (status, start and end, counts, history
+//!   length), the metadata of the latest `apply` (headline, labels as JSON, parent), and the
+//!   kept snapshot's columns: its length (`snapshot_len`), mode and ending, the ending's
+//!   `fingerprint` among them. `wakes_at` is the earliest `until` of its waits while the run is
+//!   active, kept for the `wakes` order;
+//! - `run_labels` holds one row per label, for equality, prefix and presence;
+//! - `run_waits` holds the kept snapshot's waits by `position`, the snapshot's order, without
+//!   task states;
+//! - `run_texts` holds what free text is searched in, lowercase, one row per field (the run's
+//!   id, the headline, each label's value, the ending's error and message): a field matches on
+//!   its own, whatever characters a quoted query holds;
+//! - `tool_calls.task_attempt` and `task_phase` hold the furthest state recorded for a call's
+//!   task, and `run_quarantine` the latest quarantine record (`kind` null: a release), each by
+//!   run id alone: both may be recorded before the run is projected.
 
 use turso::Connection;
 
@@ -239,17 +256,65 @@ CREATE TABLE run_summaries (
     run_id TEXT PRIMARY KEY,
     tenant TEXT NOT NULL,
     script TEXT NOT NULL,
+    headline TEXT NOT NULL,
     toolset TEXT NOT NULL,
     status TEXT NOT NULL,
+    mode TEXT,
     labels TEXT NOT NULL,
+    parent TEXT,
     started_at INTEGER,
     ended_at INTEGER,
     last_activity_at INTEGER NOT NULL,
     tool_calls INTEGER NOT NULL,
     errors INTEGER NOT NULL,
-    history_len INTEGER NOT NULL
+    history_len INTEGER NOT NULL,
+    snapshot_len INTEGER NOT NULL,
+    wakes_at INTEGER,
+    ending_error TEXT,
+    ending_message TEXT,
+    ending_line INTEGER,
+    ending_signature TEXT,
+    fingerprint TEXT
 ) STRICT;
 CREATE INDEX run_summaries_by_tenant ON run_summaries (tenant, run_id);
+CREATE INDEX run_summaries_by_activity ON run_summaries (tenant, last_activity_at, run_id);
+
+CREATE TABLE run_labels (
+    tenant TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (run_id, key)
+) STRICT;
+CREATE INDEX run_labels_by_value ON run_labels (tenant, key, value);
+
+CREATE TABLE run_waits (
+    run_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    seq INTEGER,
+    name TEXT,
+    since INTEGER NOT NULL,
+    until INTEGER,
+    callsite_line INTEGER,
+    callsite_column INTEGER,
+    PRIMARY KEY (run_id, position)
+) STRICT;
+
+CREATE TABLE run_texts (
+    run_id TEXT NOT NULL,
+    field INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (run_id, field)
+) STRICT;
+
+CREATE TABLE run_quarantine (
+    run_id TEXT PRIMARY KEY,
+    recorded_at INTEGER NOT NULL,
+    kind TEXT,
+    reason TEXT,
+    since INTEGER
+) STRICT;
 
 CREATE TABLE tool_calls (
     run_id TEXT NOT NULL,
@@ -263,7 +328,8 @@ CREATE TABLE tool_calls (
     args_digest TEXT,
     result_digest TEXT,
     result_shape TEXT,
-    attempts INTEGER,
+    task_attempt INTEGER,
+    task_phase TEXT,
     PRIMARY KEY (run_id, seq)
 ) STRICT;
 CREATE INDEX tool_calls_by_tool ON tool_calls (tool);

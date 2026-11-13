@@ -119,6 +119,7 @@ fn api_exit(error: &ptc_api::Error) -> Exit {
             ) => Exit::Refused,
             Some(
                 ProblemType::InvalidRequest
+                | ProblemType::InvalidQuery
                 | ProblemType::UnsupportedMediaType
                 | ProblemType::PayloadTooLarge
                 | ProblemType::InvalidToolset,
@@ -170,6 +171,7 @@ mod tests {
                 detail: "detail".into(),
                 instance: None,
                 diagnostics: Vec::new(),
+                query: None,
             }
             .into(),
         );

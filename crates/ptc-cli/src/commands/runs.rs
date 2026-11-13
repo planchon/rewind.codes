@@ -215,6 +215,8 @@ pub(super) async fn list(
     console: &mut Console,
 ) -> Result<Exit, CliError> {
     let filter = RunFilter {
+        q: args.query,
+        sort: args.sort.map(Into::into),
         status: args.status.map(Into::into),
         labels: args
             .labels

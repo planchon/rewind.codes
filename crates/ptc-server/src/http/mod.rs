@@ -10,6 +10,7 @@ mod hooks;
 mod reading;
 mod runs;
 mod scripts;
+mod search;
 mod subscriptions;
 mod tasks;
 mod toolsets;
@@ -46,6 +47,8 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::SCRIPTS, get(reading::scripts))
         .route(routes::SCRIPT, get(reading::script))
         .route(routes::RUNS, post(runs::start).get(runs::list))
+        .route(routes::RUN_STATS, get(runs::stats))
+        .route(routes::RUN_FAILURES, get(runs::failures))
         .route(routes::RUN, get(runs::get).delete(runs::erase))
         .route(routes::RUN_TRACE, get(runs::trace))
         .route(routes::RUN_ENTRY, get(runs::entry))

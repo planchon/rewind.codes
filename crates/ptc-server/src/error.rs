@@ -238,11 +238,13 @@ pub(crate) fn invalid_script_diagnostic(invalid: &InvalidScript) -> Diagnostic {
         severity: Severity::Error,
         code: "ptc/invalid-script".into(),
         message: invalid.message.clone(),
-        location: crate::views::script_location(&invalid.message).map(|(line, column)| Location {
-            line,
-            column,
-            end_line: None,
-            end_column: None,
+        location: ptc_engine::failures::script_location(&invalid.message).map(|(line, column)| {
+            Location {
+                line,
+                column,
+                end_line: None,
+                end_column: None,
+            }
         }),
         frame: None,
         hint: None,

@@ -265,6 +265,33 @@ describe("the client", () => {
     expect(server.requests[1]?.query.get("cursor")).toBe("c2");
   });
 
+  it("searches runs with a query, and reads their statistics and failure groups", async () => {
+    server
+      .on("GET", "/v1/runs", json({ runs: [summary("r1")] }))
+      .on("GET", "/v1/runs/stats", json({ until: "2026-11-12T00:00:00Z", runs: 3 }))
+      .on("GET", "/v1/runs/failures", json({ until: "2026-11-12T00:00:00Z", runs: 2, totalGroups: 1, groups: [] }));
+    const page = await ptc.runs.list({ q: '@agent:triage -status:completed "rate limit"', sort: "wakes" });
+    expect(page.runs.map((run) => run.id)).toEqual(["r1"]);
+    expect(server.requests[0]?.query.get("q")).toBe('@agent:triage -status:completed "rate limit"');
+    expect(server.requests[0]?.query.get("sort")).toBe("wakes");
+    const stats = await ptc.runs.stats({
+      q: "waiting:*",
+      since: new Date("2026-11-11T00:00:00Z"),
+      bucket: "1h",
+      top: 5,
+    });
+    expect(stats.runs).toBe(3);
+    const statsQuery = server.requests[1]?.query;
+    expect(statsQuery?.get("since")).toBe("2026-11-11T00:00:00.000Z");
+    expect(statsQuery?.get("bucket")).toBe("1h");
+    expect(statsQuery?.get("top")).toBe("5");
+    expect(statsQuery?.get("until")).toBeNull();
+    const failures = await ptc.runs.failures({ q: "@env:prod", bucket: 3_600_000, limit: 10 });
+    expect(failures.totalGroups).toBe(1);
+    expect(server.requests[2]?.query.get("bucket")).toBe("1h");
+    expect(server.requests[2]?.query.get("limit")).toBe("10");
+  });
+
   it("sends signals with their payload and idempotency key", async () => {
     server.on("POST", "/v1/runs/{id}/signals/{name}", (request) =>
       json({ duplicate: false, name: request.params["name"], runId: request.params["id"] }, 202),

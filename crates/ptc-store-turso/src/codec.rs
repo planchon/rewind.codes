@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{
-    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunStatus, Shape,
+    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode, RunStatus, Shape,
     ToolFailureKind, ToolRoute, canonical_json,
 };
-use ptc_engine::ports::{ParkKind, QuarantineKind, Trigger, WebhookEventType};
+use ptc_engine::ports::{ParkKind, QuarantineKind, TaskPhase, Trigger, WaitKind, WebhookEventType};
 use serde_json::{Map, Value, json};
 
 use crate::Error;
@@ -78,6 +78,63 @@ pub(crate) fn parse_failure_kind(name: &str) -> Result<ToolFailureKind, Error> {
         "timeout" => ToolFailureKind::Timeout,
         "outcome_unknown" => ToolFailureKind::OutcomeUnknown,
         other => return Err(corrupt("tool failure kind", other)),
+    })
+}
+
+pub(crate) fn run_mode(mode: RunMode) -> &'static str {
+    match mode {
+        RunMode::Live => "live",
+        RunMode::Mock => "mock",
+    }
+}
+
+pub(crate) fn parse_run_mode(name: &str) -> Result<RunMode, Error> {
+    Ok(match name {
+        "live" => RunMode::Live,
+        "mock" => RunMode::Mock,
+        other => return Err(corrupt("run mode", other)),
+    })
+}
+
+/// The names of `WaitingFor` for the same kinds: a query compares them.
+pub(crate) fn wait_kind(kind: WaitKind) -> &'static str {
+    match kind {
+        WaitKind::Signal => "signal",
+        WaitKind::Timer => "timer",
+        WaitKind::Call => "call",
+        WaitKind::Host => "host",
+    }
+}
+
+pub(crate) fn parse_wait_kind(name: &str) -> Result<WaitKind, Error> {
+    Ok(match name {
+        "signal" => WaitKind::Signal,
+        "timer" => WaitKind::Timer,
+        "call" => WaitKind::Call,
+        "host" => WaitKind::Host,
+        other => return Err(corrupt("wait kind", other)),
+    })
+}
+
+/// The names of `WaitingFor` for approval, parked and deferred: a query compares them.
+pub(crate) fn task_phase(phase: TaskPhase) -> &'static str {
+    match phase {
+        TaskPhase::Approval => "approval",
+        TaskPhase::Ready => "ready",
+        TaskPhase::Claimed => "claimed",
+        TaskPhase::Deferred => "deferred",
+        TaskPhase::Parked => "parked",
+    }
+}
+
+pub(crate) fn parse_task_phase(name: &str) -> Result<TaskPhase, Error> {
+    Ok(match name {
+        "approval" => TaskPhase::Approval,
+        "ready" => TaskPhase::Ready,
+        "claimed" => TaskPhase::Claimed,
+        "deferred" => TaskPhase::Deferred,
+        "parked" => TaskPhase::Parked,
+        other => return Err(corrupt("task phase", other)),
     })
 }
 
@@ -324,6 +381,7 @@ fn shape_of(value: &Value) -> Option<Shape> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ptc_engine::ports::WaitingFor;
 
     #[test]
     fn shapes_round_trip() {
@@ -367,6 +425,34 @@ mod tests {
         let (digest, held) = payload_columns(&digest_only);
         assert_eq!(held, None);
         assert_eq!(decode_payload(&digest, None), Ok(digest_only));
+    }
+
+    #[test]
+    fn waits_and_task_phases_are_named_as_queries_name_them() {
+        for (kind, waiting) in [
+            (WaitKind::Signal, WaitingFor::Signal),
+            (WaitKind::Timer, WaitingFor::Timer),
+            (WaitKind::Call, WaitingFor::Call),
+            (WaitKind::Host, WaitingFor::Host),
+        ] {
+            assert_eq!(wait_kind(kind), waiting.as_str());
+            assert_eq!(parse_wait_kind(wait_kind(kind)), Ok(kind));
+        }
+        for (phase, waiting) in [
+            (TaskPhase::Approval, Some(WaitingFor::Approval)),
+            (TaskPhase::Parked, Some(WaitingFor::Parked)),
+            (TaskPhase::Deferred, Some(WaitingFor::Deferred)),
+            (TaskPhase::Ready, None),
+            (TaskPhase::Claimed, None),
+        ] {
+            if let Some(waiting) = waiting {
+                assert_eq!(task_phase(phase), waiting.as_str());
+            }
+            assert_eq!(parse_task_phase(task_phase(phase)), Ok(phase));
+        }
+        for mode in [RunMode::Live, RunMode::Mock] {
+            assert_eq!(parse_run_mode(run_mode(mode)), Ok(mode));
+        }
     }
 
     #[test]

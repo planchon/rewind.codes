@@ -210,6 +210,15 @@ pub(crate) struct TraceArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct RunsArgs {
+    /// A query: terms separated by spaces, all of which must hold, as
+    /// '@agent:triage status:failed,aborted -@env:test "rate limit"'. Joined to the options by
+    /// "and".
+    #[arg(value_name = "QUERY")]
+    pub(crate) query: Option<String>,
+    /// The order: the most recently started first (the default), the most recent activity
+    /// first, or the soonest to wake by itself first.
+    #[arg(long, value_enum)]
+    pub(crate) sort: Option<SortArg>,
     #[arg(long, value_enum)]
     pub(crate) status: Option<StatusFilter>,
     /// Only runs carrying this label, key:value or key=value. Repeat to require several.
@@ -236,6 +245,23 @@ pub(crate) struct RunsArgs {
     /// The next page: the cursor the previous page printed.
     #[arg(long)]
     pub(crate) cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum SortArg {
+    Started,
+    Activity,
+    Wakes,
+}
+
+impl From<SortArg> for ptc_api::runs::RunSort {
+    fn from(sort: SortArg) -> Self {
+        match sort {
+            SortArg::Started => Self::Started,
+            SortArg::Activity => Self::Activity,
+            SortArg::Wakes => Self::Wakes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

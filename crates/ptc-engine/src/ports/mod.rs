@@ -56,8 +56,11 @@ pub use journal::{
     deferred_timeout_failure,
 };
 pub use read_model::{
-    Latency, ProjectedRun, ReadModel, ReadModelError, RunSearch, RunSummary, ScriptFilter,
-    ScriptSummary, ToolStats, ToolStatsFilter,
+    Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,
+    Predicate, ProjectedRun, QuarantineNote, Range, ReadModel, ReadModelError, RunOrder, RunQuery,
+    RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor, StatsWindow,
+    TaskPhase, TaskProgress, Term, TextMatch, ToolStats, ToolStatsFilter, Wait, WaitKind,
+    WaitingFor,
 };
 pub use secrets::{Credentials, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials};
 pub use telemetry::{

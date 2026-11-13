@@ -162,6 +162,83 @@ h3 {
   border-bottom-color: var(--ink);
 }
 
+/* Saved searches, in the navigation */
+
+.saved-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-left: 6px;
+}
+
+.saved-menu summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-2);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.saved-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.saved-menu summary:hover,
+.saved-menu[open] summary {
+  color: var(--ink);
+  background: var(--surface-2);
+}
+
+.saved-menu ul {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 280px;
+  max-width: 440px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  box-shadow: var(--shadow-pop);
+}
+
+.saved-menu li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.saved-menu li a {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 6px;
+  border-radius: 4px;
+  color: var(--ink);
+}
+
+.saved-menu li a:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+.saved-q {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .topbar-end {
   margin-left: auto;
   display: flex;
@@ -873,6 +950,12 @@ button.label:hover {
 .tooltip dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+.tooltip dt.status {
+  color: var(--ink-2);
+  font-size: 12px;
+  gap: 4px;
 }
 
 /* Key/value lists */

@@ -12,6 +12,7 @@ import {
   writeScriptFilters,
 } from "../model/filters";
 import { formatCount } from "../model/format";
+import { queryLink } from "../model/query";
 import { AddFilter, FilterChip } from "./FilterBits";
 
 export function totalRuns(counts: RunCounts): number {
@@ -36,7 +37,7 @@ export function Outcomes({ counts, digest }: { counts: RunCounts; digest?: strin
           digest ? (
             <Link
               key={s}
-              to={`/runs?status=${s}&script=${digest}`}
+              to={queryLink("/runs", `status:${s} script:${digest}`)}
               className={`status ${s}`}
               title={`${counts[s]} ${s}`}
             >
@@ -88,7 +89,7 @@ function ScriptRow({
         <Digest digest={script.digest} />
       </td>
       <td className="right">
-        <Link to={`/runs?script=${script.digest}`} className="num" title="Its runs">
+        <Link to={queryLink("/runs", `script:${script.digest}`)} className="num" title="Its runs">
           {formatCount(totalRuns(script.runs))}
         </Link>
       </td>

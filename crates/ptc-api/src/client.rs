@@ -22,8 +22,9 @@ use crate::problem::Problem;
 use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
 use crate::routes;
 use crate::runs::{
-    CancelRun, ForkRun, GetRunQuery, JournalExport, JournalQuery, Run, RunFilter, RunPage,
-    SignalAccepted, StartRun, Trace, TraceFormat, TraceQuery,
+    CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalExport, JournalQuery,
+    Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
+    TraceQuery,
 };
 use crate::scripts::{
     CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest, TestResult,
@@ -204,6 +205,18 @@ impl Client {
     /// `GET /v1/runs`.
     pub async fn list_runs(&self, filter: &RunFilter) -> Result<RunPage, Error> {
         let request = self.request_with(Method::GET, routes::RUNS, &[], filter)?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/runs/stats`.
+    pub async fn run_stats(&self, query: &RunStatsQuery) -> Result<RunStats, Error> {
+        let request = self.request_with(Method::GET, routes::RUN_STATS, &[], query)?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/runs/failures`.
+    pub async fn run_failures(&self, query: &FailureQuery) -> Result<FailureGroupPage, Error> {
+        let request = self.request_with(Method::GET, routes::RUN_FAILURES, &[], query)?;
         self.json(request).await
     }
 
@@ -617,6 +630,7 @@ fn untyped_problem(status: StatusCode, body: &str) -> Problem {
         status: status.as_u16(),
         instance: None,
         diagnostics: Vec::new(),
+        query: None,
     }
 }
 

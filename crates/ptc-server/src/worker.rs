@@ -105,6 +105,7 @@ async fn activate_one(app: &App) -> Result<bool, ()> {
     match &report.outcome {
         ActivationOutcome::Quarantined { kind, reason } => {
             tracing::warn!(run = %report.run, ?kind, %reason, "run quarantined");
+            app.record_quarantine(&report.run).await;
             // Queued: the engine's sender delivers in the background.
             if let Err(error) = app.projector().notify_quarantined(&report.run).await {
                 tracing::warn!(run = %report.run, %error, "run.quarantined was not sent");
@@ -151,11 +152,15 @@ async fn dispatch(app: Arc<App>, calls: InFlight) {
             let app = app.clone();
             tokio::spawn(async move {
                 let busy = app.activity.busy();
-                app.record_attempt(&task.task.task.run, task.task.task.seq, task.task.attempt)
-                    .await;
+                app.record_task(&task.task).await;
                 let name = task.task.task.clone();
-                if let Err(error) = app.engine.run_tool_task(task).await {
-                    tracing::warn!(task = %name, %error, "a tool call could not be prepared");
+                match app.engine.run_tool_task(task).await {
+                    // Parked or deferred: it waits for the harness.
+                    Ok(Some(waiting)) => app.record_progress(&name.run, waiting).await,
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(task = %name, %error, "a tool call could not be prepared");
+                    }
                 }
                 app.wake.bump();
                 drop(busy);
@@ -335,10 +340,12 @@ async fn drive(app: &App) -> Result<bool, ()> {
     })?;
     for task in claimed {
         moved = true;
-        app.record_attempt(&task.task.task.run, task.task.task.seq, task.task.attempt)
-            .await;
-        if let Err(error) = app.engine.run_tool_task(task).await {
-            tracing::warn!(%error, "a tool call could not be prepared");
+        app.record_task(&task.task).await;
+        let run = task.task.task.run.clone();
+        match app.engine.run_tool_task(task).await {
+            Ok(Some(waiting)) => app.record_progress(&run, waiting).await,
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "a tool call could not be prepared"),
         }
     }
     while activate_one(app).await? {

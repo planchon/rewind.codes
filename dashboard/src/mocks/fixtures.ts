@@ -155,7 +155,110 @@ export default async function main(input: { city: string }) {
 `,
 );
 
-export const SCRIPTS = { TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST };
+/** The script of crates/ptc-e2e/corpus/epoch-1/blue/triage_workflow. */
+const TRIAGE_WORKFLOW = script(
+  "triage_workflow.ts",
+  `import { github, slack } from "ptc:tools";
+import { sleep, signal } from "ptc";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+
+  await slack.post_message({ channel: "#triage", text: \`\${stale.length} stale issues in \${input.repo}\` });
+
+  const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+  if (!decision?.close) return { closed: 0 };
+
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+
+  await sleep("10d");
+  const reopened = await github.list_issues({ repo: input.repo, state: "open", labels: "reopened" });
+  return { closed: stale.length, reopened: reopened.length };
+}
+`,
+);
+
+export const SCRIPTS = { TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW };
+
+/**
+ * The journal of crates/ptc-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
+ * entries, 8 steps. Its callsites are the ones the runtime recorded.
+ */
+export function triageWorkflowJournal(start: number, toolset = fakeDigest("toolset:github,slack")) {
+  const repo = "acme/api";
+  return new JournalBuilder(start)
+    .started({ script: TRIAGE_WORKFLOW.digest, toolset, input: { repo }, mode: "mock" })
+    .call(1, "github.list_issues", { repo, state: "open" }, 5, 31)
+    .ok(1, [
+      { number: 1, updated_at: "2025-10-01T00:00:00Z" },
+      { number: 2, updated_at: "2025-12-30T00:00:00Z" },
+      { number: 3, updated_at: "2025-09-15T00:00:00Z" },
+    ])
+    .call(
+      2,
+      "slack.post_message",
+      { channel: "#triage", text: "2 stale issues in acme/api" },
+      8,
+      15,
+    )
+    .ok(2, { ok: true })
+    .timer(3, 3 * DAY, 10, 26)
+    .awaitSignal("approval", 10, 3, 26)
+    .after(HOUR)
+    .signal("approval", { close: true })
+    .cancelTimer(3)
+    .call(4, "github.close_issue", { number: 1, repo }, 13, 45)
+    .call(5, "github.close_issue", { number: 3, repo }, 13, 45)
+    .ok(4, { number: 1, repo })
+    .ok(5, { number: 3, repo })
+    .timer(6, 10 * DAY, 15, 9)
+    .after(10 * DAY)
+    .fired(6)
+    .call(7, "github.list_issues", { labels: "reopened", repo, state: "open" }, 16, 33)
+    .ok(7, [{ number: 3, updated_at: "2026-01-12T00:00:00Z" }])
+    .complete({ closed: 2, reopened: 1 });
+}
+
+/** The name a callsite points at: the callee's last name (`list_issues` of `github.list_issues`). */
+function calleeNames(event: { type: string; tool?: string; level?: string }): string[] {
+  switch (event.type) {
+    case "schedule_tool_call":
+      return [event.tool?.slice(event.tool.lastIndexOf(".") + 1) ?? ""];
+    case "start_timer":
+      return ["sleep", "signal"];
+    case "signal_awaited":
+      return ["signal"];
+    case "log":
+      return event.level === "info" ? ["log", "info"] : [event.level ?? "log"];
+    default:
+      return [];
+  }
+}
+
+/**
+ * Points each callsite at its callee's name, as the runtime records it, where a fixture gave
+ * only the line: the column of the first name on the line the event could have come from.
+ */
+function alignCallsites(fixture: RunFixture) {
+  const lines = fixture.script.source.split("\n");
+  for (const entry of fixture.journal.entries) {
+    const event = entry.event as {
+      type: string;
+      callsite?: { line: number; column: number } | null;
+    };
+    const site = event.callsite;
+    if (!site) continue;
+    const text = lines[site.line - 1] ?? "";
+    for (const name of calleeNames(event as never)) {
+      const at = new RegExp(`\\b${name}\\b`).exec(text)?.index;
+      if (at === undefined) continue;
+      const inside = site.column - 1 >= at && site.column - 1 < at + name.length;
+      if (!inside) site.column = at + 1;
+      break;
+    }
+  }
+}
 
 const TOOLSET_GITHUB = fakeDigest("toolset:github,slack");
 const TOOLSET_DIGEST = fakeDigest("toolset:github,llm,slack");
@@ -653,6 +756,37 @@ export function createWorld(options: WorldOptions): World {
       .call(2, "ask_user", { question: "No account for kim@example.org. Create one?" }, 7, 26);
   }
 
+  // onboarding: active, its host-tool call claimed by the harness's worker.
+  {
+    const r = run(
+      now - 12 * MINUTE,
+      ONBOARDING,
+      TOOLSET_CRM,
+      { agent: "support", conversation: "c-85", user: "u-1301", env: "prod" },
+      { email: "jo@example.org" },
+    );
+    r.journal
+      .after(15)
+      .call(1, "crm.find_account", { email: "jo@example.org" }, 5)
+      .after(91)
+      .ok(1, null)
+      .call(2, "ask_user", { question: "No account for jo@example.org. Create one?" }, 7, 26);
+  }
+
+  // The run of the e2e corpus's triage_workflow, in mock mode.
+  {
+    const r = run(
+      now - 12 * DAY,
+      TRIAGE_WORKFLOW,
+      TOOLSET_GITHUB,
+      { agent: "triage", conversation: "c-12", env: "test" },
+      { repo: "acme/api" },
+      {},
+      "mock",
+    );
+    r.journal = triageWorkflowJournal(now - 12 * DAY, TOOLSET_GITHUB);
+  }
+
   // onboarding: cancelled while waiting for the user.
   {
     const r = run(
@@ -791,12 +925,13 @@ export function createWorld(options: WorldOptions): World {
       .complete({ prs: repos.length, ts: "1731400000.000100" });
   }
 
+  for (const r of runs) alignCallsites(r);
   const payloads = new Map<string, unknown>();
   for (const r of runs)
     for (const [digest, value] of r.journal.payloads) payloads.set(digest, value);
   const world: World = {
     now,
-    scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST],
+    scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW],
     runs,
     payloads,
     embedded: options.embedded ?? false,

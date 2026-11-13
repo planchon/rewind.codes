@@ -1,21 +1,36 @@
-//! `ReadModel` on Turso: `run_summaries` and `tool_calls`, filled by the projector.
+//! `ReadModel` on Turso: `run_summaries` with `run_labels`, `run_waits` and `run_texts`, and
+//! `tool_calls`, filled by the projector; task states and quarantine, recorded by whoever
+//! changes them (`archi/05-testing-and-observability.md`, "Read model").
 //!
 //! Every write is keyed so that applying entries twice, or in any order, gives the same rows:
 //! a call's columns are set by the entry that knows them (`schedule_tool_call`, its
-//! completion), a summary keeps the maximum of what it has seen, and its counts are recounted
-//! from `tool_calls` after each batch.
+//! completion), a summary keeps the maximum of what it has seen and recounts its calls after
+//! each batch, and the snapshot's columns and waits are replaced only by the snapshot of a
+//! longer history. The columns derived from both (`wakes_at`, `run_texts`) are computed again
+//! at the end of each `apply`.
+//!
+//! Task states and quarantine are kept by run id alone, so they can be recorded before the run
+//! is projected; what is recorded for a run projected under another tenant is ignored.
+//!
+//! A query is a `WHERE` clause over the tenant's summaries ([`query`]); statistics, facets and
+//! failure groups are counted in Rust over the runs it matches ([`stats`]).
+
+mod query;
+mod stats;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use ptc_core::{
-    Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunStatus, ScriptError,
-    Seq, Shape, Timestamp, ToolFailureKind,
+    Callsite, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunId,
+    RunStatus, ScriptError, Seq, Shape, Timestamp, ToolFailureKind,
 };
 use ptc_engine::ports::{
-    Latency, ProjectedRun, ReadModel, ReadModelError, RunRef, RunSearch, RunSummary, ScriptFilter,
-    ScriptSummary, TenantId, TenantScope, ToolStats, ToolStatsFilter,
+    Ending, FailureGroups, FailureWindow, ProjectedRun, QuarantineNote, ReadModel, ReadModelError,
+    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
+    SearchCursor, StatsWindow, TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter,
+    Wait, WaitKind,
 };
-use turso::{Connection, Value};
+use turso::{Connection, Row, Value};
 
 use crate::codec::{self, decode_labels, encode_labels};
 use crate::sql::{
@@ -24,11 +39,33 @@ use crate::sql::{
 };
 use crate::{Error, TursoStore};
 
+use query::Sql;
+use stats::Found;
+
 impl From<Error> for ReadModelError {
     fn from(err: Error) -> Self {
         ReadModelError::Backend(err.to_string())
     }
 }
+
+/// Run ids bound in one `IN (…)` list at most.
+const IDS_PER_STATEMENT: usize = 500;
+
+/// The tables that hold something of a run, besides `run_summaries`.
+const RUN_TABLES: [&str; 5] = [
+    "tool_calls",
+    "run_labels",
+    "run_waits",
+    "run_texts",
+    "run_quarantine",
+];
+
+/// The columns a summary is read from, in the order of [`summary_of`].
+const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.headline, s.toolset, s.status, \
+     s.mode, s.labels, s.parent, s.started_at, s.ended_at, s.last_activity_at, s.tool_calls, \
+     s.errors, s.history_len, s.wakes_at, s.ending_error, s.ending_message, s.ending_line, \
+     s.ending_signature, s.fingerprint, q.kind, q.reason, q.since \
+     FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
 
 /// The status a terminal entry gives its run.
 fn status_of(event: &Event) -> Option<RunStatus> {
@@ -43,12 +80,8 @@ fn status_of(event: &Event) -> Option<RunStatus> {
     }
 }
 
-/// The nearest-rank percentile `p` of sorted values.
-fn percentile(sorted: &[u64], p: u64) -> u64 {
-    let n = sorted.len() as u64;
-    let rank = (p * n).div_ceil(100).max(1);
-    sorted[(rank - 1) as usize]
-}
+// -------------------------------------------------------------------------------------------
+// Writes
 
 /// Projects one entry onto `tool_calls`.
 async fn project_call(
@@ -126,31 +159,372 @@ async fn project_call(
     Ok(())
 }
 
+/// Replaces the snapshot's columns and waits with `snapshot`'s. A wait's task state is not
+/// kept: the waits read it from the task records.
+async fn keep_snapshot(
+    connection: &Connection,
+    run: RunId,
+    snapshot: &RunSnapshot,
+) -> Result<(), Error> {
+    let ending = snapshot.ending.as_ref();
+    sql::execute(
+        connection,
+        "UPDATE run_summaries SET snapshot_len = ?, mode = ?, ending_error = ?, \
+         ending_message = ?, ending_line = ?, ending_signature = ?, fingerprint = ? \
+         WHERE run_id = ?",
+        vec![
+            int(snapshot.history_len),
+            opt_text(snapshot.mode.map(codec::run_mode)),
+            opt_text(ending.map(|ending| ending.error.as_str())),
+            opt_text(ending.map(|ending| ending.message.as_str())),
+            ending
+                .and_then(|ending| ending.line)
+                .map_or(Value::Null, |line| int(u64::from(line))),
+            opt_text(ending.map(|ending| ending.signature.as_str())),
+            opt_text(ending.map(|ending| ending.fingerprint.as_str())),
+            run_id(run),
+        ],
+    )
+    .await?;
+    sql::execute(
+        connection,
+        "DELETE FROM run_waits WHERE run_id = ?",
+        vec![run_id(run)],
+    )
+    .await?;
+    for (position, wait) in snapshot.waits.iter().enumerate() {
+        sql::execute(
+            connection,
+            "INSERT INTO run_waits (run_id, position, kind, seq, name, since, until, \
+             callsite_line, callsite_column) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            vec![
+                run_id(run),
+                int(position as u64),
+                text(codec::wait_kind(wait.kind)),
+                wait.seq.map_or(Value::Null, |seq| int(u64::from(seq.0))),
+                opt_text(wait.name.as_deref()),
+                ts(wait.since),
+                opt_ts(wait.until),
+                wait.callsite
+                    .map_or(Value::Null, |callsite| int(u64::from(callsite.line))),
+                wait.callsite
+                    .map_or(Value::Null, |callsite| int(u64::from(callsite.column))),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Replaces the run's labels with those of its metadata.
+async fn replace_labels(connection: &Connection, run: &ProjectedRun) -> Result<(), Error> {
+    let id = run.run.id;
+    sql::execute(
+        connection,
+        "DELETE FROM run_labels WHERE run_id = ?",
+        vec![run_id(id)],
+    )
+    .await?;
+    for (key, value) in &run.labels {
+        sql::execute(
+            connection,
+            "INSERT INTO run_labels (tenant, run_id, key, value) VALUES (?, ?, ?, ?)",
+            vec![
+                tenant(&run.run.tenant),
+                run_id(id),
+                text(key.as_str()),
+                text(value.as_str()),
+            ],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Computes again what derives from both the entries and the kept snapshot: `wakes_at`, the
+/// earliest `until` of the waits while the run is active, and the texts free text is searched
+/// in, lowercased here with Unicode's rules (SQLite's `lower` only knows ASCII).
+async fn derive(connection: &Connection, run: &ProjectedRun) -> Result<(), Error> {
+    let id = run.run.id;
+    let row = sql::query_row(
+        connection,
+        "SELECT status, ending_error, ending_message FROM run_summaries WHERE run_id = ?",
+        vec![run_id(id)],
+    )
+    .await?
+    .ok_or_else(|| Error::Corrupt(format!("the summary of run {id} is missing")))?;
+    let status = codec::parse_status(&row.text(0)?)?;
+    let wakes_at = if status == RunStatus::Active {
+        sql::query_row(
+            connection,
+            "SELECT MIN(until) FROM run_waits WHERE run_id = ?",
+            vec![run_id(id)],
+        )
+        .await?
+        .map(|row| row.opt_ts(0))
+        .transpose()?
+        .flatten()
+    } else {
+        None
+    };
+    sql::execute(
+        connection,
+        "UPDATE run_summaries SET wakes_at = ? WHERE run_id = ?",
+        vec![opt_ts(wakes_at), run_id(id)],
+    )
+    .await?;
+
+    let mut texts = vec![id.to_string(), run.headline.to_lowercase()];
+    texts.extend(run.labels.values().map(|value| value.to_lowercase()));
+    texts.extend(row.opt_text(1)?.map(|error| error.to_lowercase()));
+    texts.extend(row.opt_text(2)?.map(|message| message.to_lowercase()));
+    sql::execute(
+        connection,
+        "DELETE FROM run_texts WHERE run_id = ?",
+        vec![run_id(id)],
+    )
+    .await?;
+    for (field, value) in texts.into_iter().enumerate() {
+        sql::execute(
+            connection,
+            "INSERT INTO run_texts (run_id, field, text) VALUES (?, ?, ?)",
+            vec![run_id(id), int(field as u64), text(value)],
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The tenant a run is projected under, if it is.
+async fn owner(connection: &Connection, run: RunId) -> Result<Option<String>, Error> {
+    sql::query_row(
+        connection,
+        "SELECT tenant FROM run_summaries WHERE run_id = ?",
+        vec![run_id(run)],
+    )
+    .await?
+    .map(|row| row.text(0))
+    .transpose()
+}
+
+/// Whether the run is projected under another tenant than `run`'s: what is recorded for it is
+/// ignored.
+async fn foreign(connection: &Connection, run: &RunRef) -> Result<bool, Error> {
+    Ok(owner(connection, run.id)
+        .await?
+        .is_some_and(|owner| owner != run.tenant.as_str()))
+}
+
+// -------------------------------------------------------------------------------------------
+// Reads
+
+/// A summary from a row of [`SUMMARY_COLUMNS`], without its waits.
+fn summary_of(row: &Row) -> Result<RunSummary, Error> {
+    let ending = match row.opt_text(16)? {
+        Some(error) => Some(Ending {
+            error,
+            message: row.text(17)?,
+            line: row.opt_u32(18)?,
+            signature: row.text(19)?,
+            fingerprint: row.text(20)?,
+        }),
+        None => None,
+    };
+    let quarantine = match row.opt_text(21)? {
+        Some(kind) => Some(QuarantineNote {
+            kind: codec::parse_quarantine_kind(&kind)?,
+            reason: row.text(22)?,
+            since: row.ts(23)?,
+        }),
+        None => None,
+    };
+    Ok(RunSummary {
+        run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
+        script: row.digest(2)?,
+        headline: row.text(3)?,
+        toolset: row.digest(4)?,
+        status: codec::parse_status(&row.text(5)?)?,
+        mode: row
+            .opt_text(6)?
+            .map(|mode| codec::parse_run_mode(&mode))
+            .transpose()?,
+        labels: decode_labels(&row.text(7)?)?,
+        parent: row.opt_run_id(8)?,
+        started_at: row.opt_ts(9)?,
+        ended_at: row.opt_ts(10)?,
+        last_activity_at: row.ts(11)?,
+        tool_calls: row.u64(12)?,
+        errors: row.u64(13)?,
+        history_len: row.u64(14)?,
+        waits: Vec::new(),
+        wakes_at: row.opt_ts(15)?,
+        ending,
+        quarantine,
+    })
+}
+
+/// The summaries of the runs `filter` matches, in `order` if any, at most `limit`, with their
+/// waits.
+async fn summaries(
+    connection: &Connection,
+    filter: Sql,
+    order: Option<RunOrder>,
+    count: Option<usize>,
+) -> Result<Vec<RunSummary>, Error> {
+    let mut statement = format!("SELECT {SUMMARY_COLUMNS} WHERE {}", filter.text);
+    let mut params = filter.params;
+    if let Some(order) = order {
+        statement.push_str(" ORDER BY ");
+        statement.push_str(query::order_by(order));
+    }
+    if let Some(count) = count {
+        statement.push_str(" LIMIT ?");
+        params.push(limit(count));
+    }
+    let rows = sql::query_dynamic(connection, &statement, params).await?;
+    let mut found = rows.iter().map(summary_of).collect::<Result<Vec<_>, _>>()?;
+    // Only an active run waits.
+    let active: Vec<RunId> = found
+        .iter()
+        .filter(|summary| summary.status == RunStatus::Active)
+        .map(|summary| summary.run.id)
+        .collect();
+    let mut waits = waits_of(connection, &active).await?;
+    for summary in &mut found {
+        if let Some(run_waits) = waits.remove(&summary.run.id) {
+            summary.waits = run_waits;
+        }
+    }
+    Ok(found)
+}
+
+/// The waits of these runs, in their snapshot's order, each call's with its task's furthest
+/// state.
+async fn waits_of(
+    connection: &Connection,
+    runs: &[RunId],
+) -> Result<BTreeMap<RunId, Vec<Wait>>, Error> {
+    let mut waits: BTreeMap<RunId, Vec<Wait>> = BTreeMap::new();
+    for chunk in runs.chunks(IDS_PER_STATEMENT) {
+        let rows = sql::query_dynamic(
+            connection,
+            &format!(
+                "SELECT w.run_id, w.kind, w.seq, w.name, w.since, w.until, w.callsite_line, \
+                 w.callsite_column, c.task_phase FROM run_waits w \
+                 LEFT JOIN tool_calls c ON c.run_id = w.run_id AND c.seq = w.seq \
+                 WHERE w.run_id IN ({}) ORDER BY w.run_id, w.position",
+                placeholders(chunk.len())
+            ),
+            chunk.iter().map(|id| run_id(*id)).collect(),
+        )
+        .await?;
+        for row in &rows {
+            let kind = codec::parse_wait_kind(&row.text(1)?)?;
+            let task = match kind {
+                WaitKind::Call | WaitKind::Host => row
+                    .opt_text(8)?
+                    .map(|phase| codec::parse_task_phase(&phase))
+                    .transpose()?,
+                WaitKind::Signal | WaitKind::Timer => None,
+            };
+            let callsite = match (row.opt_u32(6)?, row.opt_u32(7)?) {
+                (Some(line), Some(column)) => Some(Callsite { line, column }),
+                _ => None,
+            };
+            waits.entry(row.run_id(0)?).or_default().push(Wait {
+                kind,
+                seq: row.opt_u32(2)?.map(Seq),
+                name: row.opt_text(3)?,
+                since: row.ts(4)?,
+                until: row.opt_ts(5)?,
+                callsite,
+                task,
+            });
+        }
+    }
+    Ok(waits)
+}
+
+/// The runs a query matches, with the tools they called and the kinds their calls failed with.
+async fn matching(connection: &Connection, query: &RunQuery) -> Result<Vec<Found>, Error> {
+    let summaries = summaries(connection, query::filter(query), None, None).await?;
+    let ids: Vec<RunId> = summaries.iter().map(|summary| summary.run.id).collect();
+    let mut calls: BTreeMap<RunId, (BTreeSet<String>, BTreeSet<ToolFailureKind>)> = BTreeMap::new();
+    for chunk in ids.chunks(IDS_PER_STATEMENT) {
+        let rows = sql::query_dynamic(
+            connection,
+            &format!(
+                "SELECT run_id, tool, error_kind FROM tool_calls WHERE run_id IN ({}) \
+                 AND (tool IS NOT NULL OR error_kind IS NOT NULL)",
+                placeholders(chunk.len())
+            ),
+            chunk.iter().map(|id| run_id(*id)).collect(),
+        )
+        .await?;
+        for row in &rows {
+            let (tools, failed) = calls.entry(row.run_id(0)?).or_default();
+            tools.extend(row.opt_text(1)?);
+            if let Some(kind) = row.opt_text(2)? {
+                failed.insert(codec::parse_failure_kind(&kind)?);
+            }
+        }
+    }
+    Ok(summaries
+        .into_iter()
+        .map(|summary| {
+            let (tools, failed) = calls.remove(&summary.run.id).unwrap_or_default();
+            Found {
+                summary,
+                tools,
+                failed,
+            }
+        })
+        .collect())
+}
+
 impl ReadModel for TursoStore {
     async fn apply(
         &self,
         run: &ProjectedRun,
         entries: &[HistoryEntry],
+        snapshot: &RunSnapshot,
     ) -> Result<(), ReadModelError> {
         let connection = self.connection().await?;
         let connection = &*connection;
         transaction(connection, async {
+            let id = run_id(run.run.id);
+            let kept_len = sql::query_row(
+                connection,
+                "SELECT snapshot_len FROM run_summaries WHERE run_id = ?",
+                vec![id.clone()],
+            )
+            .await?
+            .map(|row| row.u64(0))
+            .transpose()?;
             sql::execute(
                 connection,
-                "INSERT INTO run_summaries (run_id, tenant, script, toolset, status, labels, \
-                 last_activity_at, tool_calls, errors, history_len) \
-                 VALUES (?, ?, ?, ?, 'active', ?, 0, 0, 0, 0) \
+                "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
+                 labels, parent, last_activity_at, tool_calls, errors, history_len, \
+                 snapshot_len) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, 0, 0, 0, 0) \
                  ON CONFLICT (run_id) DO UPDATE SET tenant = excluded.tenant, \
-                 script = excluded.script, toolset = excluded.toolset, labels = excluded.labels",
+                 script = excluded.script, headline = excluded.headline, \
+                 toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent",
                 vec![
-                    run_id(run.run.id),
+                    id.clone(),
                     tenant(&run.run.tenant),
                     digest(run.script),
+                    text(run.headline.as_str()),
                     digest(run.toolset),
                     text(encode_labels(&run.labels)),
+                    run.parent.map_or(Value::Null, run_id),
                 ],
             )
             .await?;
+            // Of equal lengths, the snapshots are equal: the first is kept.
+            if kept_len.is_none_or(|kept| snapshot.history_len > kept) {
+                keep_snapshot(connection, run.run.id, snapshot).await?;
+            }
+            replace_labels(connection, run).await?;
 
             let mut last_activity = Timestamp(0);
             let mut history_len = 0;
@@ -170,7 +544,6 @@ impl ReadModel for TursoStore {
                 }
                 project_call(connection, &run.run, entry).await?;
             }
-            let id = run_id(run.run.id);
             sql::execute(
                 connection,
                 "UPDATE run_summaries SET last_activity_at = MAX(last_activity_at, ?), \
@@ -192,90 +565,44 @@ impl ReadModel for TursoStore {
                 ],
             )
             .await?;
-            Ok(())
+            Ok(derive(connection, run).await?)
         })
         .await
     }
 
-    async fn search_runs(&self, search: &RunSearch) -> Result<Vec<RunSummary>, ReadModelError> {
+    async fn search_runs(
+        &self,
+        query: &RunQuery,
+        order: RunOrder,
+        after: Option<&SearchCursor>,
+        count: usize,
+    ) -> Result<Vec<RunSummary>, ReadModelError> {
         let connection = self.connection().await?;
-        let mut query = "SELECT run_id, tenant, script, toolset, status, labels, started_at, \
-                         ended_at, last_activity_at, tool_calls, errors, history_len \
-                         FROM run_summaries s WHERE tenant = ?"
-            .to_owned();
-        let mut params = vec![tenant(&search.tenant)];
-        if let Some(before) = search.before {
-            query.push_str(" AND run_id < ?");
-            params.push(run_id(before));
+        let mut filter = query::filter(query);
+        if let Some(cursor) = after {
+            query::after(&mut filter, order, cursor);
         }
-        if let Some(script) = search.script {
-            query.push_str(" AND script = ?");
-            params.push(digest(script));
-        }
-        if let Some(toolset) = search.toolset {
-            query.push_str(" AND toolset = ?");
-            params.push(digest(toolset));
-        }
-        if let Some(status) = search.status {
-            query.push_str(" AND status = ?");
-            params.push(text(status.as_str()));
-        }
-        if let Some(after) = search.started_after {
-            query.push_str(" AND started_at >= ?");
-            params.push(ts(after));
-        }
-        if let Some(before) = search.started_before {
-            query.push_str(" AND started_at < ?");
-            params.push(ts(before));
-        }
-        if let Some(tool) = &search.tool {
-            query.push_str(
-                " AND EXISTS (SELECT 1 FROM tool_calls c WHERE c.run_id = s.run_id AND c.tool = ?)",
-            );
-            params.push(text(tool.as_str()));
-        }
-        if let Some(kind) = search.error_kind {
-            query.push_str(
-                " AND EXISTS (SELECT 1 FROM tool_calls c \
-                 WHERE c.run_id = s.run_id AND c.error_kind = ?)",
-            );
-            params.push(text(kind.as_str()));
-        }
-        query.push_str(" ORDER BY run_id DESC");
-        // Labels are filtered here, so the limit can only be applied in SQL without them.
-        if search.labels.is_empty() {
-            query.push_str(" LIMIT ?");
-            params.push(limit(search.limit));
-        }
-        let rows = sql::query_dynamic(&connection, &query, params).await?;
-        let mut found = Vec::new();
-        for row in &rows {
-            if found.len() >= search.limit {
-                break;
-            }
-            let labels = decode_labels(&row.text(5)?)?;
-            if !search
-                .labels
-                .iter()
-                .all(|(key, value)| labels.get(key) == Some(value))
-            {
-                continue;
-            }
-            found.push(RunSummary {
-                run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
-                script: row.digest(2)?,
-                toolset: row.digest(3)?,
-                status: codec::parse_status(&row.text(4)?)?,
-                labels,
-                started_at: row.opt_ts(6)?,
-                ended_at: row.opt_ts(7)?,
-                last_activity_at: row.ts(8)?,
-                tool_calls: row.u64(9)?,
-                errors: row.u64(10)?,
-                history_len: row.u64(11)?,
-            });
-        }
-        Ok(found)
+        Ok(summaries(&connection, filter, Some(order), Some(count)).await?)
+    }
+
+    async fn run_stats(
+        &self,
+        query: &RunQuery,
+        window: &StatsWindow,
+    ) -> Result<RunStats, ReadModelError> {
+        let connection = self.connection().await?;
+        let found = matching(&connection, query).await?;
+        Ok(stats::run_stats(&found, window))
+    }
+
+    async fn failure_groups(
+        &self,
+        query: &RunQuery,
+        window: &FailureWindow,
+    ) -> Result<FailureGroups, ReadModelError> {
+        let connection = self.connection().await?;
+        let found = matching(&connection, query).await?;
+        Ok(stats::failure_groups(&found, window))
     }
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
@@ -293,7 +620,8 @@ impl ReadModel for TursoStore {
         let runs = sql::query_dynamic(
             &connection,
             &format!(
-                "SELECT s.script, s.status, s.started_at, s.labels, s.run_id                  FROM run_summaries s WHERE s.tenant = ?{clauses}"
+                "SELECT s.script, s.status, s.started_at, s.labels, s.run_id \
+                 FROM run_summaries s WHERE s.tenant = ?{clauses}"
             ),
             params.clone(),
         )
@@ -365,7 +693,8 @@ impl ReadModel for TursoStore {
     async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<Vec<ToolStats>, ReadModelError> {
         let connection = self.connection().await?;
         let mut query = "SELECT c.tool, c.scheduled_at, c.completed_at, c.outcome, c.error_kind, \
-                         c.attempts FROM tool_calls c JOIN run_summaries s ON s.run_id = c.run_id \
+                         c.task_attempt FROM tool_calls c \
+                         JOIN run_summaries s ON s.run_id = c.run_id \
                          WHERE s.tenant = ? AND c.tool IS NOT NULL AND c.scheduled_at IS NOT NULL"
             .to_owned();
         let mut params = vec![tenant(&filter.tenant)];
@@ -399,13 +728,13 @@ impl ReadModel for TursoStore {
                 (stats, Vec::new())
             });
             entry.calls += 1;
-            if let Some(attempts) = row.opt_u64(5)? {
-                entry.retries += attempts.saturating_sub(1);
+            if let Some(attempt) = row.opt_u64(5)? {
+                entry.retries += attempt.saturating_sub(1);
             }
             match row.opt_text(3)?.as_deref() {
                 Some("completed") => entry.completed += 1,
                 Some("failed") => {
-                    let kind: ToolFailureKind = codec::parse_failure_kind(&row.text(4)?)?;
+                    let kind = codec::parse_failure_kind(&row.text(4)?)?;
                     entry.failed += 1;
                     *entry.errors_by_kind.entry(kind).or_default() += 1;
                 }
@@ -420,19 +749,8 @@ impl ReadModel for TursoStore {
         }
         Ok(stats
             .into_values()
-            .map(|(mut entry, mut latencies)| {
-                latencies.sort_unstable();
-                if !latencies.is_empty() {
-                    let count = latencies.len() as u64;
-                    entry.latency = Some(Latency {
-                        count,
-                        mean_ms: latencies.iter().sum::<u64>() / count,
-                        p50_ms: percentile(&latencies, 50),
-                        p95_ms: percentile(&latencies, 95),
-                        p99_ms: percentile(&latencies, 99),
-                        max_ms: latencies[latencies.len() - 1],
-                    });
-                }
+            .map(|(mut entry, latencies)| {
+                entry.latency = stats::latency(latencies);
                 entry
             })
             .collect())
@@ -471,6 +789,120 @@ impl ReadModel for TursoStore {
         Ok(shapes)
     }
 
+    async fn record_tasks(
+        &self,
+        run: &RunRef,
+        tasks: &[TaskProgress],
+    ) -> Result<(), ReadModelError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            if foreign(connection, run).await? {
+                return Ok(());
+            }
+            for task in tasks {
+                let seq = int(u64::from(task.seq.0));
+                let kept = sql::query_row(
+                    connection,
+                    "SELECT task_attempt, task_phase FROM tool_calls \
+                     WHERE run_id = ? AND seq = ? AND task_attempt IS NOT NULL",
+                    vec![run_id(run.id), seq.clone()],
+                )
+                .await?
+                .map(|row| -> Result<TaskProgress, Error> {
+                    Ok(TaskProgress {
+                        seq: task.seq,
+                        attempt: row.u32(0)?,
+                        phase: codec::parse_task_phase(&row.text(1)?)?,
+                    })
+                })
+                .transpose()?;
+                if kept.is_some_and(|kept| task.rank() <= kept.rank()) {
+                    continue;
+                }
+                sql::execute(
+                    connection,
+                    "INSERT INTO tool_calls (run_id, seq, task_attempt, task_phase) \
+                     VALUES (?, ?, ?, ?) ON CONFLICT (run_id, seq) DO UPDATE SET \
+                     task_attempt = excluded.task_attempt, task_phase = excluded.task_phase",
+                    vec![
+                        run_id(run.id),
+                        seq,
+                        int(u64::from(task.attempt)),
+                        text(codec::task_phase(task.phase)),
+                    ],
+                )
+                .await?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
+    async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
+        let connection = self.connection().await?;
+        let rows = sql::query(
+            &connection,
+            "SELECT c.seq, c.task_attempt FROM tool_calls c \
+             JOIN run_summaries s ON s.run_id = c.run_id \
+             WHERE c.run_id = ? AND s.tenant = ? AND c.task_attempt IS NOT NULL",
+            vec![run_id(run.id), tenant(&run.tenant)],
+        )
+        .await?;
+        let mut attempts = BTreeMap::new();
+        for row in &rows {
+            attempts.insert(Seq(row.u32(0)?), row.u32(1)?);
+        }
+        Ok(attempts)
+    }
+
+    async fn record_quarantine(
+        &self,
+        run: &RunRef,
+        quarantine: Option<&QuarantineNote>,
+        at: Timestamp,
+    ) -> Result<(), ReadModelError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            if foreign(connection, run).await? {
+                return Ok(());
+            }
+            let kept = sql::query_row(
+                connection,
+                "SELECT recorded_at, kind IS NOT NULL FROM run_quarantine WHERE run_id = ?",
+                vec![run_id(run.id)],
+            )
+            .await?
+            .map(|row| -> Result<(Timestamp, bool), Error> { Ok((row.ts(0)?, row.boolean(1)?)) })
+            .transpose()?;
+            // The latest record; at the same time, a quarantine over a release.
+            let newer = kept.is_none_or(|(kept_at, quarantined)| {
+                at > kept_at || (at == kept_at && !quarantined && quarantine.is_some())
+            });
+            if !newer {
+                return Ok(());
+            }
+            sql::execute(
+                connection,
+                "INSERT INTO run_quarantine (run_id, recorded_at, kind, reason, since) \
+                 VALUES (?, ?, ?, ?, ?) ON CONFLICT (run_id) DO UPDATE SET \
+                 recorded_at = excluded.recorded_at, kind = excluded.kind, \
+                 reason = excluded.reason, since = excluded.since",
+                vec![
+                    run_id(run.id),
+                    ts(at),
+                    opt_text(quarantine.map(|note| codec::quarantine_kind(note.kind))),
+                    opt_text(quarantine.map(|note| note.reason.as_str())),
+                    opt_ts(quarantine.map(|note| note.since)),
+                ],
+            )
+            .await?;
+            Ok(())
+        })
+        .await
+    }
+
     async fn purge(
         &self,
         ended_before: Timestamp,
@@ -484,15 +916,17 @@ impl ReadModel for TursoStore {
         params.extend(scope_params);
         let ended = format!("ended_at IS NOT NULL AND ended_at < ? AND {scope}");
         transaction(connection, async {
-            sql::execute_dynamic(
-                connection,
-                &format!(
-                    "DELETE FROM tool_calls WHERE run_id IN \
-                     (SELECT run_id FROM run_summaries WHERE {ended})"
-                ),
-                params.clone(),
-            )
-            .await?;
+            for table in RUN_TABLES {
+                sql::execute_dynamic(
+                    connection,
+                    &format!(
+                        "DELETE FROM {table} WHERE run_id IN \
+                         (SELECT run_id FROM run_summaries WHERE {ended})"
+                    ),
+                    params.clone(),
+                )
+                .await?;
+            }
             let purged = sql::execute_dynamic(
                 connection,
                 &format!("DELETE FROM run_summaries WHERE {ended}"),
@@ -504,99 +938,25 @@ impl ReadModel for TursoStore {
         .await
     }
 
-    async fn record_attempt(
-        &self,
-        run: &RunRef,
-        seq: Seq,
-        attempt: u32,
-    ) -> Result<(), ReadModelError> {
-        let connection = self.connection().await?;
-        let connection = &*connection;
-        transaction(connection, async {
-            let owner = sql::query_row(
-                connection,
-                "SELECT tenant FROM run_summaries WHERE run_id = ?",
-                vec![run_id(run.id)],
-            )
-            .await?;
-            if let Some(owner) = owner
-                && owner.text(0)? != run.tenant.as_str()
-            {
-                return Ok(());
-            }
-            sql::execute(
-                connection,
-                "INSERT INTO tool_calls (run_id, seq, attempts) VALUES (?, ?, ?) \
-                 ON CONFLICT (run_id, seq) DO UPDATE SET \
-                 attempts = MAX(COALESCE(attempts, 0), excluded.attempts)",
-                vec![
-                    run_id(run.id),
-                    int(u64::from(seq.0)),
-                    int(u64::from(attempt)),
-                ],
-            )
-            .await?;
-            Ok(())
-        })
-        .await
-    }
-
-    async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
-        let connection = self.connection().await?;
-        let rows = sql::query_dynamic(
-            &connection,
-            "SELECT c.seq, c.attempts FROM tool_calls c \
-             JOIN run_summaries s ON s.run_id = c.run_id \
-             WHERE c.run_id = ? AND s.tenant = ? AND c.attempts IS NOT NULL",
-            vec![run_id(run.id), tenant(&run.tenant)],
-        )
-        .await?;
-        let mut attempts = BTreeMap::new();
-        for row in &rows {
-            let seq = u32::try_from(row.u64(0)?)
-                .map_err(|_| Error::Corrupt("a call's seq is out of range".into()))?;
-            let count = u32::try_from(row.u64(1)?)
-                .map_err(|_| Error::Corrupt("a call's attempts are out of range".into()))?;
-            attempts.insert(Seq(seq), count);
-        }
-        Ok(attempts)
-    }
-
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {
         let connection = self.connection().await?;
         let connection = &*connection;
         transaction(connection, async {
-            let projected = sql::query_row(
-                connection,
-                "SELECT 1 FROM run_summaries WHERE run_id = ? AND tenant = ?",
-                vec![run_id(run.id), tenant(&run.tenant)],
-            )
-            .await?;
-            if projected.is_none() {
-                return Ok(false);
+            let projected = match owner(connection, run.id).await? {
+                Some(owner) if owner != run.tenant.as_str() => return Ok(false),
+                owner => owner.is_some(),
+            };
+            // Task states and quarantine recorded before the run was projected go too.
+            for table in RUN_TABLES.into_iter().chain(["run_summaries"]) {
+                sql::execute_dynamic(
+                    connection,
+                    &format!("DELETE FROM {table} WHERE run_id = ?"),
+                    vec![run_id(run.id)],
+                )
+                .await?;
             }
-            for statement in [
-                "DELETE FROM tool_calls WHERE run_id = ?",
-                "DELETE FROM run_summaries WHERE run_id = ?",
-            ] {
-                sql::execute(connection, statement, vec![run_id(run.id)]).await?;
-            }
-            Ok(true)
+            Ok(projected)
         })
         .await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::percentile;
-
-    #[test]
-    fn percentiles_are_nearest_rank() {
-        let values = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
-        assert_eq!(percentile(&values, 50), 50);
-        assert_eq!(percentile(&values, 95), 100);
-        assert_eq!(percentile(&[7], 50), 7);
-        assert_eq!(percentile(&[1, 2, 3], 50), 2);
     }
 }

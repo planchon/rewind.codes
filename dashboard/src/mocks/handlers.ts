@@ -1,14 +1,32 @@
 // The mocked API /v1, as MSW handlers over a world of fixtures. The tests run them with
 // `msw/node`; `pnpm dev:mock` serves them from the Vite dev server.
 import { HttpResponse, http } from "msw";
-import type { ListRunsQuery, Problem, RunStatus, StreamEvent } from "../api/types";
+import type {
+  FailuresQuery,
+  ListRunsQuery,
+  Problem,
+  RunSort,
+  RunStatsQuery,
+  RunStatus,
+  StreamEvent,
+} from "../api/types";
 import type { World } from "./fixtures";
-import { deriveRun, listRuns, listScripts, toolStats, visibleEntries } from "./readmodel";
+import { QueryError } from "./query";
+import {
+  deriveRun,
+  failureGroups,
+  listRuns,
+  listScripts,
+  runStats,
+  toolStats,
+  visibleEntries,
+} from "./readmodel";
 
 const PROBLEM_TITLES: Record<string, string> = {
   unauthorized: "Unauthorized",
   "not-found": "Not found",
   "invalid-request": "Invalid request",
+  "invalid-query": "The query cannot be read",
 };
 
 export function problem(status: number, slug: string, detail: string): HttpResponse<Problem> {
@@ -16,6 +34,30 @@ export function problem(status: number, slug: string, detail: string): HttpRespo
     { type: `urn:ptc:problem:${slug}`, title: PROBLEM_TITLES[slug] ?? slug, status, detail },
     { status, headers: { "Content-Type": "application/problem+json" } },
   ) as HttpResponse<Problem>;
+}
+
+/** A query the server cannot read: `invalid-query`, with the position of the term at fault. */
+function invalidQuery(error: QueryError): HttpResponse<Problem> {
+  return HttpResponse.json(
+    {
+      type: "urn:ptc:problem:invalid-query",
+      title: PROBLEM_TITLES["invalid-query"] ?? "invalid-query",
+      status: 400,
+      detail: error.message,
+      query: { start: error.start, end: error.end },
+    },
+    { status: 400, headers: { "Content-Type": "application/problem+json" } },
+  ) as HttpResponse<Problem>;
+}
+
+/** Answers with what `answer` computes, or with `invalid-query` when the query cannot be read. */
+function reading(answer: () => unknown): Response {
+  try {
+    return HttpResponse.json(answer() as never);
+  } catch (error) {
+    if (error instanceof QueryError) return invalidQuery(error);
+    throw error;
+  }
 }
 
 function refused(world: World, request: Request): HttpResponse<Problem> | null {
@@ -76,7 +118,10 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       const query: ListRunsQuery = { label: q.getAll("label") };
       const status = q.get("status");
       if (status) query.status = status as RunStatus;
+      const sort = q.get("sort");
+      if (sort) query.sort = sort as RunSort;
       for (const key of [
+        "q",
         "tool",
         "script",
         "error",
@@ -92,7 +137,31 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       if (quarantined !== undefined) query.quarantined = quarantined;
       const limit = int(q.get("limit"));
       if (limit !== undefined) query.limit = limit;
-      return HttpResponse.json(listRuns(world, query, now()));
+      return reading(() => listRuns(world, query, now()));
+    }),
+
+    http.get("*/v1/runs/stats", ({ request }) => {
+      const q = new URL(request.url).searchParams;
+      const query: RunStatsQuery = {};
+      for (const key of ["q", "since", "until", "bucket"] as const) {
+        const value = q.get(key);
+        if (value !== null) query[key] = value;
+      }
+      const top = int(q.get("top"));
+      if (top !== undefined) query.top = top;
+      return reading(() => runStats(world, query, now()));
+    }),
+
+    http.get("*/v1/runs/failures", ({ request }) => {
+      const q = new URL(request.url).searchParams;
+      const query: FailuresQuery = {};
+      for (const key of ["q", "since", "until", "bucket"] as const) {
+        const value = q.get(key);
+        if (value !== null) query[key] = value;
+      }
+      const limit = int(q.get("limit"));
+      if (limit !== undefined) query.limit = limit;
+      return reading(() => failureGroups(world, query, now()));
     }),
 
     http.get("*/v1/runs/:id", ({ params }) => {

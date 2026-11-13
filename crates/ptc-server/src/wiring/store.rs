@@ -19,12 +19,14 @@ use ptc_core::{
 };
 use ptc_engine::ports::{
     AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun, Credentials,
-    Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
-    NewRun, ParkReason, ParkedScope, PayloadRecord, ProjectedRun, QuarantineKind, ReadModel,
-    ReadModelError, RunFilter, RunRecord, RunRef, RunSearch, RunSummary, ScriptFilter,
-    ScriptSummary, SecretError, SecretOwner, SecretStore, StoreError, StoredScript, StoredToolset,
-    Subscription, TaskFilter, TaskRef, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope,
-    ToolDeclarations, ToolStats, ToolStatsFilter, ToolTask, WebhookTarget, WebhookToken,
+    Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer, FeedItem,
+    InboxItem, JournalStore, Lease, NewRun, ParkReason, ParkedScope, PayloadRecord, ProjectedRun,
+    QuarantineKind, QuarantineNote, ReadModel, ReadModelError, RunFilter, RunOrder, RunQuery,
+    RunRecord, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
+    SearchCursor, SecretError, SecretOwner, SecretStore, StatsWindow, StoreError, StoredScript,
+    StoredToolset, Subscription, TaskFilter, TaskProgress, TaskRef, TaskToken, TaskUpdate, Tenant,
+    TenantId, TenantScope, ToolDeclarations, ToolStats, ToolStatsFilter, ToolTask, WebhookTarget,
+    WebhookToken,
 };
 use ptc_store_postgres::PostgresStore;
 use ptc_store_turso::TursoStore;
@@ -553,12 +555,35 @@ impl ReadModel for Store {
         &self,
         run: &ProjectedRun,
         entries: &[HistoryEntry],
+        snapshot: &RunSnapshot,
     ) -> Result<(), ReadModelError> {
-        each!(self, store => store.apply(run, entries).await)
+        each!(self, store => store.apply(run, entries, snapshot).await)
     }
 
-    async fn search_runs(&self, search: &RunSearch) -> Result<Vec<RunSummary>, ReadModelError> {
-        each!(self, store => store.search_runs(search).await)
+    async fn search_runs(
+        &self,
+        query: &RunQuery,
+        order: RunOrder,
+        after: Option<&SearchCursor>,
+        limit: usize,
+    ) -> Result<Vec<RunSummary>, ReadModelError> {
+        each!(self, store => store.search_runs(query, order, after, limit).await)
+    }
+
+    async fn run_stats(
+        &self,
+        query: &RunQuery,
+        window: &StatsWindow,
+    ) -> Result<RunStats, ReadModelError> {
+        each!(self, store => store.run_stats(query, window).await)
+    }
+
+    async fn failure_groups(
+        &self,
+        query: &RunQuery,
+        window: &FailureWindow,
+    ) -> Result<FailureGroups, ReadModelError> {
+        each!(self, store => store.failure_groups(query, window).await)
     }
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
@@ -577,17 +602,25 @@ impl ReadModel for Store {
         each!(self, store => store.observed_shapes(tenant, tools).await)
     }
 
-    async fn record_attempt(
+    async fn record_tasks(
         &self,
         run: &RunRef,
-        seq: Seq,
-        attempt: u32,
+        tasks: &[TaskProgress],
     ) -> Result<(), ReadModelError> {
-        each!(self, store => store.record_attempt(run, seq, attempt).await)
+        each!(self, store => store.record_tasks(run, tasks).await)
     }
 
     async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
         each!(self, store => store.attempts(run).await)
+    }
+
+    async fn record_quarantine(
+        &self,
+        run: &RunRef,
+        quarantine: Option<&QuarantineNote>,
+        at: Timestamp,
+    ) -> Result<(), ReadModelError> {
+        each!(self, store => store.record_quarantine(run, quarantine, at).await)
     }
 
     async fn purge(

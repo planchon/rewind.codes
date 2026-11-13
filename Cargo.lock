@@ -3701,6 +3701,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "utoipa",
+ "winnow",
 ]
 
 [[package]]
@@ -3812,6 +3813,7 @@ dependencies = [
  "getrandom 0.3.4",
  "ptc-core",
  "ptc-engine",
+ "regex",
  "serde_json",
  "thiserror",
  "tokio",
@@ -7215,6 +7217,15 @@ name = "windows_x86_64_msvc"
 version = "0.52.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+
+[[package]]
+name = "winnow"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winsafe"

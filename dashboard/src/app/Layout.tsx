@@ -1,6 +1,9 @@
-import { LogOut, Monitor, Moon, Sun } from "lucide-react";
-import { Link, NavLink, Outlet } from "react-router";
+import { LogOut, Monitor, Moon, Star, Sun, X } from "lucide-react";
+import { useRef } from "react";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { queryLink } from "../model/query";
 import { useServer } from "./Gate";
+import { useSavedSearches } from "./searches";
 import { maskKey, useSession } from "./session";
 import { type ThemeChoice, useSettings } from "./settings";
 
@@ -11,7 +14,54 @@ const NEXT_THEME: Record<ThemeChoice, ThemeChoice> = {
 };
 const THEME_ICON = { system: Monitor, light: Sun, dark: Moon } as const;
 
+/** The views that take a query: it follows the operator from one to the other. */
+const QUERY_VIEWS = new Set(["/overview", "/runs", "/waiting", "/failures"]);
+/** The views that take a window. */
+const WINDOW_VIEWS = new Set(["/overview", "/failures"]);
+
+function SavedMenu() {
+  const { searches, remove } = useSavedSearches();
+  const menu = useRef<HTMLDetailsElement>(null);
+  if (searches.length === 0) return null;
+  return (
+    <details className="saved-menu" ref={menu}>
+      <summary title="Saved searches, kept in this browser">
+        <Star size={12} aria-hidden="true" /> Saved{" "}
+        <span className="num muted">{searches.length}</span>
+      </summary>
+      <ul aria-label="Saved searches">
+        {searches.map((s) => (
+          <li key={s.name}>
+            <Link
+              to={queryLink(`/${s.view}`, s.q)}
+              title={`${s.view}: ${s.q || "every run"}`}
+              onClick={() => menu.current?.removeAttribute("open")}
+            >
+              <span className="saved-name">{s.name}</span>
+              <span className="mono muted saved-q">{s.q || "every run"}</span>
+            </Link>
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label={`Forget the saved search ${s.name}`}
+              onClick={() => remove(s.name)}
+            >
+              <X size={12} />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function Layout() {
+  const location = useLocation();
+  const here = new URLSearchParams(location.search);
+  const carried = QUERY_VIEWS.has(location.pathname) ? (here.get("q") ?? "") : "";
+  const win = WINDOW_VIEWS.has(location.pathname) ? here.get("window") : null;
+  const link = (path: string) =>
+    queryLink(path, carried, win && WINDOW_VIEWS.has(path) ? { window: win } : {});
   const server = useServer();
   const { key, signOut } = useSession();
   const { theme, setTheme, zone, setZone } = useSettings();
@@ -21,16 +71,20 @@ export function Layout() {
   return (
     <div className="shell">
       <header className="topbar">
-        <Link to="/runs" className="brand" aria-label="ai-ptc dashboard">
+        <Link to="/overview" className="brand" aria-label="ai-ptc dashboard">
           <span className="brand-mark" aria-hidden="true">
             AP
           </span>
           <span className="brand-name">ai-ptc</span>
         </Link>
         <nav className="nav" aria-label="Views">
-          <NavLink to="/runs">Runs</NavLink>
+          <NavLink to={link("/overview")}>Overview</NavLink>
+          <NavLink to={link("/runs")}>Runs</NavLink>
+          <NavLink to={link("/waiting")}>Waiting</NavLink>
+          <NavLink to={link("/failures")}>Failures</NavLink>
           <NavLink to="/scripts">Scripts</NavLink>
           <NavLink to="/tools">Tools</NavLink>
+          <SavedMenu />
         </nav>
         <div className="topbar-end">
           <span className="server-meta" title={`Roles: ${server.roles.join(", ")}`}>

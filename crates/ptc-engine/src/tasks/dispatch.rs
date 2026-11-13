@@ -29,8 +29,9 @@ use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
     BlobStore, ClaimedTask, Clock, Credentials, Dispatched, Entropy, JournalStore, ParkKind,
-    ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskToken, TaskUpdate, ToolCall,
-    ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind, WebhookSender,
+    ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskPhase, TaskProgress, TaskToken,
+    TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind,
+    WebhookSender,
 };
 use crate::{metrics, payloads, text};
 
@@ -80,8 +81,15 @@ where
     /// An error means the call could not be prepared (a missing toolset or payload, a store or
     /// secret store failure): it was not sent, and the task is ready again after a backoff.
     ///
+    /// Returns what the task waits for after this attempt when it waits for the harness: parked
+    /// or deferred, with its attempt, for the caller to record it in the read model. `None` when
+    /// it was answered, is put back for another attempt (its next claim records it), or is gone.
+    ///
     /// [`heartbeat_tool_claims`]: Self::heartbeat_tool_claims
-    pub async fn run_tool_task(&self, claimed: ClaimedTask) -> Result<(), EngineError> {
+    pub async fn run_tool_task(
+        &self,
+        claimed: ClaimedTask,
+    ) -> Result<Option<TaskProgress>, EngineError> {
         let ClaimedTask {
             task,
             token,
@@ -90,12 +98,12 @@ where
         if let Some(failure) = self.interrupted(&task, previous_claim_expired) {
             self.finish(&task, &token, ToolOutcome::Failure(failure))
                 .await?;
-            return Ok(());
+            return Ok(None);
         }
         let prepared = match self.prepare(&task, &token).await {
             Ok(Some(prepared)) => prepared,
             // The run has ended: its tasks are gone.
-            Ok(None) => return Ok(()),
+            Ok(None) => return Ok(None),
             Err(error) => {
                 tracing::error!(task = %task.task, %error, "a tool call could not be prepared");
                 self.retry_later(&task, &token).await?;
@@ -451,7 +459,14 @@ where
         token: &TaskToken,
         record: &RunRecord,
         dispatched: Dispatched,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<TaskProgress>, EngineError> {
+        let waiting = |phase| {
+            Some(TaskProgress {
+                seq: task.task.seq,
+                attempt: task.attempt,
+                phase,
+            })
+        };
         match dispatched {
             Dispatched::Result(result) => {
                 let outcome = match self.bounded_result(result) {
@@ -481,16 +496,19 @@ where
             }
             Dispatched::Deferred => {
                 let until = self.deferral_deadline(task, record, None);
-                self.journal.defer_tool_task(token, until).await?;
+                if self.journal.defer_tool_task(token, until).await? == TaskUpdate::Applied {
+                    return Ok(waiting(TaskPhase::Deferred));
+                }
             }
             Dispatched::Park(reason) => {
                 if self.journal.park_tool_task(token, reason.clone()).await? == TaskUpdate::Applied
                 {
                     self.report_parked(task, record, reason).await?;
+                    return Ok(waiting(TaskPhase::Parked));
                 }
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Tells the tenant's subscriptions that a call waits for the harness. Sent once the task

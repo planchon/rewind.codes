@@ -14,6 +14,7 @@ import {
   writeToolFilters,
 } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
+import { fieldTerm, queryLink } from "../model/query";
 import { AddFilter, FilterChip, Seg } from "./FilterBits";
 
 export function namespaceOf(tool: string): string {
@@ -234,7 +235,7 @@ export function ToolsView() {
                       <tr key={t.tool}>
                         <td className="mono tool-name">
                           <Link
-                            to={`/runs?tool=${encodeURIComponent(t.tool)}`}
+                            to={queryLink("/runs", fieldTerm("tool", t.tool))}
                             title={`Runs that called ${t.tool}`}
                           >
                             {t.tool}
@@ -263,7 +264,10 @@ export function ToolsView() {
                                 <Link
                                   key={kind}
                                   className="label"
-                                  to={`/runs?tool=${encodeURIComponent(t.tool)}&error=${kind}`}
+                                  to={queryLink(
+                                    "/runs",
+                                    `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
+                                  )}
                                   title={`Runs where ${t.tool} failed with ${kind}`}
                                 >
                                   <span className="k">{kind}</span>&nbsp;{n}

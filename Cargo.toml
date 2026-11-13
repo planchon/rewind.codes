@@ -60,6 +60,8 @@ libtest-mimic = "0.8"
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
 # The workers' blob cache in ptc-blob: concurrent, bounded by weight (bytes).
 quick_cache = "0.7"
+# The failure signatures of ptc-engine: the parts of an error's message that vary, replaced.
+regex = "1"
 # The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
 # The MCP SDK: clients in ptc-mcp, servers in its tests.
@@ -87,6 +89,7 @@ tokio-util = "0.7"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
+winnow = "1"
 # ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").

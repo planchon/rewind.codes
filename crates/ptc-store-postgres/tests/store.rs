@@ -1,6 +1,7 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
 //! migrations, servers starting together, what a call dropped half-way leaves, secrets at rest,
-//! the byte order of tenants, and claims that read several pages of due tasks.
+//! the byte order of tenants, claims that read several pages of due tasks, projectors applying
+//! the same runs at once, and the percentiles of Postgres.
 //!
 //! The checks share one Postgres container, each on a new database.
 
@@ -11,13 +12,15 @@ use std::time::Duration;
 
 use futures_util::future::join_all;
 use ptc_core::{
-    Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunStarted, RunStatus,
-    Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
+    Annotation, Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, RunId, RunMode,
+    RunStarted, RunStatus, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use ptc_engine::ports::{
     AcquireRunnable, Activation, CreateRun, Credentials, JournalStore, NewRun, NewToolTask,
-    RunMetadata, RunRef, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore,
-    ServerCredentials, TaskFilter, Tenant, TenantId, TenantScope,
+    Predicate, ProjectedRun, QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder,
+    RunQuery, RunRef, RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore,
+    ServerCredentials, TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait,
+    WaitKind,
 };
 use ptc_store_postgres::{Config, Error, MasterKey, PostgresStore, SCHEMA_VERSION};
 use serde_json::json;
@@ -88,6 +91,8 @@ async fn the_database_behind_the_store() {
     check!(a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next);
     check!(concurrent_claims_keep_to_a_servers_limit);
     check!(concurrent_claims_keep_to_a_tools_limit);
+    check!(projectors_applying_together_keep_the_longest_snapshot);
+    check!(percentiles_are_nearest_rank);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {
@@ -592,6 +597,213 @@ async fn concurrent_claims_keep_to_a_tools_limit(postgres: &Postgres) {
         );
         assert_eq!(all, 2, "two calls of the tool in flight in the run");
     }
+}
+
+// -------------------------------------------------------------------------------------------
+// The read model
+
+const PROJECTED_RUNS: u128 = 12;
+/// The entries of each projected run, each applied alone with the snapshot up to it.
+const PROJECTED_ENTRIES: u64 = 12;
+
+fn projected_run(n: u128) -> ProjectedRun {
+    ProjectedRun {
+        run: RunRef::new(
+            TenantId::local(),
+            RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0001_0000 | n),
+        ),
+        script: Digest::of(b"script"),
+        headline: format!("// Run {n}"),
+        toolset: Digest::of(b"toolset"),
+        labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
+        parent: None,
+    }
+}
+
+/// The entry at `index`: `run_started`, then logs.
+fn projected_entry(index: u64) -> HistoryEntry {
+    let event = if index == 0 {
+        Event::Lifecycle(Lifecycle::RunStarted(started()))
+    } else {
+        Event::Annotation(Annotation::Log {
+            level: LogLevel::Info,
+            message: format!("tick {index}"),
+            callsite: None,
+        })
+    };
+    HistoryEntry {
+        index,
+        recorded_at: Timestamp(T0.0 + index * 10),
+        event,
+    }
+}
+
+/// The snapshot of the first `len` entries: a call, and timers that name the snapshot, more or
+/// fewer of them.
+fn projected_snapshot(len: u64) -> RunSnapshot {
+    let call = Wait {
+        kind: WaitKind::Call,
+        seq: Some(Seq(1)),
+        name: Some("ask_user".into()),
+        since: T0,
+        until: None,
+        callsite: None,
+        task: None,
+    };
+    let timers = (0..len % 3).map(|n| Wait {
+        kind: WaitKind::Timer,
+        seq: Some(Seq(u32::try_from(len * 10 + n).expect("a seq"))),
+        name: None,
+        since: T0,
+        until: Some(Timestamp(T0.0 + 100_000 - len * 1_000 + n)),
+        callsite: None,
+        task: None,
+    });
+    RunSnapshot {
+        history_len: len,
+        status: RunStatus::Active,
+        mode: Some(RunMode::Live),
+        waits: std::iter::once(call).chain(timers).collect(),
+        ending: None,
+    }
+}
+
+fn quarantine_at(at: u64) -> QuarantineNote {
+    QuarantineNote {
+        kind: QuarantineKind::Failures,
+        reason: format!("recorded at {at}"),
+        since: Timestamp(T0.0 + at),
+    }
+}
+
+/// Some items in the order of `order`: as given, backwards, or the odd ones first.
+fn reorder<T: Clone>(items: &[T], order: usize) -> Vec<T> {
+    let mut items = items.to_vec();
+    match order % 3 {
+        0 => {}
+        1 => items.reverse(),
+        _ => {
+            let (odd, even): (Vec<_>, Vec<_>) =
+                items.into_iter().enumerate().partition(|(n, _)| n % 2 == 1);
+            items = odd.into_iter().chain(even).map(|(_, item)| item).collect();
+        }
+    }
+    items
+}
+
+/// Projectors on three servers apply the entries of the same runs at once, each entry with its
+/// snapshot, each server in its own order; services record the tasks' states and the
+/// quarantines at once, in their own orders. Every run keeps the snapshot of its whole history
+/// and nothing of the shorter ones, the furthest state of its task, its latest quarantine, and
+/// one row of labels and of search text.
+async fn projectors_applying_together_keep_the_longest_snapshot(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let stores = join_all((0..3).map(|_| postgres.connect_with(&database, 4))).await;
+    let lengths: Vec<u64> = (1..=PROJECTED_ENTRIES).collect();
+    let tasks: Vec<TaskProgress> = [
+        (0, TaskPhase::Approval),
+        (0, TaskPhase::Ready),
+        (1, TaskPhase::Claimed),
+        (1, TaskPhase::Parked),
+        (1, TaskPhase::Ready),
+        (2, TaskPhase::Claimed),
+        (2, TaskPhase::Deferred),
+    ]
+    .into_iter()
+    .map(|(attempt, phase)| TaskProgress {
+        seq: Seq(1),
+        attempt,
+        phase,
+    })
+    .collect();
+    // Released at even times, quarantined at odd ones, and both at the last.
+    let quarantines: Vec<(Option<QuarantineNote>, u64)> = (1..=6)
+        .map(|at| ((at % 2 == 1).then(|| quarantine_at(at)), at))
+        .chain([(Some(quarantine_at(6)), 6)])
+        .collect();
+    let work = stores.iter().enumerate().flat_map(|(server, store)| {
+        let (lengths, tasks, quarantines) = (&lengths, &tasks, &quarantines);
+        (0..PROJECTED_RUNS).map(move |n| async move {
+            let order = server + usize::try_from(n).expect("small");
+            let run = projected_run(n);
+            for len in reorder(lengths, order) {
+                let entries = [projected_entry(len - 1)];
+                let snapshot = projected_snapshot(len);
+                store.apply(&run, &entries, &snapshot).await.expect("apply");
+            }
+            for task in reorder(tasks, order + 1) {
+                store
+                    .record_tasks(&run.run, &[task])
+                    .await
+                    .expect("record_tasks");
+            }
+            for (note, at) in reorder(quarantines, order + 2) {
+                let at = Timestamp(T0.0 + at);
+                store
+                    .record_quarantine(&run.run, note.as_ref(), at)
+                    .await
+                    .expect("record_quarantine");
+            }
+        })
+    });
+    join_all(work).await;
+
+    let store = &stores[0];
+    for n in 0..PROJECTED_RUNS {
+        let run = projected_run(n);
+        let query =
+            RunQuery::new(TenantId::local()).with(Predicate::Id(vec![run.run.id.to_string()]));
+        let found = store
+            .search_runs(&query, RunOrder::Started, None, 10)
+            .await
+            .expect("search_runs");
+        assert_eq!(found.len(), 1, "run {n} is projected once");
+        let summary = &found[0];
+        let mut waits = projected_snapshot(PROJECTED_ENTRIES).waits;
+        waits[0].task = Some(TaskPhase::Deferred);
+        assert_eq!(
+            summary.waits, waits,
+            "run {n}: the waits of the longest snapshot, and only them"
+        );
+        assert_eq!(
+            summary.wakes_at,
+            waits.iter().filter_map(|wait| wait.until).min()
+        );
+        assert_eq!(
+            (summary.history_len, summary.last_activity_at),
+            (
+                PROJECTED_ENTRIES,
+                Timestamp(T0.0 + (PROJECTED_ENTRIES - 1) * 10)
+            )
+        );
+        assert_eq!(summary.quarantine, Some(quarantine_at(6)), "run {n}");
+        assert_eq!(
+            store.attempts(&run.run).await,
+            Ok(BTreeMap::from([(Seq(1), 2)])),
+            "run {n}: the highest attempt"
+        );
+    }
+    for table in ["run_summaries", "run_labels", "run_search"] {
+        assert_eq!(
+            postgres.psql(&database, &format!("SELECT count(*) FROM {table}")),
+            PROJECTED_RUNS.to_string(),
+            "one row of {table} per run"
+        );
+    }
+}
+
+/// `percentile_disc`, which the statistics use, is the nearest-rank percentile of `Latency`:
+/// the value at position `ceil(p × n / 100)`, counting from 1.
+async fn percentiles_are_nearest_rank(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let mismatches = postgres.psql(
+        &database,
+        "SELECT count(*) FROM generate_series(1, 500) AS n, \
+             (VALUES (50, 0.5), (95, 0.95), (99, 0.99)) AS p(p, fraction) \
+         WHERE (SELECT percentile_disc(p.fraction) WITHIN GROUP (ORDER BY v) \
+                FROM generate_series(1, n) AS v) <> (p.p * n + 99) / 100",
+    );
+    assert_eq!(mismatches, "0", "percentiles that are not nearest-rank");
 }
 
 #[test]

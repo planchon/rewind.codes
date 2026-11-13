@@ -9,9 +9,11 @@ import {
   type Credentials,
   type Duration,
   type Entry,
+  type FailureGroupPage,
   type Labels,
   type Run,
   type RunPage,
+  type RunStats,
   type RunStatus,
   type RunSummary,
   type SignalAccepted,
@@ -73,6 +75,15 @@ export interface ForkRunParams extends RequestOptions {
 }
 
 export interface ListRunsParams extends RequestOptions {
+  /**
+   * A query: terms separated by spaces, all of which must hold, as
+   * `@agent:triage status:failed,aborted -@env:test "rate limit"`. Joined to the other
+   * parameters by "and". A query that cannot be read is refused with `invalid-query`, whose
+   * `query` says where the term at fault is.
+   */
+  q?: string | undefined;
+  /** `started` (the default), `activity`, or `wakes`: the soonest to wake by itself first. */
+  sort?: "started" | "activity" | "wakes" | undefined;
   status?: RunStatus | undefined;
   /** Only runs carrying all these labels. */
   labels?: Labels | undefined;
@@ -90,6 +101,32 @@ export interface ListRunsParams extends RequestOptions {
   /** At most this many runs (50 by default, 500 at most). */
   limit?: number | undefined;
   cursor?: string | undefined;
+}
+
+export interface RunStatsParams extends RequestOptions {
+  /** A query, as in `list`. */
+  q?: string | undefined;
+  /** Runs started at or after this time. No lower bound by default. */
+  since?: Date | string | undefined;
+  /** Runs started before this time. Now by default. */
+  until?: Date | string | undefined;
+  /** The width of the series' buckets, from `since`, which it requires. No series without it. */
+  bucket?: Duration | undefined;
+  /** Values per facet (10 by default, 50 at most). */
+  top?: number | undefined;
+}
+
+export interface FailuresParams extends RequestOptions {
+  /** A query, as in `list`. */
+  q?: string | undefined;
+  /** Runs ended at or after this time. No lower bound by default. */
+  since?: Date | string | undefined;
+  /** Runs ended before this time. Now by default. */
+  until?: Date | string | undefined;
+  /** The width of each group's series' buckets, from `since`, which it requires. */
+  bucket?: Duration | undefined;
+  /** Groups at most (50 by default, 500 at most). */
+  limit?: number | undefined;
 }
 
 export interface EventsParams extends RequestOptions {
@@ -135,7 +172,7 @@ export class Runs {
     return this.waitUntil(run, asked, deadline, options.signal);
   }
 
-  /** A page of runs, most recently started first. */
+  /** A page of runs, most recently started first unless `sort` says otherwise. */
   list(params: ListRunsParams = {}): Promise<RunPage> {
     const { signal } = params;
     return this.transport.send(
@@ -143,6 +180,8 @@ export class Runs {
         this.transport.api.GET("/v1/runs", {
           params: {
             query: {
+              q: params.q,
+              sort: params.sort,
               status: params.status,
               label: labelParams(params.labels),
               tool: params.tool,
@@ -154,6 +193,52 @@ export class Runs {
               startedBefore: timeParam(params.startedBefore),
               limit: params.limit,
               cursor: params.cursor,
+            },
+          },
+          signal,
+        }),
+      { retry: true, signal },
+    );
+  }
+
+  /**
+   * Statistics of the runs a query matches: counts by status, a series, durations and facets of
+   * the runs started in the window; the runs waiting now by what they wait for, and the
+   * quarantined ones.
+   */
+  stats(params: RunStatsParams = {}): Promise<RunStats> {
+    const { signal } = params;
+    return this.transport.send(
+      () =>
+        this.transport.api.GET("/v1/runs/stats", {
+          params: {
+            query: {
+              q: params.q,
+              since: timeParam(params.since),
+              until: timeParam(params.until),
+              bucket: params.bucket === undefined ? undefined : durationParam(params.bucket),
+              top: params.top,
+            },
+          },
+          signal,
+        }),
+      { retry: true, signal },
+    );
+  }
+
+  /** The failed, cancelled and aborted runs a query matches, grouped by fingerprint. */
+  failures(params: FailuresParams = {}): Promise<FailureGroupPage> {
+    const { signal } = params;
+    return this.transport.send(
+      () =>
+        this.transport.api.GET("/v1/runs/failures", {
+          params: {
+            query: {
+              q: params.q,
+              since: timeParam(params.since),
+              until: timeParam(params.until),
+              bucket: params.bucket === undefined ? undefined : durationParam(params.bucket),
+              limit: params.limit,
             },
           },
           signal,

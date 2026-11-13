@@ -17,7 +17,10 @@ use ptc_api::admin::Role;
 use ptc_api::common::{Labels, RunStatus};
 use ptc_api::events::{Event, EventsQuery, StreamEvent};
 use ptc_api::headers::IdempotencyKey;
-use ptc_api::runs::{CancelRun, ForkRun, JournalExport, RunFilter, StartRun, TraceFormat, Waiting};
+use ptc_api::runs::{
+    CancelRun, FailureQuery, ForkRun, JournalExport, RunFilter, RunSort, RunStatsQuery, StartRun,
+    TraceFormat, WaitKind, Waiting,
+};
 use ptc_api::scripts::{CheckRequest, ScriptFilter};
 use ptc_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskQuery, TaskState};
 use ptc_api::toolsets::{CreateToolset, HostTool, ToolPolicy};
@@ -1400,5 +1403,221 @@ async fn text_with_a_nul_character_is_refused_with_400() {
     request.wait = wait("20s");
     let run = harness.start_run(&request, None).await.unwrap();
     assert_eq!(run.status, RunStatus::Completed);
+    server.stop().await;
+}
+
+const FAIL: &str = r#"export default async function main(input: { n: number }) {
+  throw new TypeError(`bad ${input.n}`);
+}
+"#;
+
+/// The ids of a page of runs, sorted.
+async fn found(client: &ptc_api::Client, q: &str) -> Vec<String> {
+    let mut ids: Vec<String> = client
+        .list_runs(&RunFilter {
+            q: Some(q.into()),
+            ..RunFilter::default()
+        })
+        .await
+        .unwrap()
+        .runs
+        .into_iter()
+        .map(|run| run.id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+fn sorted(mut ids: Vec<String>) -> Vec<String> {
+    ids.sort();
+    ids
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runs_are_searched_counted_and_grouped_by_failure() {
+    let server = TestServer::start(&[]).await;
+    let harness = server.key(Role::Harness, &[]).await;
+    let labelled = |script: &str, labels: &[(&str, &str)]| {
+        let mut request = start(script);
+        request.labels = labels.iter().copied().collect();
+        request
+    };
+
+    let mut waiting = labelled(SIGNAL, &[("agent", "triage"), ("env", "prod")]);
+    waiting.wait = wait("100ms");
+    let waiting = harness.start_run(&waiting, None).await.unwrap();
+    let mut failed = Vec::new();
+    for n in [1, 2] {
+        let mut request = labelled(FAIL, &[("agent", "triage"), ("env", "test")]);
+        request.input = json!({ "n": n });
+        request.wait = wait("20s");
+        let run = harness.start_run(&request, None).await.unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        failed.push(run.id);
+    }
+    let mut done = labelled(SLEEP, &[("agent", "support")]);
+    done.input = json!({ "ms": 10 });
+    done.wait = wait("20s");
+    let done = harness.start_run(&done, None).await.unwrap();
+    let toolset = harness
+        .create_toolset(&ask_toolset(ToolPolicy {
+            approval: Some(true),
+            ..ToolPolicy::default()
+        }))
+        .await
+        .unwrap();
+    let mut asking = start(ASK);
+    asking.toolset = Some(toolset.id.clone());
+    let asking = harness.start_run(&asking, None).await.unwrap();
+
+    // Once the projector has applied every run.
+    eventually(|| async {
+        let all = found(&harness, "").await;
+        let approval = found(&harness, "waiting:approval").await;
+        (all.len() == 5 && approval == vec![asking.id.clone()]).then_some(())
+    })
+    .await;
+
+    let triage = sorted(vec![
+        waiting.id.clone(),
+        failed[0].clone(),
+        failed[1].clone(),
+    ]);
+    assert_eq!(found(&harness, "@agent:triage").await, triage);
+    assert_eq!(found(&harness, "@agent:tri*").await, triage);
+    assert_eq!(
+        found(&harness, "@agent:* -@agent:triage").await,
+        vec![done.id.clone()]
+    );
+    assert_eq!(
+        found(&harness, "waiting:signal signal:approval").await,
+        vec![waiting.id.clone()]
+    );
+    assert_eq!(
+        found(&harness, "status:failed error:TypeError \"bad 2\"").await,
+        vec![failed[1].clone()]
+    );
+    assert_eq!(
+        found(&harness, "status:completed,active -waiting:*").await,
+        vec![done.id.clone()]
+    );
+    assert_eq!(
+        found(&harness, &format!("id:{}", &waiting.id[..13])).await,
+        vec![waiting.id.clone()]
+    );
+
+    // A run in a list says what it waits for, and how it failed.
+    let page = harness
+        .list_runs(&RunFilter {
+            q: Some("@agent:triage".into()),
+            sort: Some(RunSort::Wakes),
+            ..RunFilter::default()
+        })
+        .await
+        .unwrap();
+    let signal = page.runs.iter().find(|run| run.id == waiting.id).unwrap();
+    assert_eq!(signal.waiting_for.len(), 1);
+    assert_eq!(signal.waiting_for[0].kind, WaitKind::Signal);
+    assert_eq!(signal.waiting_for[0].name.as_deref(), Some("approval"));
+    assert_eq!(signal.waiting_for[0].callsite.unwrap().line, 3);
+    let bad = page.runs.iter().find(|run| run.id == failed[0]).unwrap();
+    assert_eq!(bad.error.as_deref(), Some("TypeError"));
+    assert_eq!(bad.error_message.as_deref(), Some("bad 1"));
+    assert_eq!(bad.error_line, Some(2));
+    let fingerprint = bad.fingerprint.clone().unwrap();
+    assert_eq!(
+        found(&harness, &format!("fingerprint:{fingerprint}")).await,
+        sorted(failed.clone())
+    );
+
+    // A query that cannot be read says where.
+    let refused = problem(
+        harness
+            .list_runs(&RunFilter {
+                q: Some("@agent:triage stauts:failed".into()),
+                ..RunFilter::default()
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::InvalidQuery));
+    assert_eq!(refused.status, 400);
+    let span = refused.query.unwrap();
+    assert_eq!((span.start, span.end), (14, 27));
+    assert!(
+        refused.detail.contains("unknown field \"stauts\""),
+        "{}",
+        refused.detail
+    );
+
+    // Statistics and facets.
+    let stats = harness
+        .run_stats(&RunStatsQuery {
+            q: Some("@agent:triage".into()),
+            ..RunStatsQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(stats.runs, 3);
+    assert_eq!(stats.statuses.failed, 2);
+    assert_eq!(stats.statuses.active, 1);
+    assert_eq!(stats.waiting.signal, 1);
+    let env = stats
+        .facets
+        .labels
+        .iter()
+        .find(|label| label.key == "env")
+        .unwrap();
+    assert_eq!(env.values[0].value, "test");
+    assert_eq!(env.values[0].runs, 2);
+    let now = jiff::Timestamp::now();
+    let series = harness
+        .run_stats(&RunStatsQuery {
+            since: Some(now - jiff::SignedDuration::from_hours(1)),
+            until: Some(now + jiff::SignedDuration::from_secs(1)),
+            bucket: Some("10m".parse().unwrap()),
+            ..RunStatsQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(series.series.len(), 7);
+    let started: u64 = series
+        .series
+        .iter()
+        .map(|bucket| bucket.statuses.failed)
+        .sum();
+    assert_eq!(started, 2);
+    assert_eq!(series.waiting.approval, 1);
+    let too_many = problem(
+        harness
+            .run_stats(&RunStatsQuery {
+                since: Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24)),
+                bucket: Some("1s".parse().unwrap()),
+                ..RunStatsQuery::default()
+            })
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(too_many.kind(), Some(ProblemType::InvalidRequest));
+
+    // Failures grouped by fingerprint, across inputs.
+    let failures = harness
+        .run_failures(&FailureQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(failures.total_groups, 1);
+    let group = &failures.groups[0];
+    assert_eq!(group.fingerprint, fingerprint);
+    assert_eq!(group.signature, "TypeError: bad <n>");
+    assert_eq!(group.runs, 2);
+    assert_eq!(group.line, Some(2));
+    assert!(failed.contains(&group.latest.id));
+
+    // A key limited to labels searches within them.
+    let support = server.key(Role::Reader, &[("agent", "support")]).await;
+    assert_eq!(found(&support, "").await, vec![done.id.clone()]);
+    assert!(found(&support, "@agent:triage").await.is_empty());
+    let stats = support.run_stats(&RunStatsQuery::default()).await.unwrap();
+    assert_eq!(stats.runs, 1);
     server.stop().await;
 }
