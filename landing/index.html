@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Rewind · durable tool calling for agents</title>
+    <meta
+      name="description"
+      content="Your model writes a TypeScript script that calls your tools. Rewind runs it in a deterministic sandbox and journals every interaction: runs sleep for days, survive crashes, and replay identically."
+    />
+    <meta property="og:title" content="Rewind · durable tool calling for agents" />
+    <meta
+      property="og:description"
+      content="A deterministic, durable TypeScript runtime for programmatic tool calling."
+    />
+    <meta property="og:url" content="https://rewind.codes" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/player.js" defer></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap top-row">
+        <a class="brand" href="/" aria-label="Rewind, home">
+          <svg viewBox="0 0 64 64" aria-hidden="true">
+            <rect width="64" height="64" rx="14" />
+            <path d="M33 20v24L15 32z M51 20v24L33 32z" />
+          </svg>
+          <span>rewind</span>
+        </a>
+        <nav class="nav" aria-label="Sections">
+          <a href="#journal">Journal</a>
+          <a href="#harness">Harness</a>
+          <a href="#sandbox">Sandbox</a>
+          <a class="button small" href="https://app.rewind.codes">Dashboard</a>
+        </nav>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero wrap">
+        <p class="eyebrow">Programmatic tool calling, durable by design</p>
+        <h1>Your model writes the script.<br />Rewind runs it, and remembers every step.</h1>
+        <p class="lead">
+          Instead of calling tools one at a time through the conversation, the model writes one
+          TypeScript script that calls your MCP servers and harness tools. Rewind runs it in a
+          deterministic V8 sandbox and journals every interaction with the outside world. A run can
+          wait days for a human, survive a crash or a deploy, and replay exactly.
+        </p>
+        <div class="actions">
+          <a class="button" href="https://app.rewind.codes">Open the dashboard</a>
+          <a class="button ghost" href="#harness">See how a harness plugs in</a>
+        </div>
+
+        <figure class="player" aria-label="A run of a triage script and its journal">
+          <div class="player-head">
+            <span class="file">triage.ts</span>
+            <span class="status" data-status>pending</span>
+            <span class="clock" data-clock>Nov 3, 09:12</span>
+          </div>
+          <div class="player-body">
+            <pre class="code" data-code><code><span data-line="1"><span class="ln">1</span><span class="k">import</span> { github, slack } <span class="k">from</span> <span class="s">"ptc:tools"</span>;</span><span data-line="2"><span class="ln">2</span><span class="k">import</span> { sleep, signal } <span class="k">from</span> <span class="s">"ptc"</span>;</span><span data-line="3"><span class="ln">3</span></span><span data-line="4"><span class="ln">4</span><span class="k">const</span> DAY = <span class="n">86_400_000</span>;</span><span data-line="5"><span class="ln">5</span></span><span data-line="6"><span class="ln">6</span><span class="k">export default async function</span> <span class="f">main</span>({ repo }: { repo: <span class="t">string</span> }) {</span><span data-line="7"><span class="ln">7</span>  <span class="k">const</span> issues = <span class="k">await</span> github.<span class="f">list_issues</span>({ repo, state: <span class="s">"open"</span> });</span><span data-line="8"><span class="ln">8</span>  <span class="k">const</span> stale = issues.<span class="f">filter</span>((i) =&gt; Date.<span class="f">now</span>() - Date.<span class="f">parse</span>(i.updated_at) &gt; <span class="n">30</span> * DAY);</span><span data-line="9"><span class="ln">9</span></span><span data-line="10"><span class="ln">10</span>  <span class="k">await</span> slack.<span class="f">post_message</span>({ channel: <span class="s">"#triage"</span>, text: <span class="s">`${stale.length} stale issues`</span> });</span><span data-line="11"><span class="ln">11</span></span><span data-line="12"><span class="ln">12</span>  <span class="k">const</span> ok = <span class="k">await</span> <span class="f">signal</span>&lt;{ close: <span class="t">boolean</span> }&gt;(<span class="s">"approval"</span>, { timeout: <span class="s">"3d"</span> });</span><span data-line="13"><span class="ln">13</span>  <span class="k">if</span> (!ok?.close) <span class="k">return</span> { closed: <span class="n">0</span> };</span><span data-line="14"><span class="ln">14</span></span><span data-line="15"><span class="ln">15</span>  <span class="k">await</span> Promise.<span class="f">all</span>(stale.<span class="f">map</span>((i) =&gt; github.<span class="f">close_issue</span>({ repo, number: i.number })));</span><span data-line="16"><span class="ln">16</span></span><span data-line="17"><span class="ln">17</span>  <span class="k">await</span> <span class="f">sleep</span>(<span class="s">"10d"</span>);</span><span data-line="18"><span class="ln">18</span>  <span class="k">const</span> reopened = <span class="k">await</span> github.<span class="f">list_issues</span>({ repo, state: <span class="s">"open"</span>, labels: <span class="s">"reopened"</span> });</span><span data-line="19"><span class="ln">19</span>  <span class="k">return</span> { closed: stale.length, reopened: reopened.length };</span><span data-line="20"><span class="ln">20</span>}</span></code></pre>
+            <ol class="journal" data-journal aria-label="Journal"></ol>
+          </div>
+          <div class="transport">
+            <button type="button" class="rewind" data-rewind aria-label="Rewind and replay from the journal">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12L3 12z M21 6v12l-9-6z" /></svg>
+              <span>Rewind</span>
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="15"
+              value="0"
+              step="1"
+              data-scrub
+              aria-label="Position in the journal"
+            />
+            <span class="note" data-note>Live: every effect is recorded once.</span>
+          </div>
+          <figcaption>
+            A real script shape: one tool call per line of business logic, a human approval that may
+            take days, a ten-day sleep. Drag the bar, or rewind: replaying reads results from the
+            journal and sends no tool call twice.
+          </figcaption>
+        </figure>
+      </section>
+
+      <section id="journal" class="band">
+        <div class="wrap">
+          <h2>One journal. Everything else is derived from it.</h2>
+          <p class="section-lead">
+            Every tool call, timer, signal and log line is an event in the run's journal, linked to
+            the line of TypeScript that caused it. No feature gets a side channel.
+          </p>
+          <div class="grid four">
+            <article class="card">
+              <h3>Durable execution</h3>
+              <p>
+                <code>await sleep("10d")</code> or wait for a signal. The run survives crashes and
+                deploys, and resumes by re-executing the script against its journal.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Replay</h3>
+              <p>
+                Any run re-executes from its journal, locally, with identical results. Scripts are
+                content-addressed: no workflow versioning problem.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Testing</h3>
+              <p>
+                A recorded run becomes a cassette of mocks. Time is virtual, so a ten-day workflow
+                is tested in milliseconds.
+              </p>
+            </article>
+            <article class="card">
+              <h3>Observability</h3>
+              <p>
+                OpenTelemetry traces projected from the journal, and a dashboard of every run and
+                all the code executed on the platform.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section id="harness" class="wrap split">
+        <div>
+          <h2>Built for agent harness developers</h2>
+          <ol class="steps">
+            <li>
+              <strong>Register a toolset.</strong> MCP servers and your own host tools. Rewind pins
+              their schemas and returns TypeScript declarations for the system prompt.
+            </li>
+            <li>
+              <strong>Give the model <code>run_script</code>.</strong> If the run ends within
+              <code>wait</code>, the result comes back inline. Otherwise the model gets the run's
+              state: "suspended, waiting for signal approval".
+            </li>
+            <li>
+              <strong>Answer host tools from your worker.</strong> Ask the end user, call another
+              LLM, start a sub-agent: the SDK worker long-polls tasks, like activity workers.
+            </li>
+            <li>
+              <strong>Resume the conversation on webhooks.</strong> <code>run.completed</code>,
+              <code>run.failed</code> and <code>run.suspended</code> arrive signed.
+            </li>
+          </ol>
+        </div>
+        <pre class="snippet"><code><span class="k">const</span> toolset = <span class="k">await</span> ptc.toolsets.<span class="f">create</span>({
+  mcp: [{ name: <span class="s">"github"</span>, url: <span class="s">"https://mcp.example.com/github"</span> }],
+  host: [{ name: <span class="s">"ask_user"</span>, inputSchema, policy: { onInterruption: <span class="s">"at_most_once"</span> } }],
+});
+
+<span class="c">// toolset.declarations → the system prompt</span>
+
+<span class="k">const</span> run = <span class="k">await</span> ptc.runs.<span class="f">start</span>({
+  toolset: toolset.id,
+  script: code,                 <span class="c">// written by the model</span>
+  wait: <span class="s">"30s"</span>,                  <span class="c">// inline result if it ends in time</span>
+  idempotencyKey: toolCall.id,  <span class="c">// a retry returns the same run</span>
+  labels: { conversation: conversation.id },
+  traceparent,                  <span class="c">// joins the agent's trace</span>
+});</code></pre>
+      </section>
+
+      <section class="band">
+        <div class="wrap">
+          <h2>Agent tools, ready to plug in</h2>
+          <p class="section-lead">
+            The model needs more than <code>run_script</code>: it checks, tests, follows and steers
+            its runs. The SDK ships the definitions and handlers, with adapters for the Anthropic and
+            OpenAI tool formats.
+          </p>
+          <dl class="tools">
+            <div><dt>run_script</dt><dd>Type-checks, starts the run, returns the output or its state.</dd></div>
+            <div><dt>check_script</dt><dd>Type-check only, with hints for what models reach for by habit.</dd></div>
+            <div><dt>test_script</dt><dd>Runs against mocks and cassettes, in virtual time.</dd></div>
+            <div><dt>get_run</dt><dd>Status and LLM trace, or one journal entry in full.</dd></div>
+            <div><dt>list_runs</dt><dd>The runs of the same conversation, scoped by labels.</dd></div>
+            <div><dt>signal_run</dt><dd>Sends a signal: an approval, an answer, an event.</dd></div>
+            <div><dt>cancel_run</dt><dd>Cancels a run, with a grace period for cleanup.</dd></div>
+            <div><dt>retry_run</dt><dd>Forks a failed run with a fixed script; finished calls are reused, not repeated.</dd></div>
+            <div><dt>search_tools</dt><dd>Finds declarations in toolsets too large for the prompt.</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section id="sandbox" class="wrap">
+        <h2>Deterministic by construction</h2>
+        <p class="section-lead">
+          Replay only works if the script cannot observe anything the journal does not hold. Rewind
+          owns the runtime, so determinism is guaranteed by the sandbox, not by developer discipline.
+        </p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">In the script</th><th scope="col">In the sandbox</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>Date.now()</code>, <code>new Date()</code>, <code>Temporal.Now</code></td><td>Logical time, recorded with each event</td></tr>
+              <tr><td><code>Math.random()</code>, <code>crypto.randomUUID()</code></td><td>Seeded generators, keyed by the run's 256-bit seed</td></tr>
+              <tr><td><code>setTimeout</code>, <code>sleep("10d")</code></td><td>Durable timers: the run sleeps in the database, not in memory</td></tr>
+              <tr><td><code>console.log</code></td><td>Journaled as log annotations, next to the line that wrote them</td></tr>
+              <tr><td><code>fetch</code></td><td>Absent, unless the toolset allows the <code>http</code> tool and its hosts</td></tr>
+              <tr><td>File system, env, process, <code>WebAssembly</code></td><td>Absent. No ambient authority: every capability comes from the toolset</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="band closing">
+        <div class="wrap">
+          <h2>Start from the dashboard</h2>
+          <p class="section-lead">
+            Every run, all the code executed, every tool call with its latency and errors. The API
+            lives at <code>api.rewind.codes</code>.
+          </p>
+          <div class="actions">
+            <a class="button" href="https://app.rewind.codes">Open the dashboard</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap foot">
+      <span>rewind.codes</span>
+      <span>A deterministic, durable TypeScript runtime for programmatic tool calling.</span>
+    </footer>
+  </body>
+</html>
