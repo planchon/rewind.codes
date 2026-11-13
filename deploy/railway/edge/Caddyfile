@@ -1,0 +1,25 @@
+# The edge of the Railway deployment (deploy/railway/README.md), behind api.rewind.codes: everything
+# goes to the api, except `POST /v1/test`, which runs a script and therefore runs on the workers
+# (the api role answers it with 503). Both are on Railway's private network.
+{
+	admin off
+	auto_https off
+}
+
+:8080 {
+	handle /v1/test {
+		reverse_proxy worker.railway.internal:8080 {
+			lb_try_duration 30s
+			lb_try_interval 500ms
+		}
+	}
+	handle {
+		# The api sleeps when idle: while it starts again, connections are refused, and retried
+		# here for up to 30 s instead of failing. Event streams and long polls: no buffering.
+		reverse_proxy api.railway.internal:8080 {
+			flush_interval -1
+			lb_try_duration 30s
+			lb_try_interval 500ms
+		}
+	}
+}

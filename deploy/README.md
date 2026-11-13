@@ -5,6 +5,9 @@ A production-shaped deployment of ai-ptc on one Docker host, with Docker Compose
 change what your platform does differently (managed Postgres and S3, your own collector, a
 Kubernetes egress policy instead of the gateway container).
 
+[`railway/`](railway/README.md) is such a copy: the hosted deployment, Rewind, on Railway and
+Vercel.
+
 | Service | Image | Networks | Role |
 | --- | --- | --- | --- |
 | `edge` | `caddy:2-alpine` | public, core | The only published port. Sends `POST /v1/test` to the workers, everything else to the api |
