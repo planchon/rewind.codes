@@ -37,7 +37,7 @@
 //! - a failure or an abort gives the run's [`Ending`](crate::ports::Ending), its signature and
 //!   fingerprint ([`failures`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use ptc_core::{
@@ -50,8 +50,8 @@ use crate::metrics::RunMeasurement;
 use crate::ports::{
     ExportError, FeedConsumer, FeedItem, JournalStore, PayloadRecord, ProjectedRun, QuarantineNote,
     ReadModel, ReadModelError, RunRecord, RunRef, RunSnapshot, SpanExporter, StoreError,
-    Subscription, TaskPhase, TaskProgress, TaskState, ToolTask, Wait, WaitKind, WebhookEvent,
-    WebhookEventKind, WebhookSender,
+    Subscription, TaskPhase, TaskProgress, TaskState, TenantId, ToolTask, Wait, WaitKind,
+    WebhookEvent, WebhookEventKind, WebhookSender,
 };
 use crate::telemetry::{RunTelemetry, TelemetryConfig};
 
@@ -163,6 +163,14 @@ impl Projected {
     }
 }
 
+/// What the items of one batch share: scripts and toolsets are content-addressed, so their
+/// headlines and pinned toolsets are read once per batch, not once per item.
+#[derive(Default)]
+struct Lookups {
+    headlines: HashMap<(TenantId, Digest), String>,
+    toolsets: HashMap<(TenantId, Digest), Option<Toolset>>,
+}
+
 /// Projects committed entries to the read model, run telemetry and lifecycle webhooks. It
 /// borrows its adapters: the composition root shares the journal with the engine.
 #[derive(Debug)]
@@ -224,8 +232,9 @@ where
         let mut applied = Vec::new();
         let mut measurements = Vec::new();
         let mut failed = 0;
+        let mut lookups = Lookups::default();
         for item in &items {
-            match self.apply(item).await {
+            match self.apply(item, &mut lookups).await {
                 Ok(measured) => {
                     applied.push(item.id);
                     measurements.extend(measured);
@@ -250,7 +259,11 @@ where
 
     /// Applies one feed item, and returns the run metrics it measures. A run deleted or archived
     /// since has nothing left to project.
-    async fn apply(&self, item: &FeedItem) -> Result<Vec<RunMeasurement>, ProjectorError> {
+    async fn apply(
+        &self,
+        item: &FeedItem,
+        lookups: &mut Lookups,
+    ) -> Result<Vec<RunMeasurement>, ProjectorError> {
         let Some(record) = self.journal.get_run(&item.run).await? else {
             return Ok(Vec::new());
         };
@@ -265,7 +278,8 @@ where
         let from = usize::try_from(item.from_idx).unwrap_or(usize::MAX).min(to);
         match item.consumer {
             FeedConsumer::ReadModel => {
-                self.apply_read_model(&record, &history[..to], from).await?;
+                self.apply_read_model(&record, &history[..to], from, lookups)
+                    .await?;
             }
             FeedConsumer::Otel => return self.apply_otel(&record, &history[..to], item).await,
             FeedConsumer::Webhooks => self.apply_webhooks(&record, &history[..to], from).await?,
@@ -273,8 +287,9 @@ where
         Ok(Vec::new())
     }
 
-    /// Applies the entries from `from` to the end of `history`, with the snapshot of `history`,
-    /// then records the run's quarantine and the states of its open tasks. The read model gets the entries with the
+    /// Applies the entries from `from` to the end of `history`, with the snapshot of `history`;
+    /// then records the run's quarantine when it is quarantined or has ended, and the states of
+    /// its tasks when the entries scheduled calls. The read model gets the entries with the
     /// values of the table tier loaded, so that the shapes of most results are observed; values
     /// in the blob store are not downloaded.
     async fn apply_read_model(
@@ -282,6 +297,7 @@ where
         record: &RunRecord,
         history: &[HistoryEntry],
         from: usize,
+        lookups: &mut Lookups,
     ) -> Result<(), ProjectorError> {
         let tenant = &record.run.tenant;
         let mut entries = history[from..].to_vec();
@@ -298,17 +314,31 @@ where
                 *result = Payload::Value(value);
             }
         }
-        let headline = self
-            .journal
-            .get_script(tenant, record.script)
-            .await?
-            .map(|stored| headline(stored.script.source()))
-            .unwrap_or_default();
-        let toolset = self
-            .journal
-            .get_toolset(tenant, record.toolset)
-            .await?
-            .map(|stored| stored.toolset);
+        let headline = match lookups.headlines.get(&(tenant.clone(), record.script)) {
+            Some(headline) => headline.clone(),
+            None => {
+                let headline = self
+                    .journal
+                    .get_script(tenant, record.script)
+                    .await?
+                    .map(|stored| headline(stored.script.source()))
+                    .unwrap_or_default();
+                lookups
+                    .headlines
+                    .insert((tenant.clone(), record.script), headline.clone());
+                headline
+            }
+        };
+        let key = (tenant.clone(), record.toolset);
+        if !lookups.toolsets.contains_key(&key) {
+            let toolset = self
+                .journal
+                .get_toolset(tenant, record.toolset)
+                .await?
+                .map(|stored| stored.toolset);
+            lookups.toolsets.insert(key.clone(), toolset);
+        }
+        let toolset = lookups.toolsets.get(&key).and_then(Option::as_ref);
         let run = ProjectedRun {
             run: record.run.clone(),
             script: record.script,
@@ -317,20 +347,33 @@ where
             labels: record.metadata.labels.clone(),
             parent: record.metadata.parent.map(|parent| parent.run),
         };
-        let snapshot = run_snapshot(history, toolset.as_ref());
+        let snapshot = run_snapshot(history, toolset);
         self.read_model.apply(&run, &entries, &snapshot).await?;
-        // The record says whether the run is quarantined now: a quarantine as of its start, a
-        // release as of the run's last commit, so that a release or a quarantine recorded
-        // later by whoever changed it wins, and one that was never recorded (its server died
-        // first) is caught up.
-        let quarantine = record.quarantine.as_ref().map(QuarantineNote::from);
-        let at = quarantine
-            .as_ref()
-            .map_or(record.updated_at, |quarantine| quarantine.since);
-        self.read_model
-            .record_quarantine(&record.run, quarantine.as_ref(), at)
-            .await?;
-        self.record_tasks(&record.run).await
+        // Quarantine is service state: whoever quarantines, releases or gives up a run records
+        // it. The record catches up what they could not: a quarantine whose server died before
+        // recording it (as of its start, so a release recorded later wins), and the end of a run
+        // that ended quarantined (as of its last commit).
+        if record.quarantine.is_some() || record.status.is_terminal() {
+            let quarantine = record.quarantine.as_ref().map(QuarantineNote::from);
+            let at = quarantine
+                .as_ref()
+                .map_or(record.updated_at, |quarantine| quarantine.since);
+            self.read_model
+                .record_quarantine(&record.run, quarantine.as_ref(), at)
+                .await?;
+        }
+        // A task is created with the commit that schedules its call, waiting for an approval
+        // under the `approval` policy: whoever changes it later records it.
+        let scheduled = entries.iter().any(|entry| {
+            matches!(
+                entry.event,
+                Event::Command(Command::ScheduleToolCall { .. })
+            )
+        });
+        if scheduled && !record.status.is_terminal() {
+            self.record_tasks(&record.run).await?;
+        }
+        Ok(())
     }
 
     /// Records the states of a run's open tasks, as the store holds them now, in the read model.

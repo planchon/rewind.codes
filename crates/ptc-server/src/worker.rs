@@ -154,11 +154,14 @@ async fn dispatch(app: Arc<App>, calls: InFlight) {
                 let busy = app.activity.busy();
                 app.record_task(&task.task).await;
                 let name = task.task.task.clone();
-                if let Err(error) = app.engine.run_tool_task(task).await {
-                    tracing::warn!(task = %name, %error, "a tool call could not be prepared");
+                match app.engine.run_tool_task(task).await {
+                    // Parked or deferred: it waits for the harness.
+                    Ok(Some(waiting)) => app.record_progress(&name.run, waiting).await,
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(task = %name, %error, "a tool call could not be prepared");
+                    }
                 }
-                // The call may have been parked, or put back for another attempt.
-                app.record_tasks(&name.run).await;
                 app.wake.bump();
                 drop(busy);
                 drop(slot);
@@ -339,10 +342,11 @@ async fn drive(app: &App) -> Result<bool, ()> {
         moved = true;
         app.record_task(&task.task).await;
         let run = task.task.task.run.clone();
-        if let Err(error) = app.engine.run_tool_task(task).await {
-            tracing::warn!(%error, "a tool call could not be prepared");
+        match app.engine.run_tool_task(task).await {
+            Ok(Some(waiting)) => app.record_progress(&run, waiting).await,
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "a tool call could not be prepared"),
         }
-        app.record_tasks(&run).await;
     }
     while activate_one(app).await? {
         moved = true;
