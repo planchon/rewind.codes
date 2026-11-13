@@ -1,13 +1,13 @@
 import { Webhook, WebhookVerificationError } from "standardwebhooks";
 
-import { PtcError } from "./errors.js";
+import { RewindError } from "./errors.js";
 import type { WebhookEvent, WebhookEventType } from "./types.js";
 
 /** The headers of a delivery: a fetch `Headers`, or a plain map such as Node's `req.headers`. */
 export type WebhookHeaders = Headers | Readonly<Record<string, string | readonly string[] | undefined>>;
 
 /** A delivery whose signature, timestamp or body does not hold. Answer it with 400 and ignore it. */
-export class WebhookVerificationFailed extends PtcError {
+export class WebhookVerificationFailed extends RewindError {
   override readonly name = "WebhookVerificationFailed";
 }
 
@@ -38,7 +38,7 @@ export function verifyWebhook(payload: string | Uint8Array, headers: WebhookHead
   try {
     webhook = new Webhook(secret);
   } catch (error) {
-    throw new PtcError(`invalid webhook secret: ${error instanceof Error ? error.message : String(error)}`);
+    throw new RewindError(`invalid webhook secret: ${error instanceof Error ? error.message : String(error)}`);
   }
   const body = typeof payload === "string" ? payload : new TextDecoder().decode(payload);
   let event: unknown;

@@ -4,11 +4,11 @@
  * and runs can be searched by label and tool.
  *
  * The deployment: Postgres, blobs on MinIO, an OpenTelemetry Collector writing to a file, one
- * `ptc server --role api` and two `ptc server --role worker`. The harness is the TypeScript SDK:
+ * `rewind server --role api` and two `rewind server --role worker`. The harness is the TypeScript SDK:
  * its host-tool worker serves the harness's tools; it sends a signal and approves a call.
  */
 import { randomBytes } from "node:crypto";
-import { type HostToolContext, Ptc, type Run } from "@ai-ptc/sdk";
+import { type HostToolContext, Rewind, type Run } from "@rewind.codes/sdk";
 import { expect, test } from "@playwright/test";
 import { type Deployment, startDeployment } from "../support/deployment.js";
 import { dockerAvailable } from "../support/docker.js";
@@ -16,8 +16,8 @@ import { flattenSpans, HarnessSpan, parseTraceparent, type SpanRecord } from "..
 import { resultDir } from "../support/paths.js";
 import { eventually } from "../support/processes.js";
 
-const SCRIPT = `import { signal, sleep } from "ptc";
-import { crm, payments } from "ptc:tools";
+const SCRIPT = `import { signal, sleep } from "rewind";
+import { crm, payments } from "rewind:tools";
 
 export default async function main(input: { email: string }) {
   const customer = await crm.lookup({ email: input.email });
@@ -54,10 +54,10 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
   test("runs driven by the SDK on an api server and two workers, traced under the harness", async () => {
     const { admin } = deployment;
     const harnessKey = await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "acceptance harness" });
-    const ptc = new Ptc({ url: deployment.url, apiKey: harnessKey.key ?? undefined });
+    const rewind = new Rewind({ url: deployment.url, apiKey: harnessKey.key ?? undefined });
     const suite = `acceptance-${randomBytes(4).toString("hex")}`;
 
-    const toolset = await ptc.toolsets.create({
+    const toolset = await rewind.toolsets.create({
       host: [
         {
           name: "crm.lookup",
@@ -96,7 +96,7 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
     const calls: { tool: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
     const log = (tool: string, ctx: HostToolContext) =>
       calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
-    const worker = ptc.worker({
+    const worker = rewind.worker({
       toolset: toolset.id,
       pollWait: "2s",
       tools: {
@@ -125,9 +125,9 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
           labels: { suite, conversation: `c${n}` },
           traceparent: harness[n]!.traceparent,
         };
-        const run = await ptc.runs.start(request);
+        const run = await rewind.runs.start(request);
         // The model's tool call handled twice starts one run.
-        expect((await ptc.runs.start(request)).id).toBe(run.id);
+        expect((await rewind.runs.start(request)).id).toBe(run.id);
         expect(run.traceId).toBe(harness[n]!.traceId);
         runs.push(run);
       }
@@ -135,27 +135,27 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       // Each run looks its customer up, sleeps, then waits for the decision.
       for (const [n, run] of runs.entries()) {
         await eventually(`run ${n} waits for its decision`, async () => {
-          const state = await ptc.runs.get(run.id);
+          const state = await rewind.runs.get(run.id);
           return state.waitingFor?.some((w) => w.kind === "signal" && w.name === "decision") ? state : undefined;
         });
         const refund = n === NO_REFUND ? 0 : 10 * (n + 1);
-        await ptc.runs.signal(run.id, "decision", { refund }, { idempotencyKey: `${suite}-decision-${n}` });
+        await rewind.runs.signal(run.id, "decision", { refund }, { idempotencyKey: `${suite}-decision-${n}` });
       }
 
       // A person approves each refund, after reading its arguments.
       for (const [n, run] of runs.entries()) {
         if (n === NO_REFUND) continue;
         const pending = await eventually(`run ${n}'s refund waits for approval`, async () => {
-          const found = ptc.approvals.pending(await ptc.runs.get(run.id));
+          const found = rewind.approvals.pending(await rewind.runs.get(run.id));
           return found.length > 0 ? found : undefined;
         });
         expect(pending).toHaveLength(1);
         expect(pending[0]!.tool).toBe("payments.refund");
-        expect(await ptc.approvals.args(pending[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
-        await ptc.approvals.approve(pending[0]!);
+        expect(await rewind.approvals.args(pending[0]!)).toEqual({ customer: `cus_user${n}`, amount: 10 * (n + 1) });
+        await rewind.approvals.approve(pending[0]!);
       }
 
-      const ended = await Promise.all(runs.map((run) => ptc.runs.get(run.id, { wait: "120s" })));
+      const ended = await Promise.all(runs.map((run) => rewind.runs.get(run.id, { wait: "120s" })));
       for (const [n, run] of ended.entries()) {
         expect(run.status, JSON.stringify(run)).toBe("completed");
         expect(run.output?.value).toEqual(
@@ -172,13 +172,13 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       // Found through the API by label and by tool (the read model, filled by the projector).
       const ids = (page: { runs: { id: string }[] }) => page.runs.map((r) => r.id).sort();
       const all = runs.map((r) => r.id).sort();
-      await expect.poll(async () => ids(await ptc.runs.list({ labels: { suite } }))).toEqual(all);
+      await expect.poll(async () => ids(await rewind.runs.list({ labels: { suite } }))).toEqual(all);
       await expect
-        .poll(async () => ids(await ptc.runs.list({ labels: { suite }, tool: "payments.refund" })))
+        .poll(async () => ids(await rewind.runs.list({ labels: { suite }, tool: "payments.refund" })))
         .toEqual(all.filter((id) => id !== runs[NO_REFUND]!.id));
-      await expect.poll(async () => ids(await ptc.runs.list({ labels: { suite }, tool: "crm.lookup" }))).toEqual(all);
-      expect(ids(await ptc.runs.list({ labels: { suite, conversation: "c2" } }))).toEqual([runs[2]!.id]);
-      expect(ids(await ptc.runs.list({ labels: { suite }, status: "failed" }))).toEqual([]);
+      await expect.poll(async () => ids(await rewind.runs.list({ labels: { suite }, tool: "crm.lookup" }))).toEqual(all);
+      expect(ids(await rewind.runs.list({ labels: { suite, conversation: "c2" } }))).toEqual([runs[2]!.id]);
+      expect(ids(await rewind.runs.list({ labels: { suite }, status: "failed" }))).toEqual([]);
 
       // The large customer record went to MinIO.
       const objects = deployment.minio.objects();
@@ -194,8 +194,8 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
           const done =
             runs.every(
               (run) =>
-                spans.some((s) => s.name === "run" && s.attributes["ptc.run_id"] === run.id) &&
-                spans.some((s) => s.name === "activation" && s.attributes["ptc.run_id"] === run.id),
+                spans.some((s) => s.name === "run" && s.attributes["rewind.run_id"] === run.id) &&
+                spans.some((s) => s.name === "activation" && s.attributes["rewind.run_id"] === run.id),
             ) && harness.every((h) => spans.some((s) => s.spanId === h.spanId));
           return done ? spans : undefined;
         },
@@ -206,11 +206,11 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
       for (const [n, run] of runs.entries()) {
         const span = harness[n]!;
         expect(spans.find((s) => s.spanId === span.spanId)?.traceId).toBe(span.traceId);
-        // Run telemetry and service spans (activations) both name the run `ptc.run_id`.
-        const mine = spans.filter((s) => s.attributes["ptc.run_id"] === run.id);
+        // Run telemetry and service spans (activations) both name the run `rewind.run_id`.
+        const mine = spans.filter((s) => s.attributes["rewind.run_id"] === run.id);
         // One trace: the harness's.
         expect(new Set(mine.map((s) => s.traceId))).toEqual(new Set([span.traceId]));
-        const runSpan = only(mine.filter((s) => s.name === "run" && s.scope === "ai-ptc.run"));
+        const runSpan = only(mine.filter((s) => s.name === "run" && s.scope === "rewind.run"));
         expect(runSpan.parentSpanId).toBe(span.spanId);
         const children = (name: string) => mine.filter((s) => s.name === name);
         const lookup = only(children("crm.lookup"));

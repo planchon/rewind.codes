@@ -11,10 +11,10 @@
 # other name through the egress gateway, which answers the allowed names only. It caches
 # nothing, as Docker's DNS server does not.
 #
-# PTC_WORKER_DNS_ADDRESS is this relay's address on the core network.
+# REWIND_WORKER_DNS_ADDRESS is this relay's address on the core network.
 set -eu
 
-address="${PTC_WORKER_DNS_ADDRESS:?PTC_WORKER_DNS_ADDRESS: this relay's address on the core network}"
+address="${REWIND_WORKER_DNS_ADDRESS:?REWIND_WORKER_DNS_ADDRESS: this relay's address on the core network}"
 
 echo "dns: relaying to Docker's DNS server on $address"
 exec dnsmasq --keep-in-foreground --pid-file= --no-resolv --no-hosts --no-poll \

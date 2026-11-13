@@ -159,7 +159,7 @@ describe("RunsView", () => {
     const nav = screen.getByRole("navigation", { name: "Views" });
     const saved = within(nav).getByRole("link", { name: /Failed runs/ });
     expect(saved).toHaveAttribute("href", "/runs?q=status%3Afailed");
-    expect(JSON.parse(window.localStorage.getItem("ptc.searches") ?? "[]")).toEqual([
+    expect(JSON.parse(window.localStorage.getItem("rewind.searches") ?? "[]")).toEqual([
       { name: "Failed runs", q: "status:failed", view: "runs" },
     ]);
     await user.click(

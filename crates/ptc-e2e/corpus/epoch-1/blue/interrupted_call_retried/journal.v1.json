@@ -1,6 +1,0 @@
-{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { reports } from \"ptc:tools\";\n\nexport default async function main() {\n  const report = await reports.build({ month: \"2026-10\" });\n  return { pages: report.pages };\n}\n","toolset":{"servers":[],"tools":[{"name":"reports.build","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"reports","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"c22840e0b9791635f6569a4ad8ba12154a757ab2e49ff965adf33024fc83b6c3","toolset":"6a8f9cd9d8eb6cc84be8df1bd50a07384bf61843386d4a1c2f7e8f00cfa4c35a","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
-{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"reports.build","args":{"value":{"month":"2026-10"}},"callsite":{"line":4,"column":32}}},
-{"index":2,"recorded_at":1767225720000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"pages":12}}}},
-{"index":3,"recorded_at":1767225720000,"event":{"type":"complete_run","output":{"value":{"pages":12}}}}
-]}

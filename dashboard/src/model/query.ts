@@ -1,7 +1,7 @@
 // The query language of the runs (archi/05-testing-and-observability.md, "Query language"), as the
 // dashboard handles it: terms and where they are, a facet's value added, excluded or removed,
 // suggestions as the operator types, and the filters of older links turned into a query. The
-// server reads and checks every query (crates/ptc-api/src/query.rs): nothing here refuses one.
+// server reads and checks every query (crates/rewind-api/src/query.rs): nothing here refuses one.
 import type { Facets, RunStatus, WaitKind } from "../api/types";
 import { RUN_STATUSES, WAIT_KINDS } from "../api/types";
 

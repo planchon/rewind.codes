@@ -1,0 +1,24 @@
+[package]
+name = "rewind-load"
+description = "Load generator of Rewind: drives a deployment's HTTP API with many concurrent runs, serves a fake MCP server and the host tools, and checks the invariants."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# A tooling crate (archi/07-code-architecture.md, "Dependency rules"): a client of the HTTP API
+# through rewind-api, like the CLI and the SDK; it wires no adapter.
+[dependencies]
+rewind-api.workspace = true
+axum.workspace = true
+clap = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-streamable-http-server"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util.workspace = true
+url.workspace = true
+
+[lints]
+workspace = true

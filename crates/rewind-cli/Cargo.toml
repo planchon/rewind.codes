@@ -1,0 +1,42 @@
+[package]
+name = "rewind-cli"
+description = "The client commands of the rewind binary: a client of the API /v1 (embedded or remote server), and the local commands check, test and replay of an exported journal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Composition root (archi/07-code-architecture.md, "Crates"): the CLI reaches a server only
+# through the API (rewind-api), and wires the adapters itself for its local commands. It never
+# depends on rewind-server.
+[dependencies]
+rewind-api.workspace = true
+rewind-check.workspace = true
+rewind-codegen.workspace = true
+rewind-core.workspace = true
+rewind-engine.workspace = true
+rewind-format.workspace = true
+rewind-mcp.workspace = true
+rewind-otel.workspace = true
+rewind-runtime.workspace = true
+clap.workspace = true
+# The lock check of the embedded server: `flock` on `.rewind/server.lock`, without unsafe code.
+rustix = { workspace = true, features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+
+[dev-dependencies]
+axum.workspace = true
+libtest-mimic.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["net"] }
+
+# The launcher's tests: the test binary is also the stub embedded server it starts.
+[[test]]
+name = "embedded"
+harness = false
+
+[lints]
+workspace = true

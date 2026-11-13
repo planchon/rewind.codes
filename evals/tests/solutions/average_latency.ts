@@ -1,4 +1,4 @@
-import { ops } from "ptc:tools";
+import { ops } from "rewind:tools";
 
 export default async function main() {
   const services = ["api", "web", "worker"] as const;

@@ -14,13 +14,13 @@ use evals::model::{AssistantTurn, Conversation, Model, ToolCall, Turn};
 use evals::prompt::Rendering;
 use evals::task::Task;
 use evals::tasks;
-use ptc_check::TsgoChecker;
+use rewind_check::TsgoChecker;
 use serde_json::{Value, json};
 
-/// One checker for the tests, extracted where `ptc-check`'s own tests extract it.
+/// One checker for the tests, extracted where `rewind-check`'s own tests extract it.
 static CHECKER: LazyLock<Arc<TsgoChecker>> = LazyLock::new(|| {
     Arc::new(TsgoChecker::new(
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join("ptc-check-cache"),
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rewind-check-cache"),
     ))
 });
 
@@ -268,7 +268,7 @@ async fn retrying_with_new_request_ids_duplicates_shipments() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_run_shows_the_call_that_failed_with_its_line() {
-    let code = "import { crm } from \"ptc:tools\";\n\nexport default async function main() {\n  return (await crm.get_order({ id: \"O-504\" })).json();\n}\n";
+    let code = "import { crm } from \"rewind:tools\";\n\nexport default async function main() {\n  return (await crm.get_order({ id: \"O-504\" })).json();\n}\n";
     let model = Model::Scripted(Scripted::turns(
         "scripted",
         vec![call("run_script", json!({ "code": code }))],

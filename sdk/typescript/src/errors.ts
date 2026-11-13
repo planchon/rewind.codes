@@ -1,6 +1,6 @@
 import type { Diagnostic, Problem, QuerySpan } from "./types.js";
 
-/** The kinds of problem the API answers with: the slug of `urn:ptc:problem:<slug>`. */
+/** The kinds of problem the API answers with: the slug of `urn:rewind:problem:<slug>`. */
 export type ProblemSlug =
   | "invalid-request"
   | "invalid-query"
@@ -20,16 +20,16 @@ export type ProblemSlug =
   | "toolset-unavailable"
   | "unavailable";
 
-const PROBLEM_PREFIX = "urn:ptc:problem:";
+const PROBLEM_PREFIX = "urn:rewind:problem:";
 
 /** Every error the SDK throws. */
-export class PtcError extends Error {
-  override readonly name: string = "PtcError";
+export class RewindError extends Error {
+  override readonly name: string = "RewindError";
 }
 
 /** The API answered with an error (`application/problem+json`). */
-export class PtcApiError extends PtcError {
-  override readonly name = "PtcApiError";
+export class RewindApiError extends RewindError {
+  override readonly name = "RewindApiError";
   /** The HTTP status. */
   readonly status: number;
   /** The problem as the server sent it; `about:blank` when the body was not a problem. */
@@ -63,13 +63,13 @@ export class PtcApiError extends PtcError {
 }
 
 /** The server could not be reached, or its answer could not be read. */
-export class PtcConnectionError extends PtcError {
-  override readonly name = "PtcConnectionError";
+export class RewindConnectionError extends RewindError {
+  override readonly name = "RewindConnectionError";
 }
 
 /** Whether an error is an API problem of this kind. */
-export function isProblem(error: unknown, slug: ProblemSlug): error is PtcApiError {
-  return error instanceof PtcApiError && error.slug === slug;
+export function isProblem(error: unknown, slug: ProblemSlug): error is RewindApiError {
+  return error instanceof RewindApiError && error.slug === slug;
 }
 
 /**

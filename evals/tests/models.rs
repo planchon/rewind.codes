@@ -18,12 +18,12 @@ use evals::model::openai::OpenAi;
 use evals::model::{Model, Usage};
 use evals::prompt::Rendering;
 use evals::tasks;
-use ptc_check::TsgoChecker;
+use rewind_check::TsgoChecker;
 use serde_json::{Value, json};
 
 static CHECKER: LazyLock<Arc<TsgoChecker>> = LazyLock::new(|| {
     Arc::new(TsgoChecker::new(
-        Path::new(env!("CARGO_TARGET_TMPDIR")).join("ptc-check-cache"),
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join("rewind-check-cache"),
     ))
 });
 

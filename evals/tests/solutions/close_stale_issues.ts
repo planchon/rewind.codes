@@ -1,4 +1,4 @@
-import { tracker } from "ptc:tools";
+import { tracker } from "rewind:tools";
 
 export default async function main() {
   const cutoff = Date.now() - 30 * 86_400_000;

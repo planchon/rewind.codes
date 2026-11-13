@@ -1,0 +1,19 @@
+{
+  "description": "rewind:tools does not export the built-ins, even when the toolset has them: scripts reach http through fetch, and webhook from \"rewind\". Importing one from rewind:tools is refused at start, and no run exists.",
+  "tools": {
+    "http": {
+      "status": 200,
+      "statusText": "OK",
+      "url": "https://api.example.com/",
+      "redirected": false,
+      "headers": [],
+      "body": ""
+    },
+    "webhook": { "url": "https://rewind.example.com/hooks/tok_1" },
+    "audit.record": { "ok": true }
+  },
+  "http_hosts": ["api.example.com"],
+  "expect": {
+    "start_error": "\"rewind:tools\" has no export named \"http\" (script.ts:1:10); it exports audit"
+  }
+}

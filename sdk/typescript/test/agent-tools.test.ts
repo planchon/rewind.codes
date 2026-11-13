@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_TOOL_NAMES, Ptc, PtcApiError, PtcError, type AgentTools, type Run } from "../src/index.js";
+import { AGENT_TOOL_NAMES, Rewind, RewindApiError, RewindError, type AgentTools, type Run } from "../src/index.js";
 import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
 import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
@@ -14,13 +14,13 @@ const runKey = (toolCallId: string) =>
     .update(JSON.stringify([[["conversation", "c-42"]], toolCallId]))
     .digest("hex");
 let server: MockServer;
-let ptc: Ptc;
+let rewind: Rewind;
 let tools: AgentTools;
 
 beforeEach(async () => {
   server = await MockServer.start();
-  ptc = new Ptc({ url: server.url, apiKey: "ptc_sk_agent" });
-  tools = ptc.agentTools({ toolset: TOOLSET, labels: LABELS });
+  rewind = new Rewind({ url: server.url, apiKey: "rewind_sk_agent" });
+  tools = rewind.agentTools({ toolset: TOOLSET, labels: LABELS });
   server.on(
     "GET",
     "/v1/runs/{id}/trace",
@@ -49,12 +49,12 @@ function serveRun(state: Run): void {
 describe("the agent tools' definitions", () => {
   it("are all there with a toolset, and search_tools only with one", () => {
     expect(tools.definitions.map((d) => d.name)).toEqual([...AGENT_TOOL_NAMES]);
-    const withoutToolset = ptc.agentTools({ labels: LABELS });
+    const withoutToolset = rewind.agentTools({ labels: LABELS });
     expect(withoutToolset.has("search_tools")).toBe(false);
     expect(withoutToolset.has("run_script")).toBe(true);
-    expect(() => ptc.agentTools({ tools: ["search_tools"] })).toThrow(TypeError);
-    expect(() => ptc.agentTools({ tools: ["nope" as never] })).toThrow(TypeError);
-    expect(ptc.agentTools({ tools: ["run_script", "get_run"] }).definitions.map((d) => d.name)).toEqual([
+    expect(() => rewind.agentTools({ tools: ["search_tools"] })).toThrow(TypeError);
+    expect(() => rewind.agentTools({ tools: ["nope" as never] })).toThrow(TypeError);
+    expect(rewind.agentTools({ tools: ["run_script", "get_run"] }).definitions.map((d) => d.name)).toEqual([
       "run_script",
       "get_run",
     ]);
@@ -123,7 +123,7 @@ describe("run_script", () => {
   });
 
   it("bounds the output and says how to read the rest", async () => {
-    const small = ptc.agentTools({ toolset: TOOLSET, labels: LABELS, outputLimit: 32 });
+    const small = rewind.agentTools({ toolset: TOOLSET, labels: LABELS, outputLimit: 32 });
     const output = { items: "é".repeat(40) };
     serveRun(run({ output: payload(output) }));
     server.on("POST", "/v1/runs", json(run({ output: payload(output) }), 201));
@@ -243,7 +243,12 @@ describe("run_script", () => {
             location: { line: 3, column: 28 },
             frame: "3 | github.list_issues({ repo: 42 })\n  |                            ^^",
           },
-          { code: "ptc/absent-global", message: "fetch does not exist", severity: "error", hint: "use the http tool" },
+          {
+            code: "rewind/absent-global",
+            message: "fetch does not exist",
+            severity: "error",
+            hint: "use the http tool",
+          },
         ],
       }),
     );
@@ -255,7 +260,7 @@ describe("run_script", () => {
         "script.ts:3:28 error TS2322: Type 'number' is not assignable to type 'string'.",
         "3 | github.list_issues({ repo: 42 })\n  |                            ^^",
         "",
-        "error ptc/absent-global: fetch does not exist",
+        "error rewind/absent-global: fetch does not exist",
         "hint: use the http tool",
       ].join("\n"),
     );
@@ -272,9 +277,11 @@ describe("run_script", () => {
       const script = createHash("sha256").update(body.script).digest("hex");
       return json(run({ script, labels: body.labels }), 201);
     });
-    await ptc.agentTools({ labels: { agent: "a" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
-    await ptc.agentTools({ labels: { agent: "b" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
-    await ptc.agentTools({ labels: { b: "2", a: "1" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await rewind.agentTools({ labels: { agent: "a" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await rewind.agentTools({ labels: { agent: "b" } }).handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await rewind
+      .agentTools({ labels: { b: "2", a: "1" } })
+      .handle("run_script", { code: "x" }, { toolCallId: "call_0" });
     // The same vectors as the evals' Rust port (`evals/src/agent/mod.rs`).
     expect(server.requests.slice(1).map((request) => request.headers["idempotency-key"])).toEqual([
       "60b258a9b3d4fedc3e76a4687e2f18f3a6b35dd43a5afde3743c2484c38598a5",
@@ -285,7 +292,7 @@ describe("run_script", () => {
 
   it("bounds the model's wait", async () => {
     server.on("POST", "/v1/runs", json(run(), 201));
-    const bounded = ptc.agentTools({ labels: LABELS, wait: "10s", maxWait: "20s" });
+    const bounded = rewind.agentTools({ labels: LABELS, wait: "10s", maxWait: "20s" });
     await bounded.handle("run_script", { code: "x", wait: "1h" });
     await bounded.handle("run_script", { code: "x" });
     expect(server.requests.map((r) => (r.body as { wait: string }).wait)).toEqual(["20s", "10s"]);
@@ -305,10 +312,10 @@ describe("run_script", () => {
 
   it("throws on faults of the platform and on unknown tools", async () => {
     server.on("POST", "/v1/runs", problem(500, "internal", "the store is down"));
-    await expect(tools.handle("run_script", { code: "x" })).rejects.toBeInstanceOf(PtcApiError);
+    await expect(tools.handle("run_script", { code: "x" })).rejects.toBeInstanceOf(RewindApiError);
     server.on("POST", "/v1/runs", problem(401, "unauthorized", "unknown key"));
     await expect(tools.handle("run_script", { code: "x" })).rejects.toMatchObject({ status: 401 });
-    await expect(tools.handle("delete_everything", {})).rejects.toBeInstanceOf(PtcError);
+    await expect(tools.handle("delete_everything", {})).rejects.toBeInstanceOf(RewindError);
   });
 });
 
@@ -329,7 +336,7 @@ describe("a run answered for the tool call's idempotency key", () => {
     ]) {
       server.on("POST", "/v1/runs", json(other));
       const started = tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
-      await expect(started).rejects.toBeInstanceOf(PtcError);
+      await expect(started).rejects.toBeInstanceOf(RewindError);
       await expect(started).rejects.toThrow(/tool call id "call_0".*another run/);
     }
   });
@@ -487,7 +494,7 @@ describe("the tools that take a run id", () => {
     );
     const whole = await tools.handle("get_run", { run_id: RUN_ID, entry: 3 });
     expect(whole.content.startsWith(`Entry 3 of run ${RUN_ID}:\n{"idx":3,`)).toBe(true);
-    const small = ptc.agentTools({ labels: LABELS, outputLimit: 64 });
+    const small = rewind.agentTools({ labels: LABELS, outputLimit: 64 });
     const page = await small.handle("get_run", { run_id: RUN_ID, entry: 3, offset: 64 });
     expect(page.content).toMatch(new RegExp(`^Entry 3 of run ${RUN_ID}, bytes 64 to 128 of \\d+:`));
     expect(page.content).toContain(`get_run({"run_id":"${RUN_ID}","entry":3,"offset":128})`);
@@ -607,7 +614,7 @@ describe("the other tools", () => {
         diagnostics: [
           { code: "TS2304", message: "Cannot find name 'foo'.", severity: "error", location: { line: 1, column: 1 } },
           {
-            code: "ptc/floating-promise",
+            code: "rewind/floating-promise",
             message: "not awaited",
             severity: "warning",
             location: { line: 2, column: 3 },
@@ -622,7 +629,7 @@ describe("the other tools", () => {
         "The script does not type-check: 1 error and 1 warning.",
         "script.ts:1:1 error TS2304: Cannot find name 'foo'.",
         "",
-        "script.ts:2:3 warning ptc/floating-promise: not awaited",
+        "script.ts:2:3 warning rewind/floating-promise: not awaited",
       ].join("\n"),
     );
     expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });

@@ -10,13 +10,13 @@ use evals::model::{DEFAULT_MODELS, Model};
 use evals::prompt::Rendering;
 use evals::report::{self, Report};
 use evals::tasks;
-use ptc_check::TsgoChecker;
+use rewind_check::TsgoChecker;
 use tokio::task::JoinSet;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "evals",
-    about = "The eval suite of ai-ptc: models solve tasks end to end."
+    about = "The eval suite of Rewind: models solve tasks end to end."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -116,8 +116,8 @@ async fn run(args: RunArgs) -> Result<(), String> {
         .await
         .map_err(|err| format!("the type-checker cannot be installed: {err}"))?;
 
-    let now = ptc_engine::ports::Clock::now(&ptc_engine::adapters::SystemClock);
-    let started_at = evals::clock::rfc3339(ptc_core::Timestamp(now.0 / 1_000 * 1_000));
+    let now = rewind_engine::ports::Clock::now(&rewind_engine::adapters::SystemClock);
+    let started_at = evals::clock::rfc3339(rewind_core::Timestamp(now.0 / 1_000 * 1_000));
     let out = args
         .out
         .clone()

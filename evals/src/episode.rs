@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use ptc_check::TsgoChecker;
-use ptc_core::{RunId, Script};
+use rewind_check::TsgoChecker;
+use rewind_core::{RunId, Script};
 use serde::Serialize;
 use serde_json::json;
 

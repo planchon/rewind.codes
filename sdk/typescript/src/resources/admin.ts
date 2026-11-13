@@ -100,7 +100,7 @@ export class Tools {
 export class ApiKeys {
   constructor(private readonly transport: Transport) {}
 
-  /** Creates a key `ptc_sk_…` for a tenant. The answer holds the key, once. */
+  /** Creates a key `rewind_sk_…` for a tenant. The answer holds the key, once. */
   create(key: CreateApiKey, options: RequestOptions = {}): Promise<ApiKey> {
     return this.transport.send(() => this.transport.api.POST("/v1/api-keys", { body: key, signal: options.signal }), {
       retry: false,

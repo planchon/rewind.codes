@@ -1,6 +1,6 @@
 [package]
 name = "evals"
-description = "Eval suite of ai-ptc: models solve tasks end to end with the agent tools, on the real engine, against deterministic fake MCP servers, in virtual time."
+description = "Eval suite of Rewind: models solve tasks end to end with the agent tools, on the real engine, against deterministic fake MCP servers, in virtual time."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,13 +9,13 @@ publish.workspace = true
 # Tooling (archi/07-code-architecture.md, "Dependency rules"): wires the adapters like a
 # composition root, and nothing depends on it.
 [dependencies]
-ptc-api.workspace = true
-ptc-check.workspace = true
-ptc-codegen.workspace = true
-ptc-core.workspace = true
-ptc-engine.workspace = true
-ptc-mcp.workspace = true
-ptc-runtime.workspace = true
+rewind-api.workspace = true
+rewind-check.workspace = true
+rewind-codegen.workspace = true
+rewind-core.workspace = true
+rewind-engine.workspace = true
+rewind-mcp.workspace = true
+rewind-runtime.workspace = true
 axum.workspace = true
 clap.workspace = true
 reqwest.workspace = true

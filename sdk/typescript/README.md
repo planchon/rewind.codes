@@ -1,6 +1,6 @@
-# @ai-ptc/sdk
+# @rewind.codes/sdk
 
-The TypeScript SDK of ai-ptc, for agent harness developers. It has three parts:
+The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 
 - **the client** of the HTTP API `/v1` ([`api/openapi.json`](../../api/openapi.json)): toolsets, runs, signals,
   forks, traces, journals, credentials, webhooks;
@@ -13,11 +13,11 @@ Node 22.12 or later. ESM only. The package depends on no model SDK.
 ## The client
 
 ```ts
-import { Ptc } from "@ai-ptc/sdk";
+import { Rewind } from "@rewind.codes/sdk";
 
-const ptc = new Ptc({ url: process.env.PTC_URL, apiKey: process.env.PTC_API_KEY }); // the defaults
+const rewind = new Rewind({ url: process.env.REWIND_URL, apiKey: process.env.REWIND_API_KEY }); // the defaults
 
-const toolset = await ptc.toolsets.create({
+const toolset = await rewind.toolsets.create({
   mcp: [{ name: "github", url: "https://mcp.example.com/github" }],
   host: [
     {
@@ -30,7 +30,7 @@ const toolset = await ptc.toolsets.create({
 });
 // toolset.declarations.prompt or .dts → the model's system prompt
 
-const run = await ptc.runs.start({
+const run = await rewind.runs.start({
   toolset: toolset.id,
   script: code,
   input: {},
@@ -42,26 +42,26 @@ const run = await ptc.runs.start({
 });
 ```
 
-| Namespace           | Calls                                                                                                                                                                                                                              |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ptc.toolsets`      | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
-| `ptc.scripts`       | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
-| `ptc.runs`          | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
-| `ptc.tasks`         | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
-| `ptc.approvals`     | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
-| `ptc.payloads`      | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
-| `ptc.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
-| `ptc.webhooks`      | `verify`                                                                                                                                                                                                                           |
-| `ptc.tools`         | `stats`                                                                                                                                                                                                                            |
-| `ptc.apiKeys`       | `create`, `revoke`                                                                                                                                                                                                                 |
-| `ptc.server`        | `info`, `stop`                                                                                                                                                                                                                     |
+| Namespace              | Calls                                                                                                                                                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rewind.toolsets`      | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
+| `rewind.scripts`       | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
+| `rewind.runs`          | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `rewind.tasks`         | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
+| `rewind.approvals`     | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
+| `rewind.payloads`      | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
+| `rewind.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
+| `rewind.webhooks`      | `verify`                                                                                                                                                                                                                           |
+| `rewind.tools`         | `stats`                                                                                                                                                                                                                            |
+| `rewind.apiKeys`       | `create`, `revoke`                                                                                                                                                                                                                 |
+| `rewind.server`        | `info`, `stop`                                                                                                                                                                                                                     |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 
-**Errors.** The API answers errors as `application/problem+json`. The client throws them as `PtcApiError`, with
+**Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
 `status`, `slug` (`"run-ended"`, `"invalid-script"`…), `detail` (written for a model), `diagnostics` (for a refused
-script) and `query` (for a query that cannot be read: where the term at fault is). `isProblem(error, "task-gone")` tests the kind. A server that cannot be reached gives a `PtcConnectionError`.
+script) and `query` (for a query that cannot be read: where the term at fault is). `isProblem(error, "task-gone")` tests the kind. A server that cannot be reached gives a `RewindConnectionError`.
 
 **Retries.** A request that is safe to repeat is sent again after a network error or a 503, twice by default
 (`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration, checks and tests, and the requests
@@ -79,9 +79,9 @@ A script calls a host tool like any tool. The server queues a task; the worker c
 keeps the claim alive with heartbeats while it runs, and answers with the result.
 
 ```ts
-import { HostToolError } from "@ai-ptc/sdk";
+import { HostToolError } from "@rewind.codes/sdk";
 
-const worker = ptc.worker({
+const worker = rewind.worker({
   toolset: toolset.id,
   concurrency: 10,
   tools: {
@@ -100,7 +100,7 @@ const worker = ptc.worker({
 });
 
 // Later, maybe in another process, when the user answers:
-await ptc.tasks.complete(token, { answer: "yes" });
+await rewind.tasks.complete(token, { answer: "yes" });
 
 await worker.stop(); // lets the claim in flight finish, then waits for the handlers
 ```
@@ -122,17 +122,17 @@ changed during the run. The run is then suspended; its state says which call wai
 `run.suspended` webhook).
 
 ```ts
-for (const approval of ptc.approvals.pending(run)) {
-  const args = await ptc.approvals.args(approval); // from the run's state, or by its digest when large
-  if (await askAHuman(approval.tool, args)) await ptc.approvals.approve(approval);
-  else await ptc.approvals.reject(approval, "the user refused");
+for (const approval of rewind.approvals.pending(run)) {
+  const args = await rewind.approvals.args(approval); // from the run's state, or by its digest when large
+  if (await askAHuman(approval.tool, args)) await rewind.approvals.approve(approval);
+  else await rewind.approvals.reject(approval, "the user refused");
 }
 ```
 
 ## The agent tools
 
 ```ts
-const agentTools = ptc.agentTools({ toolset: toolset.id, labels: { conversation: convId } });
+const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversation: convId } });
 
 // Anthropic Messages API
 const answer = await anthropic.messages.create({ model, messages, tools: agentTools.anthropic.tools });
@@ -165,13 +165,13 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   tool call twice starts one run, or delivers one signal. A run's key is the SHA-256 of the agent's `labels` and the id
   (`runIdempotencyKey`), so agents with other labels never share one, however their harness numbers its tool calls. A
   run the server answers for a key already used by another script or other labels is never shown to the model, and a
-  `PtcError` is thrown.
+  `RewindError` is thrown.
 - `labels` are set on every run the model starts. They filter `list_runs`, and the tools that take a run id answer for
   a run without them as for a run that does not exist. Give the harness an API key limited to these labels so the
   server holds the scope too.
 - Mistakes the model can fix (a bad argument, a refused script, a run that has ended) come back as a result with
   `isError`. Faults of the platform (an unreachable server, a 401, a 5xx) are thrown.
-- `result.run` holds the run the call started or read, for the harness: `ptc.approvals.pending(result.run)` says what
+- `result.run` holds the run the call started or read, for the harness: `rewind.approvals.pending(result.run)` says what
   waits for it.
 - Options: `tools` (a subset), `wait` (30 s), `maxWait` (2 min, the longest wait the model may ask for), `ttl`,
   `traceparent` (a string, or a function giving the current one), `outputLimit`.
@@ -179,12 +179,12 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
 ## Webhooks
 
 ```ts
-import { verifyWebhook, WebhookVerificationFailed } from "@ai-ptc/sdk";
+import { verifyWebhook, WebhookVerificationFailed } from "@rewind.codes/sdk";
 
-app.post("/ptc-events", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/rewind-events", express.raw({ type: "application/json" }), (req, res) => {
   let event;
   try {
-    event = verifyWebhook(req.body, req.headers, process.env.PTC_WEBHOOK_SECRET!);
+    event = verifyWebhook(req.body, req.headers, process.env.REWIND_WEBHOOK_SECRET!);
   } catch (error) {
     if (error instanceof WebhookVerificationFailed) return res.sendStatus(400);
     throw error;

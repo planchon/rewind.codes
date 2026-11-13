@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The acceptance suite of ai-ptc 0.1 (archi/09-roadmap.md, "0.1 is done when"): each criterion
-# proven end to end on the real `ptc` binary.
+# The acceptance suite of Rewind 0.1 (archi/09-roadmap.md, "0.1 is done when"): each criterion
+# proven end to end on the real `rewind` binary.
 #
 #   acceptance/run.sh            every criterion
 #   acceptance/run.sh 1 3 7      these criteria only
@@ -24,8 +24,8 @@ selected() {
 
 cleanup() {
   # Containers of the suite, and servers left by an interrupted run.
-  docker ps -aq --filter label=ptc-acceptance 2>/dev/null | xargs docker rm -f >/dev/null 2>&1 || true
-  pkill -f "$ROOT/target/debug/ptc server" 2>/dev/null || true
+  docker ps -aq --filter label=rewind-acceptance 2>/dev/null | xargs docker rm -f >/dev/null 2>&1 || true
+  pkill -f "$ROOT/target/debug/rewind server" 2>/dev/null || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
@@ -47,10 +47,10 @@ rm -rf "$RESULTS"
 mkdir -p "$RESULTS"
 cleanup
 
-note "building ptc, the evals, the SDK and the suite"
+note "building rewind, the evals, the SDK and the suite"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}"
 command -v sccache >/dev/null && export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
-cargo build -p ptc -p evals
+cargo build -p rewind -p evals
 pnpm --dir sdk/typescript install --frozen-lockfile
 pnpm --dir sdk/typescript build
 pnpm --dir acceptance install --frozen-lockfile
@@ -61,7 +61,7 @@ npx -y @modelcontextprotocol/server-everything@2.2.1 stdio </dev/null >/dev/null
 # Criterion 2, the part the CLI's own end-to-end tests prove through the binary: a run that
 # sleeps, is interrupted and resumes in another process; signals across processes; kill -9.
 if selected 2; then
-  step 2 "cli-across-processes" cargo test -p ptc --test cli
+  step 2 "cli-across-processes" cargo test -p rewind --test cli
 fi
 
 # Criterion 6: the operations' load and limit tests.

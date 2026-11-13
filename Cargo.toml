@@ -9,25 +9,25 @@ rust-version = "1.88"
 publish = false
 
 [workspace.dependencies]
-ptc-api = { path = "crates/ptc-api" }
-ptc-blob = { path = "crates/ptc-blob" }
-ptc-check = { path = "crates/ptc-check" }
-ptc-codegen = { path = "crates/ptc-codegen" }
-ptc-core = { path = "crates/ptc-core" }
-ptc-engine = { path = "crates/ptc-engine" }
-ptc-format = { path = "crates/ptc-format" }
-ptc-mcp = { path = "crates/ptc-mcp" }
-ptc-otel = { path = "crates/ptc-otel" }
-ptc-runtime = { path = "crates/ptc-runtime" }
-ptc-server = { path = "crates/ptc-server" }
-ptc-store-postgres = { path = "crates/ptc-store-postgres" }
-ptc-store-turso = { path = "crates/ptc-store-turso" }
-ptc-cli = { path = "crates/ptc-cli" }
+rewind-api = { path = "crates/rewind-api" }
+rewind-blob = { path = "crates/rewind-blob" }
+rewind-check = { path = "crates/rewind-check" }
+rewind-codegen = { path = "crates/rewind-codegen" }
+rewind-core = { path = "crates/rewind-core" }
+rewind-engine = { path = "crates/rewind-engine" }
+rewind-format = { path = "crates/rewind-format" }
+rewind-mcp = { path = "crates/rewind-mcp" }
+rewind-otel = { path = "crates/rewind-otel" }
+rewind-runtime = { path = "crates/rewind-runtime" }
+rewind-server = { path = "crates/rewind-server" }
+rewind-store-postgres = { path = "crates/rewind-store-postgres" }
+rewind-store-turso = { path = "crates/rewind-store-turso" }
+rewind-cli = { path = "crates/rewind-cli" }
 
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
-# The command lines of the `ptc` binary and of the evals.
+# The command lines of the `rewind` binary and of the evals.
 clap = { version = "4", features = ["derive", "env"] }
 deno_ast = { version = "0.53", features = ["transpiling"] }
 deno_core = "0.413"
@@ -36,12 +36,12 @@ deno_error = "0.7"
 # observable by scripts, so a new version is a change of the determinism epoch.
 deno_web = "=0.291.0"
 deno_webidl = "=0.260.0"
-# The user's cache directory, where ptc-check extracts tsgo.
+# The user's cache directory, where rewind-check extracts tsgo.
 dirs = "6"
-# The embedded server's exclusive lock on `.ptc/server.lock` (flock, released when the process
+# The embedded server's exclusive lock on `.rewind/server.lock` (flock, released when the process
 # dies).
 fs4 = { version = "0.13", features = ["sync"] }
-# The tarball of tsgo embedded by ptc-check (gzip, tar).
+# The tarball of tsgo embedded by rewind-check (gzip, tar).
 flate2 = "1"
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
@@ -54,17 +54,17 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 # messages reach scripts, so a new version is a change of the determinism epoch. No default
 # features: a schema never loads a remote or local `$ref`.
 jsonschema = { version = "=0.61.1", default-features = false }
-# Test harness of ptc-mcp's integration tests, whose binary is also the stdio fixture server.
+# Test harness of rewind-mcp's integration tests, whose binary is also the stdio fixture server.
 libtest-mimic = "0.8"
-# The S3 backend of ptc-blob, without the local-file backend (ptc-blob writes its own files).
+# The S3 backend of rewind-blob, without the local-file backend (rewind-blob writes its own files).
 object_store = { version = "0.14", default-features = false, features = ["aws"] }
-# The workers' blob cache in ptc-blob: concurrent, bounded by weight (bytes).
+# The workers' blob cache in rewind-blob: concurrent, bounded by weight (bytes).
 quick_cache = "0.7"
-# The failure signatures of ptc-engine: the parts of an error's message that vary, replaced.
+# The failure signatures of rewind-engine: the parts of an error's message that vary, replaced.
 regex = "1"
-# The HTTP client of ptc-api: HTTPS with rustls, and the embedded server's unix socket.
+# The HTTP client of rewind-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
-# The MCP SDK: clients in ptc-mcp, servers in its tests.
+# The MCP SDK: clients in rewind-mcp, servers in its tests.
 rmcp = { version = "3.9", default-features = false }
 # The CPU clock of the isolate's thread (`CLOCK_THREAD_CPUTIME_ID`), without unsafe code.
 rustix = { version = "1", default-features = false, features = ["std"] }
@@ -76,7 +76,7 @@ serde_html_form = "0.2"
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
-# The production store (ptc-store-postgres): Postgres through sqlx, without its macros (queries are
+# The production store (rewind-store-postgres): Postgres through sqlx, without its macros (queries are
 # built at run time) and with rustls on aws-lc-rs, the provider the HTTP clients already use. 0.8:
 # sqlx 0.9 needs Rust 1.94, above the workspace's 1.88.
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "migrate", "uuid"] }
@@ -90,9 +90,9 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
 winnow = "1"
-# ptc-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
+# rewind-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-# `ptc-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
+# `rewind-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
 uuid = { version = "1", default-features = false }
 
 [workspace.lints.rust]

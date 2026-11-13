@@ -1,5 +1,5 @@
 /**
- * A mocked ai-ptc server: a real HTTP server on a free local port, with handlers per route,
+ * A mocked Rewind server: a real HTTP server on a free local port, with handlers per route,
  * recording every request it gets.
  */
 import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from "node:http";
@@ -179,7 +179,7 @@ export function problem(
 ): JsonReply {
   return {
     status,
-    body: { type: `urn:ptc:problem:${slug}`, title: slug, status, detail, ...extra },
+    body: { type: `urn:rewind:problem:${slug}`, title: slug, status, detail, ...extra },
   };
 }
 

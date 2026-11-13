@@ -17,7 +17,7 @@ export class Toolsets {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Registers and pins a toolset: ai-ptc connects to its MCP servers, lists their tools and
+   * Registers and pins a toolset: Rewind connects to its MCP servers, lists their tools and
    * pins their schemas. Returns the toolset with its declarations for the model's prompt. The
    * toolset is content-addressed: registering it again returns the same one.
    */
@@ -28,7 +28,7 @@ export class Toolsets {
     );
   }
 
-  /** The declarations of a toolset: `dts` (`ptc-tools.d.ts`, the default) or `prompt`. */
+  /** The declarations of a toolset: `dts` (`rewind-tools.d.ts`, the default) or `prompt`. */
   declarations(id: string, options: RequestOptions & { format?: DeclarationFormat } = {}): Promise<DeclarationsText> {
     return this.transport.send(
       () =>

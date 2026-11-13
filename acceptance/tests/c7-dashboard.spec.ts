@@ -2,20 +2,20 @@
  * Criterion 7 (`archi/09-roadmap.md`, "0.1 is done when"): an operator finds any run by label,
  * tool or error in the dashboard, and sees its code next to its trace.
  *
- * The dashboard is the one `ptc-server` embeds and serves. Runs are made through the SDK, with
+ * The dashboard is the one `rewind-server` embeds and serves. Runs are made through the SDK, with
  * its worker answering the host tools; the operator signs in with a `reader` key, searches with
  * the query bar, steps through a run with the time cursor, and sees a run waiting for a signal
  * and the failures grouped by signature.
  */
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { HostToolError, Ptc, type Run } from "@ai-ptc/sdk";
+import { HostToolError, Rewind, type Run } from "@rewind.codes/sdk";
 import { expect, type Page, test } from "@playwright/test";
 import { startServer } from "../support/deployment.js";
 import { resultDir } from "../support/paths.js";
 
-const TRIAGE = `import { sleep } from "ptc";
-import { audit, crm } from "ptc:tools";
+const TRIAGE = `import { sleep } from "rewind";
+import { audit, crm } from "rewind:tools";
 
 export default async function main(input: { email: string }) {
   const customer = await crm.lookup({ email: input.email });
@@ -26,7 +26,7 @@ export default async function main(input: { email: string }) {
 }
 `;
 
-const CHARGE = `import { payments } from "ptc:tools";
+const CHARGE = `import { payments } from "rewind:tools";
 
 export default async function main() {
   const receipt = await payments.charge({ amount: 100 });
@@ -39,7 +39,7 @@ const STUCK = `export default async function main() {
 }
 `;
 
-const WAITER = `import { signal } from "ptc";
+const WAITER = `import { signal } from "rewind";
 
 export default async function main() {
   const go = await signal<{ go: boolean }>("go-ahead");
@@ -58,7 +58,7 @@ test.describe("criterion 7: the dashboard", () => {
     server = await startServer(mkdtempSync(join(resultDir("c7-dashboard"), "server-")));
     const { admin } = server;
     readerKey = (await admin.apiKeys.create({ tenant: "acme", role: "reader", name: "operator" })).key!;
-    const harness = new Ptc({
+    const harness = new Rewind({
       url: server.url,
       apiKey: (await admin.apiKeys.create({ tenant: "acme", role: "harness" })).key!,
     });
@@ -145,7 +145,7 @@ test.describe("criterion 7: the dashboard", () => {
 
   test("an operator finds runs by label, tool and error, and sees a run's code next to its trace", async ({ page }) => {
     await page.goto(`${server.url}/`);
-    await page.getByPlaceholder("ptc_sk_…").fill(readerKey);
+    await page.getByPlaceholder("rewind_sk_…").fill(readerKey);
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(page).toHaveURL(/#\/overview/);
     await expect(page.getByRole("link", { name: /Waiting now\s*1/ })).toBeVisible();

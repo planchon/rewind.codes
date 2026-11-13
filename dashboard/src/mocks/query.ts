@@ -1,4 +1,4 @@
-// The query language, read as the server reads it (crates/ptc-api/src/query.rs), for the mocked
+// The query language, read as the server reads it (crates/rewind-api/src/query.rs), for the mocked
 // API: a query becomes a predicate over the mocked run summaries, or the error the server would
 // answer with `invalid-query`, with the position of the term at fault in characters.
 import type { RunMode, RunStatus, RunSummary, WaitKind } from "../api/types";

@@ -1,13 +1,13 @@
 import createClient, { type Client } from "openapi-fetch";
 
-import { PtcApiError, PtcConnectionError, PtcError, problemOf } from "./errors.js";
+import { RewindApiError, RewindConnectionError, RewindError, problemOf } from "./errors.js";
 import type { paths } from "./generated/api.js";
 
 /** How the client reaches the server. */
 export interface TransportOptions {
-  /** The server's base URL, such as `https://ptc.example.com`. */
+  /** The server's base URL, such as `https://rewind.example.com`. */
   url: string;
-  /** The API key, `ptc_sk_…`, sent as `Authorization: Bearer …`. */
+  /** The API key, `rewind_sk_…`, sent as `Authorization: Bearer …`. */
   apiKey?: string | undefined;
   /** A `fetch` to send requests with, for a proxy, a unix socket or tests. */
   fetch?: typeof globalThis.fetch | undefined;
@@ -54,7 +54,7 @@ export class Transport {
     });
   }
 
-  /** Sends a request built by `request`; returns its data, or throws a `PtcError`. */
+  /** Sends a request built by `request`; returns its data, or throws a `RewindError`. */
   async send<D>(request: () => Promise<ApiResult<D>>, options: SendOptions): Promise<D> {
     return (await this.sendForResponse(request, options)).data;
   }
@@ -78,7 +78,7 @@ export class Transport {
           await sleep(backoff(attempt), signal);
           continue;
         }
-        throw new PtcConnectionError(`cannot reach the ai-ptc server at ${this.url}: ${messageOf(error)}`, {
+        throw new RewindConnectionError(`cannot reach the Rewind server at ${this.url}: ${messageOf(error)}`, {
           cause: error,
         });
       }
@@ -90,7 +90,7 @@ export class Transport {
         await sleep(retryAfter(response) ?? backoff(attempt), signal);
         continue;
       }
-      throw new PtcApiError(problemOf(response.status, response.statusText, result.error));
+      throw new RewindApiError(problemOf(response.status, response.statusText, result.error));
     }
   }
 }
@@ -153,7 +153,7 @@ export function checkIdempotencyKey(key: string | undefined): void {
     return;
   }
   if (!isValidIdempotencyKey(key)) {
-    throw new PtcError(`invalid idempotency key ${JSON.stringify(key)}: expected 1 to 255 visible ASCII characters`);
+    throw new RewindError(`invalid idempotency key ${JSON.stringify(key)}: expected 1 to 255 visible ASCII characters`);
   }
 }
 

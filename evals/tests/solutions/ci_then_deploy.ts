@@ -1,5 +1,5 @@
-import { ops } from "ptc:tools";
-import { signal, webhook } from "ptc";
+import { ops } from "rewind:tools";
+import { signal, webhook } from "rewind";
 
 export default async function main() {
   const hook = await webhook("build_done");

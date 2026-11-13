@@ -1,9 +1,9 @@
 //! The world of an episode: the real engine with the V8 sandbox and the MCP dispatcher, the
 //! fake MCP servers it calls, and the outside world reacting in virtual time.
 //!
-//! The engine is wired in process, as `ptc-e2e` wires it (`archi/08-decisions.md`, "Taken
+//! The engine is wired in process, as `rewind-e2e` wires it (`archi/08-decisions.md`, "Taken
 //! while building the evals"): in-memory storage, `McpDispatcher` for MCP tools, the type
-//! checker `ptc-check`, codegen `ptc-codegen`, and one virtual clock shared with the fake
+//! checker `rewind-check`, codegen `rewind-codegen`, and one virtual clock shared with the fake
 //! servers. Time only moves when the world is driven: a run's `wait`, a server's webhook, a
 //! signal sent by the world after a delay, a timer.
 
@@ -11,21 +11,21 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ptc_check::TsgoChecker;
-use ptc_core::{
+use rewind_check::TsgoChecker;
+use rewind_core::{
     Builtin, HistoryEntry, McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script,
     Timestamp, Tool, ToolRoute, Toolset,
 };
-use ptc_engine::adapters::{
+use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, RoutingDispatcher, SeededEntropy,
     Unrouted,
 };
-use ptc_engine::ports::{
+use rewind_engine::ports::{
     Clock, JournalStore, RunFilter, RunRef, TenantId, ToolDeclarations, VirtualTime, WebhookToken,
 };
-use ptc_engine::{Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartRun};
-use ptc_mcp::{McpConfig, McpDispatcher, McpEgress};
-use ptc_runtime::{SandboxLimits, V8Executor};
+use rewind_engine::{Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartRun};
+use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
+use rewind_runtime::{SandboxLimits, V8Executor};
 use serde_json::Value;
 
 use crate::clock::{DAY, SharedClock, T0};
@@ -44,7 +44,7 @@ pub type EvalEngine = Engine<
 >;
 
 /// The base of the URLs `webhook(name)` returns.
-pub const PUBLIC_URL: &str = "https://ptc.example";
+pub const PUBLIC_URL: &str = "https://rewind.example";
 
 /// How far the world goes on after the conversation, at most: the runs left waiting for
 /// timers end within it.
@@ -133,10 +133,10 @@ pub struct World {
     pub engine: EvalEngine,
     pub clock: SharedClock,
     pub servers: Vec<Running>,
-    /// The pinned toolset the agent's scripts import from `ptc:tools`.
+    /// The pinned toolset the agent's scripts import from `rewind:tools`.
     pub toolset: Toolset,
     /// What codegen generated for it.
-    pub declarations: ptc_codegen::Declarations,
+    pub declarations: rewind_codegen::Declarations,
     pub checker: Arc<TsgoChecker>,
     /// Set on every run of the agent.
     pub labels: BTreeMap<String, String>,
@@ -209,12 +209,12 @@ impl World {
             tools.push(Tool::new(
                 "webhook",
                 ToolRoute::Builtin(Builtin::Webhook),
-                ptc_runtime::builtins::webhook_input_schema(),
+                rewind_runtime::builtins::webhook_input_schema(),
             ));
         }
         let toolset = Toolset::new(pinned_servers, tools)
             .map_err(|err| WorldError::Toolset(err.to_string()))?;
-        let declarations = ptc_codegen::generate(&toolset, &BTreeMap::new());
+        let declarations = rewind_codegen::generate(&toolset, &BTreeMap::new());
 
         let executor = V8Executor::new(SandboxLimits::default())
             .map_err(|err| WorldError::Sandbox(err.to_string()))?;

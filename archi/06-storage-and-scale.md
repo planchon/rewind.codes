@@ -3,16 +3,16 @@
 ## Backends
 
 Storage sits behind the `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore` ports of
-`ptc-engine`.
+`rewind-engine`.
 
 | Use | Journal, read model, secrets | Large payloads |
 | --- | --- | --- |
-| Production (`ptc-server`) | Postgres (`ptc-store-postgres`) | S3 or any S3-compatible service (`ptc-blob`) |
-| Embedded (`ptc server --embedded`, local dev, tests) | Turso Database (`ptc-store-turso`, the `turso` crate) | Local files (`ptc-blob`) |
+| Production (`rewind-server`) | Postgres (`rewind-store-postgres`) | S3 or any S3-compatible service (`rewind-blob`) |
+| Embedded (`rewind server --embedded`, local dev, tests) | Turso Database (`rewind-store-turso`, the `turso` crate) | Local files (`rewind-blob`) |
 | Engine unit tests, mock mode | In memory | In memory |
 
 Every adapter of `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore` passes that port's
-conformance suite, shipped by `ptc-engine` behind the `conformance` feature.
+conformance suite, shipped by `rewind-engine` behind the `conformance` feature.
 
 ## Tables
 
@@ -51,7 +51,7 @@ tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, out
                error_kind, args_digest, result_digest)      PK (run_id, seq)
 ```
 
-`event` columns hold the `ptc-format` v1 JSON of the event. `labels`, `trace_context`,
+`event` columns hold the `rewind-format` v1 JSON of the event. `labels`, `trace_context`,
 `idempotency_key` and `parent` are run metadata: stored with the run, never in its events
 ([05](05-testing-and-observability.md#run-metadata)).
 
@@ -130,10 +130,10 @@ The responsibilities are split by layer:
 
 | Layer | Knows |
 | --- | --- |
-| `ptc-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
-| `ptc-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the `payloads` table with the commit, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
-| `ptc-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
-| `ptc-blob` | **Where** large values live: `{tenant}/sha256/{digest}` on S3, `.ptc/blobs/{tenant}/sha256/ab/<digest>` on disk (atomic writes); workers keep a local cache in front of S3. |
+| `rewind-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
+| `rewind-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the `payloads` table with the commit, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
+| `rewind-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
+| `rewind-blob` | **Where** large values live: `{tenant}/sha256/{digest}` on S3, `.rewind/blobs/{tenant}/sha256/ab/<digest>` on disk (atomic writes); workers keep a local cache in front of S3. |
 
 Consequences:
 
@@ -141,7 +141,7 @@ Consequences:
   during replays for as long as the run lives. RFC 8785 fixes what "sorted keys, no
   whitespace" leaves to the serializer: keys are ordered by UTF-16 code units, numbers
   are IEEE 754 doubles written as ECMAScript writes them, and string escaping is
-  minimal. Golden vectors in `ptc-core`'s tests pin it.
+  minimal. Golden vectors in `rewind-core`'s tests pin it.
 - Payloads are immutable, deduplicated within a tenant, and cacheable forever.
 - During replay, recorded command args are compared by digest, so they are never
   downloaded. Only completion results delivered to the script are fetched, and workers
@@ -152,7 +152,7 @@ Consequences:
 
 ## Tenancy and authentication
 
-Every request carries an API key as a Bearer token: `ptc_sk_…`. Keys are stored hashed. Each
+Every request carries an API key as a Bearer token: `rewind_sk_…`. Keys are stored hashed. Each
 key has a tenant and a scope:
 
 - a role, which says which endpoints the key may call;
@@ -227,8 +227,8 @@ The same binary takes a role at start:
 
 | Role | Runs | V8 |
 | --- | --- | --- |
-| `ptc server --role api` | HTTP API, authentication, SSE | No |
-| `ptc server --role worker` | V8, dispatcher, scheduler, projector | Yes |
+| `rewind server --role api` | HTTP API, authentication, SSE | No |
+| `rewind server --role worker` | V8, dispatcher, scheduler, projector | Yes |
 
 - Workers run under gVisor (`runsc`). A sandbox runs its own network stack: it takes over the
   network namespace it starts in, and reaches no DNS server on the host's loopback, such as

@@ -1,7 +1,7 @@
 import { EventSourceParserStream } from "eventsource-parser/stream";
 
 import { durationParam, toMillis } from "../duration.js";
-import { PtcApiError, PtcConnectionError, PtcError } from "../errors.js";
+import { RewindApiError, RewindConnectionError, RewindError } from "../errors.js";
 import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Transport } from "../http.js";
 import { labelParams, timeParam } from "../params.js";
 import {
@@ -33,7 +33,7 @@ const MIN_REPOLL_MS = 1_000;
 export interface StartRunParams extends RequestOptions {
   /** The TypeScript source: a single ES module whose default export is the entry point. */
   script: string;
-  /** The toolset the script imports from `ptc:tools`. */
+  /** The toolset the script imports from `rewind:tools`. */
   toolset?: string | undefined;
   /** The input of `main`. `{}` when absent. */
   input?: unknown;
@@ -144,7 +144,7 @@ export class Runs {
 
   /**
    * Starts a run. The script is compiled, checked and type-checked first: a script that cannot
-   * run is refused with `invalid-script` (a `PtcApiError` with `diagnostics`) before any run
+   * run is refused with `invalid-script` (a `RewindApiError` with `diagnostics`) before any run
    * exists. With `wait`, answers when the run ends or `wait` passes, whichever comes first.
    */
   async start(params: StartRunParams): Promise<Run> {
@@ -377,7 +377,7 @@ export class Runs {
           { retry: true, signal },
         );
         if (body === null) {
-          throw new PtcConnectionError(`the event stream of run ${id} has no body`);
+          throw new RewindConnectionError(`the event stream of run ${id} has no body`);
         }
         const messages = body.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream());
         for await (const message of messages) {
@@ -394,16 +394,16 @@ export class Runs {
       } catch (error) {
         throwIfAborted(signal);
         if (!follow || failures >= maxReconnects || !reconnectable(error)) {
-          throw error instanceof PtcError
+          throw error instanceof RewindError
             ? error
-            : new PtcConnectionError(`the event stream of run ${id} broke: ${messageOf(error)}`, { cause: error });
+            : new RewindConnectionError(`the event stream of run ${id} broke: ${messageOf(error)}`, { cause: error });
         }
       }
       if (!follow) {
-        throw new PtcConnectionError(`the event stream of run ${id} ended before its end event`);
+        throw new RewindConnectionError(`the event stream of run ${id} ended before its end event`);
       }
       if (failures >= maxReconnects) {
-        throw new PtcConnectionError(`the event stream of run ${id} closed ${failures + 1} times in a row`);
+        throw new RewindConnectionError(`the event stream of run ${id} closed ${failures + 1} times in a row`);
       }
       await sleep(backoff(failures), signal);
       failures += 1;
@@ -511,7 +511,7 @@ export class Runs {
 
 /** A failure a new connection may get past: anything but a problem the API answered, unless a 5xx or a 429. */
 function reconnectable(error: unknown): boolean {
-  return !(error instanceof PtcApiError) || error.status >= 500 || error.status === 429;
+  return !(error instanceof RewindApiError) || error.status >= 500 || error.status === 429;
 }
 
 function deadlineOf(wait: Duration | undefined, now: number): number | undefined {

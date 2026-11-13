@@ -1,14 +1,14 @@
 # evals
 
-The eval suite of ai-ptc ([archi/05](../archi/05-testing-and-observability.md#evals)). Models
+The eval suite of Rewind ([archi/05](../archi/05-testing-and-observability.md#evals)). Models
 solve realistic tasks end to end, and the choices that are cheap to change (names, error
-formats, the `ptc` library, the prompt rendering, what `run_script` returns) are decided on
+formats, the `rewind` library, the prompt rendering, what `run_script` returns) are decided on
 the numbers ([08](../archi/08-decisions.md#taken-while-building-the-evals-november-2026)).
 
 ## What an episode is
 
 ```
-model ──► system prompt (introduction, the ptc module, the toolset in one rendering)
+model ──► system prompt (introduction, the rewind module, the toolset in one rendering)
   │        + the agent tools: run_script, check_script, test_script, get_run, list_runs,
   │          signal_run, cancel_run, retry_run, search_tools
   ▼
@@ -20,7 +20,7 @@ agent tools (the SDK's, ported) ──► engine in process: tsgo check, V8 sand
 ```
 
 1. The task's world starts: its fake servers, the toolset pinned from them (discovery through
-   `McpDispatcher`), the declarations from `ptc-codegen`, and the engine at Monday
+   `McpDispatcher`), the declarations from `rewind-codegen`, and the engine at Monday
    2026-03-02T09:00:00Z in virtual time. Setup runs, if the task has any, run first.
 2. The model gets the task and loops: generate a script, check it, run it, fix it. Each tool
    call is handled as the SDK handles it, with the same text back: 256 KiB pages, diagnostics

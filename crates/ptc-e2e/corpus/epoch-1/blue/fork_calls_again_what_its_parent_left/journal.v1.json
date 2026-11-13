@@ -1,6 +1,0 @@
-{"v":1,"run":"e7464efc-70ad-7902-9a3e-aa3c25c3a340","script":"import { payments } from \"ptc:tools\";\n\nexport default async function main() {\n  const receipt = await payments.charge({ amount: 100 });\n  return { receipt };\n}\n","toolset":{"servers":[],"tools":[{"name":"payments.charge","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"payments","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"5cd28aedcd37e4d1d57ad99bb3d3c61c6ca0505838103812d1352831bf91c0f4","toolset":"c07d074f2545c77156a8ed832e4514c06f534d1514e775272bbc11b4709b3d3b","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
-{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"payments.charge","args":{"value":{"amount":100}},"callsite":{"line":4,"column":34}}},
-{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"id":"ch_1"}}}},
-{"index":3,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":{"receipt":{"id":"ch_1"}}}}}
-]}

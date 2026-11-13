@@ -1,4 +1,4 @@
-# CI of ai-ptc: the Rust workspace (formatting, lints, every test with the Docker services the
+# CI of Rewind: the Rust workspace (formatting, lints, every test with the Docker services the
 # tests start: Postgres, MinIO, the OpenTelemetry Collector; the e2e corpus; the OpenAPI
 # document), the SDK and the dashboard, the image, and the reference deployment under load.
 name: CI
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 90
     env:
       # The tests that start Postgres, MinIO or a Collector in Docker fail instead of skipping.
-      PTC_REQUIRE_DOCKER: 1
+      REWIND_REQUIRE_DOCKER: 1
     steps:
       - uses: actions/checkout@v4
       - name: Free disk space
@@ -42,7 +42,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      # ptc-server's build script builds the dashboard with pnpm.
+      # rewind-server's build script builds the dashboard with pnpm.
       - uses: pnpm/action-setup@v4
         with:
           version: ${{ env.PNPM_VERSION }}
@@ -64,11 +64,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: The OpenAPI document is current, and the API's contract
-        run: cargo test -p ptc-api --locked
+        run: cargo test -p rewind-api --locked
       - name: The e2e corpus
-        run: cargo test -p ptc-e2e --locked
+        run: cargo test -p rewind-e2e --locked
       - name: Every other test
-        run: cargo test --workspace --locked --exclude ptc-api --exclude ptc-e2e
+        run: cargo test --workspace --locked --exclude rewind-api --exclude rewind-e2e
       - name: Documentation
         run: cargo doc --workspace --no-deps --locked
         env:
@@ -151,34 +151,34 @@ jobs:
         with:
           cache-map: |
             {
-              "cargo-registry": { "target": "/usr/local/cargo/registry", "id": "ptc-cargo-registry" },
-              "pnpm-store": { "target": "/pnpm/store", "id": "ptc-pnpm-store" }
+              "cargo-registry": { "target": "/usr/local/cargo/registry", "id": "rewind-cargo-registry" },
+              "pnpm-store": { "target": "/pnpm/store", "id": "rewind-pnpm-store" }
             }
           skip-extraction: ${{ steps.mounts.outputs.cache-hit }}
       - name: The server image
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: ptc
-          tags: ai-ptc:local
+          target: rewind
+          tags: rewind:local
           load: true
-          cache-from: type=gha,scope=ptc
-          cache-to: type=gha,mode=max,scope=ptc
+          cache-from: type=gha,scope=rewind
+          cache-to: type=gha,mode=max,scope=rewind
       - name: The load generator's image
         uses: docker/build-push-action@v6
         with:
           context: .
           target: load
-          tags: ai-ptc-load:local
+          tags: rewind-load:local
           load: true
           cache-from: type=gha,scope=load
           cache-to: type=gha,mode=max,scope=load
       - name: Smoke test
         run: |
-          docker run --rm ai-ptc:local --version
-          docker run --rm ai-ptc:local server --version
-          docker image ls ai-ptc
-      - run: docker save ai-ptc:local ai-ptc-load:local | gzip > images.tar.gz
+          docker run --rm rewind:local --version
+          docker run --rm rewind:local server --version
+          docker image ls rewind
+      - run: docker save rewind:local rewind-load:local | gzip > images.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: images
@@ -224,7 +224,7 @@ jobs:
           docker compose up -d
           . ./.env
           for _ in $(seq 60); do
-            curl -fsS -H "Authorization: Bearer $PTC_ADMIN_KEY" http://127.0.0.1:8080/v1/server && break
+            curl -fsS -H "Authorization: Bearer $REWIND_ADMIN_KEY" http://127.0.0.1:8080/v1/server && break
             sleep 2
           done
           docker compose ps
@@ -247,11 +247,11 @@ jobs:
       - name: The agent tools' bound against the deployment
         run: |
           . ./.env
-          key=$(curl -fsS http://127.0.0.1:8080/v1/api-keys -H "Authorization: Bearer $PTC_ADMIN_KEY" \
+          key=$(curl -fsS http://127.0.0.1:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMIN_KEY" \
             -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness"}' | jq -r .key)
           cd ../sdk/typescript
           pnpm install --frozen-lockfile
-          PTC_LIVE_URL=http://127.0.0.1:8080 PTC_LIVE_KEY="$key" pnpm vitest run test/live.test.ts
+          REWIND_LIVE_URL=http://127.0.0.1:8080 REWIND_LIVE_KEY="$key" pnpm vitest run test/live.test.ts
       - name: Logs
         if: failure()
         run: docker compose logs --no-color --tail 200

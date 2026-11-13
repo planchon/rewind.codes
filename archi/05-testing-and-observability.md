@@ -33,27 +33,27 @@ A scenario ties it together:
 }
 ```
 
-`ptc test scenario.json` runs it in the CLI process, without a server, and reports a trace
+`rewind test scenario.json` runs it in the CLI process, without a server, and reports a trace
 plus the failed expectations. `POST /v1/test` does the same on a server.
 
-In mock mode, the CLI also takes static responses per tool from `ptc.tools.json`
+In mock mode, the CLI also takes static responses per tool from `rewind.tools.json`
 (`{"$error": "message"}` for a failure).
 
 ## Replay, debugging and forks
 
-- `ptc replay <run>`: fetches the journal and the script, re-executes them locally, and
+- `rewind replay <run>`: fetches the journal and the script, re-executes them locally, and
   checks determinism. No tool is called. `<run>` can also be an exported journal document:
   the replay then runs in the CLI process, without a server.
-- `ptc replay <run> --script fixed.ts`: tells whether a corrected script is compatible
+- `rewind replay <run> --script fixed.ts`: tells whether a corrected script is compatible
   with an existing history, and if not, where it diverges.
-- `ptc fork <run> --script fixed.ts [--at <index>] [--input …]`: a new run that reuses the
+- `rewind fork <run> --script fixed.ts [--at <index>] [--input …]`: a new run that reuses the
   recorded results of its parent, then continues live. An agent can fix a bug at step 7
   without redoing the side effects of steps 1–6. The agent tool is
   `retry_run({ run_id, code })`, and the API `POST /v1/runs/{id}/fork`.
 
 A fork rests on two things the engine already guarantees:
 
-- What `ptc replay --script` checks: the new script is replayed against the parent's
+- What `rewind replay --script` checks: the new script is replayed against the parent's
   history, and as long as its commands match, the recorded outcomes are reused.
 - A run that ends by itself has a recorded outcome for every tool call it scheduled
   ([how a script ends](03-execution.md#how-a-script-ends)), so the fork knows which
@@ -81,7 +81,7 @@ replays cassettes recorded from real runs.
 The models evaluated are Claude Opus, Sonnet and Haiku, and one OpenAI model. The suite runs
 on demand, not in CI: each run costs model tokens.
 
-The choices that are cheap to change today (names, error formats, the `ptc` library, the
+The choices that are cheap to change today (names, error formats, the `rewind` library, the
 prompt rendering, what `run_script` returns) are decided on these numbers.
 
 ## Observability
@@ -98,12 +98,12 @@ replay.
 | --- | --- | --- |
 | Covers | The platform itself: activations, lease contention, replay duration, commits, store queries, V8 heap, dispatcher attempts and retries | What each script did: tool calls, timers, signal waits, logs, outcome |
 | Source of truth | The process | The journal |
-| Emitted by | The `tracing` facade in `ptc-engine` and the adapters, live | The projector, from committed entries |
-| Exported by | The `tracing` subscriber from `ptc-otel`, installed by `ptc-server` and `ptc-cli` | `ptc-otel`, through the `SpanExporter` port |
+| Emitted by | The `tracing` facade in `rewind-engine` and the adapters, live | The projector, from committed entries |
+| Exported by | The `tracing` subscriber from `rewind-otel`, installed by `rewind-server` and `rewind-cli` | `rewind-otel`, through the `SpanExporter` port |
 
 Both land in the same OTel trace (see the span model below): the dispatcher's attempt
 spans appear under the tool call span projected from the journal. The engine only
-records the run's trace id and the parent span id as `tracing` fields; `ptc-otel` turns
+records the run's trace id and the parent span id as `tracing` fields; `rewind-otel` turns
 them into OTel context, so the engine never depends on OpenTelemetry.
 
 ### The feed and the projector
@@ -148,8 +148,8 @@ One OTel trace per run.
   paused for days shows its children under a parent that appears when the run ends.
 - **Logs** are exported as OTel log records, correlated with the trace and the activation
   span.
-- **Attributes**: `ptc.run_id`, `ptc.script` (digest), `ptc.toolset`, `ptc.seq`,
-  `ptc.tool`, `ptc.callsite` (TypeScript file and line), outcome and error kind, attempts,
+- **Attributes**: `rewind.run_id`, `rewind.script` (digest), `rewind.toolset`, `rewind.seq`,
+  `rewind.tool`, `rewind.callsite` (TypeScript file and line), outcome and error kind, attempts,
   run labels. Payloads appear as digest, size and preview, **never as values**: arguments
   are written by a model and may hold sensitive data, and OTel backends have weaker access
   control than the store.
@@ -184,7 +184,7 @@ separate **read model** behind the `ReadModel` port, filled by the projector:
   name, message, line and fingerprint; whether it is quarantined.
 - `run_labels`: one row per label of a run, for equality, prefix and presence.
 - `run_waits`: what an active run waits for: a signal (its name, the timeout as wake time), a
-  timer (its due time), a tool call dispatched by ai-ptc, or a host tool's call; each with
+  timer (its due time), a tool call dispatched by Rewind, or a host tool's call; each with
   the entry that opened it and its callsite.
 - `tool_calls`: run, `seq`, tool, callsite line, scheduled and completed at, outcome,
   error kind, payload digests, and the furthest state its task reached: its attempt, and
@@ -213,7 +213,7 @@ columnar read model is out of 0.1.
 ### Query language
 
 The runs of the read model are searched with one query language, the same in the API
-(`q`), the dashboard's query bar, the SDK and `ptc runs`. Terms are separated by spaces
+(`q`), the dashboard's query bar, the SDK and `rewind runs`. Terms are separated by spaces
 and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 
 | Term | Matches runs |
@@ -222,7 +222,7 @@ and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 | `status:failed,aborted` | with one of these statuses |
 | `tool:github.close_issue`, `tool:github.*` | that scheduled a call to this tool, or to a tool starting with `github.` |
 | `error:timeout`, `error:TypeError` | with a tool call that failed with this kind, or that ended with this error name (or abort kind) |
-| `waiting:*`, `waiting:signal,approval` | active, and waiting for: `signal`, `timer`, `call` (a tool ai-ptc calls), `host` (a host tool), `approval`, `parked`, `deferred` |
+| `waiting:*`, `waiting:signal,approval` | active, and waiting for: `signal`, `timer`, `call` (a tool Rewind calls), `host` (a host tool), `approval`, `parked`, `deferred` |
 | `signal:approval` | waiting for this signal |
 | `started:>2026-11-01`, `started:>now-24h`, `ended:<…`, `activity:>…` | by time: a date, a time, or `now` minus a duration; `>`, `>=`, `<`, `<=`, or a range `a..b` |
 | `duration:>5m`, `calls:>=20`, `errors:>0` | by duration (ended runs), number of tool calls, number of failed calls |
@@ -240,7 +240,7 @@ to the caller's tenant, and for a key limited to labels, to its labels.
 ### Dashboard
 
 The dashboard shows every run and all the code executed on the platform. It is a React
-single-page application, served by `ptc-server`.
+single-page application, served by `rewind-server`.
 
 | View | Shows |
 | --- | --- |
@@ -274,8 +274,8 @@ single-page application, served by `ptc-server`.
 
 - **Event stream**: `GET /v1/runs/{id}/events?follow=1` (SSE), for harness UIs and the
   dashboard.
-- **LLM trace**: `GET /v1/runs/{id}/trace?format=llm` and `ptc trace <run>`. Payloads are
-  truncated, and each entry can be expanded individually (`ptc trace <run> --entry 7`).
+- **LLM trace**: `GET /v1/runs/{id}/trace?format=llm` and `rewind trace <run>`. Payloads are
+  truncated, and each entry can be expanded individually (`rewind trace <run> --entry 7`).
 
 ```
 run 01JC…7Q  suspended · waiting for signal "approval" (timeout in 2d 23h)

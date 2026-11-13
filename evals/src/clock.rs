@@ -2,9 +2,9 @@
 
 use std::sync::Arc;
 
-use ptc_core::Timestamp;
-use ptc_engine::adapters::VirtualClock;
-use ptc_engine::ports::{Clock, VirtualTime};
+use rewind_core::Timestamp;
+use rewind_engine::adapters::VirtualClock;
+use rewind_engine::ports::{Clock, VirtualTime};
 
 /// Monday 2026-03-02T09:00:00Z: when every episode starts, in virtual time.
 pub const T0: Timestamp = Timestamp(1_772_442_000_000);
@@ -39,12 +39,12 @@ impl VirtualTime for SharedClock {
 
 /// `2026-03-02T09:00:00Z`.
 pub fn rfc3339(time: Timestamp) -> String {
-    ptc_api::common::timestamp(time).to_string()
+    rewind_api::common::timestamp(time).to_string()
 }
 
 /// Reads an RFC 3339 time, as tools receive them.
 pub fn parse_rfc3339(text: &str) -> Option<Timestamp> {
-    let time: ptc_api::common::Timestamp = text.parse().ok()?;
+    let time: rewind_api::common::Timestamp = text.parse().ok()?;
     u64::try_from(time.as_millisecond()).ok().map(Timestamp)
 }
 

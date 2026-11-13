@@ -1,4 +1,4 @@
-import { shop } from "ptc:tools";
+import { shop } from "rewind:tools";
 
 export default async function main() {
   const totals: Record<string, number> = {};

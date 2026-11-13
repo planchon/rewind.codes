@@ -1,9 +1,0 @@
-{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { signal } from \"ptc\";\n\nexport default async function main() {\n  const first = await signal(\"approval\");\n  const second = await signal(\"approval\", { timeout: \"1h\" });\n  return { first, second: second ?? null };\n}\n","toolset":{"servers":[],"tools":[],"v":1},"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"61c338c80d39f20d392291af1f23d751f615cde7b6f1acb6e8599b97665d377e","toolset":"f3e36efa9bae959bf0e62cf9b1da2adc53de0a970ef5b69f92dcb984a9175843","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
-{"index":1,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"approval","callsite":{"line":4,"column":23}}},
-{"index":2,"recorded_at":1767225600000,"event":{"type":"signal_received","name":"approval","payload":{"value":1}}},
-{"index":3,"recorded_at":1767225600000,"event":{"type":"start_timer","seq":1,"duration_ms":3600000,"fire_at":1767229200000,"callsite":{"line":5,"column":24}}},
-{"index":4,"recorded_at":1767225600000,"event":{"type":"signal_awaited","name":"approval","timeout":1,"callsite":{"line":5,"column":24}}},
-{"index":5,"recorded_at":1767229200000,"event":{"type":"timer_fired","seq":1}},
-{"index":6,"recorded_at":1767229200000,"event":{"type":"complete_run","output":{"value":{"first":1,"second":null}}}}
-]}

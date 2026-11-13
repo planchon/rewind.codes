@@ -1,5 +1,5 @@
-import { shop } from "ptc:tools";
-import { sleep, ToolError } from "ptc";
+import { shop } from "rewind:tools";
+import { sleep, ToolError } from "rewind";
 
 export default async function main() {
   const shipped: string[] = [];

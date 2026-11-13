@@ -4,5 +4,5 @@
 **/node_modules
 dashboard/dist
 sdk/typescript/dist
-**/.ptc
+**/.rewind
 deploy/.env

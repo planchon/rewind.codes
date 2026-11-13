@@ -119,7 +119,7 @@ impl Service for Chat {
                         channel: channel.to_owned(),
                         text,
                         ts: ts.clone(),
-                        author: "ptc-bot".to_owned(),
+                        author: "rewind-bot".to_owned(),
                     });
                     Reply::Json(json!({ "ok": true, "channel": format!("#{channel}"), "ts": ts }))
                 } else {

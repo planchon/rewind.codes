@@ -5,18 +5,18 @@
 # (route.sh). It forwards a worker's connection only to an address that one of the allowed
 # names resolved to, through this container's own DNS server:
 #
-#   1. dnsmasq answers only the names of PTC_EGRESS_ALLOW (and their subdomains), from Docker's
+#   1. dnsmasq answers only the names of REWIND_EGRESS_ALLOW (and their subdomains), from Docker's
 #      DNS; any other name is refused. IPv6 answers are dropped: workers have no IPv6 route.
 #   2. Each address it answers joins the ipset `allowed`.
 #   3. iptables forwards TCP from the core network to the addresses of `allowed` only, and
 #      never to 169.254.0.0/16 (the cloud metadata endpoint), whatever a name resolves to.
 #
-# PTC_EGRESS_ADDRESS is this container's address on the core network, the workers' gateway and
-# DNS server. PTC_EGRESS_ALLOW lists the allowed names, separated by spaces or commas.
+# REWIND_EGRESS_ADDRESS is this container's address on the core network, the workers' gateway and
+# DNS server. REWIND_EGRESS_ALLOW lists the allowed names, separated by spaces or commas.
 set -eu
 
-address="${PTC_EGRESS_ADDRESS:?PTC_EGRESS_ADDRESS: this gateway's address on the core network}"
-allow=$(printf '%s' "${PTC_EGRESS_ALLOW:-}" | tr ',' ' ')
+address="${REWIND_EGRESS_ADDRESS:?REWIND_EGRESS_ADDRESS: this gateway's address on the core network}"
+allow=$(printf '%s' "${REWIND_EGRESS_ALLOW:-}" | tr ',' ' ')
 
 inside=$(ip -o -4 addr show | awk -v ip="$address" '{ split($4, a, "/"); if (a[1] == ip) print $2 }')
 if [ -z "$inside" ]; then
@@ -46,7 +46,7 @@ iptables -A INPUT -i "$inside" -j DROP
 
 set -- --keep-in-foreground --pid-file= --no-resolv --no-hosts --no-poll --filter-AAAA \
     --listen-address="$address" --bind-interfaces --cache-size=1000 --log-facility=-
-if [ -n "${PTC_EGRESS_LOG_QUERIES:-}" ]; then
+if [ -n "${REWIND_EGRESS_LOG_QUERIES:-}" ]; then
     set -- "$@" --log-queries
 fi
 for name in $allow; do

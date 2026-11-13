@@ -21,7 +21,7 @@ import type {
   Trace,
 } from "./types";
 
-const PROBLEM_PREFIX = "urn:ptc:problem:";
+const PROBLEM_PREFIX = "urn:rewind:problem:";
 
 /** An answer of the API that is not a success, read from its `application/problem+json`. */
 export class ApiError extends Error {
@@ -78,9 +78,9 @@ export function toProblem(status: number, body: unknown, statusText = ""): Probl
 }
 
 export interface ApiOptions {
-  /** The origin serving the API, such as `https://ptc.example.com`. */
+  /** The origin serving the API, such as `https://rewind.example.com`. */
   baseUrl: string;
-  /** The operator's key, `ptc_sk_…`, or `null` to send none. */
+  /** The operator's key, `rewind_sk_…`, or `null` to send none. */
   key: () => string | null;
   fetch?: (request: Request) => Promise<Response>;
 }

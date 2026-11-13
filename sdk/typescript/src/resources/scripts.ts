@@ -6,7 +6,7 @@ import type { RequestOptions } from "./toolsets.js";
 export interface CheckParams extends RequestOptions {
   /** The TypeScript source: a single ES module whose default export is the entry point. */
   script: string;
-  /** The toolset whose `ptc:tools` the script imports. */
+  /** The toolset whose `rewind:tools` the script imports. */
   toolset?: string | undefined;
 }
 

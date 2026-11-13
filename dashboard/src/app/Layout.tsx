@@ -71,11 +71,11 @@ export function Layout() {
   return (
     <div className="shell">
       <header className="topbar">
-        <Link to="/overview" className="brand" aria-label="ai-ptc dashboard">
+        <Link to="/overview" className="brand" aria-label="Rewind dashboard">
           <span className="brand-mark" aria-hidden="true">
             AP
           </span>
-          <span className="brand-name">ai-ptc</span>
+          <span className="brand-name">Rewind</span>
         </Link>
         <nav className="nav" aria-label="Views">
           <NavLink to={link("/overview")}>Overview</NavLink>
@@ -88,7 +88,7 @@ export function Layout() {
         </nav>
         <div className="topbar-end">
           <span className="server-meta" title={`Roles: ${server.roles.join(", ")}`}>
-            ptc {server.version} · epoch{server.epochs.length > 1 ? "s" : ""} {epochs}
+            rewind {server.version} · epoch{server.epochs.length > 1 ? "s" : ""} {epochs}
             {server.embedded ? " · embedded" : ""}
             {server.virtualTime ? " · virtual time" : ""}
           </span>

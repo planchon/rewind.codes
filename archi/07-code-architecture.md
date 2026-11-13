@@ -6,29 +6,29 @@ ports, adapters that implement them, and composition roots that wire everything.
 ## Layers
 
 ```
- entry points   ptc-cli (API client, local commands)      ptc-server (HTTP API, workers, embedded mode)
+ entry points   rewind-cli (API client, local commands)      rewind-server (HTTP API, workers, embedded mode)
                     │  composition roots: the only crates that know every adapter
-                    └───────────── ptc-api (DTOs, OpenAPI, HTTP client) ─────────────┘
+                    └───────────── rewind-api (DTOs, OpenAPI, HTTP client) ─────────────┘
  ───────────────────┼─────────────────────────────────────────────────────────────────────
- adapters       ptc-runtime   ptc-store-turso   ptc-store-postgres   ptc-blob   ptc-mcp   ptc-check   ptc-otel
-                (V8)          └──────── ptc-format (stored format, v1) ────────┘
+ adapters       rewind-runtime   rewind-store-turso   rewind-store-postgres   rewind-blob   rewind-mcp   rewind-check   rewind-otel
+                (V8)             └──────── rewind-format (stored format, v1) ────────┘
                     │  implement the ports
  ───────────────────┼─────────────────────────────────────────────────────────────────────
- application    ptc-engine     use cases + ports (traits) + in-memory adapters
+ application    rewind-engine     use cases + ports (traits) + in-memory adapters
                     │  uses the model
- domain         ptc-core       pure model + pure logic
+ domain         rewind-core       pure model + pure logic
 ```
 
 Dependencies only point down. Adapters never depend on each other.
 
 ## Principles
 
-1. **`ptc-core` holds the domain and nothing else.** Types and pure functions: events,
+1. **`rewind-core` holds the domain and nothing else.** Types and pure functions: events,
    journal, determinism check (`ReplayCursor`), run state, payload identity, durations,
    script and toolset model. No I/O, no async, no V8, **no serde**. It knows nothing about
    storage, transport, or where time and ids come from.
 
-2. **Ports live in `ptc-engine`, and adapters implement them.** The engine holds the use
+2. **Ports live in `rewind-engine`, and adapters implement them.** The engine holds the use
    cases (start, activate, signal, cancel, replay, project, fork) and declares what it needs from
    the outside world as traits. It never names Postgres, S3, V8, MCP or OpenTelemetry.
 
@@ -42,9 +42,9 @@ Dependencies only point down. Adapters never depend on each other.
 
    | Boundary | Owner | Why it is separate |
    | --- | --- | --- |
-   | Stored format: events, journal documents, cassettes, pinned toolsets | `ptc-format`, versioned (`"v": 1`, [02](02-journal.md#stored-format-v1)) | Runs stay paused for days across deploys. The stored form must stay stable while domain types change. Migrations are explicit. |
-   | HTTP / SDK | DTOs in `ptc-api` | Public contract with its own versioning (`/v1`). Shared by the server and the CLI. |
-   | JS ↔ Rust | `ptc-runtime` | Internal to the sandbox; shaped for the glue code. |
+   | Stored format: events, journal documents, cassettes, pinned toolsets | `rewind-format`, versioned (`"v": 1`, [02](02-journal.md#stored-format-v1)) | Runs stay paused for days across deploys. The stored form must stay stable while domain types change. Migrations are explicit. |
+   | HTTP / SDK | DTOs in `rewind-api` | Public contract with its own versioning (`/v1`). Shared by the server and the CLI. |
+   | JS ↔ Rust | `rewind-runtime` | Internal to the sandbox; shaped for the glue code. |
 
 5. **Core knows a payload's identity, not where it lives.** A payload is a JSON value
    identified by the digest of its canonical form; an event holds the value or only the
@@ -56,7 +56,7 @@ Dependencies only point down. Adapters never depend on each other.
    deterministic given its ports. So the engine with in-memory adapters and a virtual
    clock is both mock mode and the test harness.
 
-7. **The runtime only executes.** `ptc-runtime` takes a script and a start, receives
+7. **The runtime only executes.** `rewind-runtime` takes a script and a start, receives
    deliveries, and returns the emitted events. It knows nothing about history, replay,
    storage or dispatch. `replay()` belongs to the engine, and so does the instance cache.
    V8 objects can't change threads, so instances run on dedicated threads behind the
@@ -72,16 +72,16 @@ Dependencies only point down. Adapters never depend on each other.
     script did (OTel spans, the read model behind the dashboard, SSE) is projected from
     committed entries, never emitted from the isolate, from the runtime, or during
     replay. The platform's own behavior goes through the `tracing` facade in the engine
-    and the adapters. OpenTelemetry lives only in `ptc-otel`, installed by the
-    composition roots. `ptc-core` has no telemetry. Details in
+    and the adapters. OpenTelemetry lives only in `rewind-otel`, installed by the
+    composition roots. `rewind-core` has no telemetry. Details in
     [05](05-testing-and-observability.md#observability).
 
 ## Ports
 
-All ports are declared in `ptc-engine` (`crates/ptc-engine/src/ports/`), each with an in-memory
-adapter in `ptc-engine` that is the reference implementation of its contract. The ports with
+All ports are declared in `rewind-engine` (`crates/rewind-engine/src/ports/`), each with an in-memory
+adapter in `rewind-engine` that is the reference implementation of its contract. The ports with
 state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` and
-`WebhookSender` have a conformance suite in `ptc-engine` (feature `conformance`, modules
+`WebhookSender` have a conformance suite in `rewind-engine` (feature `conformance`, modules
 `conformance::journal`, `::blobs`, `::read_model`, `::secrets`, `::spans`, `::webhooks`), and
 every adapter of the port passes it. `SpanExporter` and `WebhookSender` have no read side: their
 suites read the backend through a collector or a receiver the adapter's test provides (the
@@ -90,15 +90,15 @@ observable through the port alone (the egress rules): their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants and API keys; sticky affinity; payload metadata and references; retention | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
-| `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `ptc-blob` (files, S3) |
-| `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `ptc-runtime` (V8); a fake in engine tests |
-| `ToolDispatcher` | Execute a tool call with its idempotency key and credentials | static responses and cassettes (engine, mock mode); TypeScript mocks (`ptc-runtime`, in a separate isolate); `ptc-mcp` (MCP servers, built-ins `http` and `webhook`) |
-| `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `ptc-check` (tsgo) |
-| `ReadModel` | Projections for questions across runs | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
-| `SpanExporter` | Export spans derived from committed entries | memory (engine), `ptc-otel` (OpenTelemetry) |
-| `SecretStore` | Credentials per toolset and per run, encrypted at rest | memory (engine), `ptc-store-turso`, `ptc-store-postgres` |
-| `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`ptc-server`) |
+| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants and API keys; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
+| `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `rewind-runtime` (V8); a fake in engine tests |
+| `ToolDispatcher` | Execute a tool call with its idempotency key and credentials | static responses and cassettes (engine, mock mode); TypeScript mocks (`rewind-runtime`, in a separate isolate); `rewind-mcp` (MCP servers, built-ins `http` and `webhook`) |
+| `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `rewind-check` (tsgo) |
+| `ReadModel` | Projections for questions across runs | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `SpanExporter` | Export spans derived from committed entries | memory (engine), `rewind-otel` (OpenTelemetry) |
+| `SecretStore` | Credentials per toolset and per run, encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`rewind-server`) |
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
 
@@ -107,7 +107,7 @@ SDK worker claims them through `GET /v1/tasks` ([routes](04-tools.md#routes)).
 
 ### `JournalStore`
 
-Methods (declared in `crates/ptc-engine/src/ports/journal/mod.rs`):
+Methods (declared in `crates/rewind-engine/src/ports/journal/mod.rs`):
 
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
@@ -241,7 +241,7 @@ Contracts, all covered by the conformance suite:
   ([retention](06-storage-and-scale.md#retention-and-deletion)).
 - Only scripts that compile are stored: `start_run` refuses the others before creating a run
   ([execution](03-execution.md#starting-a-run)). `ScriptExecutor::compile` takes the toolset,
-  to check what the script imports from `ptc:tools`.
+  to check what the script imports from `rewind:tools`.
 - `next_timer` and `next_deadline` let the driver jump in virtual time.
 
 ### The other ports
@@ -302,68 +302,68 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 
 | Crate | Layer | Contents |
 | --- | --- | --- |
-| `ptc-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
-| `ptc-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
-| `ptc-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
-| `ptc-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `ptc-server` and `ptc-cli` |
-| `ptc-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog, heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
-| `ptc-store-turso` | adapter | embedded `JournalStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
-| `ptc-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `ReadModel` and `SecretStore` |
-| `ptc-blob` | adapter | `BlobStore` on local files and S3 |
-| `ptc-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
-| `ptc-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `ptc:tools`, `ptc-tools.d.ts`, prompt rendering |
-| `ptc-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `ptc` binary; the checker's own rules on the swc syntax tree |
-| `ptc-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
-| `ptc-cli` | composition root | the client commands of the `ptc` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
-| `ptc-server` | composition root | `ptc server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard |
-| `ptc` | entry point | the `ptc` binary: hands `ptc server …` to `ptc-server` and every other command to `ptc-cli`, nothing else |
-| `ptc-architecture-tests` | tooling | dependency rules |
-| `ptc-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `ptc-e2e replay <case>` |
+| `rewind-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
+| `rewind-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
+| `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
+| `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
+| `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog, heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
+| `rewind-store-turso` | adapter | embedded `JournalStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
+| `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `ReadModel` and `SecretStore` |
+| `rewind-blob` | adapter | `BlobStore` on local files and S3 |
+| `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
+| `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts`, prompt rendering |
+| `rewind-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `rewind` binary; the checker's own rules on the swc syntax tree |
+| `rewind-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
+| `rewind-cli` | composition root | the client commands of the `rewind` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
+| `rewind-server` | composition root | `rewind server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard |
+| `rewind` | entry point | the `rewind` binary: hands `rewind server …` to `rewind-server` and every other command to `rewind-cli`, nothing else |
+| `rewind-architecture-tests` | tooling | dependency rules |
+| `rewind-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `rewind-e2e replay <case>` |
 | `evals` | tooling | eval suite: tasks, deterministic fake MCP servers, the engine wired in process with the agent tools of the SDK, clients of the model APIs, reports ([08](08-decisions.md#taken-while-building-the-evals-november-2026)) |
 | `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools |
 | `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
-One `ptc` binary holds both composition roots. The `ptc` crate is that binary: it depends on
-`ptc-cli` and `ptc-server` and only dispatches the command line, `ptc server …` to
-`ptc_server::main(args)` and every other command to `ptc_cli::main(args)`, each given the
+One `rewind` binary holds both composition roots. The `rewind` crate is that binary: it depends on
+`rewind-cli` and `rewind-server` and only dispatches the command line, `rewind server …` to
+`rewind_server::main(args)` and every other command to `rewind_cli::main(args)`, each given the
 arguments after its command. The CLI's code never calls the server's: it reaches it only
-through the API, and starts the embedded server by running `ptc server --embedded` as a
+through the API, and starts the embedded server by running `rewind server --embedded` as a
 separate process.
 
-`ptc-server` wires each adapter in its own module of `src/wiring/` (store, blobs, tools,
+`rewind-server` wires each adapter in its own module of `src/wiring/` (store, blobs, tools,
 checker, telemetry, webhooks, clock), picked by configuration: `--store turso:<path>` or
 `postgres://…`, `--blobs <directory>` or `s3://<bucket>`, `--otlp-endpoint`.
 
 ## Dependency rules
 
-Checked by `crates/ptc-architecture-tests`, from `cargo metadata` and the sources:
+Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sources:
 
 - Every crate of the workspace is classified in a layer; an unclassified crate fails the check.
-- `ptc-core` depends on no internal crate. Its external dependencies are limited to
+- `rewind-core` depends on no internal crate. Its external dependencies are limited to
   `ryu-js` (ECMAScript number formatting, for RFC 8785), `serde_json`, `sha2`, `thiserror` and
   `uuid` (without features).
-- `ptc-engine` depends only on `ptc-core`.
-- `ptc-format` depends only on `ptc-core`.
-- `ptc-api` depends only on `ptc-core`. Only the composition roots and the tooling crates
+- `rewind-engine` depends only on `rewind-core`.
+- `rewind-format` depends only on `rewind-core`.
+- `rewind-api` depends only on `rewind-core`. Only the composition roots and the tooling crates
   depend on it: the CLI is an API client, and cannot depend on a composition root to reach
   the DTOs.
-- Adapters depend on `ptc-core` and `ptc-engine` (stores also on `ptc-format`), and never
+- Adapters depend on `rewind-core` and `rewind-engine` (stores also on `rewind-format`), and never
   on each other.
-- Only `ptc-cli` and `ptc-server` may depend on adapters, and the tooling crates
-  (`ptc-e2e`, `evals`), which wire adapters like a composition root for tests. `ptc-cli` and
-  `ptc-server` never depend on each other. Only the `ptc` binary crate depends on the
+- Only `rewind-cli` and `rewind-server` may depend on adapters, and the tooling crates
+  (`rewind-e2e`, `evals`), which wire adapters like a composition root for tests. `rewind-cli` and
+  `rewind-server` never depend on each other. Only the `rewind` binary crate depends on the
   composition roots. Nothing depends on a tooling crate.
-- The `ptc` binary crate depends only on `ptc-cli` and `ptc-server`, and nothing depends on it.
+- The `rewind` binary crate depends only on `rewind-cli` and `rewind-server`, and nothing depends on it.
 - Libraries do not use `anyhow`: each has its own error types.
-- Telemetry: `ptc-core` has no telemetry dependency (`tracing` included). The `tracing`
-  facade is allowed in `ptc-engine` and the adapters. `opentelemetry*` crates are allowed
-  only in `ptc-otel`.
-- No `unsafe` code, with one exception: the `memory` module of `ptc-runtime`, for what V8
+- Telemetry: `rewind-core` has no telemetry dependency (`tracing` included). The `tracing`
+  facade is allowed in `rewind-engine` and the adapters. `opentelemetry*` crates are allowed
+  only in `rewind-otel`.
+- No `unsafe` code, with one exception: the `memory` module of `rewind-runtime`, for what V8
   offers only through raw pointers (the allocator of array buffers, a hook on collections, the
   stack limit). The workspace denies `unsafe_code` and every crate takes the workspace's lints;
-  every crate root forbids it but `ptc-runtime`'s, which denies it so that `memory` alone may
+  every crate root forbids it but `rewind-runtime`'s, which denies it so that `memory` alone may
   allow it. Every `unsafe` block there carries a `// SAFETY:` comment
-  (`clippy::undocumented_unsafe_blocks` is denied). `ptc-architecture-tests` reads the sources
+  (`clippy::undocumented_unsafe_blocks` is denied). `rewind-architecture-tests` reads the sources
   and refuses `unsafe`, or a relaxed lint, anywhere else.
 
 ## Activation, in the engine
@@ -401,21 +401,21 @@ Nothing about the script is emitted during replay.
 
 | Where | What |
 | --- | --- |
-| `ptc-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
-| `ptc-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
-| `ptc-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine, failure counts and attempts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
-| `ptc-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
-| Epoch corpus (`ptc-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `PTC_E2E_RECORD=1` records the journals again |
-| `ptc-store-turso`, `ptc-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |
-| `ptc-blob` | The conformance suite of `BlobStore` |
-| `ptc-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
-| `ptc-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
-| `ptc-architecture-tests` | Dependency rules, telemetry rules included; `unsafe` code only in `ptc-runtime`'s `memory` module |
+| `rewind-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
+| `rewind-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
+| `rewind-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine, failure counts and attempts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `rewind-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
+| Epoch corpus (`rewind-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `REWIND_E2E_RECORD=1` records the journals again |
+| `rewind-store-turso`, `rewind-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |
+| `rewind-blob` | The conformance suite of `BlobStore` |
+| `rewind-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
+| `rewind-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
+| `rewind-architecture-tests` | Dependency rules, telemetry rules included; `unsafe` code only in `rewind-runtime`'s `memory` module |
 | `evals` | Every task solved by its reference solution, through the agent tools and the scripted model; the fake servers, the agent tools' texts, the metrics; the model clients against local fakes of the Anthropic and OpenAI APIs |
 
 ## HTTP API `/v1`
 
-`ptc-server` serves the API. The CLI, the SDK and its agent tools and the dashboard are its
+`rewind-server` serves the API. The CLI, the SDK and its agent tools and the dashboard are its
 clients. The evals use its DTOs, with the engine in process
 ([08](08-decisions.md#taken-while-building-the-evals-november-2026)).
 
@@ -426,10 +426,10 @@ Conventions:
 - `Idempotency-Key` on run creation (start and fork) and on signals
   ([idempotency](06-storage-and-scale.md#idempotency-of-the-api)).
 - Errors are `application/problem+json`, with a message written for a model. Their `type` is
-  `urn:ptc:problem:<slug>`; the slugs are listed in `api/README.md`.
+  `urn:rewind:problem:<slug>`; the slugs are listed in `api/README.md`.
 - JSON fields are camelCase, enumerated values snake_case, times RFC 3339, durations `"30s"`
   or a number of milliseconds.
-- The OpenAPI document is generated from the DTOs of `ptc-api` (utoipa) and committed at
+- The OpenAPI document is generated from the DTOs of `rewind-api` (utoipa) and committed at
   `api/openapi.json`; a test fails when it is stale. The SDK's and the dashboard's types are
   generated from it (`api/README.md`).
 
@@ -482,38 +482,38 @@ Conventions:
 ## Embedded server and CLI
 
 The CLI never opens `journal.db`. It is a client of the API `/v1`: of a remote server, or of
-the embedded server of a `.ptc/` directory. Only one process opens the database, so Turso
+the embedded server of a `.rewind/` directory. Only one process opens the database, so Turso
 stays in its stable single-process mode, and the instance cache lives in that server.
 
-`ptc server --embedded` is the engine host for a `.ptc/` directory. It takes both roles, api
+`rewind server --embedded` is the engine host for a `.rewind/` directory. It takes both roles, api
 and worker.
 
 | When | What happens |
 | --- | --- |
-| A command needs the server | If `.ptc/server.lock` is free, no server runs: the command starts one, detached, with `ptc server --embedded --dir <dir> --idle-timeout 10m`. |
-| The server starts | It takes an exclusive lock on `.ptc/server.lock`, opens `journal.db`, and listens on the unix socket `.ptc/server.sock`. Due timers fire at startup. |
+| A command needs the server | If `.rewind/server.lock` is free, no server runs: the command starts one, detached, with `rewind server --embedded --dir <dir> --idle-timeout 10m`. |
+| The server starts | It takes an exclusive lock on `.rewind/server.lock`, opens `journal.db`, and listens on the unix socket `.rewind/server.sock`. Due timers fire at startup. |
 | A second server starts | It fails to take the lock and exits with code 75. |
 | The server is killed (`kill -9`) | The lock is released. The next command starts a new server, and expired leases give the runs back. |
 | The CLI's version differs from the server's | The CLI asks the server to stop and starts a new one. |
-| 10 minutes pass without requests and without work in progress | The server stops. A sleeping run resumes at the next `ptc` command. |
+| 10 minutes pass without requests and without work in progress | The server stops. A sleeping run resumes at the next `rewind` command. |
 
 - The socket is mode 0600 and takes no API key. The embedded server has one implicit tenant,
   `local`.
-- `ptc server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
+- `rewind server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
 - Virtual time is an option of the server (`--virtual-time`, `--real-time`), kept in the
   `meta` table.
-- `ptc server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
+- `rewind server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
   when another server holds the directory's lock.
-- Local-only commands run in the CLI process, without a server: `ptc check`, `ptc test`, and
+- Local-only commands run in the CLI process, without a server: `rewind check`, `rewind test`, and
   the replay of an exported journal.
 
-The `.ptc/` directory:
+The `.rewind/` directory:
 
 ```
 project/
   script.ts
-  ptc.tools.json            static responses per tool, for mock mode
-  .ptc/                     created when the first server starts; --dir picks another
+  rewind.tools.json         static responses per tool, for mock mode
+  .rewind/                  created when the first server starts; --dir picks another
     server.lock             held by the embedded server
     server.sock             the API /v1, mode 0600
     journal.db              Turso: every table of the store; meta holds the schema version and virtual time
@@ -528,20 +528,20 @@ Commands:
 
 | Command | Does |
 | --- | --- |
-| `ptc run script.ts [--input …] [--wait 30s] [--ttl 30d]` | Starts a run and waits for it, up to `--wait` |
-| `ptc check script.ts` | Type-checks a script against the toolset's declarations ([tools](04-tools.md#type-checking)) |
-| `ptc test scenario.json` | Runs a scenario against mocks and cassettes, in virtual time ([testing](05-testing-and-observability.md#testing-and-mocks)) |
-| `ptc signal <run> <name> [payload]` | Sends a signal |
-| `ptc cancel <run>` | Cancels a run |
-| `ptc replay <run> [--script fixed.ts]` | Replays locally and checks determinism; `<run>` is a run id or an exported journal |
-| `ptc fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a [fork](03-execution.md#forks) |
-| `ptc trace <run> [--entry n]` | LLM-readable trace |
-| `ptc runs` | Lists runs: a query of the [query language](05-testing-and-observability.md#query-language) (`ptc runs '@agent:triage status:failed'`), filters, `--sort` |
-| `ptc release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
-| `ptc status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
-| `ptc export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
-| `ptc toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
-| `ptc server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`ptc server --help` lists its options) |
+| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d]` | Starts a run and waits for it, up to `--wait` |
+| `rewind check script.ts` | Type-checks a script against the toolset's declarations ([tools](04-tools.md#type-checking)) |
+| `rewind test scenario.json` | Runs a scenario against mocks and cassettes, in virtual time ([testing](05-testing-and-observability.md#testing-and-mocks)) |
+| `rewind signal <run> <name> [payload]` | Sends a signal |
+| `rewind cancel <run>` | Cancels a run |
+| `rewind replay <run> [--script fixed.ts]` | Replays locally and checks determinism; `<run>` is a run id or an exported journal |
+| `rewind fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a [fork](03-execution.md#forks) |
+| `rewind trace <run> [--entry n]` | LLM-readable trace |
+| `rewind runs` | Lists runs: a query of the [query language](05-testing-and-observability.md#query-language) (`rewind runs '@agent:triage status:failed'`), filters, `--sort` |
+| `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
+| `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
+| `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
+| `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
+| `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a
 second one exits at once.
@@ -568,12 +568,12 @@ Exit codes:
 Vite, strict TypeScript, pnpm. Its types are generated from `api/openapi.json`, and it calls only the
 public API.
 
-Its build is what `ptc-server` serves:
+Its build is what `rewind-server` serves:
 
 | | |
 | --- | --- |
 | Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
-| Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `ptc-server` embeds the directory when it is compiled |
+| Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
 | Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
 | API | `/v1` on the same origin. Only `GET` requests, so a `reader` key is enough. The operator types the key; the browser keeps it for the tab, or on the device when asked |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |

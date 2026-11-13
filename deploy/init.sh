@@ -17,16 +17,16 @@ random() {
 
 umask 077
 cat >"$env_file" <<ENV
-# Written by init.sh. Keep this file secret, and back up PTC_MASTER_KEY.
+# Written by init.sh. Keep this file secret, and back up REWIND_MASTER_KEY.
 
 # The master key of the secret store: 32 random bytes in base64.
-PTC_MASTER_KEY=$(head -c 32 /dev/urandom | base64)
-# The first API key (role admin, tenant \$PTC_ADMIN_TENANT): it creates the others.
-PTC_ADMIN_KEY=ptc_sk_$(random 43)
-PTC_ADMIN_TENANT=default
+REWIND_MASTER_KEY=$(head -c 32 /dev/urandom | base64)
+# The first API key (role admin, tenant \$REWIND_ADMIN_TENANT): it creates the others.
+REWIND_ADMIN_KEY=rewind_sk_$(random 43)
+REWIND_ADMIN_TENANT=default
 
 POSTGRES_PASSWORD=$(random 32)
-MINIO_ROOT_USER=ptc
+MINIO_ROOT_USER=rewind
 MINIO_ROOT_PASSWORD=$(random 32)
 
 # The workers under runc. Use the profile gvisor instead on a host with runsc.

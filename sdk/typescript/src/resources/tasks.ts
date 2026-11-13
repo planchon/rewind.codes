@@ -25,7 +25,7 @@ export interface TaskFailure {
 }
 
 /**
- * Host-tool tasks, at the level of the API. The worker (`ptc.worker`) drives them; a task
+ * Host-tool tasks, at the level of the API. The worker (`rewind.worker`) drives them; a task
  * deferred by a handler is answered here, by its token, possibly days later.
  */
 export class Tasks {

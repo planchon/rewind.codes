@@ -9,7 +9,7 @@ import { followRun } from "./events";
 import type { Entry, RunStatus, StreamEvent } from "./types";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
-const api = new Api({ baseUrl: window.location.origin, key: () => "ptc_sk_k" });
+const api = new Api({ baseUrl: window.location.origin, key: () => "rewind_sk_k" });
 
 function frame(event: StreamEvent): string {
   const id = event.type === "entry" ? `id: ${event.idx}\n` : "";
@@ -55,7 +55,7 @@ describe("followRun", () => {
     await followRun(api, "r1", collect().handlers, new AbortController().signal);
     expect(new URL(url).searchParams.get("follow")).toBe("1");
     expect(new URL(url).searchParams.get("from")).toBe("0");
-    expect(auth).toBe("Bearer ptc_sk_k");
+    expect(auth).toBe("Bearer rewind_sk_k");
   });
 
   it("resumes after a dropped stream from the next entry, without duplicates", async () => {
@@ -96,7 +96,7 @@ describe("followRun", () => {
         if (calls === 1) return new HttpResponse("upstream down", { status: 503 });
         return HttpResponse.json(
           {
-            type: "urn:ptc:problem:not-found",
+            type: "urn:rewind:problem:not-found",
             title: "Not found",
             status: 404,
             detail: "No run r9.",

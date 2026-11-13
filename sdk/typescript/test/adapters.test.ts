@@ -6,9 +6,9 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 
-import { Ptc } from "../src/index.js";
+import { Rewind } from "../src/index.js";
 
-const tools = new Ptc({ url: "http://127.0.0.1:1" }).agentTools({ toolset: "ts", labels: { conversation: "c" } });
+const tools = new Rewind({ url: "http://127.0.0.1:1" }).agentTools({ toolset: "ts", labels: { conversation: "c" } });
 
 describe("the adapters", () => {
   it("fit the Anthropic Messages API", async () => {

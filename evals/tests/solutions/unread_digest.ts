@@ -1,4 +1,4 @@
-import { office } from "ptc:tools";
+import { office } from "rewind:tools";
 
 type Inbox = { emails: { from: string; unread: boolean }[]; next_cursor?: string };
 

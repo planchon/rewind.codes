@@ -1,0 +1,31 @@
+[package]
+name = "rewind-e2e"
+description = "End-to-end corpus of Rewind: recorded scenarios, replayed in CI, per determinism epoch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+build = "build.rs"
+
+[dependencies]
+rewind-core.workspace = true
+rewind-engine.workspace = true
+rewind-format.workspace = true
+rewind-mcp.workspace = true
+rewind-runtime.workspace = true
+jsonschema.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
+
+[dev-dependencies]
+rewind-check.workspace = true
+rewind-codegen.workspace = true
+
+[[bin]]
+name = "rewind-e2e"
+path = "src/bin/rewind-e2e.rs"
+test = false
+
+[lints]
+workspace = true

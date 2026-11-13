@@ -49,8 +49,8 @@ function script(name: string, source: string): ScriptFixture {
 
 const TRIAGE = script(
   "triage.ts",
-  `import { github, slack } from "ptc:tools";
-import { sleep, signal } from "ptc";
+  `import { github, slack } from "rewind:tools";
+import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo, state: "open" });
@@ -73,8 +73,8 @@ export default async function main(input: { repo: string }) {
 
 const TRIAGE_FIXED = script(
   "triage.ts",
-  `import { github, slack } from "ptc:tools";
-import { sleep, signal } from "ptc";
+  `import { github, slack } from "rewind:tools";
+import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo, state: "open" });
@@ -97,7 +97,7 @@ export default async function main(input: { repo: string }) {
 
 const DIGEST = script(
   "digest.ts",
-  `import { github, llm, slack } from "ptc:tools";
+  `import { github, llm, slack } from "rewind:tools";
 
 export default async function main(input: { repos: string[]; channel: string }) {
   const prs = [];
@@ -120,8 +120,8 @@ export default async function main(input: { repos: string[]; channel: string }) 
 
 const ONBOARDING = script(
   "onboarding.ts",
-  `import { ask_user, crm } from "ptc:tools";
-import { sleep } from "ptc";
+  `import { ask_user, crm } from "rewind:tools";
+import { sleep } from "rewind";
 
 export default async function main(input: { email: string }) {
   const account = await crm.find_account({ email: input.email });
@@ -146,7 +146,7 @@ export default async function main(input: { email: string }) {
 const FORECAST = script(
   "forecast.ts",
   `// One-shot lookup started by the support agent.
-import { weather } from "ptc:tools";
+import { weather } from "rewind:tools";
 
 export default async function main(input: { city: string }) {
   const forecast = await weather.forecast({ city: input.city, days: 3 });
@@ -155,11 +155,11 @@ export default async function main(input: { city: string }) {
 `,
 );
 
-/** The script of crates/ptc-e2e/corpus/epoch-1/blue/triage_workflow. */
+/** The script of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow. */
 const TRIAGE_WORKFLOW = script(
   "triage_workflow.ts",
-  `import { github, slack } from "ptc:tools";
-import { sleep, signal } from "ptc";
+  `import { github, slack } from "rewind:tools";
+import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo, state: "open" });
@@ -182,7 +182,7 @@ export default async function main(input: { repo: string }) {
 export const SCRIPTS = { TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW };
 
 /**
- * The journal of crates/ptc-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
+ * The journal of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
  * entries, 8 steps. Its callsites are the ones the runtime recorded.
  */
 export function triageWorkflowJournal(start: number, toolset = fakeDigest("toolset:github,slack")) {

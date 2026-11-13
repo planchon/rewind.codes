@@ -9,7 +9,7 @@
 # settings of the workers under gVisor, in a holder of its own (compose.yaml), started for the
 # check and removed after it.
 #
-# Open: the core network (MinIO here). Closed: names outside PTC_EGRESS_ALLOW, addresses no
+# Open: the core network (MinIO here). Closed: names outside REWIND_EGRESS_ALLOW, addresses no
 # allowed name resolved to, and the cloud metadata endpoint. Exits with 1 if a wall is missing.
 set -eu
 cd "$(dirname "$0")"

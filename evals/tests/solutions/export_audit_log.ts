@@ -1,4 +1,4 @@
-import { ops } from "ptc:tools";
+import { ops } from "rewind:tools";
 
 type Page = { events: { id: string }[]; next_cursor?: string };
 

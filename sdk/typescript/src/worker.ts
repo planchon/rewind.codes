@@ -1,4 +1,4 @@
-import { PtcApiError, isProblem } from "./errors.js";
+import { RewindApiError, isProblem } from "./errors.js";
 import { backoff, sleep } from "./http.js";
 import type { TaskFailure, Tasks } from "./resources/tasks.js";
 import type { Duration, Labels, Task } from "./types.js";
@@ -40,7 +40,7 @@ export interface HostToolContext {
 
 /** A task the handler answers later, from anywhere, by its token. */
 export interface DeferredTask {
-  /** The claim's token: keep it to answer, even from another process (`ptc.tasks.complete`). */
+  /** The claim's token: keep it to answer, even from another process (`rewind.tasks.complete`). */
   readonly token: string;
   readonly taskId: string;
   complete(result: unknown): Promise<void>;
@@ -294,7 +294,7 @@ export class HostToolWorker {
           current = { failure: cut(current.failure) };
           continue;
         }
-        if ((error instanceof PtcApiError && error.status < 500) || attempt >= 4) {
+        if ((error instanceof RewindApiError && error.status < 500) || attempt >= 4) {
           throw error;
         }
         await sleep(backoff(attempt, 500, 10_000));
@@ -388,7 +388,7 @@ class Heartbeats {
 }
 
 function isFatal(error: unknown): boolean {
-  return error instanceof PtcApiError && [400, 401, 403, 404].includes(error.status);
+  return error instanceof RewindApiError && [400, 401, 403, 404].includes(error.status);
 }
 
 function failureOf(error: unknown): TaskFailure {
@@ -436,5 +436,5 @@ function jsonOutcome(task: Task, outcome: Outcome): Outcome {
 
 function defaultOnError(error: unknown, info: WorkerErrorInfo): void {
   const task = info.task === undefined ? "" : ` (${info.task.tool}, run ${info.task.runId}, call ${info.task.seq})`;
-  console.error(`[ai-ptc worker] ${info.phase}${task}:`, error);
+  console.error(`[Rewind worker] ${info.phase}${task}:`, error);
 }

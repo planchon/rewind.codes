@@ -1,17 +1,17 @@
 /**
- * The agent tools against a live ai-ptc server: the bound a model meets through `run_script`.
- * Skipped unless `PTC_LIVE_URL` and `PTC_LIVE_KEY` (a key with the role `harness`) are set, as
+ * The agent tools against a live Rewind server: the bound a model meets through `run_script`.
+ * Skipped unless `REWIND_LIVE_URL` and `REWIND_LIVE_KEY` (a key with the role `harness`) are set, as
  * the deployment's CI job and `deploy/README.md` do:
  *
- *   PTC_LIVE_URL=http://localhost:8080 PTC_LIVE_KEY=ptc_sk_… pnpm vitest run test/live.test.ts
+ *   REWIND_LIVE_URL=http://localhost:8080 REWIND_LIVE_KEY=rewind_sk_… pnpm vitest run test/live.test.ts
  */
 
 import { describe, expect, it } from "vitest";
 
-import { OUTPUT_LIMIT, Ptc } from "../src/index.js";
+import { OUTPUT_LIMIT, Rewind } from "../src/index.js";
 
-const url = process.env["PTC_LIVE_URL"];
-const apiKey = process.env["PTC_LIVE_KEY"];
+const url = process.env["REWIND_LIVE_URL"];
+const apiKey = process.env["REWIND_LIVE_KEY"];
 
 /** A script whose output, as compact JSON, is about 600 KB: above `run_script`'s 256 KiB. */
 const LARGE_OUTPUT = `export default async function main() {
@@ -25,8 +25,8 @@ function expectedOutput(): string {
 
 describe.skipIf(url === undefined || apiKey === undefined)("against a live server", () => {
   it("run_script answers at most 256 KiB of output, and get_run pages through the rest", async () => {
-    const ptc = new Ptc({ url: url ?? "", apiKey: apiKey ?? "" });
-    const tools = ptc.agentTools({ labels: { suite: "sdk-live" }, wait: "60s" });
+    const rewind = new Rewind({ url: url ?? "", apiKey: apiKey ?? "" });
+    const tools = rewind.agentTools({ labels: { suite: "sdk-live" }, wait: "60s" });
     const result = await tools.handle("run_script", { code: LARGE_OUTPUT }, { toolCallId: `live-${Date.now()}` });
     expect(result.isError, result.content).toBe(false);
     expect(result.run?.status).toBe("completed");

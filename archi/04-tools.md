@@ -6,16 +6,16 @@ A toolset has three kinds of tools:
 
 | Route | Called by | Used for |
 | --- | --- | --- |
-| MCP tools | The dispatcher of ai-ptc, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
-| Built-ins: `http`, `webhook` | The dispatcher of ai-ptc | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)) |
+| MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
+| Built-ins: `http`, `webhook` | The dispatcher of Rewind | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)) |
 | Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks` | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
 
-ai-ptc calls MCP tools and built-ins directly. Their results go back to the script, never to
+Rewind calls MCP tools and built-ins directly. Their results go back to the script, never to
 the agent. The harness is on the path only for its host tools, and they are optional: a
 toolset may have only MCP servers. There is no other kind of tool in 0.1.
 
 Every call carries an **idempotency key** `"{run_id}/{seq}"`, passed in MCP `_meta`
-(`io.ai-ptc/idempotency-key`) and to host tool handlers. Calls also carry the W3C trace
+(`codes.rewind/idempotency-key`) and to host tool handlers. Calls also carry the W3C trace
 context (`traceparent`, `tracestate`) in `_meta`, with the tool call span as parent, so
 the MCP server's own spans join the run's trace.
 
@@ -110,12 +110,12 @@ The pinned toolset is a document of the [stored format](02-journal.md#stored-for
 servers, and for each tool its name, route, schemas and policy. The toolset is
 content-addressed, and every run records the digest it was started with.
 
-From each pinned tool, `ptc-codegen` generates three outputs. For `github.list_issues`:
+From each pinned tool, `rewind-codegen` generates three outputs. For `github.list_issues`:
 
 | Output | Read by | Example |
 | --- | --- | --- |
-| The `ptc:tools` runtime module: thin wrappers over the tool op | The runtime | `list_issues: (args) => call("github.list_issues", args)` |
-| `ptc-tools.d.ts`: types for args (from `inputSchema`) and results (from `outputSchema` when present, otherwise the MCP content type with `.text()` and `.json()` helpers), with tool descriptions as JSDoc | tsgo | `list_issues(args: { repo: string; state?: "open" \| "closed" }): Promise<Issue[]>` |
+| The `rewind:tools` runtime module: thin wrappers over the tool op | The runtime | `list_issues: (args) => call("github.list_issues", args)` |
+| `rewind-tools.d.ts`: types for args (from `inputSchema`) and results (from `outputSchema` when present, otherwise the MCP content type with `.text()` and `.json()` helpers), with tool descriptions as JSDoc | tsgo | `list_issues(args: { repo: string; state?: "open" \| "closed" }): Promise<Issue[]>` |
 | A **compact prompt rendering** of the same declarations | The model | `github.list_issues({ repo, state? }) → Issue[] · List the issues` |
 
 Codegen is deterministic. Without it, nothing could check a script before it runs: tsgo would
@@ -124,7 +124,7 @@ start, before any run exists: `Type 'number' is not assignable to type 'string'
 (script.ts:3:28)`.
 
 Tool names are kept as the server defines them (`github.list_issues`) so they match the
-descriptions the model reads. The names `ptc:tools` declares, a server, a host-tool group and a
+descriptions the model reads. The names `rewind:tools` declares, a server, a host-tool group and a
 host tool without a group, are identifiers that are not reserved words of JavaScript (`default`,
 `delete`, `class`…), nor the words strict mode reserves (`let`, `static`, `eval`…): a toolset
 naming one is refused when it is registered.
@@ -133,7 +133,7 @@ Args are also validated at run time, against the same JSON Schema, inside the op
 command is recorded. Invalid args throw a `TypeError` at the call site. This is deterministic,
 since the schema is pinned.
 
-The JSON Schema → TypeScript converter is ours, written in Rust in `ptc-codegen`: no
+The JSON Schema → TypeScript converter is ours, written in Rust in `rewind-codegen`: no
 maintained crate exists. It covers objects, `required`, enums, `anyOf`/`oneOf`/`allOf`,
 `$ref`/`$defs`, arrays and `additionalProperties`.
 
@@ -202,7 +202,7 @@ egress proxy ([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
 
 ### Where MCP servers may be
 
-A tenant names the URLs of its MCP servers, and ai-ptc connects to them: the API role at
+A tenant names the URLs of its MCP servers, and Rewind connects to them: the API role at
 registration, to list their tools, and the workers at each call. On a deployed server, these
 connections go through the egress checks of the `http` tool, at registration and at every
 connection:
@@ -216,7 +216,7 @@ connection:
 
 An operator may let internal MCP servers through, by configuration: host names
 (`mcp.internal.example`, `*.svc.cluster.local`) and networks (`10.20.0.0/16`), never a switch
-for the whole private network (`ptc server --allow-internal-mcp`). What such an internal server
+for the whole private network (`rewind server --allow-internal-mcp`). What such an internal server
 answers is never quoted to the tenant: an error gives the HTTP status, not the body.
 
 A refused server fails the registration (`toolset-unavailable`), and a call with a `ToolError`
@@ -225,7 +225,7 @@ one developer names the servers of their own machine.
 
 ## Type-checking
 
-`ptc check` (and `POST /v1/check`) type-checks the script against the sandbox lib and the
+`rewind check` (and `POST /v1/check`) type-checks the script against the sandbox lib and the
 toolset's declarations, in strict mode, before anything runs. Diagnostics are formatted
 for a model: location, message, and a short code frame.
 
@@ -234,18 +234,18 @@ What tsgo sees:
 | Declarations | Contents |
 | --- | --- |
 | ECMAScript lib | ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), no DOM, without the shared memory and weak references the sandbox removes |
-| Sandbox globals | `globals.d.ts`, declaring exactly the globals the [sandbox](01-product.md#what-exists-in-the-sandbox) has; `fetch.d.ts` only when the toolset enables the `http` tool, whose `ptc-tools.d.ts` then starts with `/// <reference path="fetch.d.ts" />` |
-| `ptc.d.ts` | The `ptc` module: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError` |
-| `ptc-tools.d.ts` | Generated by `ptc-codegen` for the toolset |
+| Sandbox globals | `globals.d.ts`, declaring exactly the globals the [sandbox](01-product.md#what-exists-in-the-sandbox) has; `fetch.d.ts` only when the toolset enables the `http` tool, whose `rewind-tools.d.ts` then starts with `/// <reference path="fetch.d.ts" />` |
+| `rewind.d.ts` | The `rewind` module: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError` |
+| `rewind-tools.d.ts` | Generated by `rewind-codegen` for the toolset |
 
 What type-checks exists at run time, and the reverse. The sandbox lib lives in
-`crates/ptc-runtime/lib/`, with `tsconfig.json` (tsgo's options) and `globals.json` (the
+`crates/rewind-runtime/lib/`, with `tsconfig.json` (tsgo's options) and `globals.json` (the
 declared names); a test in CI checks that the isolate's globals and the sandbox lib declare the
 same names ([decided](08-decisions.md#taken-while-freezing-the-http-api-and-the-sandbox-lib-november-2026)).
 
-`ptc-check` drives tsgo, the native TypeScript 7 compiler, as a CLI, behind the `TypeChecker`
-port: TypeScript 7.0 has no programmatic API. The tsgo binary is embedded in the `ptc` binary
-and extracted to a cache directory at its first launch, so ai-ptc stays a single binary.
+`rewind-check` drives tsgo, the native TypeScript 7 compiler, as a CLI, behind the `TypeChecker`
+port: TypeScript 7.0 has no programmatic API. The tsgo binary is embedded in the `rewind` binary
+and extracted to a cache directory at its first launch, so Rewind stays a single binary.
 
 The checker also runs rules of its own. They run on the swc syntax tree that the checks at
 start already parse (`deno_ast`), without type information. They are syntactic, and so
@@ -253,7 +253,7 @@ slightly less precise than rules based on types.
 
 | Rule | Flags | Fix |
 | --- | --- | --- |
-| Floating promise | A call to a tool, to a `ptc` function or to an async function of the script, used as a statement: neither awaited, returned nor assigned | `await`; `void expr` says it is intended |
+| Floating promise | A call to a tool, to a `rewind` function or to an async function of the script, used as a statement: neither awaited, returned nor assigned | `await`; `void expr` says it is intended |
 | Ignored async callback | An `async` function passed to `forEach` and the like, which ignore its result | `for … of` with `await`, or `Promise.all` over `map` |
 | Absent global | `fetch`, `require`, `process`, `Buffer` | A hint saying what to use instead |
 

@@ -1,8 +1,8 @@
-//! The engine's state as the HTTP API `/v1` shows it (`ptc-api`'s DTOs), built as `ptc-server`
-//! builds it (`crates/ptc-server/src/views.rs`, `error.rs`), so that the agent tools render
+//! The engine's state as the HTTP API `/v1` shows it (`rewind-api`'s DTOs), built as `rewind-server`
+//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`), so that the agent tools render
 //! what the SDK's agent tools render from the server's answers.
 //!
-//! The evals cannot depend on `ptc-server`, a composition root: what follows repeats its
+//! The evals cannot depend on `rewind-server`, a composition root: what follows repeats its
 //! rules. Two differences: `attempts` stays empty (the server reads it from the read model,
 //! which the world does not project, and the SDK's texts do not show it), and the call whose
 //! `ToolError` failed the run is found by the message the runtime writes, `{tool} failed:
@@ -10,31 +10,31 @@
 
 use std::collections::BTreeMap;
 
-use ptc_api::common::{
+use rewind_api::common::{
     AbortReason, Callsite, Labels, LogLevel, PAYLOAD_VALUE_LIMIT, Payload, RunStatus, ToolFailure,
     timestamp,
 };
-use ptc_api::runs::{
+use rewind_api::runs::{
     FailedCall, ForkParent, LogLine, Quarantine, QuarantineCause, Run, RunError, RunSummary,
     RunWait, WaitKind, Waiting,
 };
-use ptc_api::scripts::{CheckResult, Diagnostic, Location, Severity};
-use ptc_api::tasks::{ParkedReason, TaskState};
-use ptc_core::{
+use rewind_api::scripts::{CheckResult, Diagnostic, Location, Severity};
+use rewind_api::tasks::{ParkedReason, TaskState};
+use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
 };
-use ptc_engine::EngineError;
-use ptc_engine::ports::{InvalidScript, JournalStore, ParkKind, QuarantineKind, RunRef};
+use rewind_engine::EngineError;
+use rewind_engine::ports::{InvalidScript, JournalStore, ParkKind, QuarantineKind, RunRef};
 
 use crate::world::World;
 
 /// The last log lines a run's state carries.
 const LOG_LINES: usize = 20;
 
-fn payload(payload: &ptc_core::Payload) -> Payload {
+fn payload(payload: &rewind_core::Payload) -> Payload {
     match payload {
-        ptc_core::Payload::Value(value) => Payload::of(value.clone(), PAYLOAD_VALUE_LIMIT),
-        ptc_core::Payload::Digest(digest) => Payload::reference(digest.to_hex(), 0, ""),
+        rewind_core::Payload::Value(value) => Payload::of(value.clone(), PAYLOAD_VALUE_LIMIT),
+        rewind_core::Payload::Digest(digest) => Payload::reference(digest.to_hex(), 0, ""),
     }
 }
 
@@ -82,7 +82,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
     } else {
         waiting(world, run, &history, &state).await?
     };
-    let (trace, _) = ptc_engine::telemetry::trace_of(&record);
+    let (trace, _) = rewind_engine::telemetry::trace_of(&record);
     Ok(Run {
         id: run.id.to_string(),
         status,
@@ -96,7 +96,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
         script: record.script.to_hex(),
         toolset: record.toolset.to_hex(),
         epoch: record.epoch.0,
-        mode: started.map_or(ptc_api::common::RunMode::Live, |started| {
+        mode: started.map_or(rewind_api::common::RunMode::Live, |started| {
             started.mode.into()
         }),
         labels: Labels::from(record.metadata.labels.clone()),
@@ -159,11 +159,11 @@ async fn waiting(
         let task = tasks.get(seq);
         let (task_state, parked) = match task.map(|task| &task.state) {
             None => (TaskState::Done, None),
-            Some(ptc_engine::ports::TaskState::Approval) => (TaskState::Approval, None),
-            Some(ptc_engine::ports::TaskState::Ready { .. }) => (TaskState::Ready, None),
-            Some(ptc_engine::ports::TaskState::Claimed { .. }) => (TaskState::Claimed, None),
-            Some(ptc_engine::ports::TaskState::Deferred { .. }) => (TaskState::Deferred, None),
-            Some(ptc_engine::ports::TaskState::Parked(reason)) => (
+            Some(rewind_engine::ports::TaskState::Approval) => (TaskState::Approval, None),
+            Some(rewind_engine::ports::TaskState::Ready { .. }) => (TaskState::Ready, None),
+            Some(rewind_engine::ports::TaskState::Claimed { .. }) => (TaskState::Claimed, None),
+            Some(rewind_engine::ports::TaskState::Deferred { .. }) => (TaskState::Deferred, None),
+            Some(rewind_engine::ports::TaskState::Parked(reason)) => (
                 TaskState::Parked,
                 Some(match reason.kind {
                     ParkKind::SchemaChanged => ParkedReason::SchemaChanged,
@@ -263,14 +263,14 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
     let ending = state
         .as_ref()
         .and_then(RunState::outcome)
-        .and_then(ptc_engine::failures::ending);
+        .and_then(rewind_engine::failures::ending);
     let toolset = world
         .engine
         .journal()
         .get_toolset(&run.tenant, record.toolset)
         .await?
         .map(|stored| stored.toolset);
-    let snapshot = ptc_engine::projector::run_snapshot(&history, toolset.as_ref());
+    let snapshot = rewind_engine::projector::run_snapshot(&history, toolset.as_ref());
     let waiting_for: Vec<RunWait> = snapshot
         .waits
         .iter()
@@ -289,7 +289,7 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
         .journal()
         .get_script(&run.tenant, record.script)
         .await?
-        .map(|stored| ptc_api::scripts::headline(stored.script.source()))
+        .map(|stored| rewind_api::scripts::headline(stored.script.source()))
         .unwrap_or_default();
     Ok(RunSummary {
         id: run.id.to_string(),
@@ -316,8 +316,8 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
 }
 
 /// What a wait is, as the API names it.
-fn wait_kind(waiting: ptc_engine::ports::WaitingFor) -> WaitKind {
-    use ptc_engine::ports::WaitingFor;
+fn wait_kind(waiting: rewind_engine::ports::WaitingFor) -> WaitKind {
+    use rewind_engine::ports::WaitingFor;
     match waiting {
         WaitingFor::Signal => WaitKind::Signal,
         WaitingFor::Timer => WaitKind::Timer,
@@ -331,7 +331,7 @@ fn wait_kind(waiting: ptc_engine::ports::WaitingFor) -> WaitKind {
 
 /// How the script failed, with where: the first position in `script.ts` of its stack, else of
 /// its message, and the call whose `ToolError` it did not catch.
-fn run_error(error: &ptc_core::ScriptError, history: &[HistoryEntry], source: &str) -> RunError {
+fn run_error(error: &rewind_core::ScriptError, history: &[HistoryEntry], source: &str) -> RunError {
     let location = error
         .stack
         .as_deref()
@@ -412,15 +412,15 @@ pub fn code_frame(source: &str, line: u32, column: u32) -> Option<String> {
 }
 
 /// A diagnostic of the checker, as the API writes it.
-pub fn diagnostic(diagnostic: &ptc_engine::ports::Diagnostic) -> Diagnostic {
+pub fn diagnostic(diagnostic: &rewind_engine::ports::Diagnostic) -> Diagnostic {
     Diagnostic {
         severity: match diagnostic.severity {
-            ptc_engine::ports::Severity::Error => Severity::Error,
-            ptc_engine::ports::Severity::Warning => Severity::Warning,
+            rewind_engine::ports::Severity::Error => Severity::Error,
+            rewind_engine::ports::Severity::Warning => Severity::Warning,
         },
         code: match &diagnostic.source {
-            ptc_engine::ports::DiagnosticSource::TypeScript { code } => format!("TS{code}"),
-            ptc_engine::ports::DiagnosticSource::Rule(rule) => format!("ptc/{rule}"),
+            rewind_engine::ports::DiagnosticSource::TypeScript { code } => format!("TS{code}"),
+            rewind_engine::ports::DiagnosticSource::Rule(rule) => format!("rewind/{rule}"),
         },
         message: diagnostic.message.clone(),
         location: (diagnostic.line > 0).then_some(Location {
@@ -438,7 +438,7 @@ pub fn diagnostic(diagnostic: &ptc_engine::ports::Diagnostic) -> Diagnostic {
 pub fn invalid_script_diagnostic(invalid: &InvalidScript) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
-        code: "ptc/invalid-script".into(),
+        code: "rewind/invalid-script".into(),
         message: invalid.message.clone(),
         location: script_location(&invalid.message).map(|(line, column)| Location {
             line,
@@ -452,7 +452,7 @@ pub fn invalid_script_diagnostic(invalid: &InvalidScript) -> Diagnostic {
 }
 
 /// `POST /v1/check`, from the checker's diagnostics.
-pub fn check_result(diagnostics: &[ptc_engine::ports::Diagnostic]) -> CheckResult {
+pub fn check_result(diagnostics: &[rewind_engine::ports::Diagnostic]) -> CheckResult {
     let diagnostics: Vec<Diagnostic> = diagnostics.iter().map(diagnostic).collect();
     CheckResult {
         ok: !diagnostics
@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn frames_mark_the_column_between_their_neighbors() {
-        let source = "import { crm } from \"ptc:tools\";\n\nexport default async function main() {\n  const order = await crm.get_order({ id: \"O-504\" });\n  return order;\n}\n";
+        let source = "import { crm } from \"rewind:tools\";\n\nexport default async function main() {\n  const order = await crm.get_order({ id: \"O-504\" });\n  return order;\n}\n";
         assert_eq!(
             code_frame(source, 4, 23).unwrap(),
             "3 | export default async function main() {\n4 |   const order = await crm.get_order({ id: \"O-504\" });\n  |                       ^\n5 |   return order;"

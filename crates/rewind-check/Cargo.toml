@@ -1,0 +1,31 @@
+[package]
+name = "rewind-check"
+description = "Type-checking adapter of Rewind: tsgo (TypeScript 7) behind the engine's TypeChecker port, and the checker's own rules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rewind-core.workspace = true
+rewind-engine.workspace = true
+deno_ast.workspace = true
+dirs.workspace = true
+flate2.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "process", "rt", "sync", "time"] }
+tracing.workspace = true
+
+[build-dependencies]
+base64.workspace = true
+sha2.workspace = true
+ureq.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PtcError, WebhookVerificationFailed, verifyWebhook } from "../src/index.js";
+import { RewindError, WebhookVerificationFailed, verifyWebhook } from "../src/index.js";
 
 const key = randomBytes(32);
 const secret = `whsec_${key.toString("base64")}`;
@@ -85,6 +85,6 @@ describe("webhook verification", () => {
   });
 
   it("refuses a malformed secret", () => {
-    expect(() => verifyWebhook(body, {}, "whsec_not base64!")).toThrow(PtcError);
+    expect(() => verifyWebhook(body, {}, "whsec_not base64!")).toThrow(RewindError);
   });
 });

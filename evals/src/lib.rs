@@ -1,4 +1,4 @@
-//! The eval suite of ai-ptc (`archi/05-testing-and-observability.md`, "Evals").
+//! The eval suite of Rewind (`archi/05-testing-and-observability.md`, "Evals").
 //!
 //! Models solve realistic tasks end to end: they get a system prompt with the toolset's
 //! declarations in a prompt rendering, and the agent tools of the SDK (`run_script`,

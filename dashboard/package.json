@@ -1,8 +1,8 @@
 {
-  "name": "@ai-ptc/dashboard",
+  "name": "@rewind.codes/dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "The ai-ptc dashboard: Overview, Runs, Waiting, Failures, Run, Scripts and Tools views over the public HTTP API /v1",
+  "description": "The Rewind dashboard: Overview, Runs, Waiting, Failures, Run, Scripts and Tools views over the public HTTP API /v1",
   "type": "module",
   "packageManager": "pnpm@10.15.0",
   "engines": {

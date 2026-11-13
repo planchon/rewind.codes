@@ -123,7 +123,7 @@ fn thousands(value: u64) -> String {
 /// The readable summary: one table per model and rendering, then each task's outcomes.
 pub fn markdown(report: &Report, episodes: &[EpisodeRecord]) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "# ai-ptc evals, {}\n", report.started_at);
+    let _ = writeln!(out, "# Rewind evals, {}\n", report.started_at);
     let _ = writeln!(
         out,
         "{} tasks × {} models × {} renderings × {} repetitions.\n",

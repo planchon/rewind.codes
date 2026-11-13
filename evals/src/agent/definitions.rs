@@ -32,7 +32,7 @@ fn run_id() -> Value {
 fn code() -> Value {
     json!({
         "type": "string",
-        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports tools from \"ptc:tools\" and `sleep`, `signal`, `webhook` from \"ptc\". Its input and output are JSON."
+        "description": "The TypeScript source: one ES module whose default export is `async function main(input)`. It imports tools from \"rewind:tools\" and `sleep`, `signal`, `webhook` from \"rewind\". Its input and output are JSON."
     })
 }
 
@@ -60,7 +60,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
     Some(match name {
         "run_script" => ToolDefinition {
             name: "run_script",
-            description: "Type-check a TypeScript script and run it. The script calls the tools declared in `ptc:tools` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run id and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run.",
+            description: "Type-check a TypeScript script and run it. The script calls the tools declared in `rewind:tools` and runs durably: it can sleep for days and wait for signals. A script that does not type-check is refused with its diagnostics, before anything runs. When the run ends within `wait`, you get its output and last log lines, or its error with the failing line and the trace up to the failure. Otherwise you get the run id and what the run waits for: follow it with get_run, send it a signal with signal_run, or cancel it with cancel_run.",
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -215,7 +215,7 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
         },
         "search_tools" => ToolDefinition {
             name: "search_tools",
-            description: "Find the tools of `ptc:tools` matching a query, with their TypeScript declarations: for toolsets too large to be listed in full.",
+            description: "Find the tools of `rewind:tools` matching a query, with their TypeScript declarations: for toolsets too large to be listed in full.",
             input_schema: json!({
                 "type": "object",
                 "properties": { "query": { "type": "string", "description": "Words to look for in tool names and descriptions." } },

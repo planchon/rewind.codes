@@ -158,7 +158,7 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
   return run;
 }
 
-/** Host tools: the harness's worker answers them. The others, ai-ptc calls itself. */
+/** Host tools: the harness's worker answers them. The others, Rewind calls itself. */
 const HOST_TOOLS = new Set(["ask_user"]);
 
 /**

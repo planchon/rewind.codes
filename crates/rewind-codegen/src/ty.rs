@@ -1,0 +1,949 @@
+//! The TypeScript types codegen produces, and how they are written: in full for
+//! `rewind-tools.d.ts`, on one line for the prompt.
+
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+use std::mem;
+
+use serde_json::Value;
+
+/// A TypeScript type.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Ty {
+    Unknown,
+    Never,
+    Null,
+    /// Only in index signatures, for the optional properties they must cover.
+    Undefined,
+    Boolean,
+    Number,
+    String,
+    /// A JSON value as a literal type: `"open"`, `42`, `true`, `null`, `{ a: 1 }`.
+    Literal(Value),
+    Array(Box<Ty>),
+    Tuple(Tuple),
+    Object(Object),
+    Union(Vec<Ty>),
+    Intersection(Vec<Ty>),
+    /// A named type of the tool's namespace.
+    Named(String),
+    /// `ToolContent<T>`: what an MCP tool without an output schema returns.
+    Content(Box<Ty>),
+}
+
+/// `[A, B?, ...C[]]`.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Tuple {
+    pub(crate) items: Vec<Ty>,
+    /// The items before this index are required; the others are optional.
+    pub(crate) required: usize,
+    pub(crate) rest: Option<Box<Ty>>,
+}
+
+/// An object type: its properties, sorted by name, and its index signature.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub(crate) struct Object {
+    pub(crate) properties: Vec<Property>,
+    /// `[key: string]: T`, for the keys not listed.
+    pub(crate) index: Option<Box<Ty>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Property {
+    pub(crate) name: String,
+    pub(crate) ty: Ty,
+    pub(crate) optional: bool,
+    pub(crate) doc: Doc,
+}
+
+/// A JSDoc comment: a description, then tags such as `@default "open"`.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub(crate) struct Doc {
+    pub(crate) description: Option<String>,
+    pub(crate) tags: Vec<String>,
+}
+
+impl Doc {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.description.is_none() && self.tags.is_empty()
+    }
+}
+
+impl Ty {
+    /// `A | B`, flattened and without duplicates. `unknown` absorbs the other members, and
+    /// `never` disappears.
+    pub(crate) fn union(members: impl IntoIterator<Item = Ty>) -> Ty {
+        let mut flat = Members::default();
+        for member in members {
+            match member {
+                Ty::Union(inner) => inner.into_iter().for_each(|ty| flat.push(ty)),
+                Ty::Never => {}
+                ty => flat.push(ty),
+            }
+        }
+        let mut flat = flat.list;
+        if flat.contains(&Ty::Unknown) {
+            return Ty::Unknown;
+        }
+        match flat.len() {
+            0 => Ty::Never,
+            1 => flat.remove(0),
+            _ => Ty::Union(flat),
+        }
+    }
+
+    /// `A & B`, flattened and without duplicates. `unknown` disappears, and `never` absorbs
+    /// the other members.
+    pub(crate) fn intersection(members: impl IntoIterator<Item = Ty>) -> Ty {
+        let mut flat = Members::default();
+        for member in members {
+            match member {
+                Ty::Intersection(inner) => inner.into_iter().for_each(|ty| flat.push(ty)),
+                Ty::Unknown => {}
+                ty => flat.push(ty),
+            }
+        }
+        let mut flat = flat.list;
+        if flat.contains(&Ty::Never) {
+            return Ty::Never;
+        }
+        match flat.len() {
+            0 => Ty::Unknown,
+            1 => flat.remove(0),
+            _ => Ty::Intersection(flat),
+        }
+    }
+
+    /// The names of the named types this type refers to, in order of appearance.
+    pub(crate) fn named(&self, names: &mut Names) {
+        match self {
+            Ty::Named(name) => names.insert(name),
+            Ty::Array(item) | Ty::Content(item) => item.named(names),
+            Ty::Tuple(tuple) => {
+                tuple.items.iter().for_each(|item| item.named(names));
+                if let Some(rest) = &tuple.rest {
+                    rest.named(names);
+                }
+            }
+            Ty::Object(object) => {
+                object
+                    .properties
+                    .iter()
+                    .for_each(|property| property.ty.named(names));
+                if let Some(index) = &object.index {
+                    index.named(names);
+                }
+            }
+            Ty::Union(members) | Ty::Intersection(members) => {
+                members.iter().for_each(|member| member.named(names));
+            }
+            Ty::Unknown
+            | Ty::Never
+            | Ty::Null
+            | Ty::Undefined
+            | Ty::Boolean
+            | Ty::Number
+            | Ty::String
+            | Ty::Literal(_) => {}
+        }
+    }
+}
+
+/// The members of a union or an intersection, each once, in the order they came. A member is
+/// looked up by its hash, so that an `enum` of thousands of values takes linear time.
+#[derive(Default)]
+struct Members {
+    list: Vec<Ty>,
+    /// Indices into `list`, by the hash of the member.
+    by_hash: HashMap<u64, Vec<usize>>,
+}
+
+impl Members {
+    fn push(&mut self, ty: Ty) {
+        let mut hasher = DefaultHasher::new();
+        hash_ty(&ty, &mut hasher);
+        let same_hash = self.by_hash.entry(hasher.finish()).or_default();
+        if same_hash.iter().any(|&index| self.list[index] == ty) {
+            return;
+        }
+        same_hash.push(self.list.len());
+        self.list.push(ty);
+    }
+}
+
+/// Hashes a type consistently with its equality: equal types hash the same.
+fn hash_ty(ty: &Ty, state: &mut impl Hasher) {
+    mem::discriminant(ty).hash(state);
+    match ty {
+        Ty::Literal(value) => hash_value(value, state),
+        Ty::Array(item) | Ty::Content(item) => hash_ty(item, state),
+        Ty::Tuple(tuple) => {
+            tuple.items.len().hash(state);
+            tuple.items.iter().for_each(|item| hash_ty(item, state));
+            tuple.required.hash(state);
+            if let Some(rest) = &tuple.rest {
+                hash_ty(rest, state);
+            }
+        }
+        Ty::Object(object) => {
+            object.properties.len().hash(state);
+            for property in &object.properties {
+                property.name.hash(state);
+                property.optional.hash(state);
+                hash_ty(&property.ty, state);
+            }
+            if let Some(index) = &object.index {
+                hash_ty(index, state);
+            }
+        }
+        Ty::Union(members) | Ty::Intersection(members) => {
+            members.len().hash(state);
+            members.iter().for_each(|member| hash_ty(member, state));
+        }
+        Ty::Named(name) => name.hash(state),
+        Ty::Unknown
+        | Ty::Never
+        | Ty::Null
+        | Ty::Undefined
+        | Ty::Boolean
+        | Ty::Number
+        | Ty::String => {}
+    }
+}
+
+fn hash_value(value: &Value, state: &mut impl Hasher) {
+    mem::discriminant(value).hash(state);
+    match value {
+        Value::Null => {}
+        Value::Bool(value) => value.hash(state),
+        // By value, as a float: `0.0` and `-0.0`, which are equal, hash alike.
+        Value::Number(number) => number
+            .as_f64()
+            .map_or(0, |x| if x == 0.0 { 0 } else { x.to_bits() })
+            .hash(state),
+        Value::String(text) => text.hash(state),
+        Value::Array(items) => {
+            items.len().hash(state);
+            items.iter().for_each(|item| hash_value(item, state));
+        }
+        Value::Object(fields) => {
+            fields.len().hash(state);
+            for (key, value) in fields {
+                key.hash(state);
+                hash_value(value, state);
+            }
+        }
+    }
+}
+
+/// Names in the order they were first seen, each once.
+#[derive(Debug, Default)]
+pub(crate) struct Names {
+    pub(crate) order: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl Names {
+    fn insert(&mut self, name: &str) {
+        if self.seen.insert(name.to_owned()) {
+            self.order.push(name.to_owned());
+        }
+    }
+
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.seen.contains(name)
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// Written in full, for `rewind-tools.d.ts`
+
+/// Objects shorter than this, without comments, are written on one line.
+const INLINE_OBJECT: usize = 64;
+
+/// How objects are laid out.
+#[derive(Debug, Clone, Copy)]
+enum Layout {
+    /// On several lines when they are long or commented, at this indentation.
+    Block(usize),
+    /// On one line, for an object trying to fit in [`INLINE_OBJECT`] bytes: writing stops once
+    /// the text is longer than this many bytes, or holds an object with comments. An object
+    /// nested deep in others is then written once in full, not once for each object around it.
+    Line(usize),
+}
+
+/// The type in full. Named types get `qualifier.` in front of them: the namespace they live in,
+/// when the type is written outside of it.
+pub(crate) fn render(ty: &Ty, qualifier: Option<&str>, indent: usize) -> String {
+    let mut out = String::new();
+    write(&mut out, ty, qualifier, Layout::Block(indent));
+    out
+}
+
+/// Writes the type. With [`Layout::Line`], `false` when it does not fit.
+fn write(out: &mut String, ty: &Ty, qualifier: Option<&str>, layout: Layout) -> bool {
+    if let Layout::Line(limit) = layout
+        && out.len() > limit
+    {
+        return false;
+    }
+    match ty {
+        Ty::Unknown => out.push_str("unknown"),
+        Ty::Never => out.push_str("never"),
+        Ty::Null => out.push_str("null"),
+        Ty::Undefined => out.push_str("undefined"),
+        Ty::Boolean => out.push_str("boolean"),
+        Ty::Number => out.push_str("number"),
+        Ty::String => out.push_str("string"),
+        Ty::Literal(value) => out.push_str(&literal(value)),
+        Ty::Array(item) => {
+            let parentheses = needs_parentheses_in_array(item);
+            if parentheses {
+                out.push('(');
+            }
+            if !write(out, item, qualifier, layout) {
+                return false;
+            }
+            out.push_str(if parentheses { ")[]" } else { "[]" });
+        }
+        Ty::Tuple(tuple) => {
+            out.push('[');
+            for (index, item) in tuple.items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                let optional = index >= tuple.required;
+                let parentheses = optional && needs_parentheses_in_array(item);
+                if parentheses {
+                    out.push('(');
+                }
+                if !write(out, item, qualifier, layout) {
+                    return false;
+                }
+                if parentheses {
+                    out.push(')');
+                }
+                if optional {
+                    out.push('?');
+                }
+            }
+            if let Some(rest) = &tuple.rest {
+                if !tuple.items.is_empty() {
+                    out.push_str(", ");
+                }
+                out.push_str("...");
+                if !write(out, &Ty::Array(rest.clone()), qualifier, layout) {
+                    return false;
+                }
+            }
+            out.push(']');
+        }
+        Ty::Object(object) => return write_object(out, object, qualifier, layout),
+        Ty::Union(members) => {
+            for (index, member) in members.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(" | ");
+                }
+                if !write(out, member, qualifier, layout) {
+                    return false;
+                }
+            }
+        }
+        Ty::Intersection(members) => {
+            for (index, member) in members.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(" & ");
+                }
+                let parentheses = matches!(member, Ty::Union(_));
+                if parentheses {
+                    out.push('(');
+                }
+                if !write(out, member, qualifier, layout) {
+                    return false;
+                }
+                if parentheses {
+                    out.push(')');
+                }
+            }
+        }
+        Ty::Named(name) => {
+            if let Some(qualifier) = qualifier {
+                out.push_str(qualifier);
+                out.push('.');
+            }
+            out.push_str(name);
+        }
+        Ty::Content(structured) => {
+            out.push_str("ToolContent");
+            if **structured != Ty::Unknown {
+                out.push('<');
+                if !write(out, structured, qualifier, layout) {
+                    return false;
+                }
+                out.push('>');
+            }
+        }
+    }
+    true
+}
+
+fn needs_parentheses_in_array(ty: &Ty) -> bool {
+    match ty {
+        Ty::Union(_) | Ty::Intersection(_) => true,
+        Ty::Literal(Value::Number(number)) => number.to_string().starts_with('-'),
+        _ => false,
+    }
+}
+
+fn write_object(
+    out: &mut String,
+    object: &Object,
+    qualifier: Option<&str>,
+    layout: Layout,
+) -> bool {
+    if object.properties.is_empty() && object.index.is_none() {
+        // `{}` would accept any value but `null` and `undefined`.
+        out.push_str("{ [key: string]: never }");
+        return true;
+    }
+    match layout {
+        Layout::Line(limit) => write_inline(out, object, qualifier, limit),
+        Layout::Block(indent) => {
+            let mut inline = String::new();
+            if write_inline(&mut inline, object, qualifier, INLINE_OBJECT)
+                && inline.len() <= INLINE_OBJECT
+            {
+                out.push_str(&inline);
+            } else {
+                write_block(out, object, qualifier, indent);
+            }
+            true
+        }
+    }
+}
+
+/// The object on several lines, as the body of an interface.
+pub(crate) fn block(object: &Object, qualifier: Option<&str>, indent: usize) -> String {
+    let mut out = String::new();
+    write_block(&mut out, object, qualifier, indent);
+    out
+}
+
+fn write_block(out: &mut String, object: &Object, qualifier: Option<&str>, indent: usize) {
+    out.push_str("{\n");
+    for property in &object.properties {
+        jsdoc(out, &property.doc, indent + 1);
+        pad(out, indent + 1);
+        out.push_str(&property_name(&property.name));
+        if property.optional {
+            out.push('?');
+        }
+        out.push_str(": ");
+        write(out, &property.ty, qualifier, Layout::Block(indent + 1));
+        out.push_str(";\n");
+    }
+    if let Some(index) = &object.index {
+        pad(out, indent + 1);
+        out.push_str("[key: string]: ");
+        write(out, index, qualifier, Layout::Block(indent + 1));
+        out.push_str(";\n");
+    }
+    pad(out, indent);
+    out.push('}');
+}
+
+/// The object on one line, within `limit` bytes of `out`: `false` when it is longer, or when
+/// one of the objects it holds has a property with a comment.
+fn write_inline(out: &mut String, object: &Object, qualifier: Option<&str>, limit: usize) -> bool {
+    if object
+        .properties
+        .iter()
+        .any(|property| !property.doc.is_empty())
+    {
+        return false;
+    }
+    out.push_str("{ ");
+    for (index, property) in object.properties.iter().enumerate() {
+        if index > 0 {
+            out.push_str("; ");
+        }
+        out.push_str(&property_name(&property.name));
+        if property.optional {
+            out.push('?');
+        }
+        out.push_str(": ");
+        if !write(out, &property.ty, qualifier, Layout::Line(limit)) {
+            return false;
+        }
+    }
+    if let Some(index) = &object.index {
+        if !object.properties.is_empty() {
+            out.push_str("; ");
+        }
+        out.push_str("[key: string]: ");
+        if !write(out, index, qualifier, Layout::Line(limit)) {
+            return false;
+        }
+    }
+    out.push_str(" }");
+    out.len() <= limit
+}
+
+/// A JSON value as a literal type.
+pub(crate) fn literal(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(number) => number.to_string(),
+        Value::String(text) => string_literal(text),
+        Value::Array(items) => {
+            let items: Vec<String> = items.iter().map(literal).collect();
+            format!("[{}]", items.join(", "))
+        }
+        Value::Object(fields) if fields.is_empty() => "{ [key: string]: never }".to_owned(),
+        Value::Object(fields) => {
+            let mut keys: Vec<&String> = fields.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|key| format!("{}: {}", property_name(key), literal(&fields[key])))
+                .collect();
+            format!("{{ {} }}", parts.join("; "))
+        }
+    }
+}
+
+/// A string literal, in double quotes. JSON's escapes are TypeScript's.
+pub(crate) fn string_literal(text: &str) -> String {
+    Value::String(text.to_owned()).to_string()
+}
+
+/// A property or method name: as is when it is an identifier, quoted otherwise.
+pub(crate) fn property_name(name: &str) -> String {
+    if is_identifier(name) {
+        name.to_owned()
+    } else {
+        string_literal(name)
+    }
+}
+
+/// An ECMAScript identifier in ASCII.
+pub(crate) fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+}
+
+pub(crate) fn pad(out: &mut String, indent: usize) {
+    for _ in 0..indent {
+        out.push_str("  ");
+    }
+}
+
+/// A JSDoc comment, on one line when it is short.
+pub(crate) fn jsdoc(out: &mut String, doc: &Doc, indent: usize) {
+    if doc.is_empty() {
+        return;
+    }
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(description) = &doc.description {
+        lines.extend(description.lines().map(|line| line.trim_end().to_owned()));
+        while lines.last().is_some_and(String::is_empty) {
+            lines.pop();
+        }
+        while lines.first().is_some_and(String::is_empty) {
+            lines.remove(0);
+        }
+    }
+    if !doc.tags.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.extend(doc.tags.iter().cloned());
+    }
+    let lines: Vec<String> = lines
+        .into_iter()
+        .map(|line| line.replace("*/", "*\\/"))
+        .collect();
+    if let [line] = lines.as_slice()
+        && line.len() + indent * 2 <= 90
+    {
+        pad(out, indent);
+        out.push_str("/** ");
+        out.push_str(line);
+        out.push_str(" */\n");
+        return;
+    }
+    pad(out, indent);
+    out.push_str("/**\n");
+    for line in &lines {
+        pad(out, indent);
+        if line.is_empty() {
+            out.push_str(" *\n");
+        } else {
+            out.push_str(" * ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    pad(out, indent);
+    out.push_str(" */\n");
+}
+
+// -------------------------------------------------------------------------------------------
+// On one line, for the prompt
+
+/// Union members shown in the prompt before `…`.
+const COMPACT_UNION: usize = 8;
+
+/// Types written at most for one rendering, past which they are `…`. A rendering longer than the
+/// prompt's budget is not used, but writing it out must stay cheap: named types that refer to
+/// one another many times over would otherwise expand without end.
+const COMPACT_STEPS: usize = 1024;
+
+/// Where a compact rendering is: the named types being expanded, and the steps left.
+struct Walk {
+    stack: Vec<String>,
+    steps: usize,
+}
+
+impl Walk {
+    fn new() -> Self {
+        Self {
+            stack: Vec::new(),
+            steps: COMPACT_STEPS,
+        }
+    }
+}
+
+/// Writes types on one line, compactly: `{ repo: string, state?: "open" | "closed" }`.
+/// Named types are expanded where they are used, as the prompt has no other place for them,
+/// unless they are recursive or the nesting is deeper than the budget.
+pub(crate) struct Compact<'a> {
+    pub(crate) named: &'a dyn Fn(&str) -> Option<&'a Ty>,
+}
+
+impl Compact<'_> {
+    /// The type, with objects expanded down to `depth` levels; deeper objects are `{…}`.
+    pub(crate) fn render(&self, ty: &Ty, depth: usize) -> String {
+        let mut out = String::new();
+        self.write(&mut out, ty, depth, &mut Walk::new());
+        out
+    }
+
+    /// The properties of an object, as the arguments of a call: `{ repo: string, state? }`.
+    /// With `types: false`, only their names.
+    pub(crate) fn arguments(&self, object: &Object, depth: usize, types: bool) -> String {
+        let mut parts = Vec::new();
+        let mut walk = Walk::new();
+        for property in &object.properties {
+            let optional = if property.optional { "?" } else { "" };
+            let mut part = property_name(&property.name);
+            part.push_str(optional);
+            if types {
+                part.push_str(": ");
+                self.write(&mut part, &property.ty, depth, &mut walk);
+            }
+            parts.push(part);
+        }
+        if let Some(index) = &object.index {
+            if types {
+                let mut part = "[key: string]: ".to_owned();
+                self.write(&mut part, index, depth, &mut walk);
+                parts.push(part);
+            } else {
+                parts.push("…".to_owned());
+            }
+        }
+        if parts.is_empty() {
+            "{}".to_owned()
+        } else {
+            format!("{{ {} }}", parts.join(", "))
+        }
+    }
+
+    fn write(&self, out: &mut String, ty: &Ty, depth: usize, walk: &mut Walk) {
+        if walk.steps == 0 {
+            out.push('…');
+            return;
+        }
+        walk.steps -= 1;
+        match ty {
+            Ty::Array(item) => {
+                let parentheses = needs_parentheses_in_array(item)
+                    || {
+                        // An expanded named union needs them too.
+                        matches!(&**item, Ty::Named(name)
+                        if self.expands(name, depth, &walk.stack)
+                            && matches!((self.named)(name), Some(Ty::Union(_) | Ty::Intersection(_))))
+                    };
+                if parentheses {
+                    out.push('(');
+                }
+                self.write(out, item, depth, walk);
+                if parentheses {
+                    out.push(')');
+                }
+                out.push_str("[]");
+            }
+            Ty::Tuple(tuple) => {
+                out.push('[');
+                for (index, item) in tuple.items.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(", ");
+                    }
+                    self.write(out, item, depth, walk);
+                    if index >= tuple.required {
+                        out.push('?');
+                    }
+                }
+                if let Some(rest) = &tuple.rest {
+                    if !tuple.items.is_empty() {
+                        out.push_str(", ");
+                    }
+                    out.push_str("...");
+                    self.write(out, &Ty::Array(rest.clone()), depth, walk);
+                }
+                out.push(']');
+            }
+            Ty::Object(object) => {
+                if object.properties.is_empty() && object.index.is_none() {
+                    out.push_str("{}");
+                } else if depth == 0 {
+                    out.push_str("{…}");
+                } else {
+                    let mut parts = Vec::new();
+                    for property in &object.properties {
+                        let mut part = property_name(&property.name);
+                        if property.optional {
+                            part.push('?');
+                        }
+                        part.push_str(": ");
+                        self.write(&mut part, &property.ty, depth - 1, walk);
+                        parts.push(part);
+                    }
+                    if let Some(index) = &object.index {
+                        let mut part = "[key: string]: ".to_owned();
+                        self.write(&mut part, index, depth - 1, walk);
+                        parts.push(part);
+                    }
+                    out.push_str("{ ");
+                    out.push_str(&parts.join(", "));
+                    out.push_str(" }");
+                }
+            }
+            Ty::Union(members) => {
+                for (index, member) in members.iter().enumerate() {
+                    if index == COMPACT_UNION && members.len() > COMPACT_UNION + 1 {
+                        out.push_str(" | …");
+                        break;
+                    }
+                    if index > 0 {
+                        out.push_str(" | ");
+                    }
+                    self.write(out, member, depth, walk);
+                }
+            }
+            Ty::Intersection(members) => {
+                for (index, member) in members.iter().enumerate() {
+                    if index > 0 {
+                        out.push_str(" & ");
+                    }
+                    let parentheses = matches!(member, Ty::Union(_));
+                    if parentheses {
+                        out.push('(');
+                    }
+                    self.write(out, member, depth, walk);
+                    if parentheses {
+                        out.push(')');
+                    }
+                }
+            }
+            Ty::Named(name) => {
+                if self.expands(name, depth, &walk.stack)
+                    && let Some(body) = (self.named)(name)
+                {
+                    walk.stack.push(name.clone());
+                    self.write(out, body, depth, walk);
+                    walk.stack.pop();
+                } else {
+                    out.push_str(name);
+                }
+            }
+            Ty::Content(structured) => {
+                out.push_str("ToolContent");
+                if **structured != Ty::Unknown {
+                    out.push('<');
+                    self.write(out, structured, depth, walk);
+                    out.push('>');
+                }
+            }
+            Ty::Unknown
+            | Ty::Never
+            | Ty::Null
+            | Ty::Undefined
+            | Ty::Boolean
+            | Ty::Number
+            | Ty::String
+            | Ty::Literal(_) => out.push_str(&render(ty, None, 0)),
+        }
+    }
+
+    /// Whether a named type is written out in place: not inside itself, and not once the
+    /// budget is spent.
+    fn expands(&self, name: &str, depth: usize, stack: &[String]) -> bool {
+        depth > 0 && !stack.iter().any(|seen| seen == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn object(properties: &[(&str, Ty, bool)]) -> Ty {
+        Ty::Object(Object {
+            properties: properties
+                .iter()
+                .map(|(name, ty, optional)| Property {
+                    name: (*name).to_owned(),
+                    ty: ty.clone(),
+                    optional: *optional,
+                    doc: Doc::default(),
+                })
+                .collect(),
+            index: None,
+        })
+    }
+
+    #[test]
+    fn unions_flatten_and_absorb() {
+        assert_eq!(
+            Ty::union([Ty::String, Ty::Union(vec![Ty::Null, Ty::String]), Ty::Never]),
+            Ty::Union(vec![Ty::String, Ty::Null])
+        );
+        assert_eq!(Ty::union([Ty::String, Ty::Unknown]), Ty::Unknown);
+        assert_eq!(Ty::union([]), Ty::Never);
+        assert_eq!(Ty::intersection([Ty::Unknown, Ty::String]), Ty::String);
+        assert_eq!(Ty::intersection([Ty::Never, Ty::String]), Ty::Never);
+        assert_eq!(Ty::intersection([]), Ty::Unknown);
+    }
+
+    #[test]
+    fn writes_types_in_full() {
+        let union = Ty::union([Ty::Literal(json!("open")), Ty::Literal(json!("closed"))]);
+        assert_eq!(
+            render(&Ty::Array(Box::new(union.clone())), None, 0),
+            r#"("open" | "closed")[]"#
+        );
+        assert_eq!(
+            render(&Ty::Array(Box::new(Ty::Literal(json!(-1)))), None, 0),
+            "(-1)[]"
+        );
+        assert_eq!(
+            render(
+                &Ty::intersection([Ty::Named("A".into()), Ty::union([Ty::String, Ty::Null])]),
+                Some("github"),
+                0
+            ),
+            "github.A & (string | null)"
+        );
+        assert_eq!(
+            render(
+                &Ty::Tuple(Tuple {
+                    items: vec![Ty::String, Ty::Number],
+                    required: 1,
+                    rest: Some(Box::new(Ty::Boolean)),
+                }),
+                None,
+                0
+            ),
+            "[string, number?, ...boolean[]]"
+        );
+        assert_eq!(
+            render(
+                &object(&[("repo", Ty::String, false), ("state", union, true)]),
+                None,
+                0
+            ),
+            r#"{ repo: string; state?: "open" | "closed" }"#
+        );
+        assert_eq!(
+            render(&Ty::Object(Object::default()), None, 0),
+            "{ [key: string]: never }"
+        );
+        assert_eq!(
+            literal(&json!({ "b-c": [1, "x"], "a": null })),
+            r#"{ a: null; "b-c": [1, "x"] }"#
+        );
+        assert_eq!(
+            render(&Ty::Content(Box::new(Ty::Unknown)), None, 0),
+            "ToolContent"
+        );
+    }
+
+    #[test]
+    fn long_or_documented_objects_take_several_lines() {
+        let mut ty = object(&[
+            ("a_rather_long_property_name", Ty::String, false),
+            ("another_long_property_name", Ty::Number, true),
+        ]);
+        assert_eq!(
+            render(&ty, None, 1),
+            "{\n    a_rather_long_property_name: string;\n    another_long_property_name?: number;\n  }"
+        );
+        if let Ty::Object(object) = &mut ty {
+            object.properties.truncate(1);
+            object.properties[0].doc.description = Some("A name. */ not the end".into());
+            object.index = Some(Box::new(Ty::Unknown));
+        }
+        assert_eq!(
+            render(&ty, None, 0),
+            "{\n  /** A name. *\\/ not the end */\n  a_rather_long_property_name: string;\n  [key: string]: unknown;\n}"
+        );
+    }
+
+    #[test]
+    fn jsdoc_separates_tags_from_the_description() {
+        let mut out = String::new();
+        jsdoc(
+            &mut out,
+            &Doc {
+                description: Some("First line.\n\nSecond paragraph.\n".into()),
+                tags: vec!["@default 3".into()],
+            },
+            1,
+        );
+        assert_eq!(
+            out,
+            "  /**\n   * First line.\n   *\n   * Second paragraph.\n   *\n   * @default 3\n   */\n"
+        );
+    }
+
+    #[test]
+    fn compact_rendering_expands_named_types_within_a_budget() {
+        let issue = object(&[
+            ("number", Ty::Number, false),
+            ("parent", Ty::Named("Issue".into()), true),
+        ]);
+        let named = |name: &str| (name == "Issue").then_some(&issue);
+        let compact = Compact { named: &named };
+        let list = Ty::Array(Box::new(Ty::Named("Issue".into())));
+        assert_eq!(
+            compact.render(&list, 2),
+            "{ number: number, parent?: Issue }[]"
+        );
+        assert_eq!(compact.render(&list, 0), "Issue[]");
+        assert_eq!(
+            compact.render(&object(&[("a", issue.clone(), false)]), 1),
+            "{ a: {…} }"
+        );
+        let many = Ty::union((0..12).map(|n| Ty::Literal(json!(n))));
+        assert_eq!(
+            compact.render(&many, 1),
+            "0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | …"
+        );
+    }
+}

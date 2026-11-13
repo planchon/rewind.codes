@@ -1,5 +1,5 @@
-import { crm } from "ptc:tools";
-import { ToolError } from "ptc";
+import { crm } from "rewind:tools";
+import { ToolError } from "rewind";
 
 export default async function main() {
   const ids = Array.from({ length: 12 }, (_, i) => `O-${501 + i}`);

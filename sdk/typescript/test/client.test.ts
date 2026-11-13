@@ -1,15 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Ptc, PtcApiError, PtcConnectionError, PtcError, isProblem } from "../src/index.js";
+import { Rewind, RewindApiError, RewindConnectionError, RewindError, isProblem } from "../src/index.js";
 import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
 import { MockServer, json, noContent, problem } from "./mock-server.js";
 
 let server: MockServer;
-let ptc: Ptc;
+let rewind: Rewind;
 
 beforeEach(async () => {
   server = await MockServer.start();
-  ptc = new Ptc({ url: server.url, apiKey: "ptc_sk_test" });
+  rewind = new Rewind({ url: server.url, apiKey: "rewind_sk_test" });
 });
 
 afterEach(async () => {
@@ -18,22 +18,22 @@ afterEach(async () => {
 
 describe("the client", () => {
   it("needs a URL", () => {
-    const saved = process.env["PTC_URL"];
-    delete process.env["PTC_URL"];
+    const saved = process.env["REWIND_URL"];
+    delete process.env["REWIND_URL"];
     try {
-      expect(() => new Ptc()).toThrow(PtcError);
+      expect(() => new Rewind()).toThrow(RewindError);
     } finally {
       if (saved !== undefined) {
-        process.env["PTC_URL"] = saved;
+        process.env["REWIND_URL"] = saved;
       }
     }
   });
 
   it("reads the URL and the key from the environment", async () => {
-    process.env["PTC_URL"] = `${server.url}/`;
-    process.env["PTC_API_KEY"] = "ptc_sk_env";
+    process.env["REWIND_URL"] = `${server.url}/`;
+    process.env["REWIND_API_KEY"] = "rewind_sk_env";
     try {
-      const fromEnv = new Ptc();
+      const fromEnv = new Rewind();
       server.on(
         "GET",
         "/v1/server",
@@ -42,10 +42,10 @@ describe("the client", () => {
       const info = await fromEnv.server.info();
       expect(info.version).toBe("0.1.0");
       expect(fromEnv.url).toBe(server.url);
-      expect(server.requests[0]?.headers["authorization"]).toBe("Bearer ptc_sk_env");
+      expect(server.requests[0]?.headers["authorization"]).toBe("Bearer rewind_sk_env");
     } finally {
-      delete process.env["PTC_URL"];
-      delete process.env["PTC_API_KEY"];
+      delete process.env["REWIND_URL"];
+      delete process.env["REWIND_API_KEY"];
     }
   });
 
@@ -55,21 +55,21 @@ describe("the client", () => {
       "/v1/server",
       json({ embedded: true, epochs: [1], roles: ["api", "worker"], version: "0.1.0", virtualTime: false }),
     );
-    await ptc.server.info();
-    await new Ptc({ url: server.url, apiKey: "" }).server.info();
-    expect(server.requests[0]?.headers["authorization"]).toBe("Bearer ptc_sk_test");
+    await rewind.server.info();
+    await new Rewind({ url: server.url, apiKey: "" }).server.info();
+    expect(server.requests[0]?.headers["authorization"]).toBe("Bearer rewind_sk_test");
     expect(server.requests[1]?.headers["authorization"]).toBeUndefined();
   });
 
   it("registers a toolset", async () => {
     const toolset = {
       id: TOOLSET,
-      declarations: { dts: "declare module 'ptc:tools' {}", prompt: "github.list_issues({ repo }) → Issue[]" },
+      declarations: { dts: "declare module 'rewind:tools' {}", prompt: "github.list_issues({ repo }) → Issue[]" },
       servers: [{ name: "github", tools: 1, transport: "http" as const }],
       tools: [],
     };
     server.on("POST", "/v1/toolsets", json(toolset, 201));
-    const created = await ptc.toolsets.create({
+    const created = await rewind.toolsets.create({
       mcp: [{ name: "github", url: "https://mcp.example.com/github" }],
       host: [
         {
@@ -92,9 +92,9 @@ describe("the client", () => {
       .on("GET", "/v1/toolsets/{id}/declarations", (r) => json({ format: r.query.get("format") ?? "dts", text: "x" }))
       .on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }))
       .on("PUT", "/v1/toolsets/{id}/credentials", noContent);
-    expect((await ptc.toolsets.declarations(TOOLSET, { format: "prompt" })).format).toBe("prompt");
-    await ptc.toolsets.search(TOOLSET, "close issue", { limit: 3 });
-    await ptc.toolsets.setCredentials(TOOLSET, { servers: { github: { headers: { Authorization: "Bearer x" } } } });
+    expect((await rewind.toolsets.declarations(TOOLSET, { format: "prompt" })).format).toBe("prompt");
+    await rewind.toolsets.search(TOOLSET, "close issue", { limit: 3 });
+    await rewind.toolsets.setCredentials(TOOLSET, { servers: { github: { headers: { Authorization: "Bearer x" } } } });
     const search = server.calls("GET", `/v1/toolsets/${TOOLSET}/search`)[0];
     expect(search?.query.get("query")).toBe("close issue");
     expect(search?.query.get("limit")).toBe("3");
@@ -105,7 +105,7 @@ describe("the client", () => {
 
   it("starts a run with its idempotency key, labels, trace context and ttl", async () => {
     server.on("POST", "/v1/runs", json(run({ output: payload({ closed: 3 }) }), 201));
-    const started = await ptc.runs.start({
+    const started = await rewind.runs.start({
       toolset: TOOLSET,
       script: "export default async function main() { return { closed: 3 }; }",
       input: { repo: "acme/api" },
@@ -130,8 +130,8 @@ describe("the client", () => {
   });
 
   it("refuses an idempotency key the server would refuse", async () => {
-    await expect(ptc.runs.start({ script: "x", idempotencyKey: "café" })).rejects.toThrow(/idempotency key/);
-    await expect(ptc.runs.start({ script: "x", idempotencyKey: "x".repeat(256) })).rejects.toThrow(PtcError);
+    await expect(rewind.runs.start({ script: "x", idempotencyKey: "café" })).rejects.toThrow(/idempotency key/);
+    await expect(rewind.runs.start({ script: "x", idempotencyKey: "x".repeat(256) })).rejects.toThrow(RewindError);
     expect(server.requests).toHaveLength(0);
   });
 
@@ -143,7 +143,7 @@ describe("the client", () => {
         gets += 1;
         return json(run({ status: gets < 3 ? "active" : "completed", output: payload(1) }));
       });
-    const ended = await ptc.runs.start({ script: "x", wait: "5s" });
+    const ended = await rewind.runs.start({ script: "x", wait: "5s" });
     expect(ended.status).toBe("completed");
     expect(gets).toBe(3);
     const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
@@ -157,7 +157,7 @@ describe("the client", () => {
       gets += 1;
       return json(run({ status: gets < 2 ? "active" : "cancelled" }));
     });
-    const cancelled = await ptc.runs.cancel(RUN_ID, { wait: "2m" });
+    const cancelled = await rewind.runs.cancel(RUN_ID, { wait: "2m" });
     expect(cancelled.status).toBe("cancelled");
     expect(server.calls("POST", `/v1/runs/${RUN_ID}/cancel`)[0]?.body).toEqual({ wait: "50s" });
     const waits = server.calls("GET", `/v1/runs/${RUN_ID}`).map((r) => r.query.get("wait"));
@@ -169,11 +169,11 @@ describe("the client", () => {
     server
       .on("POST", "/v1/runs", json(run({ status: "active" }), 201))
       .on("GET", "/v1/runs/{id}", json(run({ status: "active" })));
-    const started = await ptc.runs.start({ script: "x", wait: 30 });
+    const started = await rewind.runs.start({ script: "x", wait: 30 });
     expect(started.status).toBe("active");
   });
 
-  it("turns problems into PtcApiError, with the diagnostics of a refused script", async () => {
+  it("turns problems into RewindApiError, with the diagnostics of a refused script", async () => {
     const diagnostics = [
       {
         code: "TS2322",
@@ -183,9 +183,9 @@ describe("the client", () => {
       },
     ];
     server.on("POST", "/v1/runs", problem(422, "invalid-script", "the script does not type-check", { diagnostics }));
-    const error = await ptc.runs.start({ script: "x" }).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(PtcApiError);
-    const apiError = error as PtcApiError;
+    const error = await rewind.runs.start({ script: "x" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(RewindApiError);
+    const apiError = error as RewindApiError;
     expect(apiError.status).toBe(422);
     expect(apiError.slug).toBe("invalid-script");
     expect(apiError.diagnostics).toEqual(diagnostics);
@@ -198,8 +198,8 @@ describe("the client", () => {
       response.writeHead(502, { "Content-Type": "text/plain" });
       response.end("bad gateway");
     });
-    const error = (await ptc.runs.get(RUN_ID).catch((e: unknown) => e)) as PtcApiError;
-    expect(error).toBeInstanceOf(PtcApiError);
+    const error = (await rewind.runs.get(RUN_ID).catch((e: unknown) => e)) as RewindApiError;
+    expect(error).toBeInstanceOf(RewindApiError);
     expect(error.problem.type).toBe("about:blank");
     expect(error.slug).toBeUndefined();
     expect(error.detail).toBe("bad gateway");
@@ -213,19 +213,19 @@ describe("the client", () => {
         ? { ...problem(503, "unavailable", "stopping"), headers: { "Retry-After": "0" } }
         : json(run());
     });
-    expect((await ptc.runs.get(RUN_ID)).id).toBe(RUN_ID);
+    expect((await rewind.runs.get(RUN_ID)).id).toBe(RUN_ID);
     expect(attempts).toBe(2);
 
     server.on("POST", "/v1/runs", problem(503, "unavailable", "stopping"));
-    await expect(ptc.runs.start({ script: "x" })).rejects.toMatchObject({ status: 503 });
+    await expect(rewind.runs.start({ script: "x" })).rejects.toMatchObject({ status: 503 });
     expect(server.calls("POST", "/v1/runs")).toHaveLength(1);
-    await expect(ptc.runs.start({ script: "x", idempotencyKey: "k" })).rejects.toMatchObject({ status: 503 });
+    await expect(rewind.runs.start({ script: "x", idempotencyKey: "k" })).rejects.toMatchObject({ status: 503 });
     expect(server.calls("POST", "/v1/runs")).toHaveLength(4);
   });
 
-  it("reports an unreachable server as PtcConnectionError", async () => {
-    const unreachable = new Ptc({ url: "http://127.0.0.1:1", maxRetries: 0 });
-    await expect(unreachable.runs.get(RUN_ID)).rejects.toBeInstanceOf(PtcConnectionError);
+  it("reports an unreachable server as RewindConnectionError", async () => {
+    const unreachable = new Rewind({ url: "http://127.0.0.1:1", maxRetries: 0 });
+    await expect(unreachable.runs.get(RUN_ID)).rejects.toBeInstanceOf(RewindConnectionError);
   });
 
   it("stops at once when the request is aborted", async () => {
@@ -234,7 +234,7 @@ describe("the client", () => {
       return json(run());
     });
     const controller = new AbortController();
-    const pending = ptc.runs.get(RUN_ID, { wait: "30s", signal: controller.signal });
+    const pending = rewind.runs.get(RUN_ID, { wait: "30s", signal: controller.signal });
     setTimeout(() => controller.abort(new Error("enough")), 20);
     await expect(pending).rejects.toThrow("enough");
   });
@@ -248,7 +248,7 @@ describe("the client", () => {
       ),
     );
     const all: string[] = [];
-    for await (const item of ptc.runs.listAll({
+    for await (const item of rewind.runs.listAll({
       labels: { agent: "triage", conversation: "c,42" },
       status: "failed",
       startedAfter: new Date("2026-11-01T00:00:00Z"),
@@ -270,11 +270,11 @@ describe("the client", () => {
       .on("GET", "/v1/runs", json({ runs: [summary("r1")] }))
       .on("GET", "/v1/runs/stats", json({ until: "2026-11-12T00:00:00Z", runs: 3 }))
       .on("GET", "/v1/runs/failures", json({ until: "2026-11-12T00:00:00Z", runs: 2, totalGroups: 1, groups: [] }));
-    const page = await ptc.runs.list({ q: '@agent:triage -status:completed "rate limit"', sort: "wakes" });
+    const page = await rewind.runs.list({ q: '@agent:triage -status:completed "rate limit"', sort: "wakes" });
     expect(page.runs.map((run) => run.id)).toEqual(["r1"]);
     expect(server.requests[0]?.query.get("q")).toBe('@agent:triage -status:completed "rate limit"');
     expect(server.requests[0]?.query.get("sort")).toBe("wakes");
-    const stats = await ptc.runs.stats({
+    const stats = await rewind.runs.stats({
       q: "waiting:*",
       since: new Date("2026-11-11T00:00:00Z"),
       bucket: "1h",
@@ -286,7 +286,7 @@ describe("the client", () => {
     expect(statsQuery?.get("bucket")).toBe("1h");
     expect(statsQuery?.get("top")).toBe("5");
     expect(statsQuery?.get("until")).toBeNull();
-    const failures = await ptc.runs.failures({ q: "@env:prod", bucket: 3_600_000, limit: 10 });
+    const failures = await rewind.runs.failures({ q: "@env:prod", bucket: 3_600_000, limit: 10 });
     expect(failures.totalGroups).toBe(1);
     expect(server.requests[2]?.query.get("bucket")).toBe("1h");
     expect(server.requests[2]?.query.get("limit")).toBe("10");
@@ -296,9 +296,9 @@ describe("the client", () => {
     server.on("POST", "/v1/runs/{id}/signals/{name}", (request) =>
       json({ duplicate: false, name: request.params["name"], runId: request.params["id"] }, 202),
     );
-    const accepted = await ptc.runs.signal(RUN_ID, "approval/1", { close: true }, { idempotencyKey: "sig-1" });
+    const accepted = await rewind.runs.signal(RUN_ID, "approval/1", { close: true }, { idempotencyKey: "sig-1" });
     expect(accepted).toEqual({ duplicate: false, name: "approval/1", runId: RUN_ID });
-    await ptc.runs.signal(RUN_ID, "ping");
+    await rewind.runs.signal(RUN_ID, "ping");
     expect(server.requests[0]?.path).toBe(`/v1/runs/${RUN_ID}/signals/approval%2F1`);
     expect(server.requests[0]?.body).toEqual({ close: true });
     expect(server.requests[0]?.headers["idempotency-key"]).toBe("sig-1");
@@ -307,7 +307,7 @@ describe("the client", () => {
 
   it("refuses a signal to a run that has ended", async () => {
     server.on("POST", "/v1/runs/{id}/signals/{name}", problem(409, "run-ended", "the run has ended"));
-    const error = await ptc.runs.signal(RUN_ID, "approval", true).catch((e: unknown) => e);
+    const error = await rewind.runs.signal(RUN_ID, "approval", true).catch((e: unknown) => e);
     expect(isProblem(error, "run-ended")).toBe(true);
   });
 
@@ -319,10 +319,10 @@ describe("the client", () => {
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
       .on("PUT", "/v1/runs/{id}/credentials", noContent)
       .on("DELETE", "/v1/runs/{id}", noContent);
-    expect((await ptc.runs.cancel(RUN_ID, { reason: "not needed", wait: "5s" })).status).toBe("cancelled");
+    expect((await rewind.runs.cancel(RUN_ID, { reason: "not needed", wait: "5s" })).status).toBe("cancelled");
     expect(server.requests[0]?.body).toEqual({ reason: "not needed", wait: "5s" });
 
-    const fork = await ptc.runs.fork(RUN_ID, {
+    const fork = await rewind.runs.fork(RUN_ID, {
       script: "fixed",
       at: 5,
       idempotencyKey: "fork-key",
@@ -332,10 +332,10 @@ describe("the client", () => {
     expect(server.requests[1]?.body).toEqual({ script: "fixed", at: 5, labels: { a: "b" } });
     expect(server.requests[1]?.headers["idempotency-key"]).toBe("fork-key");
 
-    await ptc.runs.release(RUN_ID);
-    await ptc.runs.giveUp(RUN_ID);
-    await ptc.runs.setCredentials(RUN_ID, { servers: {} });
-    await ptc.runs.delete(RUN_ID);
+    await rewind.runs.release(RUN_ID);
+    await rewind.runs.giveUp(RUN_ID);
+    await rewind.runs.setCredentials(RUN_ID, { servers: {} });
+    await rewind.runs.delete(RUN_ID);
     expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       `POST /v1/runs/${RUN_ID}/cancel`,
       `POST /v1/runs/${RUN_ID}/fork`,
@@ -358,11 +358,11 @@ describe("the client", () => {
       )
       .on("GET", "/v1/runs/{id}/journal", (r) => json({ version: 1, kind: r.query.get("as") }))
       .on("GET", "/v1/payloads/{digest}", json({ big: true }));
-    expect((await ptc.runs.trace(RUN_ID)).format).toBe("llm");
-    expect((await ptc.runs.entry(RUN_ID, 7)).idx).toBe(7);
-    expect(await ptc.runs.journal(RUN_ID, { as: "cassette" })).toEqual({ version: 1, kind: "cassette" });
-    expect(await ptc.payloads.get("ab")).toEqual({ big: true });
-    expect(await ptc.payloads.get("ab", { run: RUN_ID })).toEqual({ big: true });
+    expect((await rewind.runs.trace(RUN_ID)).format).toBe("llm");
+    expect((await rewind.runs.entry(RUN_ID, 7)).idx).toBe(7);
+    expect(await rewind.runs.journal(RUN_ID, { as: "cassette" })).toEqual({ version: 1, kind: "cassette" });
+    expect(await rewind.payloads.get("ab")).toEqual({ big: true });
+    expect(await rewind.payloads.get("ab", { run: RUN_ID })).toEqual({ big: true });
     const reads = server.calls("GET", "/v1/payloads/ab");
     expect(reads.map((read) => read.query.get("run"))).toEqual([null, RUN_ID]);
   });
@@ -373,12 +373,12 @@ describe("the client", () => {
       .on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }))
       .on("GET", "/v1/scripts", json({ scripts: [] }))
       .on("GET", "/v1/scripts/{digest}", (r) => json({ digest: r.params["digest"], source: "src" }));
-    expect((await ptc.scripts.check({ script: "x", toolset: TOOLSET })).ok).toBe(true);
+    expect((await rewind.scripts.check({ script: "x", toolset: TOOLSET })).ok).toBe(true);
     expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });
-    expect((await ptc.scripts.test({ script: "x", signals: [{ name: "approval", when: "2h" }] })).passed).toBe(true);
-    expect((await ptc.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
+    expect((await rewind.scripts.test({ script: "x", signals: [{ name: "approval", when: "2h" }] })).passed).toBe(true);
+    expect((await rewind.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
     expect(server.requests[2]?.query.getAll("label")).toEqual(["agent:a"]);
-    expect((await ptc.scripts.get("dd")).source).toBe("src");
+    expect((await rewind.scripts.get("dd")).source).toBe("src");
   });
 
   it("manages subscriptions, API keys and the server", async () => {
@@ -397,19 +397,19 @@ describe("the client", () => {
       .on(
         "POST",
         "/v1/api-keys",
-        json({ id: "k1", key: "ptc_sk_new", role: "worker", tenant: "t", allowedLabels: {}, createdAt: "t" }, 201),
+        json({ id: "k1", key: "rewind_sk_new", role: "worker", tenant: "t", allowedLabels: {}, createdAt: "t" }, 201),
       )
       .on("DELETE", "/v1/api-keys/{id}", noContent)
       .on("GET", "/v1/tools/stats", json({ since: "a", until: "b", tools: [] }))
       .on("POST", "/v1/server/stop", { status: 202 });
-    expect((await ptc.subscriptions.create({ url: "https://h", events: ["run.completed"] })).secret).toBe("whsec_x");
-    expect(await ptc.subscriptions.list()).toHaveLength(1);
-    await ptc.subscriptions.delete("s1");
-    expect((await ptc.apiKeys.create({ role: "worker", tenant: "t" })).key).toBe("ptc_sk_new");
-    await ptc.apiKeys.revoke("k1");
-    await ptc.tools.stats({ tool: "github.list_issues", since: "2026-11-11T00:00:00Z" });
+    expect((await rewind.subscriptions.create({ url: "https://h", events: ["run.completed"] })).secret).toBe("whsec_x");
+    expect(await rewind.subscriptions.list()).toHaveLength(1);
+    await rewind.subscriptions.delete("s1");
+    expect((await rewind.apiKeys.create({ role: "worker", tenant: "t" })).key).toBe("rewind_sk_new");
+    await rewind.apiKeys.revoke("k1");
+    await rewind.tools.stats({ tool: "github.list_issues", since: "2026-11-11T00:00:00Z" });
     expect(server.calls("GET", "/v1/tools/stats")[0]?.query.get("tool")).toBe("github.list_issues");
-    await ptc.server.stop();
+    await rewind.server.stop();
   });
 });
 

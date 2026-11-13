@@ -4,7 +4,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { read, write } from "./storage";
 
-const KEY = "ptc.searches";
+const KEY = "rewind.searches";
 
 /** The views a search opens. */
 export type SearchView = "overview" | "runs" | "waiting" | "failures";

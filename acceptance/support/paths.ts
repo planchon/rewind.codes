@@ -10,11 +10,11 @@ export const root = resolve(acceptance, "..");
 /** Logs, collector output and reports of the last run. Not committed. */
 export const results = join(acceptance, "results");
 
-/** The `ptc` binary under test: `PTC_BIN`, or the workspace's debug build. */
-export function ptcBinary(): string {
-  const binary = process.env.PTC_BIN ?? join(root, "target", "debug", "ptc");
+/** The `rewind` binary under test: `REWIND_BIN`, or the workspace's debug build. */
+export function rewindBinary(): string {
+  const binary = process.env.REWIND_BIN ?? join(root, "target", "debug", "rewind");
   if (!existsSync(binary)) {
-    throw new Error(`no ptc binary at ${binary}: run \`cargo build -p ptc\`, or set PTC_BIN`);
+    throw new Error(`no rewind binary at ${binary}: run \`cargo build -p rewind\`, or set REWIND_BIN`);
   }
   return binary;
 }
@@ -28,7 +28,7 @@ export function resultDir(name: string): string {
 
 /**
  * A new temporary directory with a short path, without symbolic links: a unix socket's path is
- * limited to 103 bytes, and the embedded server's socket lives in `<dir>/.ptc/`.
+ * limited to 103 bytes, and the embedded server's socket lives in `<dir>/.rewind/`.
  */
 export function shortTempDir(prefix: string): string {
   const base = existsSync("/tmp") ? "/tmp" : tmpdir();

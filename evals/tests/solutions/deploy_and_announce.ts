@@ -1,5 +1,5 @@
-import { chat, ops } from "ptc:tools";
-import { sleep } from "ptc";
+import { chat, ops } from "rewind:tools";
+import { sleep } from "rewind";
 
 type Deployment = { deployment_id: string; status: string };
 

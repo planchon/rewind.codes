@@ -3,11 +3,11 @@
 //! reads in the evals what it reads through the SDK. Plain text, short, bounded, pointing at
 //! the next useful call.
 
-use ptc_api::common::{Callsite, Payload, RunStatus};
-use ptc_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
-use ptc_api::scripts::{CheckResult, Diagnostic, Severity, TestResult};
-use ptc_api::tasks::{ParkedReason, TaskState};
-use ptc_api::toolsets::ToolMatch;
+use rewind_api::common::{Callsite, Payload, RunStatus};
+use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
+use rewind_api::scripts::{CheckResult, Diagnostic, Severity, TestResult};
+use rewind_api::tasks::{ParkedReason, TaskState};
+use rewind_api::toolsets::ToolMatch;
 use serde_json::Value;
 
 /// What `run_script` returns of a run's output at most: 256 KiB, the bound of the API's inline
@@ -171,12 +171,12 @@ pub fn describe_run(run: &Run, extras: &RunExtras, limits: &Limits) -> String {
     lines.join("\n")
 }
 
-fn log_level(level: ptc_api::common::LogLevel) -> &'static str {
+fn log_level(level: rewind_api::common::LogLevel) -> &'static str {
     match level {
-        ptc_api::common::LogLevel::Debug => "debug",
-        ptc_api::common::LogLevel::Info => "info",
-        ptc_api::common::LogLevel::Warn => "warn",
-        ptc_api::common::LogLevel::Error => "error",
+        rewind_api::common::LogLevel::Debug => "debug",
+        rewind_api::common::LogLevel::Info => "info",
+        rewind_api::common::LogLevel::Warn => "warn",
+        rewind_api::common::LogLevel::Error => "error",
     }
 }
 
@@ -203,8 +203,8 @@ fn headline(run: &Run, limits: &Limits) -> String {
         RunStatus::Active => {
             if let Some(quarantine) = &run.quarantine {
                 let cause = match quarantine.cause {
-                    ptc_api::runs::QuarantineCause::NonDeterminism => "non_determinism",
-                    ptc_api::runs::QuarantineCause::RepeatedFailures => "repeated_failures",
+                    rewind_api::runs::QuarantineCause::NonDeterminism => "non_determinism",
+                    rewind_api::runs::QuarantineCause::RepeatedFailures => "repeated_failures",
                 };
                 return format!(
                     "{name} is quarantined ({cause}): {}. It waits for the platform to be fixed; it is not a fault of the script.",
@@ -220,13 +220,13 @@ fn headline(run: &Run, limits: &Limits) -> String {
     }
 }
 
-fn abort_kind(kind: ptc_api::common::AbortKind) -> &'static str {
+fn abort_kind(kind: rewind_api::common::AbortKind) -> &'static str {
     match kind {
-        ptc_api::common::AbortKind::LimitExceeded => "limit_exceeded",
-        ptc_api::common::AbortKind::NonDeterminism => "non_determinism",
-        ptc_api::common::AbortKind::Cancelled => "cancelled",
-        ptc_api::common::AbortKind::InvalidScript => "invalid_script",
-        ptc_api::common::AbortKind::Internal => "internal",
+        rewind_api::common::AbortKind::LimitExceeded => "limit_exceeded",
+        rewind_api::common::AbortKind::NonDeterminism => "non_determinism",
+        rewind_api::common::AbortKind::Cancelled => "cancelled",
+        rewind_api::common::AbortKind::InvalidScript => "invalid_script",
+        rewind_api::common::AbortKind::Internal => "internal",
     }
 }
 
@@ -374,12 +374,12 @@ fn failed_call_section(call: &FailedCall, limits: &Limits) -> Vec<String> {
     ]
 }
 
-fn failure_kind(kind: ptc_api::common::ToolFailureKind) -> &'static str {
+fn failure_kind(kind: rewind_api::common::ToolFailureKind) -> &'static str {
     match kind {
-        ptc_api::common::ToolFailureKind::Error => "error",
-        ptc_api::common::ToolFailureKind::Unavailable => "unavailable",
-        ptc_api::common::ToolFailureKind::Timeout => "timeout",
-        ptc_api::common::ToolFailureKind::OutcomeUnknown => "outcome_unknown",
+        rewind_api::common::ToolFailureKind::Error => "error",
+        rewind_api::common::ToolFailureKind::Unavailable => "unavailable",
+        rewind_api::common::ToolFailureKind::Timeout => "timeout",
+        rewind_api::common::ToolFailureKind::OutcomeUnknown => "outcome_unknown",
     }
 }
 
@@ -409,7 +409,7 @@ pub fn describe_page(
 }
 
 /// One journal entry in full.
-pub fn entry_text(entry: &ptc_api::events::Entry) -> String {
+pub fn entry_text(entry: &rewind_api::events::Entry) -> String {
     let event = serde_json::to_value(&entry.event).unwrap_or(Value::Null);
     format!(
         "{{\"idx\":{},\"recordedAt\":{},\"event\":{}}}",
@@ -657,7 +657,7 @@ pub fn args(values: &[(&str, Value)]) -> String {
 /// objects reach the SDK with sorted keys (serde_json maps), which `JSON.stringify` keeps, so
 /// RFC 8785's canonical form is what the SDK shows.
 pub fn json(value: &Value) -> String {
-    ptc_core::canonical_json(value)
+    rewind_core::canonical_json(value)
 }
 
 /// `JSON.stringify` of a string.

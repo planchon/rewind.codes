@@ -31,7 +31,7 @@ const PROBLEM_TITLES: Record<string, string> = {
 
 export function problem(status: number, slug: string, detail: string): HttpResponse<Problem> {
   return HttpResponse.json(
-    { type: `urn:ptc:problem:${slug}`, title: PROBLEM_TITLES[slug] ?? slug, status, detail },
+    { type: `urn:rewind:problem:${slug}`, title: PROBLEM_TITLES[slug] ?? slug, status, detail },
     { status, headers: { "Content-Type": "application/problem+json" } },
   ) as HttpResponse<Problem>;
 }
@@ -40,7 +40,7 @@ export function problem(status: number, slug: string, detail: string): HttpRespo
 function invalidQuery(error: QueryError): HttpResponse<Problem> {
   return HttpResponse.json(
     {
-      type: "urn:ptc:problem:invalid-query",
+      type: "urn:rewind:problem:invalid-query",
       title: PROBLEM_TITLES["invalid-query"] ?? "invalid-query",
       status: 400,
       detail: error.message,
@@ -69,7 +69,7 @@ function refused(world: World, request: Request): HttpResponse<Problem> | null {
     "unauthorized",
     header
       ? "This API key is unknown or revoked. Create a key with POST /v1/api-keys."
-      : "Send an API key: Authorization: Bearer ptc_sk_….",
+      : "Send an API key: Authorization: Bearer rewind_sk_….",
   );
 }
 

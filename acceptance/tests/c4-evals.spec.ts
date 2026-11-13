@@ -15,7 +15,7 @@ import { expect, test } from "@playwright/test";
 import { finish } from "../support/project.js";
 import { resultDir, root } from "../support/paths.js";
 
-const SOLUTION = `import { chat } from "ptc:tools";
+const SOLUTION = `import { chat } from "rewind:tools";
 
 export default async function main() {
   await chat.post_message({ channel: "#ops", text: "Deploy freeze starts Friday 18:00 UTC" });
@@ -41,7 +41,7 @@ interface Summary {
 }
 
 test("criterion 4: the evals report per model and prompt rendering (scripted models)", async () => {
-  const binary = process.env.PTC_EVALS_BIN ?? join(root, "target", "debug", "evals");
+  const binary = process.env.REWIND_EVALS_BIN ?? join(root, "target", "debug", "evals");
   expect(existsSync(binary), `no evals binary at ${binary}: run \`cargo build -p evals\``).toBe(true);
   const dir = mkdtempSync(join(resultDir("c4-evals"), "run-"));
   const careful = join(dir, "careful.json");

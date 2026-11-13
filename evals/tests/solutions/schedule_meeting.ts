@@ -1,4 +1,4 @@
-import { office } from "ptc:tools";
+import { office } from "rewind:tools";
 
 type Availability = { busy: { start: string; end: string }[] };
 

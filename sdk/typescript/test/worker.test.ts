@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   HostToolError,
-  Ptc,
-  PtcApiError,
+  Rewind,
+  RewindApiError,
   type DeferredTask,
   type HostToolContext,
   type HostToolHandler,
@@ -15,14 +15,14 @@ import { RUN_ID, TOOLSET, task, until } from "./fixtures.js";
 import { MockServer, json, noContent, problem, type JsonReply, type MockRequest } from "./mock-server.js";
 
 let server: MockServer;
-let ptc: Ptc;
+let rewind: Rewind;
 let queue: Task[];
 let worker: HostToolWorker | undefined;
 let errors: Array<{ error: unknown; info: WorkerErrorInfo }>;
 
 beforeEach(async () => {
   server = await MockServer.start();
-  ptc = new Ptc({ url: server.url, apiKey: "ptc_sk_worker" });
+  rewind = new Rewind({ url: server.url, apiKey: "rewind_sk_worker" });
   queue = [];
   errors = [];
   server
@@ -47,7 +47,7 @@ afterEach(async () => {
 });
 
 function start(tools: Record<string, HostToolHandler>, concurrency?: number) {
-  worker = ptc.worker({
+  worker = rewind.worker({
     toolset: TOOLSET,
     tools,
     concurrency,
@@ -79,7 +79,7 @@ describe("the host-tool worker", () => {
     expect(claim?.query.get("toolset")).toBe(TOOLSET);
     expect(claim?.query.get("limit")).toBe("10");
     expect(claim?.query.get("wait")).toBe("1s");
-    expect(claim?.headers["authorization"]).toBe("Bearer ptc_sk_worker");
+    expect(claim?.headers["authorization"]).toBe("Bearer rewind_sk_worker");
 
     expect(context).toMatchObject({
       runId: RUN_ID,
@@ -151,7 +151,7 @@ describe("the host-tool worker", () => {
     await until(() => worker?.running === 0);
     expect(answers("complete")).toHaveLength(0);
     expect(answers("fail")).toHaveLength(0);
-    expect(signal?.reason).toBeInstanceOf(PtcApiError);
+    expect(signal?.reason).toBeInstanceOf(RewindApiError);
     expect(errors).toEqual([]);
   });
 
@@ -174,7 +174,7 @@ describe("the host-tool worker", () => {
     expect(deferred?.token).toBe("tok-1");
     await deferred?.complete({ answer: "yes" });
     expect(answers("complete")[0]?.body).toEqual({ result: { answer: "yes" } });
-    await ptc.tasks.fail("tok-1", { message: "later failure" });
+    await rewind.tasks.fail("tok-1", { message: "later failure" });
     expect(answers("fail")[0]?.body).toEqual({ message: "later failure" });
   });
 
@@ -291,7 +291,7 @@ describe("the host-tool worker", () => {
 
   it("stops when its signal aborts", async () => {
     const controller = new AbortController();
-    worker = ptc.worker({ tools: { ask_user: () => "ok" }, signal: controller.signal, onError: () => undefined });
+    worker = rewind.worker({ tools: { ask_user: () => "ok" }, signal: controller.signal, onError: () => undefined });
     controller.abort();
     await worker.done;
   });
@@ -304,15 +304,15 @@ describe("the host-tool worker", () => {
     });
     const w = start({ ask_user: () => "ok" });
     await expect(w.done).rejects.toMatchObject({ status: 401 });
-    expect(errors.map((e) => [e.info.phase, (e.error as PtcApiError).status])).toEqual([
+    expect(errors.map((e) => [e.info.phase, (e.error as RewindApiError).status])).toEqual([
       ["claim", 500],
       ["claim", 401],
     ]);
   });
 
   it("refuses a worker without handlers or with a bad concurrency", () => {
-    expect(() => ptc.worker({ tools: {} })).toThrow(TypeError);
-    expect(() => ptc.worker({ tools: { a: () => 1 }, concurrency: 0 })).toThrow(RangeError);
+    expect(() => rewind.worker({ tools: {} })).toThrow(TypeError);
+    expect(() => rewind.worker({ tools: { a: () => 1 }, concurrency: 0 })).toThrow(RangeError);
   });
 
   it("sends a heartbeat on demand, and throws once the task is gone", async () => {
@@ -326,7 +326,7 @@ describe("the host-tool worker", () => {
     });
     queue.push(task());
     await until(() => outcome !== undefined && worker?.running === 0);
-    expect(outcome).toBeInstanceOf(PtcApiError);
+    expect(outcome).toBeInstanceOf(RewindApiError);
     expect(answers("complete")).toHaveLength(0);
   });
 });

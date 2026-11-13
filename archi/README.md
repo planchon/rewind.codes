@@ -1,6 +1,6 @@
-# ai-ptc architecture
+# Rewind architecture
 
-ai-ptc is a programmatic tool calling engine for **agent harness developers**. The
+Rewind is a programmatic tool calling engine for **agent harness developers**. The
 model inside a harness writes a TypeScript script that calls tools (MCP servers and
 harness tools). The script runs in a deterministic V8 sandbox. Every interaction with
 the outside world goes through a per-run **journal**, and durable pauses, replay,
@@ -21,7 +21,7 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 
 | File | Covers |
 | --- | --- |
-| [01-product.md](01-product.md) | What ai-ptc is, who it is for, how a harness integrates it, what the model writes, the sandbox |
+| [01-product.md](01-product.md) | What Rewind is, who it is for, how a harness integrates it, what the model writes, the sandbox |
 | [02-journal.md](02-journal.md) | The journal: event families, `seq`, callsites, the commit invariant, run state, the stored format v1 |
 | [03-execution.md](03-execution.md) | Activations, logical time, replay, sticky execution, forks, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
 | [04-tools.md](04-tools.md) | Tool routes, idempotency, the tool task lifecycle, policies, toolsets, code generation, observed result types, credentials, egress of the `http` tool, type-checking |

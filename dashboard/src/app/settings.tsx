@@ -23,12 +23,12 @@ export interface Settings {
 const SettingsContext = createContext<Settings | null>(null);
 
 function initialTheme(): ThemeChoice {
-  const stored = read("local", "ptc.theme");
+  const stored = read("local", "rewind.theme");
   return stored === "light" || stored === "dark" ? stored : "system";
 }
 
 function initialZone(): TimeZoneMode {
-  return read("local", "ptc.zone") === "local" ? "local" : "utc";
+  return read("local", "rewind.zone") === "local" ? "local" : "utc";
 }
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
@@ -42,12 +42,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   const setTheme = useCallback((next: ThemeChoice) => {
-    write("local", "ptc.theme", next === "system" ? null : next);
+    write("local", "rewind.theme", next === "system" ? null : next);
     setThemeState(next);
   }, []);
 
   const setZone = useCallback((next: TimeZoneMode) => {
-    write("local", "ptc.zone", next === "utc" ? null : next);
+    write("local", "rewind.zone", next === "utc" ? null : next);
     setZoneState(next);
   }, []);
 

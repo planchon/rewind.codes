@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use ptc_core::{Command, Completion, Event, RunId, RunStatus};
+use rewind_core::{Command, Completion, Event, RunId, RunStatus};
 use serde::Serialize;
 use serde_json::Value;
 

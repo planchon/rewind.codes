@@ -1,19 +1,19 @@
 import { randomBytes } from "node:crypto";
-import { Ptc } from "@ai-ptc/sdk";
+import { Rewind } from "@rewind.codes/sdk";
 import { type Collector, Containers, type Minio, startCollector, startMinio, startPostgres } from "./docker.js";
-import { ptcBinary } from "./paths.js";
+import { rewindBinary } from "./paths.js";
 import { eventually, freePort, Processes } from "./processes.js";
 
 /**
  * A deployment as 06 describes it: one Postgres, blobs on S3 (MinIO), an OpenTelemetry
- * Collector, a `ptc server --role api` and two `ptc server --role worker`.
+ * Collector, a `rewind server --role api` and two `rewind server --role worker`.
  */
 export interface Deployment {
   /** The api server's URL. */
   url: string;
   /** The admin key, `--admin-key`, of the tenant `acme`. */
   adminKey: string;
-  admin: Ptc;
+  admin: Rewind;
   minio: Minio;
   collector: Collector;
   /** The workers' names: `service.instance.id` of their telemetry. */
@@ -21,13 +21,13 @@ export interface Deployment {
   stop(): Promise<void>;
 }
 
-/** One `ptc server` with both roles, on Turso and local files in `dir`, over TCP. */
-export async function startServer(dir: string): Promise<{ url: string; adminKey: string; admin: Ptc; stop(): Promise<void> }> {
+/** One `rewind server` with both roles, on Turso and local files in `dir`, over TCP. */
+export async function startServer(dir: string): Promise<{ url: string; adminKey: string; admin: Rewind; stop(): Promise<void> }> {
   const processes = new Processes(dir);
-  const adminKey = `ptc_sk_${randomBytes(24).toString("hex")}`;
+  const adminKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
-  const child = processes.start("server", ptcBinary(), [
+  const child = processes.start("server", rewindBinary(), [
     "server",
     "--store",
     `turso:${dir}/journal.db`,
@@ -52,7 +52,7 @@ export async function startServer(dir: string): Promise<{ url: string; adminKey:
     await processes.stopAll();
     throw error;
   }
-  return { url, adminKey, admin: new Ptc({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
+  return { url, adminKey, admin: new Rewind({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
 }
 
 export async function startDeployment(dir: string, options: { workers?: number } = {}): Promise<Deployment> {
@@ -65,10 +65,10 @@ export async function startDeployment(dir: string, options: { workers?: number }
   try {
     const [postgres, minio, collector] = await Promise.all([
       startPostgres(containers),
-      startMinio(containers, "ptc-blobs"),
+      startMinio(containers, "rewind-blobs"),
       startCollector(containers, dir),
     ]);
-    const adminKey = `ptc_sk_${randomBytes(24).toString("hex")}`;
+    const adminKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
     const common = [
       "--store",
       postgres.url,
@@ -92,7 +92,7 @@ export async function startDeployment(dir: string, options: { workers?: number }
       "--admin-tenant",
       "acme",
     ];
-    const binary = ptcBinary();
+    const binary = rewindBinary();
     const server = async (name: string, role: "api" | "worker", extra: string[] = []) => {
       const port = await freePort();
       const child = processes.start(name, binary, [
@@ -123,7 +123,7 @@ export async function startDeployment(dir: string, options: { workers?: number }
     return {
       url,
       adminKey,
-      admin: new Ptc({ url, apiKey: adminKey }),
+      admin: new Rewind({ url, apiKey: adminKey }),
       minio,
       collector,
       workers,

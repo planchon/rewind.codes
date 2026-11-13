@@ -1,0 +1,52 @@
+[package]
+name = "rewind-mcp"
+description = "Tool dispatcher of Rewind outside mock mode: the MCP client (discovery, dispatch, credentials in the transport) and the built-in http tool with its egress checks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rewind-core.workspace = true
+rewind-engine.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+jsonschema.workspace = true
+reqwest.workspace = true
+rmcp = { workspace = true, features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "reqwest",
+] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "process", "net", "io-util", "macros"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+futures-util = { workspace = true, features = ["std"] }
+libtest-mimic.workspace = true
+rmcp = { workspace = true, features = [
+    "client",
+    "server",
+    "transport-io",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+    "reqwest",
+] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std"] }
+tokio-util.workspace = true
+
+# Integration tests against MCP servers started by the tests. A custom harness, so that the
+# test binary can also run as the stdio server the tests start (`REWIND_MCP_FIXTURE=stdio`).
+[[test]]
+name = "mcp"
+harness = false
+
+[lints]
+workspace = true

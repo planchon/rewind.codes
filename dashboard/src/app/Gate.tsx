@@ -67,7 +67,7 @@ export function KeyForm({ refused }: { refused: string | null }) {
       <form className="gate-card" onSubmit={submit}>
         <div className="brand">
           <span className="brand-mark">AP</span>
-          <span className="brand-name">ai-ptc</span>
+          <span className="brand-name">Rewind</span>
         </div>
         <h1>Sign in with an API key</h1>
         <p>
@@ -82,7 +82,7 @@ export function KeyForm({ refused }: { refused: string | null }) {
             type="password"
             autoComplete="off"
             spellCheck={false}
-            placeholder="ptc_sk_…"
+            placeholder="rewind_sk_…"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             // biome-ignore lint/a11y/noAutofocus: the only field of the page

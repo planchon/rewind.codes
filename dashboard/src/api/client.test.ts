@@ -27,8 +27,8 @@ describe("Api", () => {
         });
       }),
     );
-    await api("ptc_sk_test").server();
-    expect(seen).toBe("Bearer ptc_sk_test");
+    await api("rewind_sk_test").server();
+    expect(seen).toBe("Bearer rewind_sk_test");
   });
 
   it("sends no Authorization header without a key", async () => {
@@ -51,9 +51,11 @@ describe("Api", () => {
 
   it("throws the problem the server answered", async () => {
     server.use(
-      ...createHandlers(createWorld({ now: NOW, requireKey: "ptc_sk_good" }), { now: () => NOW }),
+      ...createHandlers(createWorld({ now: NOW, requireKey: "rewind_sk_good" }), {
+        now: () => NOW,
+      }),
     );
-    const error = await api("ptc_sk_bad")
+    const error = await api("rewind_sk_bad")
       .runs({})
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
@@ -89,7 +91,7 @@ describe("Api", () => {
     });
     expect(
       toProblem(404, {
-        type: "urn:ptc:problem:not-found",
+        type: "urn:rewind:problem:not-found",
         title: "Not found",
         detail: "No run x.",
       }),

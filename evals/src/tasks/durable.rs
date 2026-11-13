@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use ptc_core::Timestamp;
+use rewind_core::Timestamp;
 use serde_json::{Value, json};
 
 use crate::clock::{DAY, HOUR, T0, parse_rfc3339, rfc3339};

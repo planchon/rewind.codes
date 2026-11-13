@@ -1,0 +1,8 @@
+{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { audit } from \"rewind:tools\";\n\nexport default async function main() {\n  await audit.record({ step: 1 });\n  await audit.record({ step: 2 });\n  return \"done\";\n}\n","toolset":{"servers":[],"tools":[{"name":"audit.record","policy":{"approval":false,"concurrency":16,"heartbeat_timeout_ms":60000,"on_interruption":"retry"},"route":{"group":"audit","type":"host"},"schemas":{"input":{}}}],"v":1},"entries":[
+{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"2f103085830d15a7affad045ce184719245a8585b1890c8b3add21cb4ece1e1d","toolset":"19b1e02dbc3e39cdd27f37db4f5f3241fed040c61119bd9c80a36a4434d8e181","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
+{"index":1,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":1,"tool":"audit.record","args":{"value":{"step":1}},"callsite":{"line":4,"column":15}}},
+{"index":2,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":1,"result":{"value":{"ok":true}}}},
+{"index":3,"recorded_at":1767225600000,"event":{"type":"schedule_tool_call","seq":2,"tool":"audit.record","args":{"value":{"step":2}},"callsite":{"line":5,"column":15}}},
+{"index":4,"recorded_at":1767225600000,"event":{"type":"tool_call_completed","seq":2,"result":{"value":{"ok":true}}}},
+{"index":5,"recorded_at":1767225600000,"event":{"type":"complete_run","output":{"value":"done"}}}
+]}

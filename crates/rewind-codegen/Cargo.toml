@@ -1,0 +1,18 @@
+[package]
+name = "rewind-codegen"
+description = "Code generation of Rewind: our JSON Schema to TypeScript converter, a pinned toolset's rewind-tools.d.ts and its compact prompt rendering."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rewind-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+# Parses the generated declarations in tests: they must be valid TypeScript.
+deno_ast.workspace = true
+
+[lints]
+workspace = true

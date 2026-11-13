@@ -6,11 +6,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::fake::{chat, crm, tracker};
 use crate::task::{Difficulty, SetupRun, Task, ensure};
 use crate::world::WorldSpec;
-use ptc_core::{RunId, RunStatus};
+use rewind_core::{RunId, RunStatus};
 
 /// A run that posts and completes, and a run stuck waiting for the signal `go`.
 const POSTED: SetupRun = SetupRun {
-    script: r##"import { chat } from "ptc:tools";
+    script: r##"import { chat } from "rewind:tools";
 
 export default async function main() {
   await chat.post_message({ channel: "#general", text: "hello" });
@@ -20,8 +20,8 @@ export default async function main() {
 };
 
 const STUCK: SetupRun = SetupRun {
-    script: r##"import { chat } from "ptc:tools";
-import { signal } from "ptc";
+    script: r##"import { chat } from "rewind:tools";
+import { signal } from "rewind";
 
 export default async function main() {
   await signal("go");
@@ -32,7 +32,7 @@ export default async function main() {
 };
 
 /// Opens one onboarding issue per customer, and fails at `C-1004`, which has no company.
-pub const ONBOARDING: &str = r##"import { crm, tracker } from "ptc:tools";
+pub const ONBOARDING: &str = r##"import { crm, tracker } from "rewind:tools";
 
 export default async function main() {
   const ids = ["C-1001", "C-1002", "C-1003", "C-1004", "C-1005", "C-1006", "C-1007", "C-1008"];

@@ -1,0 +1,9 @@
+{
+  "description": "A script that imports a tool the run's toolset does not have is refused at start, with the names it does have.",
+  "tools": {
+    "github.list_issues": []
+  },
+  "expect": {
+    "start_error": "the script is invalid: \"rewind:tools\" has no export named \"jira\" (script.ts:1:10); it exports github"
+  }
+}

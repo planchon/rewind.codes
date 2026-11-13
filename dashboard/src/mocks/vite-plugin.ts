@@ -5,7 +5,7 @@ import type { Plugin } from "vite";
 
 export function mockApi(): Plugin {
   return {
-    name: "ptc-mock-api",
+    name: "rewind-mock-api",
     apply: "serve",
     configureServer(server) {
       let handlers: Promise<unknown[]> | undefined;
@@ -14,7 +14,7 @@ export function mockApi(): Plugin {
           server.ssrLoadModule("/src/mocks/handlers.ts"),
           server.ssrLoadModule("/src/mocks/fixtures.ts"),
         ]);
-        const requireKey = process.env.PTC_MOCK_KEY;
+        const requireKey = process.env.REWIND_MOCK_KEY;
         return createHandlers(
           createWorld({ now: Date.now(), live: true, requireKey }),
         ) as unknown[];

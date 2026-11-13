@@ -8,7 +8,7 @@
 # takes them from the namespace.
 set -eu
 
-gateway="${PTC_EGRESS_ADDRESS:?PTC_EGRESS_ADDRESS: the egress gateway's address}"
+gateway="${REWIND_EGRESS_ADDRESS:?REWIND_EGRESS_ADDRESS: the egress gateway's address}"
 ip route replace default via "$gateway"
 : >/run/routed
 echo "route: default via $gateway"

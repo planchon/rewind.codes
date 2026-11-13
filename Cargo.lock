@@ -1549,14 +1549,14 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "clap",
- "ptc-api",
- "ptc-check",
- "ptc-codegen",
- "ptc-core",
- "ptc-engine",
- "ptc-mcp",
- "ptc-runtime",
  "reqwest",
+ "rewind-api",
+ "rewind-check",
+ "rewind-codegen",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-mcp",
+ "rewind-runtime",
  "rmcp",
  "serde",
  "serde_json",
@@ -3670,316 +3670,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ptc"
-version = "0.1.0"
-dependencies = [
- "ptc-cli",
- "ptc-server",
- "reqwest",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "ptc-api"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "futures-util",
- "hmac 0.13.0",
- "jiff",
- "ptc-core",
- "reqwest",
- "serde",
- "serde_html_form",
- "serde_json",
- "sha2 0.11.1",
- "sse-stream 0.3.0",
- "tempfile",
- "thiserror",
- "tokio",
- "utoipa",
- "winnow",
-]
-
-[[package]]
-name = "ptc-architecture-tests"
-version = "0.1.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "ptc-blob"
-version = "0.1.0"
-dependencies = [
- "object_store",
- "ptc-core",
- "ptc-engine",
- "quick_cache",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "ptc-check"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "deno_ast",
- "dirs",
- "flate2",
- "ptc-core",
- "ptc-engine",
- "serde_json",
- "sha2 0.11.1",
- "tar",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "ureq",
-]
-
-[[package]]
-name = "ptc-cli"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "libtest-mimic",
- "ptc-api",
- "ptc-check",
- "ptc-codegen",
- "ptc-core",
- "ptc-engine",
- "ptc-format",
- "ptc-mcp",
- "ptc-otel",
- "ptc-runtime",
- "rustix 1.1.6",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "ptc-codegen"
-version = "0.1.0"
-dependencies = [
- "deno_ast",
- "ptc-core",
- "serde_json",
-]
-
-[[package]]
-name = "ptc-core"
-version = "0.1.0"
-dependencies = [
- "ryu-js",
- "serde_json",
- "sha2 0.11.1",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "ptc-e2e"
-version = "0.1.0"
-dependencies = [
- "jsonschema",
- "ptc-check",
- "ptc-codegen",
- "ptc-core",
- "ptc-engine",
- "ptc-format",
- "ptc-mcp",
- "ptc-runtime",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "ptc-engine"
-version = "0.1.0"
-dependencies = [
- "getrandom 0.3.4",
- "ptc-core",
- "ptc-engine",
- "regex",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "ptc-format"
-version = "0.1.0"
-dependencies = [
- "ptc-core",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "ptc-load"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "ptc-api",
- "rmcp",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-util",
- "url",
-]
-
-[[package]]
-name = "ptc-mcp"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "futures-util",
- "ipnet",
- "jsonschema",
- "libtest-mimic",
- "ptc-core",
- "ptc-engine",
- "reqwest",
- "rmcp",
- "serde_json",
- "sha2 0.11.1",
- "thiserror",
- "tokio",
- "tokio-util",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "ptc-otel"
-version = "0.1.0"
-dependencies = [
- "http",
- "opentelemetry",
- "opentelemetry-otlp",
- "opentelemetry_sdk",
- "ptc-core",
- "ptc-engine",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "ptc-runtime"
-version = "0.1.0"
-dependencies = [
- "chacha20",
- "deno_ast",
- "deno_core",
- "deno_error",
- "deno_web",
- "deno_webidl",
- "jsonschema",
- "ptc-core",
- "ptc-engine",
- "rustix 1.1.6",
- "serde_json",
- "sha2 0.11.1",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ptc-server"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.23.1",
- "clap",
- "fs4",
- "futures-util",
- "getrandom 0.3.4",
- "jiff",
- "ptc-api",
- "ptc-blob",
- "ptc-check",
- "ptc-codegen",
- "ptc-core",
- "ptc-engine",
- "ptc-format",
- "ptc-mcp",
- "ptc-otel",
- "ptc-runtime",
- "ptc-store-postgres",
- "ptc-store-turso",
- "reqwest",
- "rmcp",
- "serde",
- "serde_html_form",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "ptc-store-postgres"
-version = "0.1.0"
-dependencies = [
- "chacha20poly1305",
- "futures-util",
- "getrandom 0.3.4",
- "ptc-core",
- "ptc-engine",
- "ptc-format",
- "serde_json",
- "sqlx",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "ptc-store-turso"
-version = "0.1.0"
-dependencies = [
- "chacha20poly1305",
- "getrandom 0.3.4",
- "ptc-core",
- "ptc-engine",
- "ptc-format",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "tracing",
- "turso",
-]
-
-[[package]]
 name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4331,6 +4021,316 @@ checksum = "22d392791f3c6802a1905a509e9d1a6039cbbcb5e9e00e5a6d3661f7c874f390"
 dependencies = [
  "potential_utf",
  "serde_core",
+]
+
+[[package]]
+name = "rewind"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "rewind-cli",
+ "rewind-server",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "rewind-api"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "hmac 0.13.0",
+ "jiff",
+ "reqwest",
+ "rewind-core",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2 0.11.1",
+ "sse-stream 0.3.0",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "utoipa",
+ "winnow",
+]
+
+[[package]]
+name = "rewind-architecture-tests"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "rewind-blob"
+version = "0.1.0"
+dependencies = [
+ "object_store",
+ "quick_cache",
+ "rewind-core",
+ "rewind-engine",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "rewind-check"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "deno_ast",
+ "dirs",
+ "flate2",
+ "rewind-core",
+ "rewind-engine",
+ "serde_json",
+ "sha2 0.11.1",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ureq",
+]
+
+[[package]]
+name = "rewind-cli"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "libtest-mimic",
+ "rewind-api",
+ "rewind-check",
+ "rewind-codegen",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-format",
+ "rewind-mcp",
+ "rewind-otel",
+ "rewind-runtime",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "rewind-codegen"
+version = "0.1.0"
+dependencies = [
+ "deno_ast",
+ "rewind-core",
+ "serde_json",
+]
+
+[[package]]
+name = "rewind-core"
+version = "0.1.0"
+dependencies = [
+ "ryu-js",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "rewind-e2e"
+version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "rewind-check",
+ "rewind-codegen",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-format",
+ "rewind-mcp",
+ "rewind-runtime",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "rewind-engine"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "regex",
+ "rewind-core",
+ "rewind-engine",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rewind-format"
+version = "0.1.0"
+dependencies = [
+ "rewind-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "rewind-load"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "rewind-api",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "url",
+]
+
+[[package]]
+name = "rewind-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "ipnet",
+ "jsonschema",
+ "libtest-mimic",
+ "reqwest",
+ "rewind-core",
+ "rewind-engine",
+ "rmcp",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "rewind-otel"
+version = "0.1.0"
+dependencies = [
+ "http",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "rewind-core",
+ "rewind-engine",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "rewind-runtime"
+version = "0.1.0"
+dependencies = [
+ "chacha20",
+ "deno_ast",
+ "deno_core",
+ "deno_error",
+ "deno_web",
+ "deno_webidl",
+ "jsonschema",
+ "rewind-core",
+ "rewind-engine",
+ "rustix 1.1.6",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "rewind-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "clap",
+ "fs4",
+ "futures-util",
+ "getrandom 0.3.4",
+ "jiff",
+ "reqwest",
+ "rewind-api",
+ "rewind-blob",
+ "rewind-check",
+ "rewind-codegen",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-format",
+ "rewind-mcp",
+ "rewind-otel",
+ "rewind-runtime",
+ "rewind-store-postgres",
+ "rewind-store-turso",
+ "rmcp",
+ "serde",
+ "serde_html_form",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "rewind-store-postgres"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "futures-util",
+ "getrandom 0.3.4",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-format",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rewind-store-turso"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "getrandom 0.3.4",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-format",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "turso",
 ]
 
 [[package]]

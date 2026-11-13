@@ -1,6 +1,6 @@
 import { AgentTools, type AgentToolsOptions } from "./agent-tools/agent-tools.js";
 import { Approvals } from "./approvals.js";
-import { PtcError } from "./errors.js";
+import { RewindError } from "./errors.js";
 import { Transport, type TransportOptions } from "./http.js";
 import { ApiKeys, Payloads, Server, Subscriptions, Tools } from "./resources/admin.js";
 import { Runs } from "./resources/runs.js";
@@ -11,10 +11,10 @@ import type { WebhookEvent } from "./types.js";
 import { verifyWebhook, type WebhookHeaders } from "./webhooks.js";
 import { HostToolWorker, type WorkerOptions } from "./worker.js";
 
-export interface PtcOptions extends Partial<TransportOptions> {
-  /** The server's base URL. `PTC_URL` by default. */
+export interface RewindOptions extends Partial<TransportOptions> {
+  /** The server's base URL. `REWIND_URL` by default. */
   url?: string | undefined;
-  /** The API key, `ptc_sk_…`. `PTC_API_KEY` by default. */
+  /** The API key, `rewind_sk_…`. `REWIND_API_KEY` by default. */
   apiKey?: string | undefined;
 }
 
@@ -28,15 +28,15 @@ export interface Webhooks {
 }
 
 /**
- * The client of an ai-ptc server: its API `/v1`, the host-tool worker and the agent tools.
+ * The client of an Rewind server: its API `/v1`, the host-tool worker and the agent tools.
  *
  * ```ts
- * const ptc = new Ptc({ url: process.env.PTC_URL, apiKey: process.env.PTC_API_KEY });
- * const toolset = await ptc.toolsets.create({ mcp: [{ name: "github", url: "https://mcp.example.com/github" }] });
- * const run = await ptc.runs.start({ toolset: toolset.id, script, wait: "30s" });
+ * const rewind = new Rewind({ url: process.env.REWIND_URL, apiKey: process.env.REWIND_API_KEY });
+ * const toolset = await rewind.toolsets.create({ mcp: [{ name: "github", url: "https://mcp.example.com/github" }] });
+ * const run = await rewind.runs.start({ toolset: toolset.id, script, wait: "30s" });
  * ```
  */
-export class Ptc {
+export class Rewind {
   readonly toolsets: Toolsets;
   readonly scripts: Scripts;
   readonly runs: Runs;
@@ -51,12 +51,12 @@ export class Ptc {
 
   private readonly transport: Transport;
 
-  constructor(options: PtcOptions = {}) {
-    const url = options.url ?? env("PTC_URL");
+  constructor(options: RewindOptions = {}) {
+    const url = options.url ?? env("REWIND_URL");
     if (url === undefined || url === "") {
-      throw new PtcError("no ai-ptc server URL: pass `url`, or set PTC_URL");
+      throw new RewindError("no Rewind server URL: pass `url`, or set REWIND_URL");
     }
-    this.transport = new Transport({ ...options, url, apiKey: options.apiKey ?? env("PTC_API_KEY") });
+    this.transport = new Transport({ ...options, url, apiKey: options.apiKey ?? env("REWIND_API_KEY") });
     this.toolsets = new Toolsets(this.transport);
     this.scripts = new Scripts(this.transport);
     this.runs = new Runs(this.transport);

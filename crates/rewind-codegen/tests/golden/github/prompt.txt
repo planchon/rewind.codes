@@ -1,0 +1,6 @@
+import { github } from "rewind:tools";
+github["close-issue"]({ number: number, repo: string, comment?: string, reason?: "completed" | "not_planned" }) → ToolContent · Close an issue, with an optional comment.
+github.get_issue({ number: number, repo: string }) → { issue: { author: { login: string, site_admin?: boolean }, number: number, state: "open" | "closed", title: string, updated_at: string } } · Get one issue.
+github.list_issues({ repo: string, labels?: string[], page?: number, since?: string, state?: "open" | "closed" | "all" }) → { issues: { author: User, number: number, state: "open" | "closed", title: string, updated_at: string }[], next_page: number | null } · List the issues of a repository.
+github.whoami(args?) → ToolContent · The authenticated user.
+ToolContent<T> = { content: ContentBlock[], structuredContent?: T, text(): string, json(): T } · What an MCP tool without an output schema returns: its content blocks (text, image, audio, resource), with helpers.

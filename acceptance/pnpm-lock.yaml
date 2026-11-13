@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      '@ai-ptc/sdk':
+      '@rewind.codes/sdk':
         specifier: link:../sdk/typescript
         version: link:../sdk/typescript
     devDependencies:

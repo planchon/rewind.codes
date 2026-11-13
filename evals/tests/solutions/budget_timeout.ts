@@ -1,5 +1,5 @@
-import { chat, office } from "ptc:tools";
-import { signal } from "ptc";
+import { chat, office } from "rewind:tools";
+import { signal } from "rewind";
 
 export default async function main() {
   await chat.post_message({ channel: "#finance", text: "Please approve the Q2 budget" });

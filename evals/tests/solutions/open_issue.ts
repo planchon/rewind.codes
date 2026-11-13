@@ -1,4 +1,4 @@
-import { tracker } from "ptc:tools";
+import { tracker } from "rewind:tools";
 
 export default async function main() {
   return await tracker.create_issue({

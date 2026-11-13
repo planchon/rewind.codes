@@ -14,17 +14,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ptc_api::common::{RunStatus, ScriptError};
-use ptc_api::scripts::{CheckResult, Diagnostic, TestResult};
-use ptc_api::toolsets::ToolMatch;
-use ptc_core::{Matching, RunId, Script, Timestamp, parse_duration};
-use ptc_engine::mock::{
+use rewind_api::common::{RunStatus, ScriptError};
+use rewind_api::scripts::{CheckResult, Diagnostic, TestResult};
+use rewind_api::toolsets::ToolMatch;
+use rewind_core::{Matching, RunId, Script, Timestamp, parse_duration};
+use rewind_engine::mock::{
     Expectations, ExpectedError, MockDispatcher, Mocks, Scenario, ScenarioError, ScenarioSignal,
     SignalWhen,
 };
-use ptc_engine::ports::{Enqueued, RunFilter, RunRef, TenantId, TypeChecker};
-use ptc_engine::{EngineError, ForkError, ForkRun, StartError};
-use ptc_runtime::{SandboxLimits, TsMocks};
+use rewind_engine::ports::{Enqueued, RunFilter, RunRef, TenantId, TypeChecker};
+use rewind_engine::{EngineError, ForkError, ForkRun, StartError};
+use rewind_runtime::{SandboxLimits, TsMocks};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -309,23 +309,23 @@ impl<'w> AgentTools<'w> {
                 let source = source.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
                     Failure::Input("`scenario.mocks` must be a non-empty string.".into())
                 })?;
-                let clock: Arc<dyn ptc_engine::ports::Clock> =
+                let clock: Arc<dyn rewind_engine::ports::Clock> =
                     Arc::new(SharedClock::new(Scenario::DEFAULT_START));
                 let handlers = TsMocks::new(&Script::new(source), clock, SandboxLimits::default())
                     .await
                     .map_err(|err| match err {
-                        ptc_runtime::MockError::Invalid(message) => {
+                        rewind_runtime::MockError::Invalid(message) => {
                             Failure::Problem(format!("the mocks cannot load: {message}"))
                         }
-                        ptc_runtime::MockError::Internal(message) => {
+                        rewind_runtime::MockError::Internal(message) => {
                             Failure::Platform(AgentError::Checker(message))
                         }
                     })?;
                 let tools = handlers.tools().clone();
                 let dispatcher = dispatcher.with_mocks(Mocks { handlers, tools });
-                ptc_engine::mock::run_scenario(executor, dispatcher, test).await
+                rewind_engine::mock::run_scenario(executor, dispatcher, test).await
             }
-            None => ptc_engine::mock::run_scenario(executor, dispatcher, test).await,
+            None => rewind_engine::mock::run_scenario(executor, dispatcher, test).await,
         };
         let report = match report {
             Ok(report) => report,
@@ -367,10 +367,11 @@ impl<'w> AgentTools<'w> {
                     history.len().saturating_sub(1)
                 )));
             };
-            let entry = ptc_api::events::Entry::from_core(found, |payload| match payload.value() {
-                Some(value) => ptc_api::common::Payload::of(value.clone(), u64::MAX),
-                None => ptc_api::common::Payload::reference(String::new(), 0, String::new()),
-            });
+            let entry =
+                rewind_api::events::Entry::from_core(found, |payload| match payload.value() {
+                    Some(value) => rewind_api::common::Payload::of(value.clone(), u64::MAX),
+                    None => rewind_api::common::Payload::reference(String::new(), 0, String::new()),
+                });
             let content = describe_page(
                 &format!("Entry {index} of run {run_id}"),
                 &entry_text(&entry),
@@ -522,7 +523,7 @@ impl<'w> AgentTools<'w> {
     async fn report(
         &self,
         run: &RunRef,
-        view: ptc_api::runs::Run,
+        view: rewind_api::runs::Run,
         error_when_failed: bool,
         trace: bool,
     ) -> Handled {
@@ -548,7 +549,11 @@ impl<'w> AgentTools<'w> {
 
     /// The run's output as compact JSON, read from its payload when it is too large to be in
     /// the run's state (`GET /v1/payloads/{digest}`).
-    async fn output_of(&self, run: &RunRef, view: &ptc_api::runs::Run) -> Result<String, Failure> {
+    async fn output_of(
+        &self,
+        run: &RunRef,
+        view: &rewind_api::runs::Run,
+    ) -> Result<String, Failure> {
         let Some(payload) = &view.output else {
             return Ok("null".to_owned());
         };
@@ -556,14 +561,14 @@ impl<'w> AgentTools<'w> {
             return Ok(json(value));
         }
         let history = self.world.engine.export_history(run).await?;
-        let state = ptc_core::RunState::from_history(&history).map_err(|error| {
+        let state = rewind_core::RunState::from_history(&history).map_err(|error| {
             Failure::Platform(AgentError::Engine(EngineError::CorruptHistory {
                 run_id: run.id,
                 error,
             }))
         })?;
         Ok(match state.outcome() {
-            Some(ptc_core::RunOutcome::Completed { output }) => {
+            Some(rewind_core::RunOutcome::Completed { output }) => {
                 output.value().map_or_else(|| "null".to_owned(), json)
             }
             _ => "null".to_owned(),
@@ -572,7 +577,7 @@ impl<'w> AgentTools<'w> {
 
     /// `POST /v1/check`: the checks at start, then tsgo and the checker's rules.
     async fn check(&self, script: &Script) -> Result<CheckResult, Failure> {
-        use ptc_engine::ports::ScriptExecutor as _;
+        use rewind_engine::ports::ScriptExecutor as _;
         if let Err(invalid) = self
             .world
             .engine
@@ -662,7 +667,7 @@ fn result_of_test(result: &TestResult, limits: &Limits) -> AgentToolResult {
     }
 }
 
-/// A refused start, as the API answers it (`ptc-server`'s `error.rs`).
+/// A refused start, as the API answers it (`rewind-server`'s `error.rs`).
 fn start_failure(error: StartError) -> Failure {
     match error {
         StartError::InvalidScript(invalid) => Failure::Refused {
@@ -672,7 +677,7 @@ fn start_failure(error: StartError) -> Failure {
         StartError::TypeErrors(diagnostics) => {
             let errors = diagnostics
                 .iter()
-                .filter(|d| d.severity == ptc_engine::ports::Severity::Error)
+                .filter(|d| d.severity == rewind_engine::ports::Severity::Error)
                 .count();
             Failure::Refused {
                 detail: format!(
@@ -710,16 +715,16 @@ fn expectations(value: Option<&Value>) -> Result<Expectations, Failure> {
     let Some(value) = value else {
         return Ok(Expectations::default());
     };
-    let expect: ptc_api::scripts::Expectations = serde_json::from_value(value.clone())
+    let expect: rewind_api::scripts::Expectations = serde_json::from_value(value.clone())
         .map_err(|err| Failure::Input(format!("`scenario.expect` is invalid: {err}.")))?;
     Ok(Expectations {
         status: expect.status.map(|status| match status {
-            RunStatus::Pending => ptc_core::RunStatus::Pending,
-            RunStatus::Active => ptc_core::RunStatus::Active,
-            RunStatus::Completed => ptc_core::RunStatus::Completed,
-            RunStatus::Failed => ptc_core::RunStatus::Failed,
-            RunStatus::Cancelled => ptc_core::RunStatus::Cancelled,
-            RunStatus::Aborted => ptc_core::RunStatus::Aborted,
+            RunStatus::Pending => rewind_core::RunStatus::Pending,
+            RunStatus::Active => rewind_core::RunStatus::Active,
+            RunStatus::Completed => rewind_core::RunStatus::Completed,
+            RunStatus::Failed => rewind_core::RunStatus::Failed,
+            RunStatus::Cancelled => rewind_core::RunStatus::Cancelled,
+            RunStatus::Aborted => rewind_core::RunStatus::Aborted,
         }),
         output: expect.output,
         error: expect.error.map(|error| ExpectedError {
@@ -734,8 +739,8 @@ fn expectations(value: Option<&Value>) -> Result<Expectations, Failure> {
 /// word of the query found in a tool's name counts two, in its description one; 10 tools at
 /// most. `None` when the query has no word.
 pub fn search(
-    toolset: &ptc_core::Toolset,
-    declarations: &ptc_codegen::Declarations,
+    toolset: &rewind_core::Toolset,
+    declarations: &rewind_codegen::Declarations,
     query: &str,
 ) -> Option<Vec<ToolMatch>> {
     let words: Vec<String> = query
@@ -746,7 +751,7 @@ pub fn search(
     if words.is_empty() {
         return None;
     }
-    let mut scored: Vec<(usize, &ptc_core::Tool)> = toolset
+    let mut scored: Vec<(usize, &rewind_core::Tool)> = toolset
         .tools()
         .iter()
         .map(|tool| {
@@ -788,7 +793,7 @@ pub fn search(
 /// The idempotency key of a tool call: its id when the API takes it as a key, otherwise the
 /// SHA-256 of the id. `signal_run` uses it: a signal's key is unique per run.
 pub fn idempotency_key(call_id: &str) -> String {
-    match ptc_api::headers::IdempotencyKey::new(call_id) {
+    match rewind_api::headers::IdempotencyKey::new(call_id) {
         Ok(key) => key.as_str().to_owned(),
         Err(_) => sha256_hex(call_id),
     }
@@ -904,18 +909,18 @@ mod tests {
 
     #[test]
     fn search_ranks_names_before_descriptions() {
-        let crm = || ptc_core::ToolRoute::Mcp {
+        let crm = || rewind_core::ToolRoute::Mcp {
             server: "crm".into(),
         };
         let tool = |name: &str, description: &str| {
-            let mut tool = ptc_core::Tool::new(name, crm(), json!({ "type": "object" }));
+            let mut tool = rewind_core::Tool::new(name, crm(), json!({ "type": "object" }));
             tool.description = Some(description.into());
             tool
         };
-        let toolset = ptc_core::Toolset::new(
-            [ptc_core::McpServer::new(
+        let toolset = rewind_core::Toolset::new(
+            [rewind_core::McpServer::new(
                 "crm",
-                ptc_core::McpTransport::Http {
+                rewind_core::McpTransport::Http {
                     url: "https://mcp.example.com/crm".into(),
                 },
             )],
@@ -926,7 +931,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let declarations = ptc_codegen::generate(&toolset, &BTreeMap::new());
+        let declarations = rewind_codegen::generate(&toolset, &BTreeMap::new());
         let found = search(&toolset, &declarations, "refund").unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].name, "crm.refund_order");

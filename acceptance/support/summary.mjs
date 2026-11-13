@@ -13,7 +13,7 @@ const CRITERIA = {
   2: "Locally, run, signal, replay and trace across processes; a forgotten await, an unhandled rejection and a deadlock end as specified",
   3: "A script calls a real MCP server, with types checked beforehand",
   4: "The evals report, per model and prompt rendering, first-try check pass rate, task success, iterations and tokens",
-  5: "ptc test replays a recorded real run as a scenario; ptc fork continues a failed run without repeating its calls",
+  5: "rewind test replays a recorded real run as a scenario; rewind fork continues a failed run without repeating its calls",
   6: "Load tests and limit tests pass",
   7: "An operator finds any run by label, tool or error in the dashboard, and sees its code next to its trace",
 };
@@ -50,7 +50,7 @@ if (existsSync(stepsPath)) {
 }
 
 let ok = true;
-const lines = ["# Acceptance of ai-ptc 0.1", "", "| Criterion | Status | Checks |", "| --- | --- | --- |"];
+const lines = ["# Acceptance of Rewind 0.1", "", "| Criterion | Status | Checks |", "| --- | --- | --- |"];
 for (const criterion of selected) {
   const mine = checks.filter((c) => c.criterion === criterion);
   const status =

@@ -75,7 +75,7 @@ reproduced by replay; `run_aborted` is the host ending the run, and replay stops
 ## Run state
 
 The run's state is a pure function of its history (`RunState::from_history` in
-`ptc-core`):
+`rewind-core`):
 
 - `status`: `pending` (only `run_started` enqueued), `active`, `completed`, `failed`,
   `cancelled` (a `fail_run` whose error is `CancelledError`), `aborted`.
@@ -94,14 +94,14 @@ the history.
 
 ## Stored format v1
 
-What is replayed or exported is written in the stored format, defined by `crates/ptc-format`:
+What is replayed or exported is written in the stored format, defined by `crates/rewind-format`:
 JSON, versioned `"v": 1`, every value in its canonical form. It covers four documents:
 
 | Document | Fields | Where it lives |
 | --- | --- | --- |
 | Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A row of `history` or `inbox` |
 | Journal document | `v`, `run` (the run id), `script` (the TypeScript source), `toolset` (the pinned toolset document), `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
-| Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `ptc test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
+| Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `rewind test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
 | Pinned toolset | `v`, `servers[{name, transport, concurrency}]`, `tools[{name, route, description?, schemas, policy}]` | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
 
 A reader refuses an unknown version, type or field. Every change of the format comes with
@@ -119,6 +119,6 @@ replayed, never exported, never in a cassette.
 ## Where it lives in the code
 
 - The model (`Event`, `Command`, `Completion`, `HistoryEntry`, `RunState`, `ReplayCursor`)
-  is in `crates/ptc-core`. It has no serde: the core does not know how events are stored.
-- The stored form is defined by `crates/ptc-format` ([above](#stored-format-v1)).
+  is in `crates/rewind-core`. It has no serde: the core does not know how events are stored.
+- The stored form is defined by `crates/rewind-format` ([above](#stored-format-v1)).
 - See [code architecture](07-code-architecture.md).

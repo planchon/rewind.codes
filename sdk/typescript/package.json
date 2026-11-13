@@ -1,7 +1,7 @@
 {
-  "name": "@ai-ptc/sdk",
+  "name": "@rewind.codes/sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK of ai-ptc: the API client, the host-tool worker and the agent tools.",
+  "description": "TypeScript SDK of Rewind: the API client, the host-tool worker and the agent tools.",
   "license": "UNLICENSED",
   "type": "module",
   "engines": {

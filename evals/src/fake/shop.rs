@@ -8,7 +8,7 @@
 
 use std::sync::Mutex;
 
-use ptc_core::Timestamp;
+use rewind_core::Timestamp;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 

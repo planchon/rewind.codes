@@ -1,0 +1,100 @@
+== github.close-issue
+github["close-issue"]({ number: number, repo: string, comment?: string, reason?: "completed" | "not_planned" }) → ToolContent · Close an issue, with an optional comment.
+
+declare module "rewind:tools" {
+  /** Tools of the MCP server `github`. */
+  export const github: {
+    /** Close an issue, with an optional comment. */
+    "close-issue"(args: {
+      number: number;
+      repo: string;
+      /** @maxLength 65536 */
+      comment?: string;
+      reason?: "completed" | "not_planned";
+    }): Promise<ToolContent>;
+  };
+}
+
+== github.get_issue
+github.get_issue({ number: number, repo: string }) → { issue: { author: { login: string, site_admin?: boolean }, number: number, state: "open" | "closed", title: string, updated_at: string } } · Get one issue.
+
+declare module "rewind:tools" {
+  /** Tools of the MCP server `github`. */
+  export const github: {
+    /** Get one issue. */
+    get_issue(args: { number: number; repo: string }): Promise<{ issue: github.Issue }>;
+  };
+  export namespace github {
+    /** An issue of a repository. */
+    export interface Issue {
+      author: User;
+      number: number;
+      state: "open" | "closed";
+      title: string;
+      /** @format date-time */
+      updated_at: string;
+    }
+
+    export interface User {
+      login: string;
+      site_admin?: boolean;
+    }
+  }
+}
+
+== github.list_issues
+github.list_issues({ repo: string, labels?: string[], page?: number, since?: string, state?: "open" | "closed" | "all" }) → { issues: { author: User, number: number, state: "open" | "closed", title: string, updated_at: string }[], next_page: number | null } · List the issues of a repository.
+
+declare module "rewind:tools" {
+  /** Tools of the MCP server `github`. */
+  export const github: {
+    /**
+     * List the issues of a repository.
+     *
+     * Results are paginated: pass `page` to read the next ones.
+     */
+    list_issues(args: {
+      /**
+       * The repository, as `owner/name`.
+       *
+       * @pattern ^[^/]+/[^/]+$
+       */
+      repo: string;
+      /** Only issues with all of these labels. */
+      labels?: string[];
+      /** @minimum 1 */
+      page?: number;
+      /** @format date-time */
+      since?: string;
+      /** @default "open" */
+      state?: "open" | "closed" | "all";
+    }): Promise<{ issues: github.Issue[]; next_page: number | null }>;
+  };
+  export namespace github {
+    /** An issue of a repository. */
+    export interface Issue {
+      author: User;
+      number: number;
+      state: "open" | "closed";
+      title: string;
+      /** @format date-time */
+      updated_at: string;
+    }
+
+    export interface User {
+      login: string;
+      site_admin?: boolean;
+    }
+  }
+}
+
+== github.whoami
+github.whoami(args?) → ToolContent · The authenticated user.
+
+declare module "rewind:tools" {
+  /** Tools of the MCP server `github`. */
+  export const github: {
+    /** The authenticated user. */
+    whoami(args?: { [key: string]: unknown }): Promise<ToolContent>;
+  };
+}

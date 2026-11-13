@@ -1,12 +1,12 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Ptc } from "@ai-ptc/sdk";
+import { Rewind } from "@rewind.codes/sdk";
 import { Agent, fetch as undiciFetch } from "undici";
-import { ptcBinary, shortTempDir } from "./paths.js";
+import { rewindBinary, shortTempDir } from "./paths.js";
 import { eventually } from "./processes.js";
 
-/** What a `ptc` command did. */
+/** What a `rewind` command did. */
 export interface Ran {
   code: number;
   stdout: string;
@@ -14,7 +14,7 @@ export interface Ran {
 }
 
 /**
- * A project directory, as a developer has one: scripts, toolset files, and the `.ptc/` of the
+ * A project directory, as a developer has one: scripts, toolset files, and the `.rewind/` of the
  * embedded server the CLI starts on demand. Its servers are killed and the directory removed at
  * the end.
  */
@@ -25,11 +25,11 @@ export class Project {
 
   constructor(prefix: string) {
     this.root = shortTempDir(prefix);
-    this.state = join(this.root, ".ptc");
+    this.state = join(this.root, ".rewind");
     const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.PTC_URL;
-    delete env.PTC_DIR;
-    delete env.PTC_API_KEY;
+    delete env.REWIND_URL;
+    delete env.REWIND_DIR;
+    delete env.REWIND_API_KEY;
     this.env = env;
   }
 
@@ -43,23 +43,23 @@ export class Project {
     return path;
   }
 
-  /** `ptc <args…>` started in the project directory. */
+  /** `rewind <args…>` started in the project directory. */
   spawn(args: string[]): ChildProcess {
-    return spawn(ptcBinary(), args, { cwd: this.root, env: this.env, stdio: ["ignore", "pipe", "pipe"] });
+    return spawn(rewindBinary(), args, { cwd: this.root, env: this.env, stdio: ["ignore", "pipe", "pipe"] });
   }
 
-  /** `ptc <args…>` to its end. */
-  ptc(args: string[], timeoutMs = 180_000): Promise<Ran> {
+  /** `rewind <args…>` to its end. */
+  rewind(args: string[], timeoutMs = 180_000): Promise<Ran> {
     return finish(this.spawn(args), timeoutMs, args);
   }
 
-  /** `ptc --json <args…>`, its standard output parsed. */
+  /** `rewind --json <args…>`, its standard output parsed. */
   async json(args: string[]): Promise<{ code: number; value: any; ran: Ran }> {
-    const ran = await this.ptc(["--json", ...args]);
+    const ran = await this.rewind(["--json", ...args]);
     try {
       return { code: ran.code, value: JSON.parse(ran.stdout), ran };
     } catch {
-      throw new Error(`ptc --json ${args.join(" ")}: not JSON (exit ${ran.code})\nstdout: ${ran.stdout}\nstderr: ${ran.stderr}`);
+      throw new Error(`rewind --json ${args.join(" ")}: not JSON (exit ${ran.code})\nstdout: ${ran.stdout}\nstderr: ${ran.stderr}`);
     }
   }
 
@@ -90,7 +90,7 @@ export class Project {
    * The SDK's client over the embedded server's unix socket (no key: the socket is the
    * credential). The server must be running.
    */
-  client(): Ptc {
+  client(): Rewind {
     const dispatcher = new Agent({ connect: { socketPath: join(this.state, "server.sock") } });
     const viaSocket = async (request: Request): Promise<Response> => {
       const body = request.body === null ? undefined : await request.arrayBuffer();
@@ -103,7 +103,7 @@ export class Project {
       });
       return response as unknown as Response;
     };
-    return new Ptc({ url: "http://localhost", apiKey: "", fetch: viaSocket as typeof fetch });
+    return new Rewind({ url: "http://localhost", apiKey: "", fetch: viaSocket as typeof fetch });
   }
 
   async dispose(): Promise<void> {
@@ -127,7 +127,7 @@ export function finish(child: ChildProcess, timeoutMs: number, args: string[] = 
     child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`ptc ${args.join(" ")} did not end in ${timeoutMs} ms\nstdout: ${stdout}\nstderr: ${stderr}`));
+      reject(new Error(`rewind ${args.join(" ")} did not end in ${timeoutMs} ms\nstdout: ${stdout}\nstderr: ${stderr}`));
     }, timeoutMs);
     child.on("error", reject);
     child.on("close", (code) => {

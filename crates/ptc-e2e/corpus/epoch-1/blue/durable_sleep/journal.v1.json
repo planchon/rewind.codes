@@ -1,8 +1,0 @@
-{"v":1,"run":"910a2dec-8902-7cc1-a043-91a6fd59956f","script":"import { sleep } from \"ptc\";\n\nexport default async function main() {\n  const before = Date.now();\n  await sleep(\"10d\");\n  await new Promise((resolve) => setTimeout(resolve, 1500));\n  return { elapsed: Date.now() - before, now: new Date().toISOString() };\n}\n","toolset":{"servers":[],"tools":[],"v":1},"entries":[
-{"index":0,"recorded_at":1767225600000,"event":{"type":"run_started","script":"b6a9941dd5359b8abeaa42aa57272f03ebed8b2dbb7eff0780d670cea1fd3b80","toolset":"f3e36efa9bae959bf0e62cf9b1da2adc53de0a970ef5b69f92dcb984a9175843","input":{"value":{}},"seed":"499c94e5088385c482f148cbdbab0781038f4194cfd6956d9e3919e2f7380771","epoch":1,"expires_at":1769817600000,"mode":"mock"}},
-{"index":1,"recorded_at":1767225600000,"event":{"type":"start_timer","seq":1,"duration_ms":864000000,"fire_at":1768089600000,"callsite":{"line":5,"column":9}}},
-{"index":2,"recorded_at":1768089600000,"event":{"type":"timer_fired","seq":1}},
-{"index":3,"recorded_at":1768089600000,"event":{"type":"start_timer","seq":2,"duration_ms":1500,"fire_at":1768089601500,"callsite":{"line":6,"column":34}}},
-{"index":4,"recorded_at":1768089601500,"event":{"type":"timer_fired","seq":2}},
-{"index":5,"recorded_at":1768089601500,"event":{"type":"complete_run","output":{"value":{"elapsed":864001500,"now":"2026-01-11T00:00:01.500Z"}}}}
-]}

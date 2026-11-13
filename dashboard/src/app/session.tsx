@@ -13,7 +13,7 @@ import {
 import { Api } from "../api/client";
 import { read, write } from "./storage";
 
-const KEY = "ptc.key";
+const KEY = "rewind.key";
 
 export interface Session {
   api: Api;
@@ -81,8 +81,8 @@ export function useApi(): Api {
   return useSession().api;
 }
 
-/** `ptc_sk_…a1b2`: enough to tell keys apart, not enough to use one. */
+/** `rewind_sk_…a1b2`: enough to tell keys apart, not enough to use one. */
 export function maskKey(key: string): string {
-  const prefix = key.startsWith("ptc_sk_") ? "ptc_sk_" : "";
+  const prefix = key.startsWith("rewind_sk_") ? "rewind_sk_" : "";
   return `${prefix}…${key.slice(-4)}`;
 }

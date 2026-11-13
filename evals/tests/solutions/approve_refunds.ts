@@ -1,5 +1,5 @@
-import { crm } from "ptc:tools";
-import { signal } from "ptc";
+import { crm } from "rewind:tools";
+import { signal } from "rewind";
 
 export default async function main() {
   const decision = await signal<{ approved: string[] }>("refund_approval");

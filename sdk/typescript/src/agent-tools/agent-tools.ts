@@ -1,5 +1,5 @@
 import { toMillis } from "../duration.js";
-import { PtcApiError, PtcError } from "../errors.js";
+import { RewindApiError, RewindError } from "../errors.js";
 import { isValidIdempotencyKey } from "../http.js";
 import { hasLabels } from "../params.js";
 import type { Payloads } from "../resources/admin.js";
@@ -53,7 +53,7 @@ export interface AgentToolsClient {
 }
 
 export interface AgentToolsOptions {
-  /** The toolset the model's scripts import from `ptc:tools`. `search_tools` needs one. */
+  /** The toolset the model's scripts import from `rewind:tools`. `search_tools` needs one. */
   toolset?: string | undefined;
   /**
    * Set on every run the model starts. They scope `list_runs`, and the tools that take a run id
@@ -193,11 +193,11 @@ export class AgentTools {
    * come back as a result with `isError`; a fault of the platform or of the configuration (an
    * unreachable server, a 401, a 5xx) is thrown.
    *
-   * @throws {PtcError} when `name` is not one of these tools, or the platform failed.
+   * @throws {RewindError} when `name` is not one of these tools, or the platform failed.
    */
   async handle(name: string, input: unknown, options: HandleOptions = {}): Promise<AgentToolResult> {
     if (!isAgentToolName(name) || !this.names.has(name)) {
-      throw new PtcError(`${JSON.stringify(name)} is not one of these agent tools`);
+      throw new RewindError(`${JSON.stringify(name)} is not one of these agent tools`);
     }
     let result: AgentToolResult;
     try {
@@ -400,7 +400,7 @@ export class AgentTools {
     const query = requireString(input, "query");
     const toolset = this.options.toolset;
     if (toolset === undefined) {
-      throw new PtcError("search_tools needs a toolset");
+      throw new RewindError("search_tools needs a toolset");
     }
     const results = await this.client.toolsets.search(toolset, query, { signal: options.signal });
     return { content: describeMatches(query, results.tools), isError: false };
@@ -451,7 +451,7 @@ export class AgentTools {
     if (hasLabels(run.labels, this.options.labels) && run.script === (await sha256Hex(code))) {
       return;
     }
-    throw new PtcError(
+    throw new RewindError(
       `the tool call id ${JSON.stringify(toolCallId)} is already the idempotency key of another run (of another script, or with other labels): give each tool call a unique id`,
     );
   }
@@ -516,7 +516,7 @@ function failure(name: AgentToolName, error: unknown, limits: Limits): AgentTool
   if (error instanceof InputError) {
     return { content: `${name}: ${error.message}`, isError: true };
   }
-  if (error instanceof PtcApiError) {
+  if (error instanceof RewindApiError) {
     if (error.slug === "invalid-script") {
       return { content: describeRefusal(error.detail, error.diagnostics, limits), isError: true };
     }

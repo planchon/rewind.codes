@@ -50,7 +50,7 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
         failed ??
         (as === "journal"
           ? "The journal document, stored format v1"
-          : "A cassette of its tool calls, for ptc test")
+          : "A cassette of its tool calls, for rewind test")
       }
       onClick={async () => {
         setBusy(true);
@@ -263,8 +263,8 @@ export function RunBanners({
         </h3>
         <p className="mono">{run.quarantine.reason}</p>
         <p className="hint">
-          Nothing runs until an operator acts: <code>ptc release {run.id}</code> to retry, or{" "}
-          <code>ptc release {run.id} --give-up</code> to abort it.
+          Nothing runs until an operator acts: <code>rewind release {run.id}</code> to retry, or{" "}
+          <code>rewind release {run.id} --give-up</code> to abort it.
         </p>
       </section>,
     );

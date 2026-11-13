@@ -8,13 +8,13 @@ nothing is stored. Refused at start, with a diagnostic written for the model (a 
 column in `script.ts`):
 
 - a syntax error;
-- an import of anything other than `ptc` and `ptc:tools`, a dynamic `import()`, a `require`;
-- an import of a name `ptc` does not export, or of a tool the run's toolset does not have;
+- an import of anything other than `rewind` and `rewind:tools`, a dynamic `import()`, a `require`;
+- an import of a name `rewind` does not export, or of a tool the run's toolset does not have;
 - no default export, or a default export that is certainly not a function (a literal, an
   object, a class).
 
 Starting a run also type-checks the script against the toolset's declarations, as
-`ptc check` does, so that most mistakes are refused before a run exists.
+`rewind check` does, so that most mistakes are refused before a run exists.
 
 ## Activations
 
@@ -102,7 +102,7 @@ wall-clock time.
 ## Replay
 
 Replay creates a fresh instance, runs `main(input)`, and walks the history with
-`ReplayCursor` (pure, in `ptc-core`):
+`ReplayCursor` (pure, in `rewind-core`):
 
 - When the next entry is a **completion**, deliver it and drain microtasks.
 - Each **command** the script emits must match the next command in the history: same
@@ -133,7 +133,7 @@ The history itself is validated first: not empty, starts with exactly one
 Scripts are immutable and content-addressed, so there is no workflow versioning problem
 for the script. Two risks remain:
 
-- A change in the ai-ptc runtime itself: see the [determinism epoch](#determinism-epoch).
+- A change in the Rewind runtime itself: see the [determinism epoch](#determinism-epoch).
 - A toolset whose schemas changed while the run was suspended: dispatch checks the call
   against the current schema and parks the task
   ([toolset change](04-tools.md#when-a-toolset-changes-during-a-run)).
@@ -209,7 +209,7 @@ fork's history is self-contained: it replays without the parent.
 
 A suspended run has no saved memory. It is rebuilt by re-executing the script, and the
 journal only holds what came from outside (tool results, timer fires, signals) and the
-seed. Everything computed inside the sandbox is computed again. If a new build of ai-ptc
+seed. Everything computed inside the sandbox is computed again. If a new build of Rewind
 computes it differently, the script emits a command that no longer matches the history.
 
 What can change a `seq`, a digest, or a value the script observes:
@@ -219,8 +219,8 @@ What can change a `seq`, a digest, or a value the script observes:
 | V8 and ICU | `toLocaleString`, `localeCompare`, the text of built-in error messages |
 | JS glue | A different order in which `signal(name, { timeout })` allocates its timer shifts every later `seq` |
 | Random generators | A different algorithm gives a different `crypto.randomUUID()` |
-| `ptc` library and sandbox globals | A global added or changed |
-| `ptc:tools` codegen | A different normalization of args changes their digest |
+| `rewind` library and sandbox globals | A global added or changed |
+| `rewind:tools` codegen | A different normalization of args changes their digest |
 
 The transpiled script is stored with the script, so a transpiler upgrade doesn't count.
 
@@ -265,7 +265,7 @@ reason then says how many never finished. Released, it is activated again; given
 ends with `run_aborted { internal }`. The failure is logged and reported through
 OpenTelemetry and webhooks.
 
-`ptc replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
+`rewind replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
 different script is the point.
 
 ## How a script ends
@@ -311,7 +311,7 @@ Consequences:
 **Waiting for a signal is not a deadlock**: something outside can still wake the script.
 The [run TTL](#run-ttl) bounds it.
 
-`ptc check` catches the forgotten `await` before anything runs
+`rewind check` catches the forgotten `await` before anything runs
 ([type-checking](04-tools.md#type-checking)).
 
 ## Signals and timers in the glue

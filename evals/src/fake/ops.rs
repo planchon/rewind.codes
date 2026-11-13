@@ -3,7 +3,7 @@
 
 use std::sync::Mutex;
 
-use ptc_core::Timestamp;
+use rewind_core::Timestamp;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -432,7 +432,7 @@ mod tests {
             &ops,
             0,
             "trigger_build",
-            json!({ "repo": "acme/api", "commit": GREEN_COMMIT, "callback_url": "https://ptc.example/hooks/t" }),
+            json!({ "repo": "acme/api", "commit": GREEN_COMMIT, "callback_url": "https://rewind.example/hooks/t" }),
         );
         let outbox = ops.outbox().unwrap();
         assert_eq!(outbox.next(), Some(Timestamp(T0.0 + BUILD_DURATION)));

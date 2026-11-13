@@ -1,5 +1,5 @@
-import { chat, tracker } from "ptc:tools";
-import { sleep } from "ptc";
+import { chat, tracker } from "rewind:tools";
+import { sleep } from "rewind";
 
 const DAY = 86_400_000;
 const NINE = 9 * 3_600_000;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { eventually } from "./processes.js";
 
 /** The label of every container the suite starts: `run.sh` removes leftovers by it. */
-export const LABEL = "ptc-acceptance";
+export const LABEL = "rewind-acceptance";
 
 export const IMAGES = {
   postgres: "postgres:17",
@@ -30,7 +30,7 @@ export class Containers {
   /** Starts a detached container; returns its name. */
   run(role: string, args: string[]): string {
     Containers.count += 1;
-    const name = `ptc-acceptance-${role}-${process.pid}-${Date.now()}-${Containers.count}`;
+    const name = `rewind-acceptance-${role}-${process.pid}-${Date.now()}-${Containers.count}`;
     docker(["run", "--detach", "--rm", "--label", LABEL, "--name", name, ...args]);
     this.names.push(name);
     return name;
@@ -63,9 +63,9 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     "--tmpfs",
     "/var/lib/postgresql/data",
     "--env",
-    "POSTGRES_USER=ptc",
+    "POSTGRES_USER=rewind",
     "--env",
-    "POSTGRES_PASSWORD=ptc-secret",
+    "POSTGRES_PASSWORD=rewind-secret",
     IMAGES.postgres,
   ]);
   const address = containers.port(name, "5432/tcp");
@@ -74,7 +74,7 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     () => {
       const ready = spawnSync(
         "docker",
-        ["exec", name, "psql", "-h", "127.0.0.1", "-U", "ptc", "-d", "postgres", "-tAc", "SELECT 1"],
+        ["exec", name, "psql", "-h", "127.0.0.1", "-U", "rewind", "-d", "postgres", "-tAc", "SELECT 1"],
         { encoding: "utf8" },
       );
       return ready.status === 0 ? true : undefined;
@@ -82,7 +82,7 @@ export async function startPostgres(containers: Containers): Promise<{ url: stri
     60_000,
     300,
   );
-  return { url: `postgres://ptc:ptc-secret@${address}/postgres`, name };
+  return { url: `postgres://rewind:rewind-secret@${address}/postgres`, name };
 }
 
 export interface Minio {
@@ -96,8 +96,8 @@ export interface Minio {
 
 /** MinIO on a tmpfs, with one bucket. */
 export async function startMinio(containers: Containers, bucket: string): Promise<Minio> {
-  const user = "ptc-acceptance";
-  const password = "ptc-acceptance-secret";
+  const user = "rewind-acceptance";
+  const password = "rewind-acceptance-secret";
   const name = containers.run("minio", [
     "--publish",
     "127.0.0.1::9000",
@@ -122,18 +122,18 @@ export async function startMinio(containers: Containers, bucket: string): Promis
       "--network",
       `container:${name}`,
       "--env",
-      `MC_HOST_ptc=http://${user}:${password}@127.0.0.1:9000`,
+      `MC_HOST_rewind=http://${user}:${password}@127.0.0.1:9000`,
       IMAGES.mc,
       ...args,
     ]);
-  mc(["mb", `ptc/${bucket}`]);
+  mc(["mb", `rewind/${bucket}`]);
   return {
     endpoint: `http://${address}`,
     user,
     password,
     bucket,
     objects: () =>
-      mc(["ls", "--recursive", `ptc/${bucket}`])
+      mc(["ls", "--recursive", `rewind/${bucket}`])
         .split("\n")
         .map((line) => line.trim().split(/\s+/).pop() ?? "")
         .filter((key) => key !== ""),

@@ -9,8 +9,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use ptc_core::Timestamp;
-use ptc_engine::ports::Clock;
+use rewind_core::Timestamp;
+use rewind_engine::ports::Clock;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
@@ -38,7 +38,7 @@ pub mod tracker;
 pub struct CallContext {
     /// The episode's virtual time.
     pub now: Timestamp,
-    /// `_meta["io.ai-ptc/idempotency-key"]`: the same for every attempt of one call.
+    /// `_meta["codes.rewind/idempotency-key"]`: the same for every attempt of one call.
     pub idempotency_key: Option<String>,
 }
 
@@ -133,7 +133,7 @@ impl Outbox {
 
 /// The behavior of a fake server.
 pub trait Service: Send + Sync + 'static {
-    /// The server's name: the namespace of its tools in `ptc:tools`.
+    /// The server's name: the namespace of its tools in `rewind:tools`.
     fn name(&self) -> &'static str;
     fn tools(&self) -> Vec<ToolSpec>;
     /// Answers a call. The arguments were checked against the tool's input schema by the
@@ -221,7 +221,7 @@ impl ServerHandler for Handler {
             meta.extend(own.0.0.clone());
         }
         let idempotency_key = meta
-            .get(ptc_mcp::IDEMPOTENCY_KEY_META)
+            .get(rewind_mcp::IDEMPOTENCY_KEY_META)
             .and_then(Value::as_str)
             .map(str::to_owned);
         let call = CallContext {
@@ -480,7 +480,7 @@ mod tests {
         for (id, at) in [("b", 20), ("a", 10)] {
             outbox.push(Outbound {
                 id: id.into(),
-                url: "https://ptc.example/hooks/x".into(),
+                url: "https://rewind.example/hooks/x".into(),
                 payload: Value::Null,
                 at: Timestamp(at),
             });

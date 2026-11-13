@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Criterion 6 of 0.1, "Load tests and limit tests pass" (archi/09-roadmap.md): the limits of
 # archi/03-execution.md through the API, then the reference deployment brought up from this
-# directory and loaded by ptc-load, with the thresholds recorded in 09 ("Load tests").
+# directory and loaded by rewind-load, with the thresholds recorded in 09 ("Load tests").
 #
 #   deploy/acceptance.sh
 #
@@ -10,25 +10,25 @@
 # network and secrets; deploy/.env is not read), and removes its containers, volumes, networks
 # and images at the end. Exits with 0 only when every step passed.
 #
-#   PTC_ACCEPTANCE_PORT   the edge's port on 127.0.0.1 (18580)
-#   PTC_ACCEPTANCE_KEEP=1 keep the deployment and the images, for a look afterwards
+#   REWIND_ACCEPTANCE_PORT   the edge's port on 127.0.0.1 (18580)
+#   REWIND_ACCEPTANCE_KEEP=1 keep the deployment and the images, for a look afterwards
 set -euo pipefail
 
 cd "$(dirname "$0")"
 DEPLOY="$PWD"
 ROOT="$(cd .. && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/ptc-acceptance.XXXXXX")"
-PORT="${PTC_ACCEPTANCE_PORT:-18580}"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/rewind-acceptance.XXXXXX")"
+PORT="${REWIND_ACCEPTANCE_PORT:-18580}"
 URL="http://127.0.0.1:$PORT"
 
-export COMPOSE_PROJECT_NAME="ptc-acceptance-$$"
+export COMPOSE_PROJECT_NAME="rewind-acceptance-$$"
 export COMPOSE_ENV_FILES="$WORK/env"
 export COMPOSE_PROFILES=runc
-export PTC_IMAGE="ai-ptc:acceptance-$$"
-export PTC_LOAD_IMAGE="ai-ptc-load:acceptance-$$"
-export PTC_BIND=127.0.0.1 PTC_PORT="$PORT" PTC_PUBLIC_URL="$URL"
-export PTC_CORE_SUBNET=172.29.223.0/24 PTC_CORE_RANGE=172.29.223.128/25
-export PTC_EGRESS_ADDRESS=172.29.223.2
+export REWIND_IMAGE="rewind:acceptance-$$"
+export REWIND_LOAD_IMAGE="rewind-load:acceptance-$$"
+export REWIND_BIND=127.0.0.1 REWIND_PORT="$PORT" REWIND_PUBLIC_URL="$URL"
+export REWIND_CORE_SUBNET=172.29.223.0/24 REWIND_CORE_RANGE=172.29.223.128/25
+export REWIND_EGRESS_ADDRESS=172.29.223.2
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-3}"
 command -v sccache >/dev/null && export RUSTC_WRAPPER="${RUSTC_WRAPPER:-sccache}"
 
@@ -49,13 +49,13 @@ step() {
 
 cleanup() {
   local status=$?
-  if [ "${PTC_ACCEPTANCE_KEEP:-}" = 1 ]; then
+  if [ "${REWIND_ACCEPTANCE_KEEP:-}" = 1 ]; then
     note "kept: COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES=$WORK/env, on $URL"
     return
   fi
   note "cleaning up"
   docker compose --profile runc --profile load down -v --remove-orphans >/dev/null 2>&1 || true
-  docker image rm -f "$PTC_IMAGE" "$PTC_LOAD_IMAGE" >/dev/null 2>&1 || true
+  docker image rm -f "$REWIND_IMAGE" "$REWIND_LOAD_IMAGE" >/dev/null 2>&1 || true
   rm -rf "$WORK"
   return "$status"
 }
@@ -65,17 +65,17 @@ trap 'exit 130' INT TERM
 # 1. The limits, through the HTTP API of a server on Turso: CPU per call, heap, commands per
 #    activation, the history cap, payload sizes, the TTL; the quota's 429.
 limits() {
-  (cd "$ROOT" && cargo test -p ptc-server --test limits &&
-    cargo test -p ptc-server --test api a_tenant_above_its_quota_is_refused_with_429)
+  (cd "$ROOT" && cargo test -p rewind-server --test limits &&
+    cargo test -p rewind-server --test api a_tenant_above_its_quota_is_refused_with_429)
 }
 step "limits through the API" limits
 
 # 2. The reference deployment, from its images.
 images() {
   local target image
-  for target in ptc load; do
-    image="$PTC_IMAGE"
-    [ "$target" = load ] && image="$PTC_LOAD_IMAGE"
+  for target in rewind load; do
+    image="$REWIND_IMAGE"
+    [ "$target" = load ] && image="$REWIND_LOAD_IMAGE"
     if ! docker build --progress=plain --build-arg "JOBS=$CARGO_BUILD_JOBS" --target "$target" \
       -t "$image" "$ROOT" >"$WORK/build-$target.log" 2>&1; then
       tail -n 40 "$WORK/build-$target.log"
@@ -90,7 +90,7 @@ up() {
 }
 wait_for_api() {
   local key
-  key="$(sed -n 's/^PTC_ADMIN_KEY=//p' "$WORK/env")"
+  key="$(sed -n 's/^REWIND_ADMIN_KEY=//p' "$WORK/env")"
   for _ in $(seq 90); do
     curl -fsS -H "Authorization: Bearer $key" "$URL/v1/server" >/dev/null 2>&1 && return 0
     sleep 2
@@ -119,13 +119,13 @@ else
   # 4. The 256 KiB bound of the agent tools' run_script, against the deployment.
   sdk() {
     local admin key
-    admin="$(sed -n 's/^PTC_ADMIN_KEY=//p' "$WORK/env")"
+    admin="$(sed -n 's/^REWIND_ADMIN_KEY=//p' "$WORK/env")"
     key="$(curl -fsS "$URL/v1/api-keys" -H "Authorization: Bearer $admin" \
       -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness"}' |
-      sed -n 's/.*"key":"\(ptc_sk_[A-Za-z0-9]*\)".*/\1/p')"
+      sed -n 's/.*"key":"\(rewind_sk_[A-Za-z0-9]*\)".*/\1/p')"
     [ -n "$key" ] || return 1
     pnpm --dir "$ROOT/sdk/typescript" install --frozen-lockfile >/dev/null &&
-      PTC_LIVE_URL="$URL" PTC_LIVE_KEY="$key" \
+      REWIND_LIVE_URL="$URL" REWIND_LIVE_KEY="$key" \
         pnpm --dir "$ROOT/sdk/typescript" exec vitest run test/live.test.ts
   }
   step "run_script's bound against the deployment" sdk

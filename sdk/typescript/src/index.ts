@@ -1,6 +1,6 @@
-export { Ptc, type PtcOptions, type Webhooks } from "./client.js";
+export { Rewind, type RewindOptions, type Webhooks } from "./client.js";
 
-export { PtcApiError, PtcConnectionError, PtcError, isProblem, type ProblemSlug } from "./errors.js";
+export { RewindApiError, RewindConnectionError, RewindError, isProblem, type ProblemSlug } from "./errors.js";
 export { formatDuration, toMillis } from "./duration.js";
 export type { TransportOptions } from "./http.js";
 

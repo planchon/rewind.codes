@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use ptc_core::Timestamp;
+use rewind_core::Timestamp;
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -304,7 +304,7 @@ impl Service for Tracker {
                     body: args.opt_str("body").unwrap_or_default().to_owned(),
                     state: "open".to_owned(),
                     labels: args.strings("labels"),
-                    reporter: "ptc-bot".to_owned(),
+                    reporter: "rewind-bot".to_owned(),
                     created_at: now.clone(),
                     updated_at: now,
                     comments: Vec::new(),

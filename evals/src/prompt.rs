@@ -3,10 +3,10 @@
 //! The renderings are what the evals compare (`archi/08-decisions.md`: "the evals decide
 //! between renderings"):
 //!
-//! | Rendering | The tools of `ptc:tools` in the prompt |
+//! | Rendering | The tools of `rewind:tools` in the prompt |
 //! | --- | --- |
-//! | `compact` | The compact rendering of `ptc-codegen`: one line per tool, with argument and result types |
-//! | `dts` | The whole `ptc-tools.d.ts`, as the type-checker reads it |
+//! | `compact` | The compact rendering of `rewind-codegen`: one line per tool, with argument and result types |
+//! | `dts` | The whole `rewind-tools.d.ts`, as the type-checker reads it |
 //! | `search` | Tool names only: the model reads declarations with `search_tools` |
 
 use std::fmt;
@@ -53,14 +53,14 @@ impl FromStr for Rendering {
 }
 
 const INTRODUCTION: &str = "\
-You solve tasks by writing TypeScript scripts that ai-ptc runs for you, through the tools \
+You solve tasks by writing TypeScript scripts that Rewind runs for you, through the tools \
 run_script, check_script, test_script, get_run, list_runs, signal_run, cancel_run, retry_run \
 and search_tools.
 
 - A script is one ES module whose default export is `async function main(input)`. What `main` \
 returns is the run's output, as JSON.
-- It imports its tools from \"ptc:tools\", and `sleep`, `signal`, `webhook`, `run`, \
-`ToolError` and `CancelledError` from \"ptc\". Nothing else can be imported: there is no npm, \
+- It imports its tools from \"rewind:tools\", and `sleep`, `signal`, `webhook`, `run`, \
+`ToolError` and `CancelledError` from \"rewind\". Nothing else can be imported: there is no npm, \
 no `fetch`, no file system and no `process`.
 - A tool call that fails throws a `ToolError`. Runs are durable: `await sleep(\"2d\")` and \
 `await signal(\"name\")` can last days, and a script sees time move only as its run does.
@@ -70,22 +70,22 @@ repeating the calls it already made.
 - When the task is done, answer with a short summary of what you did, and the answer if the \
 task asks a question.";
 
-/// The `ptc` module's declarations, without the file's own comment.
-fn ptc_module() -> &'static str {
-    let lib = ptc_runtime::sandbox_lib::PTC_D_TS;
+/// The `rewind` module's declarations, without the file's own comment.
+fn rewind_module() -> &'static str {
+    let lib = rewind_runtime::sandbox_lib::REWIND_D_TS;
     lib.find("declare module")
         .map_or(lib, |start| &lib[start..])
 }
 
 /// The system prompt for a toolset's declarations, in a rendering.
-pub fn system(declarations: &ptc_codegen::Declarations, rendering: Rendering) -> String {
+pub fn system(declarations: &rewind_codegen::Declarations, rendering: Rendering) -> String {
     let tools = match rendering {
         Rendering::Compact => format!(
-            "The tools of \"ptc:tools\", one per line:\n\n{}",
+            "The tools of \"rewind:tools\", one per line:\n\n{}",
             declarations.prompt.trim_end()
         ),
         Rendering::Dts => format!(
-            "The declarations of \"ptc:tools\" (ptc-tools.d.ts):\n\n```ts\n{}\n```",
+            "The declarations of \"rewind:tools\" (rewind-tools.d.ts):\n\n```ts\n{}\n```",
             declarations.typescript.trim_end()
         ),
         Rendering::Search => {
@@ -95,15 +95,15 @@ pub fn system(declarations: &ptc_codegen::Declarations, rendering: Rendering) ->
                 .map(|tool| tool.name.as_str())
                 .collect();
             format!(
-                "The tools of \"ptc:tools\", by name: {}.\nRead their declarations (arguments, results, \
+                "The tools of \"rewind:tools\", by name: {}.\nRead their declarations (arguments, results, \
                  descriptions) with search_tools before using them.",
                 names.join(", ")
             )
         }
     };
     format!(
-        "{INTRODUCTION}\n\nThe `ptc` module:\n\n```ts\n{}\n```\n\n{tools}\n",
-        ptc_module().trim_end()
+        "{INTRODUCTION}\n\nThe `rewind` module:\n\n```ts\n{}\n```\n\n{tools}\n",
+        rewind_module().trim_end()
     )
 }
 
@@ -111,11 +111,11 @@ pub fn system(declarations: &ptc_codegen::Declarations, rendering: Rendering) ->
 mod tests {
     use super::*;
 
-    fn declarations() -> ptc_codegen::Declarations {
-        ptc_codegen::Declarations {
-            typescript: "declare module \"ptc:tools\" {}\n".into(),
-            prompt: "import { crm } from \"ptc:tools\";\ncrm.get_customer({ id: string }) → ToolContent · Get a customer\n".into(),
-            tools: vec![ptc_codegen::ToolDeclaration {
+    fn declarations() -> rewind_codegen::Declarations {
+        rewind_codegen::Declarations {
+            typescript: "declare module \"rewind:tools\" {}\n".into(),
+            prompt: "import { crm } from \"rewind:tools\";\ncrm.get_customer({ id: string }) → ToolContent · Get a customer\n".into(),
+            tools: vec![rewind_codegen::ToolDeclaration {
                 name: "crm.get_customer".into(),
                 prompt: String::new(),
                 typescript: String::new(),
@@ -128,9 +128,11 @@ mod tests {
         let declarations = declarations();
         let compact = system(&declarations, Rendering::Compact);
         assert!(compact.contains("crm.get_customer({ id: string })"));
-        assert!(compact.contains("declare module \"ptc\""));
+        assert!(compact.contains("declare module \"rewind\""));
         assert!(!compact.contains("archi/"));
-        assert!(system(&declarations, Rendering::Dts).contains("declare module \"ptc:tools\" {}"));
+        assert!(
+            system(&declarations, Rendering::Dts).contains("declare module \"rewind:tools\" {}")
+        );
         let search = system(&declarations, Rendering::Search);
         assert!(search.contains("by name: crm.get_customer."));
         assert!(!search.contains("crm.get_customer({"));

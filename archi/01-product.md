@@ -1,8 +1,8 @@
 # 1. Product
 
-## What ai-ptc is
+## What Rewind is
 
-ai-ptc lets the model inside an agent harness solve a task by writing a TypeScript
+Rewind lets the model inside an agent harness solve a task by writing a TypeScript
 script that calls tools (MCP servers and harness-defined tools), instead of calling
 tools one at a time through the conversation.
 
@@ -27,14 +27,14 @@ Priorities:
 
 ## Who uses it
 
-ai-ptc is a tool for **agent harness developers**. A harness embeds it through an HTTP
-API ([`/v1`](07-code-architecture.md#http-api-v1)) and a TypeScript SDK. The `ptc` CLI is a
+Rewind is a tool for **agent harness developers**. A harness embeds it through an HTTP
+API ([`/v1`](07-code-architecture.md#http-api-v1)) and a TypeScript SDK. The `rewind` CLI is a
 client of the same API, for local development: of a server it starts itself on a local
 directory (Turso, local files), or of a remote one
 ([embedded server](07-code-architecture.md#embedded-server-and-cli)).
 
 ```
-┌──────────── agent harness ────────────┐       ┌──────────────── ai-ptc ────────────────┐
+┌──────────── agent harness ────────────┐       ┌──────────────── Rewind ────────────────┐
 │                                        │       │                                         │
 │  model ── run_script(code) ──► SDK ────┼─HTTP─►│  API server ──► Postgres (journal, …)   │
 │    ▲                            │      │       │                    ▲          S3 (payloads)
@@ -46,7 +46,7 @@ directory (Turso, local files), or of a remote one
 ```
 
 1. The harness **registers a toolset**: MCP servers and, optionally, its own *host tools*
-   (JSON Schema + handler). ai-ptc connects to the MCP servers, pins their schemas, and
+   (JSON Schema + handler). Rewind connects to the MCP servers, pins their schemas, and
    returns the generated TypeScript declarations ([routes](04-tools.md#routes)).
 2. The harness puts those declarations in the system prompt and exposes the **agent
    tools** to its model (below).
@@ -66,11 +66,11 @@ directory (Turso, local files), or of a remote one
    `run.suspended`) to resume the agent conversation when a long run ends.
 
 ```ts
-import { Ptc } from "@ai-ptc/sdk";
+import { Rewind } from "@rewind.codes/sdk";
 
-const ptc = new Ptc({ url: process.env.PTC_URL });
+const rewind = new Rewind({ url: process.env.REWIND_URL });
 
-const toolset = await ptc.toolsets.create({
+const toolset = await rewind.toolsets.create({
   mcp: [{ name: "github", url: "https://mcp.example.com/github" }],
   host: [{
     name: "ask_user",
@@ -82,9 +82,9 @@ const toolset = await ptc.toolsets.create({
 
 // toolset.declarations → system prompt
 
-ptc.worker({ toolset: toolset.id, tools: { ask_user: async ({ question }, ctx) => { /* … */ } } });
+rewind.worker({ toolset: toolset.id, tools: { ask_user: async ({ question }, ctx) => { /* … */ } } });
 
-const run = await ptc.runs.start({
+const run = await rewind.runs.start({
   toolset: toolset.id,
   script: code,
   input: {},
@@ -103,7 +103,7 @@ write them. The harness picks the ones it wants and plugs them into its model AP
 (adapters for the Anthropic and OpenAI tool formats).
 
 ```ts
-const agentTools = ptc.agentTools({ toolset: toolset.id, labels: { conversation: convId } });
+const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversation: convId } });
 // agentTools.definitions → model API; agentTools.handle(name, input) → tool result
 ```
 
@@ -139,8 +139,8 @@ A script is a single ES module. Its default export is the entry point; its input
 output are JSON.
 
 ```ts
-import { github, slack } from "ptc:tools";
-import { sleep, signal } from "ptc";
+import { github, slack } from "rewind:tools";
+import { sleep, signal } from "rewind";
 
 export default async function main(input: { repo: string }) {
   const issues = await github.list_issues({ repo: input.repo, state: "open" });
@@ -161,11 +161,11 @@ export default async function main(input: { repo: string }) {
 
 ### Modules available to scripts
 
-- `ptc:tools`: generated per toolset. One namespace per MCP server or host-tool group.
-- `ptc`: the runtime standard library.
+- `rewind:tools`: generated per toolset. One namespace per MCP server or host-tool group.
+- `rewind`: the runtime standard library.
 
 ```ts
-declare module "ptc" {
+declare module "rewind" {
   type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d" | "w"}` | string; // "1h30m"
   export function sleep(duration: Duration): Promise<void>;
   export function signal<T = unknown>(name: string): Promise<T>;
@@ -243,6 +243,6 @@ depend on the host. The sandbox refuses to start if `TZ` is not UTC.
 **What type-checks is what exists.** The checker's `lib` declares exactly the globals of
 this table and the ECMAScript built-ins, and nothing else (no DOM lib). A name that models
 reach for by habit but that is absent (`fetch`, `require`, `process`, `Buffer`) gets a
-hint in `ptc check` diagnostics and in the LLM trace, saying what to use instead. Adding
+hint in `rewind check` diagnostics and in the LLM trace, saying what to use instead. Adding
 or changing a global changes what scripts can observe, so it bumps the
 [determinism epoch](03-execution.md#determinism-epoch).
