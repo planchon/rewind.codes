@@ -42,6 +42,7 @@ struct Seen {
     query: BTreeMap<String, String>,
     idempotency_key: Option<String>,
     authorization: Option<String>,
+    namespace: Option<String>,
     body: Value,
 }
 
@@ -113,6 +114,7 @@ fn see(
         query,
         idempotency_key: header("idempotency-key"),
         authorization: header("authorization"),
+        namespace: header("rewind-namespace"),
         body,
     });
 }
@@ -518,6 +520,11 @@ async fn run_starts_a_run_and_waits_for_it() {
     assert_eq!(start.what, "start");
     assert_eq!(start.idempotency_key.as_deref(), Some("start-1"));
     assert_eq!(start.authorization, None, "the socket takes no API key");
+    assert_eq!(
+        start.namespace.as_deref(),
+        Some("local"),
+        "against its own embedded server, the namespace local"
+    );
     assert_eq!(start.body["labels"], json!({"agent": "triage"}));
     // The start answers at once; a wait above 50 s is split into reads of 50 s at most.
     assert_eq!(start.body.get("wait"), None);
@@ -802,22 +809,35 @@ async fn a_remote_server_gets_the_api_key() {
     let script = dir.path().join("hello.ts");
     std::fs::write(&script, "export default async () => 1;\n").unwrap();
 
-    let (mut console, captured) = Console::captured();
-    let exit = rewind_cli::run(
-        [
-            "--url",
-            &url,
-            "--api-key",
-            "rewind_sk_secret",
-            "--dir",
-            dir.path().join(".rewind").to_str().unwrap(),
-            "run",
-            script.to_str().unwrap(),
-        ],
-        &mut console,
-    )
-    .await;
-    assert_eq!(exit, Exit::Success, "{}", captured.stderr());
+    let state = dir.path().join(".rewind");
+    let rewind = |key: &'static str, namespace: Option<&'static str>| {
+        let mut argv = vec![
+            "--url".to_owned(),
+            url.clone(),
+            "--api-key".to_owned(),
+            key.to_owned(),
+            "--dir".to_owned(),
+            state.display().to_string(),
+        ];
+        if let Some(namespace) = namespace {
+            argv.extend(["--namespace".to_owned(), namespace.to_owned()]);
+        }
+        argv.extend(["run".to_owned(), script.display().to_string()]);
+        async move {
+            let (mut console, captured) = Console::captured();
+            let exit = rewind_cli::run(argv, &mut console).await;
+            (exit, captured.stderr())
+        }
+    };
+
+    // A key names the end user the run acts for: a usage error without it, before any request.
+    let (exit, err) = rewind("rewind_sk_secret", None).await;
+    assert_eq!(exit, Exit::Usage, "{err}");
+    assert!(err.contains("--namespace"), "{err}");
+    assert!(stub.lock().unwrap().requests.is_empty());
+
+    let (exit, err) = rewind("rewind_sk_secret", Some("alice")).await;
+    assert_eq!(exit, Exit::Success, "{err}");
     let requests = stub.lock().unwrap().requests.clone();
     assert!(
         requests
@@ -825,9 +845,18 @@ async fn a_remote_server_gets_the_api_key() {
             .all(|seen| seen.authorization.as_deref() == Some("Bearer rewind_sk_secret"))
     );
     assert!(
-        !dir.path().join(".rewind").exists(),
-        "a remote server needs no embedded one"
+        requests
+            .iter()
+            .all(|seen| seen.namespace.as_deref() == Some("alice"))
     );
+    assert!(!state.exists(), "a remote server needs no embedded one");
+
+    // An end user's token names its own namespace.
+    stub.lock().unwrap().requests.clear();
+    let (exit, err) = rewind("rewind_nt_token_of_alice", None).await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    let requests = stub.lock().unwrap().requests.clone();
+    assert!(requests.iter().all(|seen| seen.namespace.is_none()));
 }
 
 #[tokio::test(flavor = "multi_thread")]

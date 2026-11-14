@@ -90,6 +90,9 @@ pub(crate) enum Command {
     /// Register toolsets and read their declarations.
     #[command(subcommand)]
     Toolsets(ToolsetsCommand),
+    /// The namespaces (the end users) and their use; one namespace; their limits; erase one.
+    #[command(subcommand)]
+    Namespaces(NamespacesCommand),
 }
 
 /// What starts a run: `rewind run` and `rewind fork` share them.
@@ -341,6 +344,161 @@ pub(crate) enum ToolsetsCommand {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum NamespacesCommand {
+    /// The namespaces and their use this month, the most CPU first.
+    List(NamespacesListArgs),
+    /// One namespace: its limits, its use day by day, its alerts and its tokens in use.
+    Show {
+        name: String,
+        /// The month, such as 2026-11; the current one by default.
+        #[arg(long, value_name = "YYYY-MM")]
+        month: Option<String>,
+    },
+    /// Sets a namespace's exceptions to the default limits, or the defaults with --defaults,
+    /// and prints the limits. Without a limit to set, prints them.
+    Quotas(QuotasArgs),
+    /// Erases a namespace in the background: the end user's tokens, runs, credentials and use.
+    Delete { name: String },
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct NamespacesListArgs {
+    /// Only the namespaces whose name starts with this.
+    #[arg(long)]
+    pub(crate) prefix: Option<String>,
+    /// Only those that used at least this share of one of their limits: 0.8 for 80 %.
+    #[arg(long, value_name = "SHARE")]
+    pub(crate) above: Option<f64>,
+    /// The order: the most CPU (the default), runs or scripts of the month first, or by name.
+    #[arg(long, value_enum)]
+    pub(crate) order: Option<NamespaceOrderArg>,
+    /// The month whose use is listed, such as 2026-11; the current one by default.
+    #[arg(long, value_name = "YYYY-MM")]
+    pub(crate) month: Option<String>,
+    /// At most this many namespaces.
+    #[arg(long)]
+    pub(crate) limit: Option<u32>,
+    /// The next page: the cursor the previous page printed.
+    #[arg(long)]
+    pub(crate) after: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum NamespaceOrderArg {
+    Cpu,
+    Runs,
+    Scripts,
+    Name,
+}
+
+impl From<NamespaceOrderArg> for rewind_api::namespaces::NamespaceOrder {
+    fn from(order: NamespaceOrderArg) -> Self {
+        match order {
+            NamespaceOrderArg::Cpu => Self::Cpu,
+            NamespaceOrderArg::Runs => Self::Runs,
+            NamespaceOrderArg::Scripts => Self::Scripts,
+            NamespaceOrderArg::Name => Self::Name,
+        }
+    }
+}
+
+/// A limit to set, or `none` to remove it: a namespace's exception then follows the default,
+/// and a default no longer limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Limit<T> {
+    Set(T),
+    None,
+}
+
+impl<T: std::str::FromStr> std::str::FromStr for Limit<T>
+where
+    T::Err: std::fmt::Display,
+{
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        if text == "none" {
+            return Ok(Limit::None);
+        }
+        text.parse()
+            .map(Limit::Set)
+            .map_err(|error| format!("{error}; or none to remove the limit"))
+    }
+}
+
+impl<T> Limit<T> {
+    /// The limit to keep, given the one in place.
+    pub(crate) fn apply(self, slot: &mut Option<T>) {
+        *slot = match self {
+            Limit::Set(value) => Some(value),
+            Limit::None => None,
+        };
+    }
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct QuotasArgs {
+    /// The namespace whose exceptions to set.
+    #[arg(required_unless_present = "defaults", conflicts_with = "defaults")]
+    pub(crate) name: Option<String>,
+    /// Set the default limits of every namespace without an exception instead.
+    #[arg(long)]
+    pub(crate) defaults: bool,
+    /// CPU time of the scripts in a calendar month, such as 2h: alerts at 80 % and 100 %.
+    #[arg(long, value_name = "DURATION|none")]
+    pub(crate) cpu_per_month: Option<Limit<Duration>>,
+    /// Runs active at once.
+    #[arg(long, value_name = "N|none")]
+    pub(crate) active_runs: Option<Limit<u32>>,
+    /// Runs created in a calendar month, forks included.
+    #[arg(long, value_name = "N|none")]
+    pub(crate) runs_per_month: Option<Limit<u64>>,
+    /// Distinct scripts with a run kept.
+    #[arg(long, value_name = "N|none")]
+    pub(crate) scripts: Option<Limit<u64>>,
+    /// The longest TTL a run may ask for.
+    #[arg(long, value_name = "DURATION|none")]
+    pub(crate) max_ttl: Option<Limit<Duration>>,
+    /// The most lines a script may have.
+    #[arg(long, value_name = "N|none")]
+    pub(crate) max_script_lines: Option<Limit<u32>>,
+}
+
+impl QuotasArgs {
+    /// Whether a limit is to be set.
+    pub(crate) fn changes(&self) -> bool {
+        self.cpu_per_month.is_some()
+            || self.active_runs.is_some()
+            || self.runs_per_month.is_some()
+            || self.scripts.is_some()
+            || self.max_ttl.is_some()
+            || self.max_script_lines.is_some()
+    }
+
+    /// `quotas` with the limits given set or removed, the others kept.
+    pub(crate) fn apply(&self, quotas: &mut rewind_api::namespaces::Quotas) {
+        if let Some(limit) = self.cpu_per_month {
+            limit.apply(&mut quotas.cpu_per_month);
+        }
+        if let Some(limit) = self.active_runs {
+            limit.apply(&mut quotas.active_runs);
+        }
+        if let Some(limit) = self.runs_per_month {
+            limit.apply(&mut quotas.runs_per_month);
+        }
+        if let Some(limit) = self.scripts {
+            limit.apply(&mut quotas.scripts);
+        }
+        if let Some(limit) = self.max_ttl {
+            limit.apply(&mut quotas.max_ttl);
+        }
+        if let Some(limit) = self.max_script_lines {
+            limit.apply(&mut quotas.max_script_lines);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum DeclarationsFormat {
     /// rewind-tools.d.ts, for the type-checker.
@@ -370,5 +528,55 @@ mod tests {
         assert_eq!(run.start.wait.as_millis(), 120_000);
         assert!(Cli::try_parse_from(["rewind", "run", "a.ts", "--wait", "soon"]).is_err());
         assert!(Cli::try_parse_from(["rewind", "replay", "r1", "--at", "3"]).is_err());
+    }
+
+    #[test]
+    fn quotas_name_a_namespace_or_the_defaults() {
+        let cli = Cli::try_parse_from([
+            "rewind",
+            "namespaces",
+            "quotas",
+            "alice",
+            "--active-runs",
+            "5",
+            "--max-ttl",
+            "none",
+            "--cpu-per-month",
+            "2h",
+        ])
+        .unwrap();
+        let Command::Namespaces(NamespacesCommand::Quotas(quotas)) = cli.command else {
+            panic!("not quotas")
+        };
+        assert_eq!(quotas.name.as_deref(), Some("alice"));
+        assert_eq!(quotas.active_runs, Some(Limit::Set(5)));
+        assert_eq!(quotas.max_ttl, Some(Limit::None));
+        let mut limits = rewind_api::namespaces::Quotas {
+            max_ttl: Some("1h".parse().unwrap()),
+            scripts: Some(9),
+            ..Default::default()
+        };
+        quotas.apply(&mut limits);
+        assert_eq!(limits.active_runs, Some(5));
+        assert_eq!(limits.max_ttl, None);
+        assert_eq!(limits.scripts, Some(9), "a limit not given is kept");
+        assert_eq!(limits.cpu_per_month, Some("2h".parse().unwrap()));
+
+        assert!(Cli::try_parse_from(["rewind", "namespaces", "quotas"]).is_err());
+        assert!(
+            Cli::try_parse_from(["rewind", "namespaces", "quotas", "alice", "--defaults"]).is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "rewind",
+                "namespaces",
+                "quotas",
+                "--defaults",
+                "--scripts",
+                "x"
+            ])
+            .is_err()
+        );
+        assert!(Cli::try_parse_from(["rewind", "namespaces", "quotas", "--defaults"]).is_ok());
     }
 }
