@@ -712,7 +712,7 @@ mod tests {
         let limits = Limits::for_output(64 * 1024);
         let long = "m".repeat(3_000_000);
         let run: Run = serde_json::from_value(json!({
-            "id": "r", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
+            "id": "r", "namespace": "alice", "status": "failed", "script": "s", "toolset": "t", "epoch": 1,
             "mode": "live", "labels": {}, "traceId": "0", "historyLen": 3,
             "createdAt": "2026-11-12T00:00:00Z", "updatedAt": "2026-11-12T00:00:00Z",
             "expiresAt": "2026-11-13T00:00:00Z",

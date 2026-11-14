@@ -77,6 +77,8 @@ async fn exited(child: &mut Child, within: Duration) -> ExitStatus {
 async fn post(socket: &Path, path: &str, body: Value) -> (u16, Value) {
     let response = client(socket)
         .post(format!("http://localhost{path}"))
+        // The runs act for one end user: a request over the socket names its namespace too.
+        .header("Rewind-Namespace", "local")
         .json(&body)
         .send()
         .await

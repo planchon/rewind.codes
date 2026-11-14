@@ -391,6 +391,8 @@ fn a_first_ctrl_c_before_the_start_starts_no_run() {
         .command(&[
             "--url",
             &url,
+            "--namespace",
+            "alice",
             "run",
             "script.ts",
             "--toolset",
