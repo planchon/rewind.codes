@@ -111,6 +111,13 @@ describe("sign-in", () => {
     expect(await screen.findByRole("heading", { name: "Sign in to Rewind" })).toBeVisible();
   });
 
+  it("says why a sign-in with GitHub failed, then takes the reason out of the address", async () => {
+    window.history.replaceState(null, "", "/?auth_error=state_mismatch");
+    renderApp("/", { world: withWorkos() });
+    expect(await screen.findByText(/took too long, or started in another tab/i)).toBeVisible();
+    expect(window.location.search).toBe("");
+  });
+
   it("leaves for GitHub with the invitation the page was opened with", async () => {
     const user = userEvent.setup();
     window.history.replaceState(null, "", "/?invitation_token=tok_123");

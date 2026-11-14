@@ -94,6 +94,33 @@ function readInvitationToken(): string | null {
   }
 }
 
+/**
+ * The reason a sign-in with GitHub failed, which `/auth/callback` puts in the address
+ * (`/?auth_error=…#/`), as a sentence for the sign-in page. Read once, then taken out of the
+ * address.
+ */
+const AUTH_ERROR_PARAM = "auth_error";
+
+function takeAuthError(): string | null {
+  try {
+    const url = new URL(window.location.href);
+    const code = url.searchParams.get(AUTH_ERROR_PARAM);
+    if (code === null) return null;
+    url.searchParams.delete(AUTH_ERROR_PARAM);
+    window.history.replaceState(window.history.state, "", url.toString());
+    switch (code) {
+      case "state_mismatch":
+        return "The sign-in with GitHub took too long, or started in another tab: try again.";
+      case "provider_error":
+        return "GitHub or WorkOS refused the sign-in: try again, or sign in with a code by email.";
+      default:
+        return "The sign-in with GitHub did not go through: try again, or sign in with a code by email.";
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** Takes the invitation's token out of the address, once it has served. */
 function dropInvitationToken(): void {
   try {
@@ -138,6 +165,7 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
   const [key, setKey] = useState<string | null>(storedKey);
   const [phase, setPhaseState] = useState<AuthPhase>({ kind: "starting" });
   const [invitationToken, setInvitationToken] = useState(readInvitationToken);
+  const [authError] = useState(takeAuthError);
   const [attempt, setAttempt] = useState(0);
 
   const phaseRef = useRef(phase);
@@ -255,14 +283,14 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
         if (!cancelled) apply(answer);
       } catch (error) {
         if (cancelled) return;
-        if (error instanceof ApiError && error.status === 401) signedOut(null);
+        if (error instanceof ApiError && error.status === 401) signedOut(authError);
         else setPhase({ kind: "unreachable", error });
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [api, apply, setPhase, signedOut, attempt]);
+  }, [api, apply, setPhase, signedOut, attempt, authError]);
 
   // A minute before the access token expires, a fresh one.
   useEffect(() => {
