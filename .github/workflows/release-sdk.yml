@@ -1,0 +1,86 @@
+# Publishes @rewind.codes/sdk to npm when a tag `sdk-v<version>` is pushed. The version follows
+# SemVer and must be the one of sdk/typescript/package.json, with its section in CHANGELOG.md, on
+# a commit of main. A prerelease (`0.2.0-rc.1`) goes to the `next` dist-tag, any other version to
+# `latest`. npm trusts this workflow (trusted publishing, OIDC): no token, and provenance.
+name: Release the SDK
+
+on:
+  push:
+    tags: ["sdk-v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-sdk
+  cancel-in-progress: false
+
+env:
+  PNPM_VERSION: 10.15.0
+  PACKAGE: "@rewind.codes/sdk"
+
+jobs:
+  publish:
+    name: Publish @rewind.codes/sdk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: sdk/typescript/pnpm-lock.yaml
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@11.21.1 && npm --version
+      - name: The tag is the package's SemVer version, on main, with its changelog
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*)(\.(0|[1-9][0-9]*|[0-9]*[a-zA-Z-][0-9a-zA-Z-]*))*)?$'
+          if [[ ! "$version" =~ $semver ]]; then
+            echo "::error::package.json's version $version is not SemVer (without build metadata)"; exit 1
+          fi
+          if [[ "$TAG" != "sdk-v$version" ]]; then
+            echo "::error::the tag $TAG is not sdk-v$version, the version of package.json"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$TAG is not on main"; exit 1
+          fi
+          if ! grep -qE "^## ${version//./\\.} " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"; exit 1
+          fi
+          if [[ "$version" == *-* ]]; then dist_tag=next; else dist_tag=latest; fi
+          if npm view "$PACKAGE@$version" version >/dev/null 2>&1; then
+            echo "::notice::$PACKAGE@$version is already on npm: nothing to publish"
+            published=true
+          else
+            published=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "dist-tag=$dist_tag" >> "$GITHUB_OUTPUT"
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+      - if: steps.version.outputs.published == 'false'
+        run: pnpm install --frozen-lockfile
+      - name: Format, types, tests
+        if: steps.version.outputs.published == 'false'
+        run: pnpm check
+      - name: The types generated from api/openapi.json are current
+        if: steps.version.outputs.published == 'false'
+        run: pnpm check:api
+      # `prepack` builds dist/ again from a clean directory.
+      - name: Publish
+        if: steps.version.outputs.published == 'false'
+        run: npm publish --provenance --tag "${{ steps.version.outputs.dist-tag }}"
