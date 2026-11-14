@@ -6,17 +6,22 @@
 //! | `turso:<path>` | `rewind-store-turso`: the embedded server, local development |
 //! | `postgres://…` | `rewind-store-postgres`: production, several workers on one database |
 //!
+//! The server's tests also run it on the engine's in-memory adapters ([`MemoryStore`]), through
+//! `rewind_server::start_in_memory`: the reference implementations of the ports' contracts.
+//!
 //! Each method is handed to the backend as it is: the enum only picks it.
 
 #![allow(clippy::too_many_lines)]
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rewind_core::{
     Completion, Digest, Epoch, HistoryEntry, RunId, Script, Seq, Shape, Timestamp, ToolFailure,
     ToolOutcome, Toolset,
 };
+use rewind_engine::adapters::{MemoryAccess, MemoryJournal, MemoryReadModel, MemorySecrets};
 use rewind_engine::ports::{
     AccessStore, AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun,
     Credentials, Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer,
@@ -47,6 +52,8 @@ pub(crate) enum StoreLocation {
     Turso(PathBuf),
     /// A Postgres connection string.
     Postgres(String),
+    /// The engine's in-memory adapters, for the server's tests: never read from `--store`.
+    Memory,
 }
 
 impl StoreLocation {
@@ -75,6 +82,18 @@ impl StoreLocation {
 pub(crate) enum Store {
     Turso(TursoStore),
     Postgres(PostgresStore),
+    Memory(Arc<MemoryStore>),
+}
+
+/// The engine's in-memory adapters of the four ports, and the virtual time a server on them
+/// keeps while it runs.
+#[derive(Debug, Default)]
+pub(crate) struct MemoryStore {
+    journal: MemoryJournal,
+    access: MemoryAccess,
+    read_model: MemoryReadModel,
+    secrets: MemorySecrets,
+    virtual_time: Mutex<Option<Timestamp>>,
 }
 
 impl Store {
@@ -103,6 +122,7 @@ impl Store {
                         .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
                 Ok(Self::Postgres(store))
             }
+            StoreLocation::Memory => Ok(Self::Memory(Arc::new(MemoryStore::default()))),
         }
     }
 
@@ -122,6 +142,10 @@ impl Store {
                 .await
                 .map_err(|error| StoreError::Backend(error.to_string())),
             Store::Postgres(_) => Ok(None),
+            Store::Memory(store) => Ok(*store
+                .virtual_time
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)),
         }
     }
 
@@ -135,16 +159,53 @@ impl Store {
             (Store::Postgres(_), Some(_)) => Err(StoreError::Backend(
                 "a server on Postgres runs in real time: virtual time is for Turso".into(),
             )),
+            (Store::Memory(store), at) => {
+                *store
+                    .virtual_time
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner) = at;
+                Ok(())
+            }
         }
     }
 }
 
+/// Hands a call of one port to the backend: Turso and Postgres implement every port on one
+/// type, the in-memory store has one adapter per port (`$port`).
 macro_rules! each {
-    ($self:ident, $store:ident => $call:expr) => {
+    ($port:ident, $self:ident, $store:ident => $call:expr) => {
         match $self {
             Store::Turso($store) => $call,
             Store::Postgres($store) => $call,
+            Store::Memory(memory) => {
+                let $store = &memory.$port;
+                $call
+            }
         }
+    };
+}
+
+macro_rules! journal {
+    ($self:ident, $store:ident => $call:expr) => {
+        each!(journal, $self, $store => $call)
+    };
+}
+
+macro_rules! access {
+    ($self:ident, $store:ident => $call:expr) => {
+        each!(access, $self, $store => $call)
+    };
+}
+
+macro_rules! read_model {
+    ($self:ident, $store:ident => $call:expr) => {
+        each!(read_model, $self, $store => $call)
+    };
+}
+
+macro_rules! secrets {
+    ($self:ident, $store:ident => $call:expr) => {
+        each!(secrets, $self, $store => $call)
     };
 }
 
@@ -155,7 +216,7 @@ impl JournalStore for Store {
         script: &Script,
         compiled: &CompiledScript,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.put_script(tenant, script, compiled).await)
+        journal!(self, store => store.put_script(tenant, script, compiled).await)
     }
 
     async fn get_script(
@@ -163,7 +224,7 @@ impl JournalStore for Store {
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<StoredScript>, StoreError> {
-        each!(self, store => store.get_script(tenant, digest).await)
+        journal!(self, store => store.get_script(tenant, digest).await)
     }
 
     async fn put_toolset(
@@ -172,7 +233,7 @@ impl JournalStore for Store {
         toolset: &Toolset,
         declarations: &ToolDeclarations,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.put_toolset(tenant, toolset, declarations).await)
+        journal!(self, store => store.put_toolset(tenant, toolset, declarations).await)
     }
 
     async fn get_toolset(
@@ -180,11 +241,11 @@ impl JournalStore for Store {
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<StoredToolset>, StoreError> {
-        each!(self, store => store.get_toolset(tenant, digest).await)
+        journal!(self, store => store.get_toolset(tenant, digest).await)
     }
 
     async fn list_toolsets(&self, tenant: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
-        each!(self, store => store.list_toolsets(tenant).await)
+        journal!(self, store => store.list_toolsets(tenant).await)
     }
 
     async fn create_run(
@@ -192,7 +253,7 @@ impl JournalStore for Store {
         run: NewRun,
         idempotency_key: Option<String>,
     ) -> Result<CreateRun, StoreError> {
-        each!(self, store => store.create_run(run, idempotency_key).await)
+        journal!(self, store => store.create_run(run, idempotency_key).await)
     }
 
     async fn enqueue(
@@ -202,22 +263,22 @@ impl JournalStore for Store {
         idempotency_key: Option<String>,
         now: Timestamp,
     ) -> Result<Enqueued, StoreError> {
-        each!(self, store => store.enqueue(run, completion, idempotency_key, now).await)
+        journal!(self, store => store.enqueue(run, completion, idempotency_key, now).await)
     }
 
     async fn get_run(&self, run: &RunRef) -> Result<Option<RunRecord>, StoreError> {
-        each!(self, store => store.get_run(run).await)
+        journal!(self, store => store.get_run(run).await)
     }
 
     async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, StoreError> {
-        each!(self, store => store.list_runs(filter).await)
+        journal!(self, store => store.list_runs(filter).await)
     }
 
     async fn acquire_runnable(
         &self,
         request: &AcquireRunnable<'_>,
     ) -> Result<Option<Lease>, StoreError> {
-        each!(self, store => store.acquire_runnable(request).await)
+        journal!(self, store => store.acquire_runnable(request).await)
     }
 
     async fn acquire_run(
@@ -227,7 +288,7 @@ impl JournalStore for Store {
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
-        each!(self, store => store.acquire_run(run, owner, now, lease_duration).await)
+        journal!(self, store => store.acquire_run(run, owner, now, lease_duration).await)
     }
 
     async fn acquire_quarantined(
@@ -239,7 +300,7 @@ impl JournalStore for Store {
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<Option<Lease>, StoreError> {
-        each!(self, store => {
+        journal!(self, store => {
             store
                 .acquire_quarantined(owner, build, epochs, tenants, now, lease_duration)
                 .await
@@ -252,15 +313,15 @@ impl JournalStore for Store {
         now: Timestamp,
         lease_duration: Duration,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.renew(lease, now, lease_duration).await)
+        journal!(self, store => store.renew(lease, now, lease_duration).await)
     }
 
     async fn load_history(&self, run: &RunRef, from: u64) -> Result<Vec<HistoryEntry>, StoreError> {
-        each!(self, store => store.load_history(run, from).await)
+        journal!(self, store => store.load_history(run, from).await)
     }
 
     async fn take_inbox(&self, lease: &Lease) -> Result<Vec<InboxItem>, StoreError> {
-        each!(self, store => store.take_inbox(lease).await)
+        journal!(self, store => store.take_inbox(lease).await)
     }
 
     async fn commit_activation(
@@ -269,15 +330,15 @@ impl JournalStore for Store {
         activation: Activation,
         now: Timestamp,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.commit_activation(lease, activation, now).await)
+        journal!(self, store => store.commit_activation(lease, activation, now).await)
     }
 
     async fn release(&self, lease: &Lease) -> Result<(), StoreError> {
-        each!(self, store => store.release(lease).await)
+        journal!(self, store => store.release(lease).await)
     }
 
     async fn forget_sticky(&self, run: &RunRef, owner: &str) -> Result<(), StoreError> {
-        each!(self, store => store.forget_sticky(run, owner).await)
+        journal!(self, store => store.forget_sticky(run, owner).await)
     }
 
     async fn record_failure(
@@ -286,7 +347,7 @@ impl JournalStore for Store {
         error: String,
         now: Timestamp,
     ) -> Result<Failures, StoreError> {
-        each!(self, store => store.record_failure(lease, error, now).await)
+        journal!(self, store => store.record_failure(lease, error, now).await)
     }
 
     async fn quarantine(
@@ -296,19 +357,19 @@ impl JournalStore for Store {
         reason: String,
         now: Timestamp,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.quarantine(lease, kind, reason, now).await)
+        journal!(self, store => store.quarantine(lease, kind, reason, now).await)
     }
 
     async fn release_quarantine(&self, run: &RunRef) -> Result<bool, StoreError> {
-        each!(self, store => store.release_quarantine(run).await)
+        journal!(self, store => store.release_quarantine(run).await)
     }
 
     async fn fire_due_timers(&self, now: Timestamp, limit: usize) -> Result<usize, StoreError> {
-        each!(self, store => store.fire_due_timers(now, limit).await)
+        journal!(self, store => store.fire_due_timers(now, limit).await)
     }
 
     async fn next_timer(&self) -> Result<Option<Timestamp>, StoreError> {
-        each!(self, store => store.next_timer().await)
+        journal!(self, store => store.next_timer().await)
     }
 
     async fn expire_due_runs(
@@ -316,11 +377,11 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<ExpiredRuns, StoreError> {
-        each!(self, store => store.expire_due_runs(now, limit).await)
+        journal!(self, store => store.expire_due_runs(now, limit).await)
     }
 
     async fn next_deadline(&self) -> Result<Option<Timestamp>, StoreError> {
-        each!(self, store => store.next_deadline().await)
+        journal!(self, store => store.next_deadline().await)
     }
 
     async fn claim_tool_tasks(
@@ -330,7 +391,7 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<Vec<ClaimedTask>, StoreError> {
-        each!(self, store => store.claim_tool_tasks(owner, filter, now, limit).await)
+        journal!(self, store => store.claim_tool_tasks(owner, filter, now, limit).await)
     }
 
     async fn heartbeat_tool_task(
@@ -338,11 +399,11 @@ impl JournalStore for Store {
         token: &TaskToken,
         now: Timestamp,
     ) -> Result<Option<Timestamp>, StoreError> {
-        each!(self, store => store.heartbeat_tool_task(token, now).await)
+        journal!(self, store => store.heartbeat_tool_task(token, now).await)
     }
 
     async fn next_tool_attempt(&self, after: Timestamp) -> Result<Option<Timestamp>, StoreError> {
-        each!(self, store => store.next_tool_attempt(after).await)
+        journal!(self, store => store.next_tool_attempt(after).await)
     }
 
     async fn retry_tool_task(
@@ -350,7 +411,7 @@ impl JournalStore for Store {
         token: &TaskToken,
         next_attempt_at: Timestamp,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.retry_tool_task(token, next_attempt_at).await)
+        journal!(self, store => store.retry_tool_task(token, next_attempt_at).await)
     }
 
     async fn defer_tool_task(
@@ -358,7 +419,7 @@ impl JournalStore for Store {
         token: &TaskToken,
         until: Timestamp,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.defer_tool_task(token, until).await)
+        journal!(self, store => store.defer_tool_task(token, until).await)
     }
 
     async fn park_tool_task(
@@ -366,7 +427,7 @@ impl JournalStore for Store {
         token: &TaskToken,
         reason: ParkReason,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.park_tool_task(token, reason).await)
+        journal!(self, store => store.park_tool_task(token, reason).await)
     }
 
     async fn complete_tool_task(
@@ -375,7 +436,7 @@ impl JournalStore for Store {
         outcome: ToolOutcome,
         now: Timestamp,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.complete_tool_task(token, outcome, now).await)
+        journal!(self, store => store.complete_tool_task(token, outcome, now).await)
     }
 
     async fn approve_tool_task(
@@ -383,7 +444,7 @@ impl JournalStore for Store {
         task: &TaskRef,
         now: Timestamp,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.approve_tool_task(task, now).await)
+        journal!(self, store => store.approve_tool_task(task, now).await)
     }
 
     async fn reject_tool_task(
@@ -392,7 +453,7 @@ impl JournalStore for Store {
         failure: ToolFailure,
         now: Timestamp,
     ) -> Result<TaskUpdate, StoreError> {
-        each!(self, store => store.reject_tool_task(task, failure, now).await)
+        journal!(self, store => store.reject_tool_task(task, failure, now).await)
     }
 
     async fn resume_parked(
@@ -400,7 +461,7 @@ impl JournalStore for Store {
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
-        each!(self, store => store.resume_parked(scope, now).await)
+        journal!(self, store => store.resume_parked(scope, now).await)
     }
 
     async fn expire_deferred_tool_tasks(
@@ -408,15 +469,15 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<usize, StoreError> {
-        each!(self, store => store.expire_deferred_tool_tasks(now, limit).await)
+        journal!(self, store => store.expire_deferred_tool_tasks(now, limit).await)
     }
 
     async fn tool_tasks(&self, run: &RunRef) -> Result<Vec<ToolTask>, StoreError> {
-        each!(self, store => store.tool_tasks(run).await)
+        journal!(self, store => store.tool_tasks(run).await)
     }
 
     async fn tool_task(&self, token: &TaskToken) -> Result<Option<ToolTask>, StoreError> {
-        each!(self, store => store.tool_task(token).await)
+        journal!(self, store => store.tool_task(token).await)
     }
 
     async fn create_webhook_token(
@@ -424,26 +485,26 @@ impl JournalStore for Store {
         run: &RunRef,
         name: &str,
     ) -> Result<WebhookToken, StoreError> {
-        each!(self, store => store.create_webhook_token(run, name).await)
+        journal!(self, store => store.create_webhook_token(run, name).await)
     }
 
     async fn resolve_webhook_token(
         &self,
         token: &WebhookToken,
     ) -> Result<Option<WebhookTarget>, StoreError> {
-        each!(self, store => store.resolve_webhook_token(token).await)
+        journal!(self, store => store.resolve_webhook_token(token).await)
     }
 
     async fn put_subscription(&self, subscription: &Subscription) -> Result<(), StoreError> {
-        each!(self, store => store.put_subscription(subscription).await)
+        journal!(self, store => store.put_subscription(subscription).await)
     }
 
     async fn subscriptions(&self, tenant: &TenantId) -> Result<Vec<Subscription>, StoreError> {
-        each!(self, store => store.subscriptions(tenant).await)
+        journal!(self, store => store.subscriptions(tenant).await)
     }
 
     async fn delete_subscription(&self, tenant: &TenantId, id: &str) -> Result<bool, StoreError> {
-        each!(self, store => store.delete_subscription(tenant, id).await)
+        journal!(self, store => store.delete_subscription(tenant, id).await)
     }
 
     async fn get_payload(
@@ -451,7 +512,7 @@ impl JournalStore for Store {
         tenant: &TenantId,
         digest: Digest,
     ) -> Result<Option<PayloadRecord>, StoreError> {
-        each!(self, store => store.get_payload(tenant, digest).await)
+        journal!(self, store => store.get_payload(tenant, digest).await)
     }
 
     async fn reserve_payloads(
@@ -460,7 +521,7 @@ impl JournalStore for Store {
         payloads: &[PayloadRecord],
         now: Timestamp,
     ) -> Result<Vec<Digest>, StoreError> {
-        each!(self, store => store.reserve_payloads(tenant, payloads, now).await)
+        journal!(self, store => store.reserve_payloads(tenant, payloads, now).await)
     }
 
     async fn unreferenced_payloads(
@@ -468,7 +529,7 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
-        each!(self, store => store.unreferenced_payloads(now, limit).await)
+        journal!(self, store => store.unreferenced_payloads(now, limit).await)
     }
 
     async fn forget_payloads(
@@ -476,7 +537,7 @@ impl JournalStore for Store {
         payloads: &[(TenantId, Digest)],
         now: Timestamp,
     ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
-        each!(self, store => store.forget_payloads(payloads, now).await)
+        journal!(self, store => store.forget_payloads(payloads, now).await)
     }
 
     async fn drop_payloads(
@@ -484,7 +545,7 @@ impl JournalStore for Store {
         payloads: &[(TenantId, Digest)],
         started: Timestamp,
     ) -> Result<usize, StoreError> {
-        each!(self, store => store.drop_payloads(payloads, started).await)
+        journal!(self, store => store.drop_payloads(payloads, started).await)
     }
 
     async fn runs_to_archive(
@@ -492,7 +553,7 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<Vec<RunRef>, StoreError> {
-        each!(self, store => store.runs_to_archive(now, limit).await)
+        journal!(self, store => store.runs_to_archive(now, limit).await)
     }
 
     async fn archive_run(
@@ -501,7 +562,7 @@ impl JournalStore for Store {
         document: Digest,
         now: Timestamp,
     ) -> Result<bool, StoreError> {
-        each!(self, store => store.archive_run(run, document, now).await)
+        journal!(self, store => store.archive_run(run, document, now).await)
     }
 
     async fn runs_to_delete(
@@ -509,23 +570,23 @@ impl JournalStore for Store {
         now: Timestamp,
         limit: usize,
     ) -> Result<Vec<RunRef>, StoreError> {
-        each!(self, store => store.runs_to_delete(now, limit).await)
+        journal!(self, store => store.runs_to_delete(now, limit).await)
     }
 
     async fn delete_run(&self, run: &RunRef, now: Timestamp) -> Result<bool, StoreError> {
-        each!(self, store => JournalStore::delete_run(store, run, now).await)
+        journal!(self, store => JournalStore::delete_run(store, run, now).await)
     }
 
     async fn put_tenant(&self, tenant: &Tenant) -> Result<(), StoreError> {
-        each!(self, store => store.put_tenant(tenant).await)
+        journal!(self, store => store.put_tenant(tenant).await)
     }
 
     async fn get_tenant(&self, id: &TenantId) -> Result<Option<Tenant>, StoreError> {
-        each!(self, store => store.get_tenant(id).await)
+        journal!(self, store => store.get_tenant(id).await)
     }
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
-        each!(self, store => store.list_tenants().await)
+        journal!(self, store => store.list_tenants().await)
     }
 
     async fn put_namespace(
@@ -535,7 +596,7 @@ impl JournalStore for Store {
         exceptions: Option<&Quotas>,
         now: Timestamp,
     ) -> Result<NamespaceWrite, StoreError> {
-        each!(self, store => store.put_namespace(tenant, name, exceptions, now).await)
+        journal!(self, store => store.put_namespace(tenant, name, exceptions, now).await)
     }
 
     async fn get_namespace(
@@ -543,14 +604,14 @@ impl JournalStore for Store {
         tenant: &TenantId,
         name: &NamespaceName,
     ) -> Result<Option<Namespace>, StoreError> {
-        each!(self, store => store.get_namespace(tenant, name).await)
+        journal!(self, store => store.get_namespace(tenant, name).await)
     }
 
     async fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
     ) -> Result<Vec<NamespaceUsage>, StoreError> {
-        each!(self, store => store.list_namespaces(filter).await)
+        journal!(self, store => store.list_namespaces(filter).await)
     }
 
     async fn namespace_usage(
@@ -559,7 +620,7 @@ impl JournalStore for Store {
         of: &UsageOf,
         month: Month,
     ) -> Result<Usage, StoreError> {
-        each!(self, store => store.namespace_usage(tenant, of, month).await)
+        journal!(self, store => store.namespace_usage(tenant, of, month).await)
     }
 
     async fn namespace_has_script(
@@ -568,7 +629,7 @@ impl JournalStore for Store {
         name: &NamespaceName,
         script: Digest,
     ) -> Result<bool, StoreError> {
-        each!(self, store => store.namespace_has_script(tenant, name, script).await)
+        journal!(self, store => store.namespace_has_script(tenant, name, script).await)
     }
 
     async fn revoke_namespace_tokens(
@@ -577,7 +638,7 @@ impl JournalStore for Store {
         name: &NamespaceName,
         now: Timestamp,
     ) -> Result<bool, StoreError> {
-        each!(self, store => store.revoke_namespace_tokens(tenant, name, now).await)
+        journal!(self, store => store.revoke_namespace_tokens(tenant, name, now).await)
     }
 
     async fn delete_namespace(
@@ -586,14 +647,14 @@ impl JournalStore for Store {
         name: &NamespaceName,
         now: Timestamp,
     ) -> Result<DeleteNamespace, StoreError> {
-        each!(self, store => JournalStore::delete_namespace(store, tenant, name, now).await)
+        journal!(self, store => JournalStore::delete_namespace(store, tenant, name, now).await)
     }
 
     async fn namespaces_to_erase(
         &self,
         limit: usize,
     ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
-        each!(self, store => store.namespaces_to_erase(limit).await)
+        journal!(self, store => store.namespaces_to_erase(limit).await)
     }
 
     async fn drop_namespace(
@@ -601,7 +662,7 @@ impl JournalStore for Store {
         tenant: &TenantId,
         name: &NamespaceName,
     ) -> Result<DropNamespace, StoreError> {
-        each!(self, store => store.drop_namespace(tenant, name).await)
+        journal!(self, store => store.drop_namespace(tenant, name).await)
     }
 
     async fn record_usage(
@@ -609,7 +670,7 @@ impl JournalStore for Store {
         deltas: &[UsageDelta],
         now: Timestamp,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        each!(self, store => store.record_usage(deltas, now).await)
+        journal!(self, store => store.record_usage(deltas, now).await)
     }
 
     async fn quota_alerts(
@@ -618,7 +679,7 @@ impl JournalStore for Store {
         namespace: Option<&NamespaceName>,
         month: Month,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        each!(self, store => store.quota_alerts(tenant, namespace, month).await)
+        journal!(self, store => store.quota_alerts(tenant, namespace, month).await)
     }
 
     async fn claim_quota_alerts(
@@ -628,7 +689,7 @@ impl JournalStore for Store {
         lease_duration: Duration,
         limit: usize,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        each!(self, store => store.claim_quota_alerts(owner, now, lease_duration, limit).await)
+        journal!(self, store => store.claim_quota_alerts(owner, now, lease_duration, limit).await)
     }
 
     async fn ack_quota_alerts(
@@ -636,7 +697,7 @@ impl JournalStore for Store {
         keys: &[QuotaAlertKey],
         now: Timestamp,
     ) -> Result<(), StoreError> {
-        each!(self, store => store.ack_quota_alerts(keys, now).await)
+        journal!(self, store => store.ack_quota_alerts(keys, now).await)
     }
 
     async fn claim_feed(
@@ -647,37 +708,37 @@ impl JournalStore for Store {
         lease_duration: Duration,
         limit: usize,
     ) -> Result<Vec<FeedItem>, StoreError> {
-        each!(self, store => store.claim_feed(consumer, owner, now, lease_duration, limit).await)
+        journal!(self, store => store.claim_feed(consumer, owner, now, lease_duration, limit).await)
     }
 
     async fn ack_feed(&self, ids: &[u64]) -> Result<(), StoreError> {
-        each!(self, store => store.ack_feed(ids).await)
+        journal!(self, store => store.ack_feed(ids).await)
     }
 }
 
 impl AccessStore for Store {
     async fn put_key(&self, key: &ApiKey) -> Result<(), StoreError> {
-        each!(self, store => store.put_key(key).await)
+        access!(self, store => store.put_key(key).await)
     }
 
     async fn find_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
-        each!(self, store => store.find_key(hash).await)
+        access!(self, store => store.find_key(hash).await)
     }
 
     async fn list_keys(&self, tenant: &TenantId) -> Result<Vec<ApiKey>, StoreError> {
-        each!(self, store => store.list_keys(tenant).await)
+        access!(self, store => store.list_keys(tenant).await)
     }
 
     async fn revoke_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        each!(self, store => store.revoke_key(hash, now).await)
+        access!(self, store => store.revoke_key(hash, now).await)
     }
 
     async fn put_token(&self, token: &Token) -> Result<(), StoreError> {
-        each!(self, store => store.put_token(token).await)
+        access!(self, store => store.put_token(token).await)
     }
 
     async fn find_token(&self, hash: Digest) -> Result<Option<Token>, StoreError> {
-        each!(self, store => store.find_token(hash).await)
+        access!(self, store => store.find_token(hash).await)
     }
 
     async fn revoke_token(
@@ -686,7 +747,7 @@ impl AccessStore for Store {
         hash: Digest,
         now: Timestamp,
     ) -> Result<bool, StoreError> {
-        each!(self, store => store.revoke_token(tenant, hash, now).await)
+        access!(self, store => store.revoke_token(tenant, hash, now).await)
     }
 
     async fn revoke_tokens(
@@ -695,7 +756,7 @@ impl AccessStore for Store {
         namespace: &NamespaceName,
         now: Timestamp,
     ) -> Result<u64, StoreError> {
-        each!(self, store => store.revoke_tokens(tenant, namespace, now).await)
+        access!(self, store => store.revoke_tokens(tenant, namespace, now).await)
     }
 
     async fn count_tokens(
@@ -704,43 +765,43 @@ impl AccessStore for Store {
         namespace: &NamespaceName,
         now: Timestamp,
     ) -> Result<u64, StoreError> {
-        each!(self, store => store.count_tokens(tenant, namespace, now).await)
+        access!(self, store => store.count_tokens(tenant, namespace, now).await)
     }
 
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
-        each!(self, store => store.put_token_key(key).await)
+        access!(self, store => store.put_token_key(key).await)
     }
 
     async fn find_token_key(&self, kid: &str) -> Result<Option<TokenKey>, StoreError> {
-        each!(self, store => store.find_token_key(kid).await)
+        access!(self, store => store.find_token_key(kid).await)
     }
 
     async fn list_token_keys(&self, tenant: &TenantId) -> Result<Vec<TokenKey>, StoreError> {
-        each!(self, store => store.list_token_keys(tenant).await)
+        access!(self, store => store.list_token_keys(tenant).await)
     }
 
     async fn delete_token_key(&self, tenant: &TenantId, kid: &str) -> Result<bool, StoreError> {
-        each!(self, store => store.delete_token_key(tenant, kid).await)
+        access!(self, store => store.delete_token_key(tenant, kid).await)
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {
-        each!(self, store => store.put_role(role).await)
+        access!(self, store => store.put_role(role).await)
     }
 
     async fn get_role(&self, tenant: &TenantId, name: &str) -> Result<Option<Role>, StoreError> {
-        each!(self, store => store.get_role(tenant, name).await)
+        access!(self, store => store.get_role(tenant, name).await)
     }
 
     async fn list_roles(&self, tenant: &TenantId) -> Result<Vec<Role>, StoreError> {
-        each!(self, store => store.list_roles(tenant).await)
+        access!(self, store => store.list_roles(tenant).await)
     }
 
     async fn delete_role(&self, tenant: &TenantId, name: &str) -> Result<RoleDeletion, StoreError> {
-        each!(self, store => store.delete_role(tenant, name).await)
+        access!(self, store => store.delete_role(tenant, name).await)
     }
 
     async fn put_grant(&self, grant: &Grant, keep: Option<&str>) -> Result<GrantWrite, StoreError> {
-        each!(self, store => store.put_grant(grant, keep).await)
+        access!(self, store => store.put_grant(grant, keep).await)
     }
 
     async fn grant(
@@ -748,11 +809,11 @@ impl AccessStore for Store {
         tenant: &TenantId,
         principal: &Principal,
     ) -> Result<Option<Grant>, StoreError> {
-        each!(self, store => store.grant(tenant, principal).await)
+        access!(self, store => store.grant(tenant, principal).await)
     }
 
     async fn list_grants(&self, tenant: &TenantId) -> Result<Vec<Grant>, StoreError> {
-        each!(self, store => store.list_grants(tenant).await)
+        access!(self, store => store.list_grants(tenant).await)
     }
 
     async fn delete_grant(
@@ -761,7 +822,7 @@ impl AccessStore for Store {
         principal: &Principal,
         keep: Option<&str>,
     ) -> Result<GrantDeletion, StoreError> {
-        each!(self, store => store.delete_grant(tenant, principal, keep).await)
+        access!(self, store => store.delete_grant(tenant, principal, keep).await)
     }
 
     async fn claim_grant(
@@ -770,15 +831,15 @@ impl AccessStore for Store {
         invitation: &Principal,
         user: &Principal,
     ) -> Result<GrantClaim, StoreError> {
-        each!(self, store => store.claim_grant(tenant, invitation, user).await)
+        access!(self, store => store.claim_grant(tenant, invitation, user).await)
     }
 
     async fn set_default_role(&self, tenant: &TenantId, role: &str) -> Result<(), StoreError> {
-        each!(self, store => store.set_default_role(tenant, role).await)
+        access!(self, store => store.set_default_role(tenant, role).await)
     }
 
     async fn default_role(&self, tenant: &TenantId) -> Result<Option<String>, StoreError> {
-        each!(self, store => store.default_role(tenant).await)
+        access!(self, store => store.default_role(tenant).await)
     }
 }
 
@@ -789,7 +850,7 @@ impl ReadModel for Store {
         entries: &[HistoryEntry],
         snapshot: &RunSnapshot,
     ) -> Result<(), ReadModelError> {
-        each!(self, store => store.apply(run, entries, snapshot).await)
+        read_model!(self, store => store.apply(run, entries, snapshot).await)
     }
 
     async fn search_runs(
@@ -799,7 +860,7 @@ impl ReadModel for Store {
         after: Option<&SearchCursor>,
         limit: usize,
     ) -> Result<Vec<RunSummary>, ReadModelError> {
-        each!(self, store => store.search_runs(query, order, after, limit).await)
+        read_model!(self, store => store.search_runs(query, order, after, limit).await)
     }
 
     async fn run_stats(
@@ -807,7 +868,7 @@ impl ReadModel for Store {
         query: &RunQuery,
         window: &StatsWindow,
     ) -> Result<RunStats, ReadModelError> {
-        each!(self, store => store.run_stats(query, window).await)
+        read_model!(self, store => store.run_stats(query, window).await)
     }
 
     async fn failure_groups(
@@ -815,15 +876,15 @@ impl ReadModel for Store {
         query: &RunQuery,
         window: &FailureWindow,
     ) -> Result<FailureGroups, ReadModelError> {
-        each!(self, store => store.failure_groups(query, window).await)
+        read_model!(self, store => store.failure_groups(query, window).await)
     }
 
     async fn scripts(&self, filter: &ScriptFilter) -> Result<Vec<ScriptSummary>, ReadModelError> {
-        each!(self, store => store.scripts(filter).await)
+        read_model!(self, store => store.scripts(filter).await)
     }
 
     async fn tool_stats(&self, filter: &ToolStatsFilter) -> Result<Vec<ToolStats>, ReadModelError> {
-        each!(self, store => store.tool_stats(filter).await)
+        read_model!(self, store => store.tool_stats(filter).await)
     }
 
     async fn observed_shapes(
@@ -831,7 +892,7 @@ impl ReadModel for Store {
         tenant: &TenantId,
         tools: &[String],
     ) -> Result<BTreeMap<String, Shape>, ReadModelError> {
-        each!(self, store => store.observed_shapes(tenant, tools).await)
+        read_model!(self, store => store.observed_shapes(tenant, tools).await)
     }
 
     async fn record_tasks(
@@ -839,11 +900,11 @@ impl ReadModel for Store {
         run: &RunRef,
         tasks: &[TaskProgress],
     ) -> Result<(), ReadModelError> {
-        each!(self, store => store.record_tasks(run, tasks).await)
+        read_model!(self, store => store.record_tasks(run, tasks).await)
     }
 
     async fn attempts(&self, run: &RunRef) -> Result<BTreeMap<Seq, u32>, ReadModelError> {
-        each!(self, store => store.attempts(run).await)
+        read_model!(self, store => store.attempts(run).await)
     }
 
     async fn record_quarantine(
@@ -852,7 +913,7 @@ impl ReadModel for Store {
         quarantine: Option<&QuarantineNote>,
         at: Timestamp,
     ) -> Result<(), ReadModelError> {
-        each!(self, store => store.record_quarantine(run, quarantine, at).await)
+        read_model!(self, store => store.record_quarantine(run, quarantine, at).await)
     }
 
     async fn purge(
@@ -860,11 +921,11 @@ impl ReadModel for Store {
         ended_before: Timestamp,
         tenants: &TenantScope,
     ) -> Result<usize, ReadModelError> {
-        each!(self, store => store.purge(ended_before, tenants).await)
+        read_model!(self, store => store.purge(ended_before, tenants).await)
     }
 
     async fn delete_run(&self, run: &RunRef) -> Result<bool, ReadModelError> {
-        each!(self, store => ReadModel::delete_run(store, run).await)
+        read_model!(self, store => ReadModel::delete_run(store, run).await)
     }
 }
 
@@ -875,7 +936,7 @@ impl SecretStore for Store {
         owner: &SecretOwner,
         credentials: &Credentials,
     ) -> Result<(), SecretError> {
-        each!(self, store => store.put(tenant, owner, credentials).await)
+        secrets!(self, store => store.put(tenant, owner, credentials).await)
     }
 
     async fn resolve(
@@ -885,11 +946,11 @@ impl SecretStore for Store {
         namespace: &NamespaceName,
         toolset: Digest,
     ) -> Result<Option<Credentials>, SecretError> {
-        each!(self, store => store.resolve(tenant, run, namespace, toolset).await)
+        secrets!(self, store => store.resolve(tenant, run, namespace, toolset).await)
     }
 
     async fn delete(&self, tenant: &TenantId, owner: &SecretOwner) -> Result<bool, SecretError> {
-        each!(self, store => store.delete(tenant, owner).await)
+        secrets!(self, store => store.delete(tenant, owner).await)
     }
 
     async fn delete_namespace(
@@ -897,6 +958,6 @@ impl SecretStore for Store {
         tenant: &TenantId,
         namespace: &NamespaceName,
     ) -> Result<usize, SecretError> {
-        each!(self, store => SecretStore::delete_namespace(store, tenant, namespace).await)
+        secrets!(self, store => SecretStore::delete_namespace(store, tenant, namespace).await)
     }
 }

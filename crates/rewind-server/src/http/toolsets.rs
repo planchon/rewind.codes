@@ -216,7 +216,7 @@ pub(super) async fn credentials(
     app.engine
         .set_toolset_credentials(&caller.tenant, digest, &secrets(credentials))
         .await?;
-    app.record_parked_tasks(&caller.tenant, digest).await;
+    app.record_parked_tasks(&caller.tenant, None, digest).await;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
 }
@@ -224,6 +224,13 @@ pub(super) async fn credentials(
 /// A toolset's credentials serve every run of the tenant that has none of its own: a key
 /// limited to labels sets only those of its runs.
 fn refuse_scoped_credentials(caller: &Caller) -> Result<(), ApiError> {
+    if caller.token.is_some() {
+        return Err(ApiError::forbidden(
+            "a toolset's credentials serve every end user of the tenant: an end user's token sets \
+             its namespace's (PUT /v1/namespaces/{name}/toolsets/{id}/credentials) or its runs' \
+             (PUT /v1/runs/{id}/credentials)",
+        ));
+    }
     if caller.scoped() {
         return Err(ApiError::forbidden(
             "a toolset's credentials serve every run of the tenant: a key limited to labels sets \

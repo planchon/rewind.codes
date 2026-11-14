@@ -137,6 +137,18 @@ pub async fn start_with_identity(
     start_wired(args, Some(identity)).await
 }
 
+/// Starts a server in this process on the engine's in-memory adapters of `JournalStore`,
+/// `AccessStore`, `ReadModel` and `SecretStore`, the reference implementations of their
+/// contracts, instead of `--store`: the server's tests. With `identity`, as
+/// [`start_with_identity`]. Its blobs are in `--blobs`, which is required.
+pub async fn start_in_memory(
+    mut args: ServerArgs,
+    identity: Option<MemoryIdentity>,
+) -> Result<Running, StartupError> {
+    args.in_memory = true;
+    start_wired(args, identity).await
+}
+
 /// The dashboard's sign-in, when the configuration has WorkOS (on the api role).
 fn sign_in(
     config: &Config,
@@ -238,7 +250,7 @@ async fn start_wired(
         version: VERSION,
         embedded: config.embedded(),
         roles,
-        run_quota: config.run_quota,
+        ceiling: config.ceiling.clone(),
         retention: config.retention,
         allow_stdio: config.allow_stdio,
         webhook_egress,

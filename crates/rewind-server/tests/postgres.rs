@@ -162,7 +162,7 @@ async fn an_api_server_and_two_workers_share_one_postgres() {
                     "worker",
                     "--worker-name",
                     name,
-                    "--run-quota",
+                    "--quota-active-runs",
                     "20",
                 ],
             )
@@ -175,7 +175,7 @@ async fn an_api_server_and_two_workers_share_one_postgres() {
         tempfile::tempdir().unwrap(),
         &url,
         &blobs,
-        &["--role", "api", "--run-quota", "20"],
+        &["--role", "api", "--quota-active-runs", "20"],
     )
     .await;
     let info = api.admin.server_info().await.unwrap();

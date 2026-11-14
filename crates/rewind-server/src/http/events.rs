@@ -19,13 +19,15 @@ use rewind_engine::ports::{Clock, JournalStore, RunRef};
 use tokio::sync::watch;
 
 use crate::app::App;
-use crate::auth::{Caller, TokenExpiry};
+use crate::auth::{self, Caller, TokenExpiry};
 use crate::error::ApiError;
 use crate::extract::Query;
 use crate::wake::{Busy, POLL, wait};
 
 /// `GET /v1/runs/{id}/events?follow=1&from=…`. A stream opened with a member's access token is
-/// closed at the token's expiry: the dashboard resumes it with a new token and `from`.
+/// closed at the token's expiry: the dashboard resumes it with a new token and `from`. A stream
+/// opened with an end user's token is closed once the token no longer authenticates: revoked,
+/// expired, its key deleted or its namespace erased.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -49,6 +51,7 @@ pub(super) async fn stream(
         tokio::time::Instant::now() + Duration::from_millis(left)
     });
     let tail = Tail {
+        caller: caller.token.is_some().then_some(caller),
         changes: app.wake.subscribe(),
         busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),
         app,
@@ -68,6 +71,8 @@ pub(super) async fn stream(
 /// Where a stream stands.
 struct Tail {
     app: Arc<App>,
+    /// The end user's token that opened the stream, checked again at each read.
+    caller: Option<Caller>,
     run: RunRef,
     /// The index of the next entry to send.
     next: u64,
@@ -111,6 +116,12 @@ impl Tail {
     /// Reads what was committed since the last read. Returns whether there is something to
     /// send.
     async fn read(&mut self) -> Result<bool, ApiError> {
+        if let Some(caller) = &self.caller
+            && !auth::still_valid(&self.app, caller).await
+        {
+            self.done = true;
+            return Ok(false);
+        }
         let Some(record) = self.app.store.get_run(&self.run).await? else {
             self.done = true;
             return Ok(false);

@@ -275,6 +275,42 @@ impl TestServer {
         Self::start_with(dir, &store, &blobs, extra, Some(identity.clone())).await
     }
 
+    /// A server with both roles on the engine's in-memory adapters of the store's ports, its
+    /// blobs in a temporary directory, with these extra options.
+    pub(crate) async fn in_memory(extra: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let key = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
+        let blobs = dir.path().join("blobs").display().to_string();
+        let mut args = vec![
+            "rewind server",
+            "--blobs",
+            &blobs,
+            "--master-key",
+            &key,
+            "--admin-key",
+            ADMIN_KEY,
+            "--admin-tenant",
+            "acme",
+            "--listen",
+            "127.0.0.1:0",
+            "--activations",
+            "2",
+            "--dispatches",
+            "4",
+        ];
+        args.extend_from_slice(extra);
+        let args = ServerArgs::try_parse_from(args).unwrap();
+        let running = rewind_server::start_in_memory(args, None).await.unwrap();
+        let url = running.url().unwrap();
+        let admin = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
+        Self {
+            running: Some(running),
+            url,
+            admin,
+            dir,
+        }
+    }
+
     /// A server on `store`, with its blobs in `blobs`; with `identity`, the dashboard's sign-in
     /// (the four `WORKOS_*`) on that identity provider.
     pub(crate) async fn start_with(
@@ -360,6 +396,28 @@ impl TestServer {
             .await
             .unwrap();
         self.client(key.key.as_deref())
+    }
+
+    /// A key of `tenant` with `role` whose requests name no namespace: they read every
+    /// namespace of the tenant.
+    pub(crate) async fn tenant_key(&self, tenant: &str, role: &str) -> Client {
+        let key = self
+            .admin
+            .create_api_key(&CreateApiKey {
+                tenant: Some(tenant.into()),
+                name: format!("a {role} key of the tests"),
+                role: role.into(),
+                allowed_labels: Labels::new(),
+            })
+            .await
+            .unwrap();
+        Client::remote(&self.url, key.key.as_deref()).unwrap()
+    }
+
+    /// A client of this server with `key`, whose requests name no namespace: an end user's
+    /// token names its own.
+    pub(crate) fn bare(&self, key: &str) -> Client {
+        Client::remote(&self.url, Some(key)).unwrap()
     }
 
     /// A client of this server with `key`.
@@ -488,6 +546,8 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
             .unwrap_err(),
     );
     not_found(harness.delete_subscription("sub\u{0}").await.unwrap_err());
+    not_found(harness.revoke_token("ab\u{0}").await.unwrap_err());
+    not_found(harness.delete_token_key("rk_\u{0}").await.unwrap_err());
     not_found(harness.get_run("run\u{0}", None).await.unwrap_err());
 
     // Filters: labels and tools.

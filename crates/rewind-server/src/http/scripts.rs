@@ -9,12 +9,13 @@ use rewind_api::access::Permission;
 use rewind_api::common::{AbortReason, RunStatus, ScriptError};
 use rewind_api::scripts::{CheckRequest, CheckResult, Severity, TestRequest, TestResult};
 use rewind_core::Script;
+use rewind_engine::StartError;
 use rewind_engine::adapters::VirtualClock;
 use rewind_engine::mock::{
     Expectations, ExpectedError, MockDispatcher, Mocks, Scenario, ScenarioError, ScenarioSignal,
     SignalWhen, TestReport, run_scenario,
 };
-use rewind_engine::ports::{ScriptExecutor, TypeChecker};
+use rewind_engine::ports::{JournalStore, Quotas, ScriptExecutor, Tenant, TypeChecker, limits};
 use rewind_runtime::{MockError, SandboxLimits, TsMocks};
 
 use crate::app::App;
@@ -23,6 +24,36 @@ use crate::error::{ApiError, diagnostic, invalid_script_diagnostic};
 use crate::extract::Body;
 use crate::http::toolsets;
 
+/// The limits a script checked or tested in the request's namespace passes, as a start would:
+/// its namespace's (its exceptions over the tenant's defaults) and the tenant's ceiling. The
+/// header `Rewind-Namespace` is required with a key or a member (400).
+async fn bounds(app: &App, caller: &Caller) -> Result<Quotas, ApiError> {
+    let namespace = caller.namespace_required("check or test a script")?;
+    let tenant = app
+        .store
+        .get_tenant(&caller.tenant)
+        .await?
+        .unwrap_or_else(|| Tenant::new(caller.tenant.clone()));
+    let found = app.store.get_namespace(&caller.tenant, &namespace).await?;
+    Ok(limits(&tenant, found.as_ref()).tightest(&tenant.quotas))
+}
+
+/// Refuses (422 `invalid-script`) a script longer than `max_script_lines`, as a start does.
+fn check_lines(script: &Script, bounds: &Quotas) -> Result<(), ApiError> {
+    let Some(max) = bounds.max_script_lines else {
+        return Ok(());
+    };
+    let lines = script.source().lines().count() as u64;
+    if lines > u64::from(max) {
+        return Err(StartError::ScriptTooLong {
+            lines,
+            max: u64::from(max),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// `POST /v1/check`: the checks at start, then tsgo and the checker's rules.
 pub(super) async fn check(
     State(app): State<Arc<App>>,
@@ -30,11 +61,13 @@ pub(super) async fn check(
     Body(request): Body<CheckRequest>,
 ) -> Result<Json<CheckResult>, ApiError> {
     caller.require(Permission::RunsStart)?;
+    let bounds = bounds(&app, &caller).await?;
     let stored = match &request.toolset {
         Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
         None => app.default_toolset(&caller.tenant).await?,
     };
     let script = Script::new(request.script);
+    check_lines(&script, &bounds)?;
     if let Err(invalid) = app.engine.executor().compile(&script, &stored.toolset) {
         return Ok(Json(CheckResult {
             ok: false,
@@ -70,11 +103,18 @@ pub(super) async fn test(
              server with the worker role",
         ));
     }
+    let bounds = bounds(&app, &caller).await?;
     let stored = match &request.toolset {
         Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
         None => app.default_toolset(&caller.tenant).await?,
     };
-    let mut scenario = Scenario::new(Script::new(request.script), stored.toolset, request.input);
+    let script = Script::new(request.script);
+    check_lines(&script, &bounds)?;
+    let mut scenario = Scenario::new(script, stored.toolset, request.input);
+    // The default TTL is lowered to the namespace's longest.
+    scenario.ttl = bounds
+        .max_ttl
+        .map(|max| max.min(app.engine.config().default_ttl));
     for signal in request.signals {
         let when = match signal.when.as_deref() {
             None | Some("blocked") => SignalWhen::Blocked,

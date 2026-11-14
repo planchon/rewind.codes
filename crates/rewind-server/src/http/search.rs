@@ -24,7 +24,8 @@ use crate::http::runs::core_time;
 use crate::http::{refuse_nul_in_filter, runs_status};
 
 /// The read model's query for `q`, and for the filters of `GET /v1/runs` when given, as the
-/// caller may see it: every term of both, and the key's labels.
+/// caller may see it: every term of both, the namespace the request is bound to, and the
+/// caller's labels.
 pub(crate) fn run_query(
     caller: &Caller,
     q: Option<&str>,
@@ -32,6 +33,9 @@ pub(crate) fn run_query(
     now: rewind_core::Timestamp,
 ) -> Result<RunQuery, ApiError> {
     let mut query = RunQuery::new(caller.tenant.clone());
+    if let Some(namespace) = &caller.namespace {
+        query = query.with(Predicate::Namespace(BTreeSet::from([namespace.clone()])));
+    }
     for (key, value) in &caller.labels {
         query = query.with(Predicate::Label {
             key: key.clone(),

@@ -20,7 +20,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
-use rewind_engine::ports::{Retention, TenantId, TenantScope};
+use rewind_engine::ports::{Quotas, Retention, TenantId, TenantScope};
 use rewind_engine::{CacheConfig, EngineConfig};
 use rewind_mcp::{InternalAllowList, McpEgress};
 
@@ -151,9 +151,37 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_DISPATCHES", default_value_t = 64)]
     pub dispatches: usize,
 
-    /// The most active runs a tenant created with its first key may have.
-    #[arg(long, env = "REWIND_RUN_QUOTA")]
-    pub run_quota: Option<u32>,
+    /// The ceiling of the tenants this server creates (`archi/06-storage-and-scale.md`,
+    /// "Quotas"): the runs active at once across their namespaces; one more is refused with 429.
+    /// The operator changes a tenant's ceiling with `PUT /v1/organizations/{tenant}/quotas`.
+    #[arg(long, env = "REWIND_QUOTA_ACTIVE_RUNS")]
+    pub quota_active_runs: Option<u32>,
+
+    /// The ceiling of the tenants this server creates: the runs created in a calendar month,
+    /// forks included.
+    #[arg(long, env = "REWIND_QUOTA_RUNS_PER_MONTH")]
+    pub quota_runs_per_month: Option<u64>,
+
+    /// The ceiling of the tenants this server creates: the CPU time of their scripts in a
+    /// calendar month, such as `100h`. Never refused: crossing 80 % and 100 % sends
+    /// `quota.alert`.
+    #[arg(long, env = "REWIND_QUOTA_CPU_PER_MONTH", value_parser = parse_duration)]
+    pub quota_cpu_per_month: Option<Duration>,
+
+    /// The ceiling of the tenants this server creates: the distinct scripts with a run kept,
+    /// summed over their namespaces.
+    #[arg(long, env = "REWIND_QUOTA_SCRIPTS")]
+    pub quota_scripts: Option<u64>,
+
+    /// The ceiling of the tenants this server creates: the longest TTL a run may ask for in any
+    /// of their namespaces.
+    #[arg(long, env = "REWIND_QUOTA_MAX_TTL", value_parser = parse_duration)]
+    pub quota_max_ttl: Option<Duration>,
+
+    /// The ceiling of the tenants this server creates: the most lines a script may have in any
+    /// of their namespaces.
+    #[arg(long, env = "REWIND_QUOTA_MAX_SCRIPT_LINES")]
+    pub quota_max_script_lines: Option<u32>,
 
     /// Accept toolsets with stdio MCP servers: processes this server starts. The embedded
     /// server always does.
@@ -255,6 +283,11 @@ pub struct ServerArgs {
     /// `/auth/callback` (`https://app.rewind.codes/auth/callback`), registered in WorkOS.
     #[arg(long, env = "WORKOS_REDIRECT_URI")]
     pub workos_redirect_uri: Option<String>,
+
+    /// The store on the engine's in-memory adapters instead of `--store`: set by
+    /// `rewind_server::start_in_memory`, for the server's tests, never from the command line.
+    #[arg(skip)]
+    pub(crate) in_memory: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -394,7 +427,8 @@ pub(crate) struct Config {
     pub(crate) tenants: TenantScope,
     pub(crate) activations: usize,
     pub(crate) dispatches: usize,
-    pub(crate) run_quota: Option<u32>,
+    /// The ceiling of the tenants this server creates.
+    pub(crate) ceiling: Quotas,
     pub(crate) allow_stdio: bool,
     /// Where MCP servers may be: anywhere for the embedded server; public addresses and the
     /// internal hosts of `--allow-internal-mcp` for a deployed one.
@@ -543,7 +577,7 @@ impl ServerArgs {
                 tenants,
                 activations,
                 dispatches: self.dispatches,
-                run_quota: None,
+                ceiling: Quotas::default(),
                 allow_stdio: true,
                 mcp_egress: McpEgress::open(),
                 allow_private_webhooks: true,
@@ -566,12 +600,17 @@ impl ServerArgs {
         }
         let internal_mcp = InternalAllowList::parse(&self.allow_internal_mcp)
             .map_err(|error| ConfigError::new(format!("--allow-internal-mcp: {error}")))?;
-        let store_text = self.store.clone().ok_or_else(|| {
-            ConfigError::new(
-                "--store is required (turso:<path>), or run the embedded server with --embedded",
-            )
-        })?;
-        let store = StoreLocation::parse(&store_text)?;
+        let store = if self.in_memory {
+            StoreLocation::Memory
+        } else {
+            let store_text = self.store.clone().ok_or_else(|| {
+                ConfigError::new(
+                    "--store is required (turso:<path>), or run the embedded server with \
+                     --embedded",
+                )
+            })?;
+            StoreLocation::parse(&store_text)?
+        };
         let blobs = match &self.blobs {
             Some(blobs) => BlobLocation::parse(blobs, s3)?,
             None => match &store {
@@ -583,6 +622,11 @@ impl ServerArgs {
                     return Err(ConfigError::new(
                         "--blobs is required with Postgres: s3://<bucket>, or a directory every \
                          worker shares",
+                    ));
+                }
+                StoreLocation::Memory => {
+                    return Err(ConfigError::new(
+                        "--blobs is required with the in-memory store: a directory",
                     ));
                 }
             },
@@ -632,7 +676,14 @@ impl ServerArgs {
             tenants,
             activations,
             dispatches: self.dispatches,
-            run_quota: self.run_quota,
+            ceiling: Quotas {
+                cpu_per_month: self.quota_cpu_per_month,
+                active_runs: self.quota_active_runs,
+                runs_per_month: self.quota_runs_per_month,
+                scripts: self.quota_scripts,
+                max_ttl: self.quota_max_ttl,
+                max_script_lines: self.quota_max_script_lines,
+            },
             allow_stdio: self.allow_stdio,
             mcp_egress: McpEgress::checked(internal_mcp),
             allow_private_webhooks: self.allow_private_webhooks,

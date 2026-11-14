@@ -6,21 +6,23 @@ mod admin;
 mod dashboard;
 mod events;
 mod hooks;
+mod namespaces;
 mod organization;
 mod reading;
 mod roles;
-mod runs;
+pub(crate) mod runs;
 mod scripts;
 mod search;
 mod sign_in;
 mod subscriptions;
 mod tasks;
+mod tokens;
 mod toolsets;
 
 use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
-use axum::http::HeaderValue;
+use axum::http::{HeaderValue, header};
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
 use axum::routing::{delete, get, patch, post, put};
@@ -30,7 +32,7 @@ use rewind_api::routes;
 
 use crate::app::App;
 use crate::auth::{Caller, authenticate};
-use crate::error::ApiError;
+use crate::error::{ApiError, FreesAt};
 
 /// The largest request body: payloads are bounded at 8 MiB of canonical JSON, and JSON as sent
 /// may be larger.
@@ -111,6 +113,30 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
             routes::ORGANIZATION_INVITATION_RESEND,
             post(organization::resend_invitation),
         )
+        .route(routes::NAMESPACES, get(namespaces::list))
+        .route(
+            routes::NAMESPACE,
+            get(namespaces::get)
+                .put(namespaces::put)
+                .delete(namespaces::delete),
+        )
+        .route(routes::NAMESPACE_CREDENTIALS, put(namespaces::credentials))
+        .route(
+            routes::NAMESPACE_DEFAULTS,
+            get(namespaces::defaults).put(namespaces::put_defaults),
+        )
+        .route(routes::QUOTA_ALERTS, get(namespaces::alerts))
+        .route(routes::ORGANIZATION_QUOTAS, put(namespaces::put_ceiling))
+        .route(
+            routes::NAMESPACE_TOKENS,
+            post(tokens::create).delete(tokens::revoke_namespace),
+        )
+        .route(routes::TOKEN, delete(tokens::revoke))
+        .route(
+            routes::TOKEN_KEYS,
+            get(tokens::list_keys).post(tokens::create_key),
+        )
+        .route(routes::TOKEN_KEY, delete(tokens::delete_key))
         .route(routes::ROLES, get(roles::list))
         .route(routes::ROLE, put(roles::put).delete(roles::delete))
         .route(routes::PERMISSIONS, get(admin::permissions))
@@ -173,8 +199,9 @@ pub(crate) fn runs_status(status: rewind_api::common::RunStatus) -> rewind_core:
     }
 }
 
-/// Every response carries `Rewind-Version`; every request counts as activity for the embedded
-/// server's idle stop.
+/// Every response carries `Rewind-Version`, and a monthly quota's refusal `Retry-After`: the
+/// seconds left in the month, by the server's clock. Every request counts as activity for
+/// the embedded server's idle stop.
 async fn every_response(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
     let busy = app.activity.busy();
     let mut response = next.run(request).await;
@@ -183,5 +210,14 @@ async fn every_response(State(app): State<Arc<App>>, request: Request, next: Nex
         REWIND_VERSION,
         HeaderValue::from_static(app.settings.version),
     );
+    if let Some(FreesAt(at)) = response.extensions().get::<FreesAt>().copied() {
+        let seconds = at
+            .as_millis()
+            .saturating_sub(app.now().as_millis())
+            .div_ceil(1000);
+        response
+            .headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from(seconds.max(1)));
+    }
     response
 }

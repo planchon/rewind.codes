@@ -19,7 +19,7 @@ use rewind_api::common::timestamp;
 use rewind_api::organization::{
     CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, InvitationState,
     Member, MemberList, MembershipStatus, Organization, OrganizationSettings,
-    Principal as CallerPrincipal, UpdateOrganization, User,
+    Principal as CallerPrincipal, TokenKind, UpdateOrganization, User,
 };
 use rewind_engine::ports::{
     self, AccessStore, GrantClaim, GrantDeletion, GrantWrite, IdentityProvider, InvitationId,
@@ -28,7 +28,7 @@ use rewind_engine::ports::{
 use rewind_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::{App, SignIn};
-use crate::auth::{Caller, Member as SignedIn, Who, role_permissions};
+use crate::auth::{Caller, Member as SignedIn, TokenForm, Who, role_permissions};
 use crate::error::ApiError;
 use crate::extract::Body;
 use crate::grants::{OWNER, current_permissions, first_grant, givable_role, grant_view, holds};
@@ -178,6 +178,23 @@ pub(super) async fn whoami(
         });
         if let Some(Principal::Key(hash)) = &caller.principal {
             identity.principal = Some(CallerPrincipal::Key { id: hash.to_hex() });
+        }
+        if let (Some(token), Some(namespace)) = (&caller.token, &caller.namespace) {
+            let (kind, id, kid, jti) = match &token.form {
+                TokenForm::Opaque { hash } => (TokenKind::Opaque, Some(hash.to_hex()), None, None),
+                TokenForm::Signed { kid, jti, .. } => {
+                    (TokenKind::Signed, None, Some(kid.clone()), jti.clone())
+                }
+            };
+            identity.principal = Some(CallerPrincipal::Token {
+                token: kind,
+                id,
+                kid,
+                jti,
+                namespace: crate::views::namespace(namespace),
+                labels: caller.labels.clone().into(),
+                expires_at: timestamp(token.expires_at),
+            });
         }
     }
     if let Some(member) = &who.member {

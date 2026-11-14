@@ -45,9 +45,11 @@ pub(super) async fn claim(
 ) -> Result<Json<TaskBatch>, ApiError> {
     caller.require(Permission::TasksWork)?;
     if caller.scoped() {
-        return Err(ApiError::forbidden(
-            "a key limited to labels cannot claim host-tool tasks: use a worker key of the tenant",
-        ));
+        return Err(ApiError::forbidden(format!(
+            "{} is limited to labels and cannot claim host-tool tasks: use a worker key of the \
+             tenant",
+            caller.who()
+        )));
     }
     let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
     for tool in &query.tools {
@@ -55,7 +57,7 @@ pub(super) async fn claim(
     }
     let claim = HostClaim {
         tenant: caller.tenant.clone(),
-        namespace: None,
+        namespace: caller.namespace.clone(),
         toolset,
         tools: query.tools.into_iter().collect::<BTreeSet<_>>(),
         limit: usize::try_from(query.limit.unwrap_or(1).clamp(1, 100)).unwrap_or(1),
@@ -117,6 +119,7 @@ pub(super) async fn heartbeat(
 ) -> Result<Json<HeartbeatAck>, ApiError> {
     caller.require(Permission::TasksWork)?;
     let token = TaskToken(token);
+    held(&app, &caller, &token).await?;
     let until = app.engine.heartbeat_task(&caller.tenant, &token).await?;
     // A deferred task's deadline may be far: the worker sends heartbeats it does not need.
     let left = until.0.saturating_sub(app.now().0);
@@ -134,6 +137,7 @@ pub(super) async fn defer(
 ) -> Result<StatusCode, ApiError> {
     caller.require(Permission::TasksWork)?;
     let token = TaskToken(token);
+    held(&app, &caller, &token).await?;
     app.engine
         .defer_task(
             &caller.tenant,
@@ -156,8 +160,10 @@ pub(super) async fn complete(
 ) -> Result<StatusCode, ApiError> {
     caller.require(Permission::TasksWork)?;
     check_payload_size(&app, &request.result)?;
+    let token = TaskToken(token);
+    held(&app, &caller, &token).await?;
     app.engine
-        .complete_task(&caller.tenant, &TaskToken(token), request.result)
+        .complete_task(&caller.tenant, &token, request.result)
         .await?;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
@@ -177,8 +183,10 @@ pub(super) async fn fail(
         data: request.data,
         retryable: request.retryable,
     };
+    let token = TaskToken(token);
+    held(&app, &caller, &token).await?;
     app.engine
-        .fail_task(&caller.tenant, &TaskToken(token), failure)
+        .fail_task(&caller.tenant, &token, failure)
         .await?;
     app.wake.bump();
     Ok(StatusCode::NO_CONTENT)
@@ -231,6 +239,26 @@ fn check_failure_size(message: &str, data: Option<&serde_json::Value>) -> Result
     Ok(())
 }
 
+/// Refuses (410, as a task that no longer exists) the token of a task whose run is outside the
+/// namespace the request is bound to: a worker acting for an end user answers its tasks only.
+async fn held(app: &App, caller: &Caller, token: &TaskToken) -> Result<(), ApiError> {
+    let Some(namespace) = &caller.namespace else {
+        return Ok(());
+    };
+    // A token holding a NUL character is no task's, and never reaches a store: the engine
+    // answers it as gone.
+    if token.0.contains('\0') {
+        return Ok(());
+    }
+    let Some(task) = app.store.tool_task(token).await? else {
+        return Ok(());
+    };
+    match app.store.get_run(&task.task.run).await? {
+        Some(record) if record.namespace == *namespace => Ok(()),
+        _ => Err(rewind_engine::EngineError::TaskGone.into()),
+    }
+}
+
 /// A task of a run the caller sees.
 async fn task(
     app: &App,
@@ -244,7 +272,7 @@ async fn task(
     };
     let task = parse_task_id(&caller.tenant, id).ok_or_else(missing)?;
     match app.store.get_run(&task.run).await? {
-        Some(record) if caller.sees(&record.metadata.labels) => Ok(task),
+        Some(record) if caller.sees_run(&record) => Ok(task),
         _ => Err(missing()),
     }
 }

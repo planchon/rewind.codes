@@ -28,7 +28,7 @@ use rewind_engine::trace::{TraceInput, render_trace};
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
-use crate::extract::{Body, Idempotency, NamespaceHeader, OptionalBody, Query};
+use crate::extract::{Body, Idempotency, OptionalBody, Query};
 use crate::http::{search, toolsets};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
@@ -40,11 +40,10 @@ pub(super) async fn start(
     State(app): State<Arc<App>>,
     caller: Caller,
     Idempotency(key): Idempotency,
-    namespace: NamespaceHeader,
     Body(request): Body<StartRun>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsStart)?;
-    let namespace = namespace.required()?;
+    let namespace = caller.namespace_required("start a run")?;
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
     let stored = match &request.toolset {
@@ -78,7 +77,7 @@ pub(super) async fn start(
     let record = app
         .wait_for_end(&created.run, request.wait.map(|wait| wait.get()))
         .await?;
-    if !caller.sees(&record.metadata.labels) {
+    if !caller.sees_run(&record) {
         return Err(ApiError::run_not_found(&created.run.id.to_string()));
     }
     let mut run = app.views().run(&record).await?;
@@ -462,7 +461,7 @@ pub(super) async fn fork(
     let record = app
         .wait_for_end(&created.run, request.wait.map(|wait| wait.get()))
         .await?;
-    if !caller.sees(&record.metadata.labels) {
+    if !caller.sees_run(&record) {
         return Err(ApiError::run_not_found(&created.run.id.to_string()));
     }
     let run = app.views().run(&record).await?;
