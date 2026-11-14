@@ -5,6 +5,7 @@
 import type { Labels, Quarantine, Waiting } from "../api/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { fakeDigest, JournalBuilder } from "./journal";
+import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -47,6 +48,8 @@ export interface World {
   embedded: boolean;
   /** Identity and access: the sign-in, organizations, roles, grants, API keys. */
   access: AccessWorld;
+  /** The end users of each tenant, their quotas, use and alerts. */
+  namespaces: Map<string, NamespaceWorld>;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -958,19 +961,23 @@ export function createWorld(options: WorldOptions): World {
   const payloads = new Map<string, unknown>();
   for (const r of runs)
     for (const [digest, value] of r.journal.payloads) payloads.set(digest, value);
+  const access = createAccessWorld({
+    requireKey: options.requireKey,
+    ...(options.workos !== undefined ? { workos: options.workos } : {}),
+    ...(options.tokenTtlMs !== undefined ? { tokenTtlMs: options.tokenTtlMs } : {}),
+    ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
+    ...(options.log ? { log: options.log } : {}),
+  });
   const world: World = {
     now,
     scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW],
     runs,
     payloads,
     embedded: options.embedded ?? false,
-    access: createAccessWorld({
-      requireKey: options.requireKey,
-      ...(options.workos !== undefined ? { workos: options.workos } : {}),
-      ...(options.tokenTtlMs !== undefined ? { tokenTtlMs: options.tokenTtlMs } : {}),
-      ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
-      ...(options.log ? { log: options.log } : {}),
-    }),
+    access,
+    namespaces: new Map([
+      [access.tenant, createNamespaceWorld({ now, names: runs.map((r) => r.namespace) })],
+    ]),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   return world;

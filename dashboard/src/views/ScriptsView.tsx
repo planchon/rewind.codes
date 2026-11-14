@@ -1,8 +1,9 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
 // outcome, the tools it called and the labels it ran with.
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 import { useScripts } from "../api/queries";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../api/types";
+import { keepNamespace, Link, useNavigate } from "../app/namespace";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
 import { StatusGlyph } from "../components/Status";
 import {
@@ -140,7 +141,7 @@ export function ScriptsView() {
   const key = writeScriptFilters(filters).toString();
   const scripts = useScripts(key, toScriptsQuery(filters));
   const update = (patch: Partial<ScriptFilters>) =>
-    setParams(writeScriptFilters({ ...filters, ...patch }));
+    setParams((current) => keepNamespace(current, writeScriptFilters({ ...filters, ...patch })));
   const addLabel = (pair: string) => {
     if (!filters.labels.includes(pair)) update({ labels: [...filters.labels, pair] });
   };

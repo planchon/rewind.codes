@@ -8,18 +8,27 @@ API `/v1` and of the sign-in `/auth` only.
 | View | Shows |
 | --- | --- |
 | Overview | The home page, over a window (1 h, 24 h, 7 d, 30 d): runs started (against the previous window), the share that completed, the failed ones, the runs waiting now, durations (p95, p50), quarantined runs; runs by outcome over time; what fails most; failing tools. Every figure, bar and row opens the runs behind it. Polled every 10 s. |
-| Runs | Every run the caller may read, searched with the query language in one bar: suggestions as you type, the term the server cannot read underlined, facets beside the results (a click asks for a value, a second excludes it, a third removes it), ordered by start, activity or next wake. Saved searches are kept in the browser and listed in the navigation. |
+| Runs | Every run the caller may read, searched with the query language in one bar: suggestions as you type, the term the server cannot read underlined, facets beside the results (a click asks for a value, a second excludes it, a third removes it), ordered by start, activity or next wake. Over every namespace, each run's namespace in a column and a facet (counted among the runs shown), and the namespaces suggested after `namespace:`. Saved searches are kept in the browser and listed in the navigation. |
 | Waiting | Every run paused on the outside world, by tab (signals, approvals, timers, tools) and grouped by what it waits for, with the line it is paused on and when it wakes, the soonest first. Polled every 10 s. |
 | Failures | Failed, cancelled and aborted runs of a window grouped by fingerprint: signature, runs, their series, scripts, first and last seen, the line most of them ended at, top labels, the latest run. |
 | Run | The source, with each tool call, timer, signal wait and log next to the line that caused it; the timeline; the journal, the logs and the LLM trace; payloads on demand. Live through the event stream while the run goes on. A time cursor steps through the history (`?step=`): the marks of each line, hovers that show a call's arguments and result or a variable's value at that step, watches, a playhead on the timeline. |
 | Scripts | Every distinct script, with its runs by outcome, its tools and its labels; one script's source and runs. |
 | Tools | Latency (p50, p95, p99, max), error rate by kind and retries per tool, grouped by namespace, over a window, optionally for one toolset. Not for a grant limited to labels. |
+| Namespaces | The end users of the organization this month: the operator's ceiling with the organization's totals, the default limits, then the namespaces sorted by CPU, runs or scripts of the month (a search by the start of the name, a filter of those at 80 % or more of a limit), each quota a meter, orange from 80 %, red at 100 %, a CPU above its quota full with its share (`160%`); the alerts of the month. Whoever holds `namespaces:write` edits the defaults. Polled every 30 s. |
+| Namespace | One end user, over a month: its cumulative CPU time against its quota (where it reached 80 % and 100 %), its use of every limit, its alerts and whether they were sent, its tokens in use, its exceptions to the defaults; a link to its runs. Edit its limits and erase it (typing its name to confirm) with `namespaces:write`, revoke its tokens with `tokens:write`. |
 | Organization | Members (their grant: role and allowed labels; change it, remove a member), Invitations (invite an email with a role and labels, resend, revoke), Roles (built-in and the organization's own, with their permissions; create, edit, delete), API keys (role, labels, creator, dates; create, with the secret shown once; revoke), Settings (name, default role). Each part is shown to whoever holds its permission; the roles offered are those the caller may give. |
 
 The views follow what `GET /v1/whoami` says the caller may do: the run views need `runs:read`,
-and a member without it is told so. The query (`q`) follows the reader from Overview to Runs,
-Waiting and Failures in the URL. Links of earlier versions (`#/runs?status=failed&label=…`) are
-read as the query they mean.
+the namespace views `namespaces:read`, and a member without them is told so. The query (`q`)
+follows the reader from Overview to Runs, Waiting and Failures in the URL. Links of earlier
+versions (`#/runs?status=failed&label=…`) are read as the query they mean.
+
+**The namespace filter**, beside the organization picker, narrows the views to one end user: a
+search over the namespaces (by the start of their name, the most active first, as there can be
+thousands), or a name typed. It is kept in the URL (`?ns=bob`) and follows every link of the app;
+Overview, Runs, Waiting, Failures, Run, Scripts and Tools then send it as `Rewind-Namespace` with
+each request, and their cache is kept per namespace. Picked on a run's page, it opens the runs of
+that namespace.
 
 ## Signing in
 
@@ -61,7 +70,10 @@ invitation links it "sends": Ada (`ada@example.net`) owns Acme and reads in Glob
 `harness` in Acme, Linus has a role without `runs:read`, Alan verifies his email first and reads
 only `agent:triage`, Margaret has no organization and an invitation to Globex, any other email
 meets the waitlist. "Continue with GitHub" signs in as Ada. A run goes on live, and the access
-tokens live 5 minutes, as WorkOS's: the event stream is closed at their expiry and resumed.
+tokens live 5 minutes, as WorkOS's: the event stream is closed at their expiry and resumed. Each
+run acts for an end user: of the tenant's 1,200 or so namespaces, bob is above his CPU quota and
+at his active runs, chen pays for more (exceptions), dana and user_7Kd02 passed 80 %, erin is
+blocked.
 
 ## The build
 
@@ -89,9 +101,20 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
   token's expiry) resumes from the next entry (`from`) with the current token.
 - A payload shows its size, digest and preview; its value is shown on demand, and read with
   `GET /v1/payloads/{digest}` when the entry left it out (above 256 KiB).
+- A namespace picked in the filter is sent as `Rewind-Namespace` by a client bound to it
+  (`Api.inNamespace`), with every request of the run views; the namespace views and the filter's
+  suggestions read every namespace, without it. The links come from `src/app/namespace.tsx`,
+  which keeps `?ns=`; Biome refuses the router's own `Link`, `NavLink`, `Navigate` and
+  `useNavigate` elsewhere.
 - Lists search with `q` (`GET /v1/runs`, `/v1/runs/stats`, `/v1/runs/failures`); the server
   reads the query and answers `invalid-query` with the position of the term at fault, in
   characters. Suggestions and facets come from `GET /v1/runs/stats?q=…&top=…`.
+- The namespace views read `GET /v1/namespaces` (paged, `prefix`, `above=0.8`, `order`),
+  `GET /v1/namespaces/{name}?month=`, `GET /v1/organization/namespace-defaults` and
+  `GET /v1/organization/quota-alerts`, and write `PUT /v1/namespaces/{name}` (its exceptions),
+  `PUT /v1/organization/namespace-defaults`, `DELETE /v1/namespaces/{name}/tokens` and
+  `DELETE /v1/namespaces/{name}`. Durations are read and written as the API writes them (`2h`,
+  `1h30m`).
 - The organization views write: grants, invitations, roles, keys, the organization. Before the
   server enforces them, they follow its rules: only the roles whose permissions the caller holds
   are offered, a role editor's permissions the caller lacks are disabled, a member or role beyond
@@ -110,9 +133,9 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 | Path | Holds |
 | --- | --- |
 | `src/api/` | The client (`/v1` and `/auth`), the event stream, the data hooks (TanStack Query), the DTO names |
-| `src/model/` | Pure code: a run's activities and steps from its journal, callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting, what a caller may do and give |
-| `src/views/` | Overview, Runs (with its facets), Waiting, Failures, Run (`run/`, with the time cursor), Scripts, Script, Tools, Organization (`org/`) |
-| `src/components/` | Shared pieces: statuses, payloads, the source view, the query bar, charts, tooltips, refusals explained |
-| `src/app/` | Routes, the session (key or member), the gate, the sign-in pages, the onboarding, the account menus, what the caller may do (`access.tsx`), settings (theme, time zone), saved searches |
-| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run), a small read model that reads the query language, a world of identity and access (users, organizations, invitations, the waitlist, one browser's session, roles, grants, keys), MSW handlers, the Vite plugin of `dev:mock` |
+| `src/model/` | Pure code: a run's activities and steps from its journal, callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting, what a caller may do and give, quotas (shares, levels, durations, the month's cumulative CPU) |
+| `src/views/` | Overview, Runs (with its facets), Waiting, Failures, Run (`run/`, with the time cursor), Scripts, Script, Tools, Namespaces and Namespace (`namespaces/`), Organization (`org/`) |
+| `src/components/` | Shared pieces: statuses, payloads, the source view, the query bar, charts (the cumulative CPU among them), tooltips, refusals explained |
+| `src/app/` | Routes, the session (key or member), the gate, the sign-in pages, the onboarding, the account menus, the namespace filter and the links that keep it (`namespace.tsx`), what the caller may do (`access.tsx`), settings (theme, time zone), saved searches |
+| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run), a small read model that reads the query language, a world of identity and access (users, organizations, invitations, the waitlist, one browser's session, roles, grants, keys), the namespaces of the tenant (their limits, use day by day, alerts and tokens) and the header that narrows the reads, MSW handlers, the Vite plugin of `dev:mock` |
 | `src/styles/` | Tokens for light and dark, and the styles |

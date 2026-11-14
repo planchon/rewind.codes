@@ -12,6 +12,7 @@ import type {
 import type { Caller } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
 import type { World } from "./fixtures";
+import { headerNamespace, namespaceHandlers } from "./namespace-handlers";
 import { invalidQuery, problem } from "./problem";
 import { QueryError } from "./query";
 import {
@@ -38,7 +39,7 @@ function reading(answer: () => unknown): Response {
 
 /**
  * Runs `answer` over the runs the caller may read (`runs:read`): its tenant's, carrying its
- * grant's labels.
+ * grant's labels, and of the namespace the request names (`Rewind-Namespace`) if it names one.
  */
 function withRuns(
   world: World,
@@ -47,7 +48,17 @@ function withRuns(
 ): Response {
   const caller = guard(world, request, "runs:read");
   if (caller instanceof Response) return caller;
-  return answer(runsWorld(world, caller), caller);
+  const namespace = headerNamespace(request);
+  if (namespace instanceof Response) return namespace;
+  return answer(inNamespace(runsWorld(world, caller), namespace), caller);
+}
+
+/** The runs of one namespace, and the scripts they ran; every namespace without one. */
+function inNamespace(world: World, namespace: string | null): World {
+  if (namespace === null) return world;
+  const runs = world.runs.filter((r) => r.namespace === namespace);
+  const digests = new Set(runs.map((r) => r.script.digest));
+  return { ...world, runs, scripts: world.scripts.filter((s) => digests.has(s.digest)) };
 }
 
 function sse(event: StreamEvent): string {
@@ -85,6 +96,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     }),
 
     ...accessHandlers(world),
+
+    ...namespaceHandlers(world, now),
 
     http.get("*/v1/server", () =>
       HttpResponse.json({

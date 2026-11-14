@@ -2,8 +2,8 @@
 // chart library (archi/08-decisions.md): a few bars, each a link to the runs behind it, with a
 // tooltip on hover and an accessible name. Colors are the run statuses', always with a legend.
 import type { ReactNode } from "react";
-import { Link } from "react-router";
 import type { RunStatus, StatusCounts } from "../api/types";
+import { Link } from "../app/namespace";
 import { formatCount } from "../model/format";
 import { StatusGlyph } from "./Status";
 import { useTooltip } from "./Tooltip";
@@ -226,7 +226,7 @@ export function Meter({
 }: {
   value: number;
   max: number;
-  tone?: "critical" | "neutral" | "info";
+  tone?: "critical" | "warning" | "neutral" | "info";
 }) {
   const share = max > 0 ? Math.min(1, value / max) : 0;
   return (

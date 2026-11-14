@@ -1,7 +1,7 @@
 // The table of runs, shared by the Runs view and a script's page.
 import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
-import { Link, useNavigate } from "react-router";
 import type { RunPage, RunSummary } from "../api/types";
+import { Link, useNavigate } from "../app/namespace";
 import {
   Ago,
   Digest,
@@ -19,6 +19,9 @@ export interface RunTableProps {
   query: UseInfiniteQueryResult<InfiniteData<RunPage>>;
   onPickLabel?: (pair: string) => void;
   onPickScript?: (digest: string) => void;
+  /** Shows each run's namespace, when the views read every namespace. */
+  showNamespace?: boolean;
+  onPickNamespace?: (namespace: string) => void;
   /** Hides the script column, on a script's own page. */
   hideScript?: boolean;
   empty?: string;
@@ -39,6 +42,8 @@ export function RunTable({
   query,
   onPickLabel,
   onPickScript,
+  showNamespace = false,
+  onPickNamespace,
   hideScript = false,
   empty,
 }: RunTableProps) {
@@ -58,6 +63,7 @@ export function RunTable({
           <tr>
             <th>Status</th>
             <th>Run</th>
+            {showNamespace && <th title="The end user the run acts for">Namespace</th>}
             <th>Labels</th>
             {!hideScript && <th>Script</th>}
             <th>Started</th>
@@ -103,6 +109,22 @@ export function RunTable({
                   )}
                 </span>
               </td>
+              {showNamespace && (
+                <td>
+                  {onPickNamespace ? (
+                    <button
+                      type="button"
+                      className="link-btn mono ns-cell"
+                      title={`Only runs of ${run.namespace}`}
+                      onClick={() => onPickNamespace(run.namespace)}
+                    >
+                      {run.namespace}
+                    </button>
+                  ) : (
+                    <span className="mono ns-cell">{run.namespace}</span>
+                  )}
+                </td>
+              )}
               <td className="wrap">
                 <LabelList labels={run.labels} {...(onPickLabel ? { onPick: onPickLabel } : {})} />
               </td>

@@ -3,13 +3,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Building2, Check, ChevronDown, LogOut, Plus } from "lucide-react";
 import { type FormEvent, type RefObject, useContext, useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router";
 import { MY_INVITATIONS, useMyInvitations } from "../api/organization";
 import type { Invitation, User } from "../api/types";
 import { ErrorNote } from "../components/ErrorNote";
 import { displayName } from "../model/access";
 import { AccessContext, useAccess } from "./access";
 import { Avatar } from "./Brand";
+import { useNavigate } from "./namespace";
 import { useSession } from "./session";
 
 /** Closes an open `<details>` menu on a click outside it, or on Escape. */

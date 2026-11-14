@@ -11,6 +11,8 @@ interface Group {
   values: FacetValue[];
   /** How a value is shown. */
   show?: (value: string) => string;
+  /** What the counts are, when not the runs the query matches. */
+  note?: string;
 }
 
 const STATE_WORD: Record<"include" | "exclude", string> = {
@@ -43,6 +45,7 @@ function FacetGroup({
   return (
     <section className="facet" aria-label={group.title}>
       <h3>{group.title}</h3>
+      {group.note && <p className="facet-note muted">{group.note}</p>}
       <ul>
         {rows.map((r) => {
           const shown = group.show?.(r.value) ?? r.value;
@@ -74,14 +77,27 @@ function FacetGroup({
 
 export function FacetList({
   facets,
+  namespaces,
   q,
   onToggle,
 }: {
   facets: FacetCounts | undefined;
+  /** The namespaces of the runs shown, when the views read every namespace. */
+  namespaces?: FacetValue[] | undefined;
   q: string;
   onToggle: (field: string, value: string) => void;
 }) {
   const groups: Group[] = [
+    ...(namespaces
+      ? [
+          {
+            field: "namespace",
+            title: "Namespace",
+            values: namespaces,
+            note: "Among the runs shown",
+          },
+        ]
+      : []),
     { field: "status", title: "Status", values: facets?.statuses ?? [] },
     ...(facets?.labels ?? []).slice(0, 6).map((l) => ({
       field: `@${l.key}`,

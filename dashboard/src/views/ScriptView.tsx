@@ -2,6 +2,7 @@
 import { useParams, useSearchParams } from "react-router";
 import { useRuns, useScript } from "../api/queries";
 import { RUN_STATUSES, type RunStatus } from "../api/types";
+import { keepNamespace } from "../app/namespace";
 import { Digest, Loading, ProblemView } from "../components/bits";
 import { CodeView } from "../components/CodeView";
 import { StatusGlyph } from "../components/Status";
@@ -51,7 +52,13 @@ export function ScriptView() {
         <Seg<RunStatus | "any">
           label="Status"
           value={status ?? "any"}
-          onChange={(v) => setParams(v === "any" ? {} : { status: v }, { replace: true })}
+          onChange={(v) =>
+            setParams(
+              (current) =>
+                keepNamespace(current, new URLSearchParams(v === "any" ? {} : { status: v })),
+              { replace: true },
+            )
+          }
           options={[
             { value: "any", label: "Any status" },
             ...RUN_STATUSES.map((s) => ({

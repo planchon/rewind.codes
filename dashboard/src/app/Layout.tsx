@@ -1,10 +1,12 @@
 import { LogOut, Monitor, Moon, Star, Sun, X } from "lucide-react";
 import { useRef } from "react";
-import { Link, NavLink, Outlet, useLocation } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { queryLink } from "../model/query";
 import { OrganizationSwitcher, UserMenu } from "./AccountMenus";
 import { useAccess } from "./access";
 import { useServer } from "./Gate";
+import { NamespaceFilter } from "./NamespaceFilter";
+import { Link, NavLink } from "./namespace";
 import { useSavedSearches } from "./searches";
 import { maskKey, useSession } from "./session";
 import { type ThemeChoice, useSettings } from "./settings";
@@ -93,6 +95,7 @@ export function Layout() {
               {access.toolStats && <NavLink to="/tools">Tools</NavLink>}
             </>
           )}
+          {access.can("namespaces:read") && <NavLink to="/namespaces">Namespaces</NavLink>}
           {access.sections.length > 0 && <NavLink to="/organization">Organization</NavLink>}
           {reads && <SavedMenu />}
         </nav>
@@ -121,6 +124,7 @@ export function Layout() {
             <ThemeIcon size={15} />
           </button>
           {member && <OrganizationSwitcher />}
+          {reads && <NamespaceFilter />}
           {member && <UserMenu user={member} />}
           {phase.kind === "key" && key && (
             <span className="copyable" title="The API key in use">

@@ -1,9 +1,10 @@
 // Organization: the members and their grants, the invitations, the roles and their permissions,
 // the API keys, the settings; each part shown to whoever holds its permission.
 import type { ReactNode } from "react";
-import { Navigate, NavLink, Outlet } from "react-router";
+import { Outlet } from "react-router";
 import { SECTIONS, useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
+import { Navigate, NavLink } from "../../app/namespace";
 import { CopyButton } from "../../components/bits";
 
 export function OrganizationView() {
