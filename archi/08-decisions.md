@@ -11,6 +11,7 @@ Three kinds of decisions, kept apart so it is clear which ones are open:
 | Decision | Notes |
 | --- | --- |
 | **The project is Rewind**, at `rewind.codes` (the owner, 13 November 2026) | It was ai-ptc. Identifiers say `rewind`: the crates `rewind-*`, the binary `rewind`, the script modules `"rewind"` and `rewind:tools`, the variables `REWIND_*`, the directory `.rewind/`, the key prefix `rewind_sk_`, the header `Rewind-Version`, the problem types `urn:rewind:problem:*`. The npm scope is `@rewind.codes`, the repository `planchon/rewind.codes`. Epoch 1 took the new names too (its modules and the labels its seeds are derived with), and its corpus was recorded again: no epoch had been released. |
+| **The license is FSL-1.1-ALv2** (the owner, 14 November 2026) | The Functional Source License, the one Sentry uses: any purpose but a competing use, and each version becomes Apache 2.0 two years after its release. `LICENSE.md` at the root covers the repository; every crate and the SDK say `FSL-1.1-ALv2`, and the SDK carries a copy of the license for its npm package. |
 | Rewind is a tool for **agent harness developers** | Server + TypeScript SDK + ready-made agent tools; the CLI is for local development. |
 | **Durable workflows are the priority** | A short run is the same mechanism started with `wait`. |
 | **Built to scale** | Postgres in production. Turso only for the embedded engine (CLI, local dev, tests). |

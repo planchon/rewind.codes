@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # Composition root (archi/07-code-architecture.md, "Crates"): the CLI reaches a server only
 # through the API (rewind-api), and wires the adapters itself for its local commands. It never

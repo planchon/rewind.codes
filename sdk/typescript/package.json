@@ -2,7 +2,7 @@
   "name": "@rewind.codes/sdk",
   "version": "0.1.0",
   "description": "TypeScript SDK of Rewind: the API client, the host-tool worker and the agent tools.",
-  "license": "UNLICENSED",
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "engines": {
     "node": ">=22.12"

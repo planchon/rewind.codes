@@ -55,3 +55,10 @@ expectations) and the `journal.v1.json` recorded from it.
 Each case runs live and must meet its expectations, must record the committed journal byte
 for byte, and the committed journal must replay with the script on a fresh executor. A build
 that stops replaying a journal of a determinism epoch it supports fails.
+
+## License
+
+[FSL-1.1-ALv2](LICENSE.md), the Functional Source License with Apache 2.0 as its future
+license. Any use is allowed except offering Rewind, or something substantially similar, as a
+competing commercial product or service. Each version becomes Apache 2.0 two years after it
+is released.
