@@ -14,6 +14,7 @@ use rewind_api::Client;
 use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
+use rewind_api::namespaces::NamespaceName;
 use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CallAttempts, Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
@@ -136,7 +137,12 @@ pub(crate) async fn run(
     interrupt: CancellationToken,
 ) -> Result<Report, Error> {
     wait_until_ready(admin).await?;
-    let harness = key(admin, base_url, &settings.tenant, BuiltInRole::Harness).await?;
+    // The runs act for one end user, the namespace `load`: a key must name one to start a run.
+    let namespace =
+        NamespaceName::new("load").map_err(|error| Error::new(format!("namespace: {error}")))?;
+    let harness = key(admin, base_url, &settings.tenant, BuiltInRole::Harness)
+        .await?
+        .with_namespace(namespace);
     let worker = key(admin, base_url, &settings.tenant, BuiltInRole::Worker).await?;
     let toolset = harness
         .create_toolset(&toolset(&settings.mcp_url))

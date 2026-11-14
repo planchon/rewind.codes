@@ -248,7 +248,7 @@ jobs:
         run: |
           . ./.env
           key=$(curl -fsS http://127.0.0.1:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMIN_KEY" \
-            -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness"}' | jq -r .key)
+            -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness", "name": "sdk live"}' | jq -r .key)
           cd ../sdk/typescript
           pnpm install --frozen-lockfile
           REWIND_LIVE_URL=http://127.0.0.1:8080 REWIND_LIVE_KEY="$key" pnpm vitest run test/live.test.ts

@@ -54,7 +54,8 @@ test.describe("criterion 1: SDK, two workers, one Postgres", () => {
   test("runs driven by the SDK on an api server and two workers, traced under the harness", async () => {
     const { admin } = deployment;
     const harnessKey = await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "acceptance harness" });
-    const rewind = new Rewind({ url: deployment.url, apiKey: harnessKey.key ?? undefined });
+    // The runs act for one end user of the harness: a key names its namespace to start them.
+    const rewind = new Rewind({ url: deployment.url, apiKey: harnessKey.key ?? undefined }).namespace("alice");
     const suite = `acceptance-${randomBytes(4).toString("hex")}`;
 
     const toolset = await rewind.toolsets.create({
