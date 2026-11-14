@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # Adapter support: among internal crates, rewind-api depends only on rewind-core
 # (archi/07-code-architecture.md, "Dependency rules"). No server code lives here.

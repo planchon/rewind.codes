@@ -2,7 +2,23 @@
   "name": "@rewind.codes/sdk",
   "version": "0.1.0",
   "description": "TypeScript SDK of Rewind: the API client, the host-tool worker and the agent tools.",
-  "license": "UNLICENSED",
+  "keywords": [
+    "rewind",
+    "agents",
+    "programmatic-tool-calling",
+    "mcp",
+    "durable-execution",
+    "workflows",
+    "sdk"
+  ],
+  "homepage": "https://rewind.codes",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/planchon/rewind.codes.git",
+    "directory": "sdk/typescript"
+  },
+  "bugs": "https://github.com/planchon/rewind.codes/issues",
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "engines": {
     "node": ">=22.12"
@@ -14,17 +30,23 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "CHANGELOG.md"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
     "generate:api": "pnpm dlx --package openapi-typescript@7.13.0 --package typescript@5.9.3 openapi-typescript ../../api/openapi.json --empty-objects-unknown -o src/generated/api.ts",
     "check": "prettier --check . && tsc -p tsconfig.json && vitest run",
     "format": "prettier --write .",
-    "check:api": "pnpm generate:api && git diff --exit-code -- src/generated/api.ts"
+    "check:api": "pnpm generate:api && git diff --exit-code -- src/generated/api.ts",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "eventsource-parser": "4.1.3",

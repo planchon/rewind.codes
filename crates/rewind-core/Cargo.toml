@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # The allowed dependencies are fixed by archi/07-code-architecture.md ("Dependency rules")
 # and checked by rewind-architecture-tests.

@@ -2,11 +2,16 @@
 
 The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 
-- **the client** of the HTTP API `/v1` ([`api/openapi.json`](../../api/openapi.json)): toolsets, runs, signals,
-  forks, traces, journals, credentials, webhooks;
+- **the client** of the HTTP API `/v1`
+  ([`api/openapi.json`](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json)): toolsets, runs,
+  signals, forks, traces, journals, credentials, webhooks;
 - **the host-tool worker**, which executes the harness's own tools when scripts call them;
 - **the agent tools**, ready-made tools for the model (`run_script`, `get_run`…), with adapters for the Anthropic
   and OpenAI tool formats.
+
+```sh
+npm install @rewind.codes/sdk
+```
 
 Node 22.12 or later. ESM only. The package depends on no model SDK.
 
@@ -198,6 +203,13 @@ app.post("/rewind-events", express.raw({ type: "application/json" }), (req, res)
 Deliveries follow Standard Webhooks: an HMAC-SHA256 signature over `{id}.{timestamp}.{body}` with the subscription's
 secret `whsec_…`, and 5 minutes of tolerance on the timestamp. Pass the body exactly as received.
 
+## Versions
+
+The package follows [Semantic Versioning](https://semver.org). Before 1.0, a minor version (0.1 → 0.2) may break the
+API and a patch version does not. Each version's changes are in
+[`CHANGELOG.md`](https://github.com/planchon/rewind.codes/blob/main/sdk/typescript/CHANGELOG.md). A version speaks
+the HTTP API `/v1`.
+
 ## Development
 
 ```sh
@@ -209,3 +221,13 @@ pnpm generate:api   # src/generated/api.ts from api/openapi.json; commit the dif
 
 The tests run against a mocked HTTP server (`test/mock-server.ts`): a real server on a free local port, with handlers
 per route.
+
+## Releasing
+
+1. Set the new version, following SemVer: `pnpm version <patch|minor|major|x.y.z-rc.n> --no-git-tag-version`.
+2. Add its section to `CHANGELOG.md`, then commit on `main`.
+3. Tag the commit `sdk-v<version>` and push the tag.
+
+The `Release the SDK` workflow (`.github/workflows/release-sdk.yml`) checks that the tag matches `package.json`, runs
+the checks, and publishes to npm with provenance through trusted publishing (no token). A prerelease (`-rc.1`) goes
+to the `next` dist-tag, any other version to `latest`.

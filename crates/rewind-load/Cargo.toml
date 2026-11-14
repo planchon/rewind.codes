@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 
 # A tooling crate (archi/07-code-architecture.md, "Dependency rules"): a client of the HTTP API
 # through rewind-api, like the CLI and the SDK; it wires no adapter.
