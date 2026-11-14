@@ -302,7 +302,7 @@ tools' `run_script` against a live deployment by the SDK:
 ```sh
 . ./.env
 KEY=$(curl -s http://localhost:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMIN_KEY" \
-  -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness"}' | jq -r .key)
+  -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness", "name": "sdk live test"}' | jq -r .key)
 (cd ../sdk/typescript && REWIND_LIVE_URL=http://localhost:8080 REWIND_LIVE_KEY=$KEY pnpm vitest run test/live.test.ts)
 ```
 
