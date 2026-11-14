@@ -6,8 +6,8 @@ use axum::response::{IntoResponse, Response};
 use rewind_api::scripts::{Diagnostic, Location, Severity};
 use rewind_api::{Problem, ProblemType};
 use rewind_engine::ports::{
-    BlobError, CheckerError, DiagnosticSource, InvalidScript, ReadModelError, SecretError,
-    StoreError,
+    BlobError, CheckerError, DiagnosticSource, IdentityError, InvalidScript, ReadModelError,
+    SecretError, StoreError,
 };
 use rewind_engine::retention::RetentionError;
 use rewind_engine::{EngineError, ForkError, NulCharacter, StartError};
@@ -83,6 +83,35 @@ impl From<StoreError> for ApiError {
                 ))
             }
             other => Self::internal(other),
+        }
+    }
+}
+
+/// The identity provider's answers (`archi/07-code-architecture.md`, "Sign-in (`/auth`)"): its
+/// messages never hold a secret the call sent (`rewind-workos` redacts them).
+impl From<IdentityError> for ApiError {
+    fn from(error: IdentityError) -> Self {
+        match error {
+            IdentityError::Unavailable(message) => {
+                tracing::warn!(%message, "the identity provider is unavailable");
+                Self::new(
+                    ProblemType::IdentityUnavailable,
+                    format!(
+                        "the identity provider (WorkOS) cannot be reached or failed ({message}): \
+                         retry later"
+                    ),
+                )
+            }
+            IdentityError::Refused { code, message } => Self::invalid(format!(
+                "the identity provider refused the request ({code}): {message}"
+            )),
+            IdentityError::NotFound(what) => Self::not_found(format!(
+                "{what} not found in the identity provider: check the id"
+            )),
+            IdentityError::InvalidToken => Self::new(
+                ProblemType::Unauthorized,
+                "the token is invalid or expired: sign in again",
+            ),
         }
     }
 }

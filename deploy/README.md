@@ -83,17 +83,19 @@ the ones the deployment needs; `.env` (written by `init.sh`) or your shell sets 
 | Secret | What it protects | If lost |
 | --- | --- | --- |
 | `REWIND_MASTER_KEY` | 32 random bytes in base64. It encrypts each tenant's data key, which encrypts the credentials of toolsets and runs | Every stored credential is unreadable: back it up with the database. The servers refuse to start without it |
-| `REWIND_ADMIN_KEY` | The first API key: role `admin` of the tenant `REWIND_ADMIN_TENANT`, registered when the api starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `keyId`) and set a new one: a revoked key is never registered again |
+| `REWIND_ADMIN_KEY` | The first API key: role `operator` in the tenant `REWIND_ADMIN_TENANT`, registered when the api starts. It creates the other keys | Revoke it (`DELETE /v1/api-keys/{id}`, its id is `GET /v1/whoami`'s `principal.id`) and set a new one: a revoked key is never registered again |
+| `WORKOS_API_KEY`, `WORKOS_COOKIE_PASSWORD` | WorkOS's secret key, and the key of the sign-in's sealed cookies ([sign-in](#sign-in)) | A new cookie password signs everyone out; a new WorkOS key is set in WorkOS first |
 | `POSTGRES_PASSWORD`, `MINIO_ROOT_*` | The stores | Change them in the store first, then in `.env` |
 
 The servers read them from the environment. On a platform with a secret manager, inject them as
-environment variables of the containers instead of a file. Never give `REWIND_ADMIN_KEY` to the
-workers: they do not need it, and they run code written by a model.
+environment variables of the containers instead of a file. Never give `REWIND_ADMIN_KEY` nor
+`WORKOS_API_KEY` to the workers: they do not need them, and they run code written by a model.
 
-## Tenants and API keys
+## Tenants, keys and roles
 
-A tenant is created with its first key, with the deployment's quota and retention. Every key is
-`rewind_sk_…`, shown once, stored hashed.
+A tenant is created with its first key, or with its organization when people sign in
+([sign-in](#sign-in)), with the deployment's quota and retention. Every key is `rewind_sk_…`,
+shown once, stored hashed.
 
 ```sh
 . ./.env
@@ -102,16 +104,48 @@ curl -s http://localhost:8080/v1/api-keys -H "Authorization: Bearer $REWIND_ADMI
   -d '{"tenant": "acme", "role": "harness", "name": "acme harness"}'
 ```
 
+A key gets what it may do from its grant, given with it: a role, and optionally allowed labels.
+Whoever creates a key holds every permission of its role. Four roles are built in; a tenant
+composes its own from the catalog of permissions (`GET /v1/permissions`, `PUT /v1/roles/{name}`).
+
 | Role | May |
 | --- | --- |
-| `admin` | Everything, and keys of every tenant: the operator |
-| `harness` | Everything of its tenant but keys: toolsets, runs, tasks, subscriptions, reading. The harness and its agent tools |
+| `owner` | Every permission of its tenant: its runs, and its members, roles, keys and organization |
+| `harness` | Runs, toolsets, credentials, tasks and subscriptions, and reading the members and roles. The harness and its agent tools |
 | `worker` | The host-tool task endpoints: the harness's SDK worker |
-| `reader` | The `GET` endpoints of its tenant: a dashboard |
+| `reader` | Reading runs, toolsets, subscriptions, members and roles: a dashboard |
+
+**The operator.** The key of `REWIND_ADMIN_KEY` has the role `operator`: every permission in its
+tenant, and the keys of every tenant (`POST /v1/api-keys` with a `tenant`, as above, and their
+revocation). `operator` is the deployment's role, never an organization's; only the operator
+creates an operator key.
 
 A key may carry `allowedLabels` (`{"conversation": "c-42"}`): it then sees and creates only the
-runs carrying them, which is how one conversation's agent tools are scoped. Revoke a key with
-`DELETE /v1/api-keys/{id}`.
+runs carrying them, which is how one conversation's agent tools are scoped; such a key
+administers nothing. Revoke a key with `DELETE /v1/api-keys/{id}`: its grant goes with it.
+
+## Sign-in
+
+With WorkOS, people sign in to the dashboard (GitHub, or a code by email), each in their
+organizations: a WorkOS organization is a tenant, with the same id. WorkOS says who someone is;
+what they may do is their grant in Rewind, as for a key. Sign-ups go through WorkOS's waitlist:
+the operator approves people there, which invites them.
+
+Give the api role the four variables together, or none (`rewind server` refuses to start with
+some of them; without them the server accepts only API keys). Add them to the `api` service's
+`environment` in `compose.yaml`, never to a worker's:
+
+| Variable | Value |
+| --- | --- |
+| `WORKOS_CLIENT_ID` | The WorkOS environment's client, `client_…` |
+| `WORKOS_API_KEY` | Its secret key, `sk_…` |
+| `WORKOS_COOKIE_PASSWORD` | 32 random bytes in hexadecimal (`openssl rand -hex 32`) |
+| `WORKOS_REDIRECT_URI` | The dashboard's origin and `/auth/callback` (`http://localhost:8080/auth/callback`), registered in WorkOS |
+
+The sign-in's cookies are `Secure`: browsers keep them on `https://` origins and on
+`localhost`. The api passes WorkOS the address of each browser that signs in: the last of
+`X-Forwarded-For`, which the edge writes with the address that reached it (Caddy ignores the one
+a client sends; the edge is the only published port), when it is a public address.
 
 A tenant's quota and retention are rows of the `tenants` table: change an existing tenant there.
 
@@ -215,7 +249,7 @@ settings (`archi/06-storage-and-scale.md`, "Retention and deletion"):
 | A payload no journal references | 24 hours | `REWIND_PAYLOAD_GRACE` |
 
 The settings apply to the tenants created after they change; update the `tenants` row of an
-existing one ([above](#tenants-and-api-keys)). `DELETE /v1/runs/{id}` erases one run at any
+existing one ([above](#tenants-keys-and-roles)). `DELETE /v1/runs/{id}` erases one run at any
 time, archive and payloads included. Back up Postgres and the bucket together, with the master
 key.
 

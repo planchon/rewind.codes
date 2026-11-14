@@ -432,7 +432,22 @@ async fn a_key_limited_to_labels_does_not_administer() {
     let server = TestServer::start(&[]).await;
     let scoped = server.key(BuiltInRole::Owner, &[("team", "support")]).await;
     let identity = scoped.whoami().await.unwrap();
-    assert_eq!(identity.permissions, Permission::ALL);
+    // What the grant may use: its role's permissions without the administration.
+    assert_eq!(
+        identity.permissions,
+        Permission::ALL
+            .into_iter()
+            .filter(|permission| !matches!(
+                permission,
+                Permission::MembersInvite
+                    | Permission::MembersManage
+                    | Permission::RolesWrite
+                    | Permission::ApiKeysRead
+                    | Permission::ApiKeysWrite
+                    | Permission::OrganizationWrite
+            ))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         identity.grant.unwrap().allowed_labels,
         Labels::from_iter([("team", "support")])

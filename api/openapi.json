@@ -4852,7 +4852,7 @@
   "paths": {
     "/auth/callback": {
       "get": {
-        "description": "Checks `state`, exchanges the code, keeps the outcome in the session cookie, and\nredirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.",
+        "description": "Checks `state`, exchanges the code, keeps the outcome in the session cookie, and\nredirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.\nWhen the sign-in did not go through, the redirect names why with a code\n(`state_mismatch`, `provider_error`, `sign_in_failed`), and the session cookie is left\nas it was.",
         "operationId": "authCallback",
         "parameters": [
           {
@@ -4892,16 +4892,16 @@
         ],
         "responses": {
           "302": {
-            "description": "To the dashboard, `/#/`, whatever the outcome.",
+            "description": "To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through.",
             "headers": {
               "Location": {
-                "description": "`/#/`.",
+                "description": "`/#/`, or `/?auth_error=<code>#/`.",
                 "schema": {
                   "type": "string"
                 }
               },
               "Set-Cookie": {
-                "description": "`rewind_session`; `rewind_oauth` cleared.",
+                "description": "`rewind_session` when signed in or at a step; `rewind_oauth` cleared.",
                 "schema": {
                   "type": "string"
                 }
@@ -5218,6 +5218,16 @@
               }
             },
             "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider could not revoke the session (`identity-unavailable`): the cookie is cleared anyway, and the session expires at the provider on its own."
           },
           "503": {
             "content": {

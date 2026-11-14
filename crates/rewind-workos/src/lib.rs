@@ -14,6 +14,8 @@
 //! - Users, organizations, memberships (created without a role) and invitations (sent without
 //!   a role), the waitlist. Lists are in creation order. Memberships are the active ones: the
 //!   pending membership WorkOS creates with an invitation is the invitation.
+//! - The dashboard's cookies are sealed with the `workos` crate's `seal` ([`CookieSeal`]), so
+//!   that the server depends on one adapter of WorkOS.
 //!
 //! No token, code or key appears in an error or a `Debug` output.
 
@@ -21,6 +23,7 @@
 
 mod convert;
 mod errors;
+mod seal;
 mod tokens;
 
 use std::fmt;
@@ -47,6 +50,7 @@ use workos::user_management::{
 };
 
 pub use errors::SIGN_UP_CLOSED;
+pub use seal::{CookieSeal, SealError};
 pub use tokens::{ISSUER, JWKS_REFETCH_INTERVAL, LEEWAY};
 
 use errors::{
@@ -73,6 +77,8 @@ pub enum ConfigError {
     InvalidApiKey,
     #[error("the WorkOS base URL must start with http:// or https://")]
     InvalidBaseUrl,
+    #[error("the cookie password must be 32 bytes in hexadecimal: 64 characters 0-9 and a-f")]
+    InvalidCookiePassword,
 }
 
 /// `IdentityProvider` on a WorkOS environment. Clones share the client and the key cache.

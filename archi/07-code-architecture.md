@@ -535,7 +535,7 @@ described in the OpenAPI document like `/v1`.
 | --- | --- |
 | `GET /auth/config` | The sign-in methods (`github`, `magic_auth`) and whether sign-ups go through the waitlist; 404 without WorkOS, and the dashboard asks for an API key |
 | `GET /auth/github` | Redirects to WorkOS for GitHub, with a random `state` and the `invitation_token` of the page, both kept in the cookie `rewind_oauth` (5 minutes) |
-| `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/#/`) |
+| `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/#/`); when the sign-in did not go through, to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`), never with a token or WorkOS's message |
 | `POST /auth/magic-auth` | Sends the 6-digit code to an email; the same answer whether the email has an account or not |
 | `POST /auth/magic-auth/verify` | Checks the code |
 | `POST /auth/email-verification` | The code WorkOS sends when it requires the email to be verified |
