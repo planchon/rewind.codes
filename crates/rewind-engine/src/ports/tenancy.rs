@@ -1,14 +1,14 @@
-//! Tenants, the runs that belong to them, and API keys (`archi/06-storage-and-scale.md`,
-//! "Tenancy and authentication"; "Retention and deletion").
+//! Tenants and the runs that belong to them (`archi/06-storage-and-scale.md`, "Tenancy, identity
+//! and access"; "Retention and deletion").
 //!
 //! The tenant is run metadata, never part of the core: it lives here, with the ports. It is
 //! part of every storage key, and every method of a store is scoped by it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::time::Duration;
 
-use rewind_core::{Digest, RunId, Timestamp};
+use rewind_core::RunId;
 
 /// The tenant a run, a script, a toolset or a payload belongs to: 1 to 64 ASCII letters,
 /// digits, `-` and `_`. It appears in storage keys and blob paths (`{tenant}/sha256/…`), hence
@@ -142,22 +142,6 @@ impl Default for Retention {
             payload_grace: Duration::from_secs(DAY),
         }
     }
-}
-
-/// An API key, as the store keeps it: hashed (`rewind_sk_…` is never stored), with its tenant and
-/// its scope.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ApiKey {
-    /// SHA-256 of the key. Keys are looked up by it.
-    pub hash: Digest,
-    pub tenant: TenantId,
-    /// Which endpoints the key may call. The server defines and checks roles; the store keeps
-    /// them.
-    pub role: String,
-    /// When not empty, the key only sees the runs carrying all of these labels.
-    pub allowed_labels: BTreeMap<String, String>,
-    pub created_at: Timestamp,
-    pub revoked_at: Option<Timestamp>,
 }
 
 #[cfg(test)]

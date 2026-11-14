@@ -6,9 +6,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rewind_api::access::OPERATOR;
 use rewind_api::admin::ServerRole;
 use rewind_engine::adapters::{SystemClock, SystemEntropy, VirtualClock};
-use rewind_engine::ports::{ApiKey, Clock, JournalStore, TaskFilter};
+use rewind_engine::ports::{AccessStore, ApiKey, Clock, Grant, Principal, StoreError, TaskFilter};
 use rewind_engine::projector::ProjectorConfig;
 use rewind_engine::{Adapters, Engine, EngineConfig};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -263,39 +264,60 @@ async fn clock(config: &Config, store: &Store) -> Result<ServerClock, StartupErr
     })
 }
 
-/// Registers `--admin-key`, the first key of a deployment.
+/// The name of the key given with `--admin-key`.
+const ADMIN_KEY_NAME: &str = "operator key (--admin-key)";
+
+/// Registers `--admin-key`, the first key of a deployment: the key, and its grant of the role
+/// `operator`, written again if it was changed.
 async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupError> {
     let Some(key) = &config.admin_key else {
         return Ok(());
     };
     let setup = |error: crate::error::ApiError| StartupError::Setup(error.0.detail.clone());
+    let store = |error: StoreError| StartupError::Setup(error.to_string());
     let hash = key_hash(key);
-    let existing = app
-        .store
-        .find_api_key(hash)
-        .await
-        .map_err(|error| StartupError::Setup(error.to_string()))?;
-    match existing {
+    let tenant = match app.store.find_key(hash).await.map_err(store)? {
         Some(existing) if existing.revoked_at.is_some() => {
             tracing::warn!("--admin-key was revoked: it is not registered again");
+            return Ok(());
         }
-        Some(_) => {}
+        Some(existing) => existing.tenant,
         None => {
             crate::http::ensure_tenant(app, &config.admin_tenant)
                 .await
                 .map_err(setup)?;
             app.store
-                .put_api_key(&ApiKey {
+                .put_key(&ApiKey {
                     hash,
                     tenant: config.admin_tenant.clone(),
-                    role: rewind_api::access::OPERATOR.to_owned(),
-                    allowed_labels: std::collections::BTreeMap::new(),
+                    name: ADMIN_KEY_NAME.to_owned(),
+                    created_by: None,
                     created_at: app.now(),
                     revoked_at: None,
                 })
                 .await
-                .map_err(|error| StartupError::Setup(error.to_string()))?;
+                .map_err(store)?;
+            config.admin_tenant.clone()
         }
+    };
+    let principal = Principal::Key(hash);
+    let granted = app.store.grant(&tenant, &principal).await.map_err(store)?;
+    let operator = |grant: &Grant| grant.role == OPERATOR && grant.allowed_labels.is_empty();
+    if !granted.as_ref().is_some_and(operator) {
+        app.store
+            .put_grant(
+                &Grant {
+                    tenant,
+                    principal,
+                    role: OPERATOR.to_owned(),
+                    allowed_labels: std::collections::BTreeMap::new(),
+                    granted_by: None,
+                    granted_at: app.now(),
+                },
+                None,
+            )
+            .await
+            .map_err(store)?;
     }
     Ok(())
 }

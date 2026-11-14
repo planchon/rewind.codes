@@ -1,6 +1,6 @@
 //! How values the store keeps in columns are written: events in the stored format v1
 //! (`rewind-format`), JSON values in their canonical form, and the store's own small encodings for
-//! enumerations, routes, label maps and shapes.
+//! enumerations, routes, label maps, shapes, permissions and principals.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,7 +9,7 @@ use rewind_core::{
     ToolFailureKind, ToolRoute, canonical_json,
 };
 use rewind_engine::ports::{
-    ParkKind, QuarantineKind, TaskPhase, Trigger, WaitKind, WebhookEventType,
+    ParkKind, Principal, QuarantineKind, TaskPhase, Trigger, WaitKind, WebhookEventType,
 };
 use serde_json::{Map, Value, json};
 
@@ -270,6 +270,32 @@ pub(crate) fn mcp_server(route: &ToolRoute) -> Option<&str> {
         ToolRoute::Mcp { server } => Some(server),
         _ => None,
     }
+}
+
+// -------------------------------------------------------------------------------------------
+// Access
+
+/// A role's permissions: a JSON array of strings, sorted.
+pub(crate) fn encode_permissions(permissions: &BTreeSet<String>) -> String {
+    let names: Vec<Value> = permissions.iter().cloned().map(Value::String).collect();
+    canonical_json(&Value::Array(names))
+}
+
+pub(crate) fn decode_permissions(json: &str) -> Result<BTreeSet<String>, Error> {
+    let Value::Array(names) = decode_value(json)? else {
+        return Err(Error::Corrupt(format!("permissions {json:?}")));
+    };
+    names
+        .into_iter()
+        .map(|name| match name {
+            Value::String(name) => Ok(name),
+            other => Err(Error::Corrupt(format!("permission {other}"))),
+        })
+        .collect()
+}
+
+pub(crate) fn parse_principal(text: &str) -> Result<Principal, Error> {
+    Principal::parse(text).map_err(|err| Error::Corrupt(err.to_string()))
 }
 
 // -------------------------------------------------------------------------------------------

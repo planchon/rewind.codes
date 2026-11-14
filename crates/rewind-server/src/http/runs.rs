@@ -8,6 +8,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
+use rewind_api::access::Permission;
 use rewind_api::common::{Payload, timestamp};
 use rewind_api::events::Entry;
 use rewind_api::runs::{
@@ -25,7 +26,7 @@ use rewind_engine::ports::{
 use rewind_engine::trace::{TraceInput, render_trace};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
 use crate::http::{search, toolsets};
@@ -41,7 +42,7 @@ pub(super) async fn start(
     Idempotency(key): Idempotency,
     Body(request): Body<StartRun>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsStart)?;
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
     let stored = match &request.toolset {
@@ -97,7 +98,7 @@ pub(super) async fn list(
     caller: Caller,
     Query(filter): Query<RunFilter>,
 ) -> Result<Json<RunPage>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let limit = usize::try_from(filter.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let query = search::run_query(&caller, filter.q.as_deref(), Some(&filter), app.now())?;
     let order = search::order(filter.sort);
@@ -144,7 +145,7 @@ pub(super) async fn stats(
     caller: Caller,
     Query(request): Query<RunStatsQuery>,
 ) -> Result<Json<RunStats>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let now = app.now();
     let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
     let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
@@ -181,7 +182,7 @@ pub(super) async fn failures(
     caller: Caller,
     Query(request): Query<FailureQuery>,
 ) -> Result<Json<FailureGroupPage>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let now = app.now();
     let query = search::run_query(&caller, request.q.as_deref(), None, now)?;
     let (since, until, bucket) = window(request.since, request.until, request.bucket, now)?;
@@ -264,7 +265,7 @@ pub(super) async fn get(
     Path(id): Path<String>,
     Query(query): Query<GetRunQuery>,
 ) -> Result<Json<Run>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let record = app
         .wait_for_end(&record.run, query.wait.map(|wait| wait.get()))
@@ -278,7 +279,7 @@ pub(super) async fn erase(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsDelete)?;
     let record = app.run(&caller, &id).await?;
     if !app.housekeeper().delete_run(&record.run, app.now()).await? {
         return Err(ApiError::run_not_found(&id));
@@ -294,7 +295,7 @@ pub(super) async fn trace(
     Path(id): Path<String>,
     Query(query): Query<TraceQuery>,
 ) -> Result<Json<Trace>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let views = app.views();
     let history = views.history(&record).await?;
@@ -318,7 +319,7 @@ pub(super) async fn entry(
     caller: Caller,
     Path((id, idx)): Path<(String, String)>,
 ) -> Result<Json<Entry>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let missing = || {
         ApiError::not_found(format!(
@@ -347,7 +348,7 @@ pub(super) async fn signal(
     Idempotency(key): Idempotency,
     OptionalBody(payload): OptionalBody<serde_json::Value>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsControl)?;
     let record = app.run(&caller, &id).await?;
     check_payload_size(&app, &payload)?;
     let enqueued = app
@@ -411,7 +412,7 @@ pub(super) async fn cancel(
     Path(id): Path<String>,
     OptionalBody(request): OptionalBody<CancelRun>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsControl)?;
     let record = app.run(&caller, &id).await?;
     match app.engine.cancel(&record.run, request.reason).await? {
         Enqueued::RunEnded => return Err(run_ended(&record, "a cancellation")),
@@ -432,7 +433,7 @@ pub(super) async fn fork(
     Idempotency(key): Idempotency,
     Body(request): Body<ForkRun>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsStart)?;
     let parent = app.run(&caller, &id).await?;
     let labels = match request.labels {
         Some(labels) => Some(caller.within(labels.0)?),
@@ -478,7 +479,7 @@ pub(super) async fn journal(
     Path(id): Path<String>,
     Query(query): Query<JournalQuery>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let views = app.views();
     let tenant = &record.run.tenant;
@@ -527,7 +528,7 @@ pub(super) async fn release(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsQuarantine)?;
     let record = app.run(&caller, &id).await?;
     if !app.engine.release_quarantine(&record.run).await? {
         return Err(not_quarantined(&id));
@@ -544,7 +545,7 @@ pub(super) async fn give_up(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<Json<Run>, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsQuarantine)?;
     let record = app.run(&caller, &id).await?;
     if record.quarantine.is_none() {
         return Err(not_quarantined(&id));
@@ -574,7 +575,7 @@ pub(super) async fn credentials(
     Path(id): Path<String>,
     Body(credentials): Body<rewind_api::toolsets::Credentials>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::CredentialsWrite)?;
     let record = app.run(&caller, &id).await?;
     app.engine
         .set_run_credentials(&record.run, &toolsets::secrets(credentials))

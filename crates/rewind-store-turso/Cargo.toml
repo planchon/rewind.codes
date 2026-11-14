@@ -1,6 +1,6 @@
 [package]
 name = "rewind-store-turso"
-description = "Embedded store of Rewind on Turso Database: JournalStore, ReadModel and SecretStore."
+description = "Embedded store of Rewind on Turso Database: JournalStore, AccessStore, ReadModel and SecretStore."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

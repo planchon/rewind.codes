@@ -43,8 +43,8 @@ mod tenancy;
 mod webhooks;
 
 pub use access::{
-    AccessStore, Grant, GrantClaim, GrantDeletion, GrantWrite, InvalidPrincipal, Principal, Role,
-    RoleDeletion,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, InvalidPrincipal, Principal,
+    Role, RoleDeletion,
 };
 pub use blob::{BlobError, BlobStore};
 pub use checker::{
@@ -82,7 +82,7 @@ pub use telemetry::{
     AttributeValue, ExportError, LogRecord, Span, SpanExporter, SpanId, SpanKind, SpanStatus,
     TraceId,
 };
-pub use tenancy::{ApiKey, InvalidTenant, Retention, RunRef, Tenant, TenantId, TenantScope};
+pub use tenancy::{InvalidTenant, Retention, RunRef, Tenant, TenantId, TenantScope};
 pub use webhooks::{
     Subscription, WebhookError, WebhookEvent, WebhookEventKind, WebhookEventType, WebhookSender,
 };

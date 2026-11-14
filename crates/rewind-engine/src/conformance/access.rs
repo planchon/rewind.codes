@@ -7,10 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use rewind_core::{Digest, Timestamp};
 
 use super::{T0, check, tenant};
-use crate::ports::access::ApiKey;
 use crate::ports::{
-    AccessStore, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role, RoleDeletion,
-    StoreError, TenantId,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role,
+    RoleDeletion, StoreError, TenantId,
 };
 
 /// The role every kept-role check keeps, as the server does.

@@ -35,7 +35,7 @@ use crate::error::ApiError;
 const BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// The routes of one listener. Over the embedded server's socket, no key is read: the caller is
-/// the tenant `local`. Over TCP, every request to `/v1` carries a key.
+/// the operator of the tenant `local`. Over TCP, every request to `/v1` carries a key.
 pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
     let api = Router::new()
         .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))
@@ -74,9 +74,13 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::SUBSCRIPTION, delete(subscriptions::delete))
         .route(routes::TOOL_STATS, get(reading::tool_stats))
         .route(routes::PAYLOAD, get(reading::payload))
-        .route(routes::API_KEYS, post(admin::create_key))
+        .route(
+            routes::API_KEYS,
+            post(admin::create_key).get(admin::list_keys),
+        )
         .route(routes::API_KEY, delete(admin::revoke_key))
         .route(routes::WHOAMI, get(admin::whoami))
+        .route(routes::PERMISSIONS, get(admin::permissions))
         .route(routes::SERVER, get(admin::server))
         .route(routes::SERVER_STOP, post(admin::stop))
         .with_state(app.clone());

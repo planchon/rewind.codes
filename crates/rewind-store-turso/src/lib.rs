@@ -1,11 +1,12 @@
 //! The embedded store of Rewind on Turso Database (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Embedded server and CLI").
 //!
-//! [`TursoStore`] implements three ports of `rewind-engine` on one database file, `journal.db`:
+//! [`TursoStore`] implements four ports of `rewind-engine` on one database file, `journal.db`:
 //!
 //! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants and API keys,
-//!   payload rows and references, retention;
+//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, payload rows
+//!   and references, retention;
+//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles;
 //! - `ReadModel`: the projections behind the dashboard and the query language
 //!   (`run_summaries` with each run's snapshot, `run_labels`, `run_waits`, `run_texts`,
 //!   `tool_calls`), with the task states and quarantine recorded by whoever changes them
@@ -27,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod codec;
 mod journal;
 mod read_model;
@@ -77,8 +79,8 @@ impl From<turso::Error> for Error {
     }
 }
 
-/// The store of an embedded server: `JournalStore`, `ReadModel` and `SecretStore` on one Turso
-/// database. Cloning it is cheap, and the clones share the database.
+/// The store of an embedded server: `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore`
+/// on one Turso database. Cloning it is cheap, and the clones share the database.
 #[derive(Clone)]
 pub struct TursoStore {
     inner: Arc<Inner>,
