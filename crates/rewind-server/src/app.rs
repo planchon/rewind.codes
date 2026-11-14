@@ -10,8 +10,9 @@ use rewind_core::{Digest, RunId, Timestamp, Toolset};
 use rewind_engine::Engine;
 use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::ports::{
-    Clock, JournalStore, Predicate, ReadModel, Retention, RunOrder, RunQuery, RunRecord, RunRef,
-    StoredToolset, TaskProgress, Tenant, TenantId, ToolDeclarations, ToolTask, WaitingFor,
+    Clock, JournalStore, NamespaceName, Predicate, ReadModel, Retention, RunOrder, RunQuery,
+    RunRecord, RunRef, StoredToolset, TaskProgress, Tenant, TenantId, ToolDeclarations, ToolTask,
+    WaitingFor,
 };
 use rewind_engine::projector::{Projector, ProjectorConfig};
 use rewind_engine::retention::Housekeeper;
@@ -49,7 +50,8 @@ pub(crate) struct Settings {
     pub(crate) version: &'static str,
     pub(crate) embedded: bool,
     pub(crate) roles: Vec<ServerRole>,
-    pub(crate) run_quota: Option<u32>,
+    /// The ceiling of the tenants this server creates.
+    pub(crate) ceiling: rewind_engine::ports::Quotas,
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
     pub(crate) allow_stdio: bool,
@@ -146,7 +148,7 @@ impl App {
         })
     }
 
-    /// Creates the tenant's record, with the deployment's quota and retention, when it has
+    /// Creates the tenant's record, with the deployment's ceiling and retention, when it has
     /// none: at its first key, at its organization's creation, at a member's first request.
     pub(crate) async fn ensure_tenant(&self, tenant: &TenantId) -> Result<(), ApiError> {
         let known = |tenants: &HashSet<TenantId>| tenants.contains(tenant);
@@ -157,10 +159,7 @@ impl App {
             self.store
                 .put_tenant(&Tenant {
                     id: tenant.clone(),
-                    quotas: rewind_engine::ports::Quotas {
-                        active_runs: self.settings.run_quota,
-                        ..Default::default()
-                    },
+                    quotas: self.settings.ceiling.clone(),
                     namespace_defaults: rewind_engine::ports::Quotas::default(),
                     retention: self.settings.retention,
                 })
@@ -211,13 +210,13 @@ impl App {
         *self.stop.borrow()
     }
 
-    /// A run the caller sees: of its tenant, with its allowed labels. Any other is answered
-    /// as missing.
+    /// A run the caller sees: of its tenant, with its allowed labels, in the namespace its
+    /// request is bound to, if any. Any other is answered as missing.
     pub(crate) async fn run(&self, caller: &Caller, id: &str) -> Result<RunRecord, ApiError> {
         let run_id: RunId = id.parse().map_err(|_| ApiError::run_not_found(id))?;
         let run = RunRef::new(caller.tenant.clone(), run_id);
         match self.store.get_run(&run).await? {
-            Some(record) if caller.sees(&record.metadata.labels) => Ok(record),
+            Some(record) if caller.sees_run(&record) => Ok(record),
             _ => Err(ApiError::run_not_found(id)),
         }
     }
@@ -320,13 +319,22 @@ impl App {
         }
     }
 
-    /// Records the states of the tasks of the runs of a toolset that had a call parked, after
-    /// the toolset's credentials were renewed: their parked calls are ready again.
-    pub(crate) async fn record_parked_tasks(&self, tenant: &TenantId, toolset: Digest) {
+    /// Records the states of the tasks of the runs of a toolset that had a call parked, in one
+    /// namespace or in all, after the toolset's or an end user's credentials were renewed: their
+    /// parked calls are ready again.
+    pub(crate) async fn record_parked_tasks(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        toolset: Digest,
+    ) {
         const PAGE: usize = 100;
-        let query = RunQuery::new(tenant.clone())
+        let mut query = RunQuery::new(tenant.clone())
             .with(Predicate::Toolset(vec![toolset.to_hex()]))
             .with(Predicate::Waiting(BTreeSet::from([WaitingFor::Parked])));
+        if let Some(namespace) = namespace {
+            query = query.with(Predicate::Namespace(BTreeSet::from([namespace.clone()])));
+        }
         let mut after = None;
         loop {
             let runs = match self

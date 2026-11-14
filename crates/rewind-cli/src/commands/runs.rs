@@ -44,7 +44,7 @@ pub(super) async fn run(
     let key = idempotency_key(args.start.key.as_deref())?;
     let toolset = args.toolset.as_deref().map(ToolsetRef::parse).transpose()?;
 
-    let client = server.client().await?;
+    let client = server.starting_client().await?;
     let deadline = Instant::now() + args.start.wait.get();
     start.toolset = match toolset {
         None => None,

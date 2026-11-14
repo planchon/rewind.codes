@@ -63,7 +63,7 @@ the ones the deployment needs; `.env` (written by `init.sh`) or your shell sets 
 | `REWIND_PUBLIC_URL` | `http://localhost:8080` | The URL clients reach the edge at: `webhook()` URLs start with it |
 | `REWIND_EGRESS_ALLOW` | `loadgen` | The names the workers may reach: MCP servers, hosts of `http` tools, webhook receivers (spaces or commas). A name allows its subdomains |
 | `REWIND_ALLOW_INTERNAL_MCP` | `loadgen` | MCP servers at private addresses the api and the workers may use (names, `*.domain`, addresses, CIDR networks; commas). Without it a deployed server reaches MCP servers at public addresses only |
-| `REWIND_RUN_QUOTA` | `10000` | Active runs of a tenant created by this deployment; one more is refused with 429 |
+| `REWIND_QUOTA_ACTIVE_RUNS` | `10000` | The ceiling of the tenants this deployment creates: their active runs across their namespaces; one more is refused with 429. `REWIND_QUOTA_RUNS_PER_MONTH`, `REWIND_QUOTA_CPU_PER_MONTH`, `REWIND_QUOTA_SCRIPTS`, `REWIND_QUOTA_MAX_TTL` and `REWIND_QUOTA_MAX_SCRIPT_LINES` set the others, none by default |
 | `REWIND_DEFAULT_TTL`, `REWIND_MAX_TTL` | `30d`, `365d` | A run's TTL when the harness gives none, and the most it may ask for |
 | `REWIND_JOURNAL_RETENTION`, `REWIND_ARCHIVE_RETENTION`, `REWIND_READ_MODEL_RETENTION`, `REWIND_PAYLOAD_GRACE` | `30d`, `365d`, `90d`, `24h` | The retention of the tenants this deployment creates ([retention](#retention)) |
 | `REWIND_WORKER_ACTIVATIONS`, `REWIND_WORKER_DISPATCHES` | `4`, `64` | Activations run at once, and tool calls in flight, per worker |
@@ -147,11 +147,16 @@ The sign-in's cookies are `Secure`: browsers keep them on `https://` origins and
 `X-Forwarded-For`, which the edge writes with the address that reached it (Caddy ignores the one
 a client sends; the edge is the only published port), when it is a public address.
 
-A tenant's quota and retention are rows of the `tenants` table: change an existing tenant there.
+A tenant's ceiling is the operator's offer: the admin key changes it with `PUT
+/v1/organizations/{tenant}/quotas`. Its retention is a row of the `tenants` table: change an
+existing tenant there.
 
 ```sh
+curl -X PUT "$REWIND_PUBLIC_URL/v1/organizations/acme/quotas" \
+  -H "Authorization: Bearer $REWIND_ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"ceiling": {"activeRuns": 50000, "runsPerMonth": 2000000}}'
 docker compose exec postgres psql -U rewind -d rewind -c \
-  "UPDATE tenants SET active_run_quota = 50000, journal_retention_ms = 7 * 86400000 WHERE id = 'acme'"
+  "UPDATE tenants SET journal_retention_ms = 7 * 86400000 WHERE id = 'acme'"
 ```
 
 **Worker pools per tenant.** `rewind server --role worker --tenant acme` serves only `acme`;

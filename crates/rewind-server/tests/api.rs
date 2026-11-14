@@ -828,7 +828,7 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tenant_above_its_quota_is_refused_with_429() {
-    let server = TestServer::start(&["--run-quota", "1"]).await;
+    let server = TestServer::start(&["--quota-active-runs", "1"]).await;
     let harness = server.key_of("small", BuiltInRole::Harness, &[]).await;
     let key = IdempotencyKey::new("first").unwrap();
     let first = harness.start_run(&start(SIGNAL), Some(&key)).await.unwrap();
@@ -1117,7 +1117,13 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
         );
     }
     assert_eq!(
-        reader.get_payload(&their_input, None).await.unwrap(),
+        problem(reader.get_payload(&their_input, None).await.unwrap_err()).kind(),
+        Some(ProblemType::Forbidden),
+        "a read bound to a namespace names the run"
+    );
+    let tenant_reader = server.tenant_key("acme", "reader").await;
+    assert_eq!(
+        tenant_reader.get_payload(&their_input, None).await.unwrap(),
         json!({ "text": "t".repeat(2048) })
     );
     assert_eq!(

@@ -5,7 +5,7 @@
 //! | --- | --- | --- |
 //! | `approval` (the `approval` policy) | lets the call go | `approve_task` |
 //! | `parked` by a schema change | continues against the new schema | `approve_task` |
-//! | `parked` by a 401 | renews the credentials | `set_run_credentials`, `set_toolset_credentials` |
+//! | `parked` by a 401 | renews the credentials | `set_run_credentials`, `set_namespace_credentials`, `set_toolset_credentials` |
 //! | any of them | refuses: the call fails with a `ToolError` | `reject_task` |
 //!
 //! Cancelling the run, or forking it with a corrected script, are the other ways out.
@@ -14,9 +14,9 @@ use rewind_core::{Digest, ToolFailure, ToolFailureKind};
 
 use crate::engine::{Engine, EngineError};
 use crate::ports::{
-    BlobStore, Clock, Credentials, Entropy, JournalStore, ParkedScope, RunRef, ScriptExecutor,
-    SecretOwner, SecretStore, TaskRef, TaskUpdate, TenantId, ToolDispatcher, ToolTask,
-    WebhookSender,
+    BlobStore, Clock, Credentials, Entropy, JournalStore, NamespaceName, ParkedScope, RunRef,
+    ScriptExecutor, SecretOwner, SecretStore, TaskRef, TaskUpdate, TenantId, ToolDispatcher,
+    ToolTask, WebhookSender,
 };
 
 /// The message of a rejection without one.
@@ -77,6 +77,31 @@ where
             .await?;
         let scope = ParkedScope::Toolset {
             tenant: tenant.clone(),
+            toolset,
+        };
+        Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)
+    }
+
+    /// Sets or renews an end user's credentials for a toolset, used by the runs of its namespace
+    /// with this toolset and without credentials of their own, over the toolset's. The calls
+    /// parked by `credentials.expired` in those runs are ready again, and sent with the same
+    /// idempotency key. Returns how many.
+    pub async fn set_namespace_credentials(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        toolset: Digest,
+        credentials: &Credentials,
+    ) -> Result<usize, EngineError> {
+        self.toolset(tenant, toolset).await?;
+        let owner = SecretOwner::Namespace {
+            namespace: namespace.clone(),
+            toolset,
+        };
+        self.secrets.put(tenant, &owner, credentials).await?;
+        let scope = ParkedScope::Namespace {
+            tenant: tenant.clone(),
+            namespace: namespace.clone(),
             toolset,
         };
         Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)

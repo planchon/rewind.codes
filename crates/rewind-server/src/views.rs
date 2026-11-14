@@ -587,6 +587,50 @@ pub(crate) fn namespace(
         .expect("the engine and the API check the same rule for namespaces")
 }
 
+/// A namespace as the engine names it: the engine and the API check the same rule.
+pub(crate) fn engine_namespace(
+    name: &rewind_api::namespaces::NamespaceName,
+) -> rewind_engine::ports::NamespaceName {
+    rewind_engine::ports::NamespaceName::new(name.as_str())
+        .expect("the engine and the API check the same rule for namespaces")
+}
+
+/// Limits as the API writes them.
+pub(crate) fn quotas(quotas: &rewind_engine::ports::Quotas) -> rewind_api::namespaces::Quotas {
+    rewind_api::namespaces::Quotas {
+        cpu_per_month: quotas.cpu_per_month.map(Into::into),
+        active_runs: quotas.active_runs,
+        runs_per_month: quotas.runs_per_month,
+        scripts: quotas.scripts,
+        max_ttl: quotas.max_ttl.map(Into::into),
+        max_script_lines: quotas.max_script_lines,
+    }
+}
+
+/// Limits as the engine reads them.
+pub(crate) fn engine_quotas(
+    quotas: &rewind_api::namespaces::Quotas,
+) -> rewind_engine::ports::Quotas {
+    rewind_engine::ports::Quotas {
+        cpu_per_month: quotas.cpu_per_month.map(|duration| duration.get()),
+        active_runs: quotas.active_runs,
+        runs_per_month: quotas.runs_per_month,
+        scripts: quotas.scripts,
+        max_ttl: quotas.max_ttl.map(|duration| duration.get()),
+        max_script_lines: quotas.max_script_lines,
+    }
+}
+
+/// A month's use as the API writes it.
+pub(crate) fn usage(usage: &rewind_engine::ports::Usage) -> rewind_api::namespaces::QuotaUsage {
+    rewind_api::namespaces::QuotaUsage {
+        cpu: usage.cpu.into(),
+        active_runs: usage.active_runs,
+        runs_started: usage.runs_started,
+        scripts: usage.scripts,
+    }
+}
+
 /// A quota alert as the API and the webhook `quota.alert` write it.
 pub(crate) fn quota_alert(
     alert: &rewind_engine::ports::QuotaAlert,

@@ -4351,6 +4351,7 @@ dependencies = [
 name = "rewind-server"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "axum",
  "base64 0.23.1",
  "clap",
@@ -4358,6 +4359,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "jiff",
+ "jsonwebtoken",
  "reqwest 0.13.5",
  "rewind-api",
  "rewind-blob",

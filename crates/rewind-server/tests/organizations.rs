@@ -450,6 +450,7 @@ async fn no_one_gives_or_takes_away_more_than_they_hold() {
             Permission::MembersInvite,
             Permission::MembersManage,
             Permission::RolesRead,
+            Permission::NamespacesRead,
         ],
     };
     acme.owner.put_role("manager", &manager).await.unwrap();

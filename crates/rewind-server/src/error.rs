@@ -97,16 +97,30 @@ impl ApiError {
     }
 }
 
+/// When the quota a `quota-exceeded` answer reached frees: the router turns it into
+/// `Retry-After`, in seconds from the server's now (`http::every_response`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FreesAt(pub(crate) rewind_core::Timestamp);
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status =
             StatusCode::from_u16(self.0.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let body = serde_json::to_vec(&*self.0).unwrap_or_default();
+        let frees_at = self
+            .0
+            .quota
+            .as_ref()
+            .and_then(|quota| quota.resets_at)
+            .map(crate::http::runs::core_time);
         let mut response = (status, body).into_response();
         response.headers_mut().insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static(rewind_api::problem::CONTENT_TYPE),
         );
+        if let Some(at) = frees_at {
+            response.extensions_mut().insert(FreesAt(at));
+        }
         response
     }
 }

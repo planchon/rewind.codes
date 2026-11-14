@@ -54,6 +54,7 @@ fn filter(
         None => None,
     };
     let mut filter = rewind_engine::ports::ScriptFilter::new(caller.tenant.clone());
+    filter.namespace = caller.namespace.clone();
     filter.digest = digest;
     filter.labels = labels;
     filter.tool = tool;
@@ -162,6 +163,19 @@ pub(super) async fn script(
         // A key limited to labels reads the scripts of the runs it sees, once they are listed.
         return Err(missing());
     }
+    if let (Some(_), Some(namespace)) = (&caller.token, &caller.namespace) {
+        // An end user's token reads the scripts its namespace's kept runs ran.
+        if !app
+            .store
+            .namespace_has_script(&caller.tenant, namespace, parsed)
+            .await?
+        {
+            return Err(missing());
+        }
+    } else if caller.namespace.is_some() && summary.is_none() {
+        // A key's or a member's read narrowed to a namespace, once its runs are listed.
+        return Err(missing());
+    }
     let source = stored.script.source().to_owned();
     Ok(Json(Script {
         digest: parsed.to_hex(),
@@ -194,10 +208,11 @@ pub(super) async fn tool_stats(
 ) -> Result<Json<ToolStatsPage>, ApiError> {
     caller.require(Permission::RunsRead)?;
     if caller.scoped() {
-        return Err(ApiError::forbidden(
-            "tool statistics span every run of the tenant: a key limited to labels cannot read \
-             them",
-        ));
+        return Err(ApiError::forbidden(format!(
+            "tool statistics span every run of the tenant: {} is limited to labels and cannot \
+             read them",
+            caller.who()
+        )));
     }
     let until = query.until.map_or_else(|| app.now(), core_time);
     let since = query.since.map_or_else(
@@ -215,7 +230,7 @@ pub(super) async fn tool_stats(
         .store
         .tool_stats(&rewind_engine::ports::ToolStatsFilter {
             tenant: caller.tenant.clone(),
-            namespace: None,
+            namespace: caller.namespace.clone(),
             toolset,
             since: Some(since),
             until: Some(until),
@@ -258,8 +273,8 @@ pub(super) async fn tool_stats(
 }
 
 /// `GET /v1/payloads/{digest}`: the value, as canonical JSON. Through `run` when it is given,
-/// which a key limited to labels must do: the run must be one the caller sees, and its journal
-/// must hold the payload.
+/// which a key limited to labels and a request bound to a namespace must do: the run must be
+/// one the caller sees, and its journal must hold the payload.
 pub(super) async fn payload(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -285,8 +300,16 @@ pub(super) async fn payload(
         }
         None if caller.scoped() => {
             return Err(ApiError::forbidden(format!(
-                "a key limited to labels reads the payloads of the runs it sees: name the run \
-                 (GET /v1/payloads/{digest}?run=<id>)"
+                "{} is limited to labels and reads the payloads of the runs it sees: name the \
+                 run (GET /v1/payloads/{digest}?run=<id>)",
+                caller.who()
+            )));
+        }
+        None if caller.namespace.is_some() => {
+            return Err(ApiError::forbidden(format!(
+                "a request bound to a namespace (an end user's token, or Rewind-Namespace) reads \
+                 the payloads of its namespace's runs: name the run (GET \
+                 /v1/payloads/{digest}?run=<id>)"
             )));
         }
         None => {}

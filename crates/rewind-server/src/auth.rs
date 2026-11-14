@@ -21,6 +21,17 @@
 //! The operator (role `operator`) holds every permission in its own tenant, reaches the keys of
 //! every tenant, and stops the embedded server. The embedded server's socket takes no key: its
 //! one caller is the operator of the tenant `local`.
+//!
+//! An end user's token (`archi/06-storage-and-scale.md`, "Namespaces", "Who calls") holds no
+//! grant: its permissions are its own, among [`Permission::TOKEN`], its labels work as a grant's,
+//! and it is bound to its namespace. It is opaque (`rewind_nt_…`, found by its SHA-256 in the
+//! access store) or a JWT the customer signed with a registered key (`kid` `rk_…`). Every
+//! request reads its state again: revoked, expired, its key deleted, signed before its
+//! namespace's `tokens_revoked_before`, or its namespace being erased, it is refused (401).
+//!
+//! The namespace of a request ([`Caller::namespace`]) is the token's; for a key or a member, the
+//! header `Rewind-Namespace`, which narrows what it reads and names where it creates. A token's
+//! request naming another namespace is refused (403).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -32,15 +43,21 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::{OPERATOR, Permission, fixed_permissions};
-use rewind_api::headers::API_KEY_PREFIX;
+use rewind_api::headers::{API_KEY_PREFIX, NAMESPACE, TOKEN_KEY_PREFIX, TOKEN_PREFIX};
+use rewind_api::namespaces::{SignedTokenClaims, TOKEN_AUDIENCE, TOKEN_MAX_TTL};
 use rewind_core::{Digest, Timestamp};
+use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{
-    AccessStore, IdentityError, IdentityProvider, OrganizationId, Principal, SessionId, StoreError,
-    TenantId, UserId,
+    AccessStore, Clock, IdentityError, IdentityProvider, JournalStore, NamespaceName,
+    NamespaceWrite, OrganizationId, Principal, RunRecord, SessionId, StoreError, TenantId, UserId,
 };
 
 use crate::app::App;
 use crate::error::ApiError;
+use crate::tokens::PublicKey;
+
+/// The clock skew allowed on a signed token's expiry, as on a member's access token.
+const LEEWAY_SECONDS: u64 = 30;
 
 /// The permissions a grant limited to labels never uses: members, roles, keys and the
 /// organization carry no labels.
@@ -68,8 +85,35 @@ pub(crate) struct Caller {
     /// Who gave the grant; `None` for the grants the server gives.
     pub(crate) granted_by: Option<Principal>,
     pub(crate) granted_at: Option<Timestamp>,
-    /// What the role gives.
+    /// What the role gives, or what the token holds.
     pub(crate) permissions: BTreeSet<Permission>,
+    /// The namespace the request is bound to: a token's own; for a key or a member, the one
+    /// `Rewind-Namespace` names, if any ([`Caller::bind`]).
+    pub(crate) namespace: Option<NamespaceName>,
+    /// The caller is an end user's token.
+    pub(crate) token: Option<EndUserToken>,
+}
+
+/// An end user's token, as the request presented it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EndUserToken {
+    pub(crate) form: TokenForm,
+    /// When it expires: in the server's time for an opaque token, in the world's for a signed
+    /// one.
+    pub(crate) expires_at: Timestamp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TokenForm {
+    /// `rewind_nt_…`, by the SHA-256 of its secret: its id.
+    Opaque { hash: Digest },
+    /// A JWT the customer signed with the key `kid`.
+    Signed {
+        kid: String,
+        jti: Option<String>,
+        /// Its `iat`, in milliseconds.
+        issued_at: Timestamp,
+    },
 }
 
 impl Caller {
@@ -83,6 +127,8 @@ impl Caller {
             granted_by: None,
             granted_at: None,
             permissions: Permission::ALL.into_iter().collect(),
+            namespace: None,
+            token: None,
         }
     }
 
@@ -101,6 +147,8 @@ impl Caller {
                 granted_by: None,
                 granted_at: None,
                 permissions: BTreeSet::new(),
+                namespace: None,
+                token: None,
             });
         };
         let permissions = role_permissions(store, &tenant, &grant.role)
@@ -114,6 +162,8 @@ impl Caller {
             granted_by: grant.granted_by,
             granted_at: Some(grant.granted_at),
             permissions,
+            namespace: None,
+            token: None,
         })
     }
 
@@ -123,7 +173,10 @@ impl Caller {
     }
 
     /// The caller, as a message names it.
-    fn who(&self) -> &'static str {
+    pub(crate) fn who(&self) -> &'static str {
+        if self.token.is_some() {
+            return "this token";
+        }
         match self.principal {
             Some(Principal::Key(_)) => "this key",
             Some(Principal::User(_)) => "this member",
@@ -131,11 +184,24 @@ impl Caller {
         }
     }
 
-    /// Refuses the request (403) unless the caller's grant gives `permission`; a grant limited to
-    /// labels never administers.
+    /// Refuses the request (403) unless the caller's grant gives `permission`, or its token holds
+    /// it; a grant limited to labels never administers.
     pub(crate) fn require(&self, permission: Permission) -> Result<(), ApiError> {
         let who = self.who();
         if !self.permissions.contains(&permission) {
+            if self.token.is_some() {
+                let held: Vec<Permission> = self.permissions.iter().copied().collect();
+                return Err(ApiError::forbidden(format!(
+                    "this request needs the permission `{permission}`, which this end user's \
+                     token does not hold: it holds {}, within its namespace. The customer mints \
+                     tokens with the permissions they need",
+                    if held.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        listed(&held)
+                    }
+                )));
+            }
             return Err(ApiError::forbidden(match &self.role {
                 None => format!(
                     "{who} has no grant in the tenant {}, so no permission: this request needs \
@@ -178,6 +244,49 @@ impl Caller {
         self.labels
             .iter()
             .all(|(key, value)| labels.get(key) == Some(value))
+    }
+
+    /// Whether the caller sees the run: it carries the caller's labels, and it is in the
+    /// namespace the request is bound to, if any.
+    pub(crate) fn sees_run(&self, record: &RunRecord) -> bool {
+        self.sees(&record.metadata.labels) && self.reaches(&record.namespace)
+    }
+
+    /// Whether the request reaches `namespace`: any, unless it is bound to one.
+    pub(crate) fn reaches(&self, namespace: &NamespaceName) -> bool {
+        self.namespace
+            .as_ref()
+            .is_none_or(|bound| bound == namespace)
+    }
+
+    /// The namespace the request acts for, required to create in one: a token's, or the
+    /// header's (400 without it).
+    pub(crate) fn namespace_required(&self, what: &str) -> Result<NamespaceName, ApiError> {
+        self.namespace.clone().ok_or_else(|| {
+            ApiError::invalid(format!(
+                "the header Rewind-Namespace is required to {what}: it names the end user (the \
+                 namespace) the request acts for. There is no default namespace"
+            ))
+        })
+    }
+
+    /// Binds the request to the namespace `Rewind-Namespace` names: a key's or a member's acts
+    /// for it; a token's may repeat its own, and naming another is refused (403).
+    pub(crate) fn bind(&mut self, header: Option<NamespaceName>) -> Result<(), ApiError> {
+        let Some(header) = header else {
+            return Ok(());
+        };
+        if self.token.is_some() {
+            if self.namespace.as_ref() != Some(&header) {
+                return Err(ApiError::forbidden(
+                    "this end user's token reaches its own namespace only: Rewind-Namespace may \
+                     repeat it or be left out, and names no other",
+                ));
+            }
+            return Ok(());
+        }
+        self.namespace = Some(header);
+        Ok(())
     }
 
     /// Whether the caller's grant is limited to labels.
@@ -267,7 +376,8 @@ pub(crate) struct Who {
     pub(crate) member: Option<Member>,
 }
 
-/// The expiry of the caller's access token; `None` for a key and over the socket.
+/// The expiry of the caller's access token, in the world's time; `None` for a key, an end
+/// user's token and over the socket.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TokenExpiry(pub(crate) Option<Timestamp>);
 
@@ -285,18 +395,41 @@ fn unauthenticated() -> ApiError {
     ApiError::new(ProblemType::Unauthorized, "no API key nor access token")
 }
 
+fn unauthorized(detail: impl Into<String>) -> ApiError {
+    ApiError::new(ProblemType::Unauthorized, detail)
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
         if let Some(caller) = parts.extensions.get::<Caller>() {
-            return Ok(caller.clone());
+            let mut caller = caller.clone();
+            caller.bind(namespace_header(&parts.headers)?)?;
+            return Ok(caller);
         }
         if parts.extensions.get::<Member>().is_some() {
             return Err(no_organization());
         }
         Err(unauthenticated())
     }
+}
+
+/// The namespace `Rewind-Namespace` names, if any; a header that is not a namespace's name is
+/// refused (400).
+pub(crate) fn namespace_header(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<NamespaceName>, ApiError> {
+    let Some(value) = headers.get(NAMESPACE) else {
+        return Ok(None);
+    };
+    let invalid = || {
+        ApiError::invalid(
+            "Rewind-Namespace: expected 1 to 128 ASCII letters, digits, -, _, ., : and @",
+        )
+    };
+    let text = value.to_str().map_err(|_| invalid())?;
+    NamespaceName::new(text).map(Some).map_err(|_| invalid())
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for Who {
@@ -370,11 +503,10 @@ async fn credentials(
     app: &App,
     headers: &axum::http::HeaderMap,
 ) -> Result<(Option<Caller>, Option<Member>), ApiError> {
-    let unauthorized = |detail: &str| ApiError::new(ProblemType::Unauthorized, detail);
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized(
-            "no token: send an API key as `Authorization: Bearer rewind_sk_…`, or a member's \
-             access token from POST /auth/session",
+            "no token: send an API key as `Authorization: Bearer rewind_sk_…`, an end user's \
+             token, or a member's access token from POST /auth/session",
         ));
     };
     // The scheme is case-insensitive (RFC 9110, section 11.1).
@@ -402,11 +534,22 @@ async fn credentials(
             None,
         ));
     }
-    // A worker, and a server without WorkOS, accept only keys.
+    if token.starts_with(TOKEN_PREFIX) {
+        return Ok((Some(opaque_token(app, token).await?), None));
+    }
+    if let Some(header) = jsonwebtoken::decode_header(token).ok().filter(|header| {
+        header
+            .kid
+            .as_deref()
+            .is_some_and(|kid| kid.starts_with(TOKEN_KEY_PREFIX))
+    }) {
+        return Ok((Some(signed_token(app, token, header).await?), None));
+    }
+    // A worker, and a server without WorkOS, accept only keys and end users' tokens.
     let Some(sign_in) = &app.sign_in else {
         return Err(unauthorized(
-            "this server accepts only API keys (`Authorization: Bearer rewind_sk_…`): it has no \
-             sign-in, so no access token is valid here",
+            "this server accepts only API keys (`Authorization: Bearer rewind_sk_…`) and end \
+             users' tokens: it has no sign-in, so no member's access token is valid here",
         ));
     };
     let claims =
@@ -435,6 +578,223 @@ async fn credentials(
     app.ensure_tenant(&tenant).await?;
     let caller = Caller::of(&app.store, tenant, Principal::from(&member.user)).await?;
     Ok((Some(caller), Some(member)))
+}
+
+/// The permissions a token holds, as the store or its claims name them: those a token may
+/// hold, others ignored.
+fn token_permissions<'a>(names: impl IntoIterator<Item = &'a String>) -> BTreeSet<Permission> {
+    names
+        .into_iter()
+        .filter_map(|name| Permission::parse(name))
+        .filter(|permission| permission.in_token())
+        .collect()
+}
+
+/// The caller of an opaque token: live, of a namespace that is not being erased.
+async fn opaque_token(app: &App, token: &str) -> Result<Caller, ApiError> {
+    let hash = key_hash(token);
+    let stored = app.store.find_token(hash).await?;
+    let Some(stored) = stored.filter(|stored| stored.is_live(app.now())) else {
+        return Err(unauthorized(
+            "this end user's token is unknown, revoked or expired: ask the service that gave it \
+             for a new one",
+        ));
+    };
+    refuse_erased(app, &stored.tenant, &stored.namespace).await?;
+    Ok(Caller {
+        tenant: stored.tenant,
+        principal: None,
+        role: None,
+        labels: stored.labels,
+        granted_by: None,
+        granted_at: None,
+        permissions: token_permissions(&stored.permissions),
+        namespace: Some(stored.namespace),
+        token: Some(EndUserToken {
+            form: TokenForm::Opaque { hash },
+            expires_at: stored.expires_at,
+        }),
+    })
+}
+
+/// Refuses (401) a token whose namespace is being erased: it takes no token any more.
+async fn refuse_erased(
+    app: &App,
+    tenant: &TenantId,
+    namespace: &NamespaceName,
+) -> Result<(), ApiError> {
+    let erased = app
+        .store
+        .get_namespace(tenant, namespace)
+        .await?
+        .is_some_and(|namespace| namespace.deleting_since.is_some());
+    if erased {
+        return Err(unauthorized(
+            "the end user of this token is being erased: its tokens are refused",
+        ));
+    }
+    Ok(())
+}
+
+/// The caller of a token the customer signed with a registered key: a valid signature by a key
+/// that still exists, the audience `rewind`, an expiry at most 30 days after its issue, not
+/// past, permissions the key may give, issued after its namespace's `tokens_revoked_before`. Its
+/// namespace is created at its first use.
+async fn signed_token(
+    app: &App,
+    token: &str,
+    header: jsonwebtoken::Header,
+) -> Result<Caller, ApiError> {
+    let kid = header.kid.unwrap_or_default();
+    // A `kid` holding a NUL character is no key's, and never reaches a store.
+    let key = if kid.contains('\0') {
+        None
+    } else {
+        app.store.find_token_key(&kid).await?
+    };
+    let Some(key) = key else {
+        return Err(unauthorized(format!(
+            "the key {kid} that signed this token is unknown or was deleted: its tokens are \
+             refused"
+        )));
+    };
+    let public = PublicKey::stored(&key.jwk)
+        .ok_or_else(|| ApiError::internal(format!("the stored key {kid} cannot be read")))?;
+    let algorithm = public.jwt_algorithm();
+    if header.alg != algorithm {
+        return Err(unauthorized(format!(
+            "this token is signed with {:?}, but its key {kid} signs with {algorithm:?}",
+            header.alg
+        )));
+    }
+    let decoding = public
+        .decoding_key()
+        .ok_or_else(|| ApiError::internal(format!("the stored key {kid} cannot be read")))?;
+    let mut validation = jsonwebtoken::Validation::new(algorithm);
+    validation.set_required_spec_claims(&["exp", "iat", "sub", "aud"]);
+    validation.set_audience(&[TOKEN_AUDIENCE]);
+    validation.leeway = LEEWAY_SECONDS;
+    validation.validate_exp = true;
+    validation.validate_nbf = true;
+    let claims = jsonwebtoken::decode::<SignedTokenClaims>(token, &decoding, &validation)
+        .map_err(|error| {
+            unauthorized(format!(
+                "this signed token is refused ({error}): it must be signed by its key, for the \
+                 audience {TOKEN_AUDIENCE:?}, name its namespace in sub, and not be expired"
+            ))
+        })?
+        .claims;
+    if rewind_engine::text::refuse_nul_in_labels(&claims.labels.0).is_err() {
+        return Err(unauthorized(
+            "this signed token's labels hold a NUL character (U+0000), which no label holds",
+        ));
+    }
+    let lifetime = claims.exp.saturating_sub(claims.iat);
+    let max = i64::try_from(TOKEN_MAX_TTL.as_secs()).unwrap_or(i64::MAX);
+    if lifetime <= 0 || lifetime > max {
+        return Err(unauthorized(
+            "this signed token's exp must come after its iat, by 30 days at most",
+        ));
+    }
+    let given = token_permissions(&key.permissions);
+    let permissions = match &claims.permissions {
+        Some(asked) => {
+            let asked: BTreeSet<Permission> = asked.iter().copied().collect();
+            if let Some(refused) = asked.iter().find(|permission| !given.contains(permission)) {
+                return Err(unauthorized(format!(
+                    "this signed token asks for the permission `{refused}`, which its key {kid} \
+                     may not give"
+                )));
+            }
+            asked
+        }
+        None => Permission::TOKEN_DEFAULT
+            .into_iter()
+            .filter(|permission| given.contains(permission))
+            .collect(),
+    };
+    let issued_at = Timestamp::from_millis(u64::try_from(claims.iat).unwrap_or(0) * 1000);
+    let name = crate::views::engine_namespace(&claims.sub);
+    let namespace = match app.store.get_namespace(&key.tenant, &name).await? {
+        Some(namespace) => namespace,
+        None => match app
+            .store
+            .put_namespace(&key.tenant, &name, None, app.now())
+            .await?
+        {
+            NamespaceWrite::Written(namespace) => namespace,
+            NamespaceWrite::Deleting => {
+                return Err(unauthorized(
+                    "the end user of this token is being erased: its tokens are refused",
+                ));
+            }
+        },
+    };
+    if namespace.deleting_since.is_some() {
+        return Err(unauthorized(
+            "the end user of this token is being erased: its tokens are refused",
+        ));
+    }
+    if namespace
+        .tokens_revoked_before
+        .is_some_and(|revoked| issued_at < revoked)
+    {
+        return Err(unauthorized(
+            "this signed token was issued before its namespace's tokens were revoked: sign a new \
+             one",
+        ));
+    }
+    Ok(Caller {
+        tenant: key.tenant,
+        principal: None,
+        role: None,
+        labels: claims.labels.0,
+        granted_by: None,
+        granted_at: None,
+        permissions,
+        namespace: Some(name),
+        token: Some(EndUserToken {
+            form: TokenForm::Signed {
+                kid,
+                jti: claims.jti,
+                issued_at,
+            },
+            expires_at: Timestamp::from_millis(u64::try_from(claims.exp).unwrap_or(0) * 1000),
+        }),
+    })
+}
+
+/// Whether the caller's end user's token still authenticates, as it did when its request opened
+/// an event stream: a revocation, an expiry, a deleted key or an erasure closes the stream.
+/// Always for any other caller.
+pub(crate) async fn still_valid(app: &App, caller: &Caller) -> bool {
+    let (Some(token), Some(name)) = (&caller.token, &caller.namespace) else {
+        return true;
+    };
+    let namespace = match app.store.get_namespace(&caller.tenant, name).await {
+        Ok(namespace) => namespace,
+        Err(_) => return false,
+    };
+    if namespace
+        .as_ref()
+        .is_some_and(|namespace| namespace.deleting_since.is_some())
+    {
+        return false;
+    }
+    match &token.form {
+        TokenForm::Opaque { hash } => match app.store.find_token(*hash).await {
+            Ok(Some(stored)) => stored.is_live(app.now()),
+            _ => false,
+        },
+        TokenForm::Signed { kid, issued_at, .. } => {
+            let key = app.store.find_token_key(kid).await;
+            let key_kept = matches!(key, Ok(Some(key)) if key.tenant == caller.tenant);
+            let not_revoked = namespace
+                .and_then(|namespace| namespace.tokens_revoked_before)
+                .is_none_or(|revoked| *issued_at >= revoked);
+            key_kept && not_revoked && SystemClock.now() < token.expires_at
+        }
+    }
 }
 
 #[cfg(test)]
@@ -580,6 +940,45 @@ mod tests {
                 "{permission}: {refused}"
             );
         }
+    }
+
+    #[test]
+    fn a_request_is_bound_to_its_token_s_namespace_or_its_header_s() {
+        let alice = NamespaceName::new("alice").unwrap_or_else(|_| NamespaceName::migrated());
+        let bob = NamespaceName::new("bob").unwrap_or_else(|_| NamespaceName::migrated());
+        let mut key = Caller::local();
+        assert!(key.reaches(&bob), "without the header, every namespace");
+        assert!(key.namespace_required("start a run").is_err());
+        assert!(key.bind(Some(alice.clone())).is_ok());
+        assert!(key.reaches(&alice) && !key.reaches(&bob));
+        assert_eq!(
+            key.namespace_required("start a run").ok(),
+            Some(alice.clone())
+        );
+
+        let token = Caller {
+            role: None,
+            permissions: Permission::TOKEN_DEFAULT.into_iter().collect(),
+            namespace: Some(alice.clone()),
+            token: Some(EndUserToken {
+                form: TokenForm::Opaque {
+                    hash: Digest::of(b"rewind_nt_alice"),
+                },
+                expires_at: Timestamp(0),
+            }),
+            ..Caller::local()
+        };
+        let mut repeated = token.clone();
+        assert!(repeated.bind(Some(alice.clone())).is_ok());
+        assert!(repeated.bind(None).is_ok());
+        assert_eq!(repeated.namespace, Some(alice.clone()));
+        let mut astray = token.clone();
+        let refused = detail(astray.bind(Some(bob.clone())));
+        assert!(refused.contains("its own namespace only"), "{refused}");
+        let refused = detail(token.require(Permission::RunsDelete));
+        assert!(refused.contains("`runs:delete`"), "{refused}");
+        assert!(refused.contains("token"), "{refused}");
+        assert_eq!(token.who(), "this token");
     }
 
     #[test]

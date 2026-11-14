@@ -7,7 +7,7 @@ use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::header;
 use axum::http::request::Parts;
 use rewind_api::ProblemType;
-use rewind_api::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE};
+use rewind_api::headers::{IDEMPOTENCY_KEY, IdempotencyKey};
 use serde::de::DeserializeOwned;
 
 use crate::error::ApiError;
@@ -103,40 +103,6 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequestParts<S> for Query<T> {
         serde_html_form::from_str(query)
             .map(Query)
             .map_err(|error| ApiError::invalid(format!("the query string is not valid: {error}")))
-    }
-}
-
-/// The `Rewind-Namespace` header, if any: the namespace a key's or a member's request acts for
-/// (`archi/06-storage-and-scale.md`, "Namespaces").
-#[derive(Debug)]
-pub(crate) struct NamespaceHeader(pub(crate) Option<rewind_engine::ports::NamespaceName>);
-
-impl NamespaceHeader {
-    /// The namespace, required to create something in one.
-    pub(crate) fn required(self) -> Result<rewind_engine::ports::NamespaceName, ApiError> {
-        self.0.ok_or_else(|| {
-            ApiError::invalid(
-                "the header Rewind-Namespace is required: it names the end user the run acts for",
-            )
-        })
-    }
-}
-
-impl<S: Send + Sync> FromRequestParts<S> for NamespaceHeader {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
-        let Some(value) = parts.headers.get(NAMESPACE) else {
-            return Ok(NamespaceHeader(None));
-        };
-        let invalid = || {
-            ApiError::invalid(
-                "Rewind-Namespace: expected 1 to 128 ASCII letters, digits, -, _, ., : and @",
-            )
-        };
-        let text = value.to_str().map_err(|_| invalid())?;
-        let name = rewind_engine::ports::NamespaceName::new(text).map_err(|_| invalid())?;
-        Ok(NamespaceHeader(Some(name)))
     }
 }
 

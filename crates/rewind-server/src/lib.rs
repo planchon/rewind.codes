@@ -30,6 +30,7 @@ mod extract;
 mod grants;
 mod http;
 mod serve;
+mod tokens;
 mod views;
 mod wake;
 mod wiring;
@@ -41,7 +42,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 pub use config::{ConfigError, OtlpArg, RoleArg, ServerArgs};
-pub use serve::{Running, StartupError, VERSION, start, start_with_identity};
+pub use serve::{Running, StartupError, VERSION, start, start_in_memory, start_with_identity};
 
 /// Exit codes of `rewind server`.
 pub mod exit {
