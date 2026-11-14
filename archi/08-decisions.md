@@ -75,7 +75,7 @@ Answers to the questions raised once the layering was done.
 | **Fork semantics** | A fork is a new run with its own id, the parent's seed, input (overridable) and toolset, and a new TTL. While its commands match, the parent's entries are copied and no tool is called again; at the first difference, at `at`, or at the end of the parent's history, it continues live with keys `{fork_run_id}/{seq}`. A call the parent left without an outcome is dispatched again with the parent's key under `retry`, and fails with `outcomeUnknown` under `at_most_once`. The link to the parent is run metadata (closes question 9; [execution](03-execution.md#forks)). |
 | **One state machine for tool tasks** | `approval` → `ready` → `claimed` → `done`, with `deferred` (a token, for host tools that answer later) and `parked` (schema changed, 401). Per-tool policy: `retry` or `at_most_once`, `approval`, execution timeout (5 min for MCP), heartbeat timeout (60 s for host tools), concurrency (16 per run, 8 per MCP server on each worker). A terminal run's tasks are deleted ([tools](04-tools.md#tool-task-lifecycle)). |
 | **Credentials are resolved by the dispatcher at call time** | Sent per toolset or per run, stored encrypted in the `SecretStore` (a data key per tenant, encrypted by a master key from the deployment's configuration), injected into the MCP transport. Never in the journal, the isolate, a cassette or OpenTelemetry. A 401 parks the task and sends `credentials.expired` ([tools](04-tools.md#credentials)). |
-| **API keys and tenancy** | Superseded in part by [accounts and access](#taken-for-accounts-organizations-and-access-november-2026): rights come from grants. Keys `rewind_sk_…`, stored hashed, each with a tenant and a scope (a role, and optionally allowed labels). The tenant is part of every storage key. A quota of active runs per tenant (429 above it). Workers draw a tenant at random among those with runnable work, then take its oldest runnable run ([storage](06-storage-and-scale.md#tenancy-identity-and-access)). |
+| **API keys and tenancy** | Superseded in part by [accounts and access](#taken-for-accounts-organizations-and-access-november-2026): rights come from grants. Keys `rewind_sk_…`, stored hashed, each with a tenant and a scope (a role, and optionally allowed labels). The tenant is part of every storage key. A quota of active runs per tenant (429 above it). Workers draw a tenant at random among those with runnable work, then take its oldest runnable run ([storage](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)). |
 | **Egress of the `http` tool** | Requests leave from the dispatcher. No allow-list, no `http` tool and no `fetch`. Each request: allow-list, one DNS resolution, private and metadata IPs refused, connection to the checked IP, each redirect checked again (5 at most), response bounded to 5 MB and 30 s; an egress proxy in production ([tools](04-tools.md#the-http-tool-and-egress)). |
 | **Sandboxed workers** | One binary, two roles: `--role api` (no V8) and `--role worker`. Workers run under gVisor, in pools per tenant when needed, reach the outside only through the egress proxy, and have no route to the cloud metadata endpoint. Three walls between two tenants: V8, gVisor, separate pools ([storage](06-storage-and-scale.md#sandboxed-workers)). |
 | **The dashboard is a React SPA served by `rewind-server`** | It uses only the public API ([05](05-testing-and-observability.md#dashboard)). |
@@ -98,7 +98,7 @@ Answers to the questions raised once the layering was done.
 ### Taken for accounts, organizations and access (November 2026)
 
 Decided by the owner on 14 November 2026, with the design reviewed the same day
-([06](06-storage-and-scale.md#tenancy-identity-and-access)).
+([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 
 | Decision | Notes |
 | --- | --- |
@@ -163,6 +163,58 @@ Approved with the design:
 | The key of `--admin-key` is named `operator key (--admin-key)`; at each start its grant is written again as `operator` without labels when it is missing or was changed | Writing the grant only with the key | The key given at start is the operator's by configuration (06). |
 | A key without a grant authenticates and holds no permission: 403, naming the permission the request needs, and `GET /v1/whoami` answers it without `grant`. A role's stored permission the catalog does not know gives nothing | 401 | The key is genuine; what it lacks is a right, as for a member without a grant. |
 | A key's name is trimmed and may not be blank | Any string | A key's name says what it is for: blank, the list says nothing. |
+
+### Taken for namespaces (November 2026)
+
+Decided by the owner on 14 November 2026, with the design reviewed the same day
+([06](06-storage-and-scale.md#namespaces)).
+
+| Decision | Notes |
+| --- | --- |
+| **A namespace isolates one end user of a customer** | Not an environment. A customer (a tenant) serves its own users; the agent acting for Alice cannot see or reach Bob's runs, whatever its model writes. Namespaces also protect the platform against an end user who abuses the customer's product. |
+| **The customer holds all rights on its namespaces** | Its members and keys keep their grants ([accounts and access](#taken-for-accounts-organizations-and-access-november-2026)); there is no grant per namespace. |
+| **End users get tokens, in two forms** | Opaque tokens minted through the API, and JWTs the customer signs with a key it registered. |
+| **A workflow is a distinct script** | The quota on workflows counts the distinct scripts (by digest) with a run kept in the namespace: a stock, not the new scripts of a month. There is no named workflow. |
+| **Six quotas** | CPU per month, active runs, runs per month and the longest TTL; distinct scripts; the longest script, in lines. |
+| **CPU time above its quota alerts the customer, and nothing more** | Nothing is refused or paused. The other quotas refuse. |
+| **Credentials per end user** | An end user's credentials for a toolset are resolved after the run's and before the toolset's. |
+| **`Rewind-Namespace` is required to create** | There is no default namespace: every run belongs to an end user. |
+
+Approved with the design:
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The customer names the namespace with a header, `Rewind-Namespace` | The namespace in every path (`/v1/namespaces/{name}/runs/…`) | Paths stay, and a read exists once for one namespace or for all; run ids are already unique per tenant. Stripe (`Stripe-Account`) and OpenAI (`OpenAI-Project`) do the same. |
+| A token's namespace comes from the token, never from a parameter | A header the agent sets | Neither the agent nor the scripts its model writes can leave the end user. |
+| Three levels of limits: the tenant's defaults and a namespace's exceptions, set by the customer; the tenant's ceiling, set by the operator | One level | Paying and blocked end users; the operator's offer. |
+| `activeRuns`, `runsPerMonth` and `scripts` refuse a start (429); `maxTtl` (400) and `maxScriptLines` (422) refuse the request | Alerts for every quota | The owner asked that CPU only alert; the others are checked where the run is created. |
+| Alerts at 80 % and 100 %, through the outbound webhooks (`quota.alert`) and in the dashboard | A channel of their own | The customer already receives signed webhooks. |
+| CPU time counts the calls that execute, not those of a replay, and each worker writes it about every 10 s | An activation's whole CPU; a write per activation | A replay is the cost of the instance cache; a write per activation would contend on one row. A worker that dies loses at most 10 s. |
+| **CPU time is not in the journal** | An entry per activation | The journal holds what a run did, the same at every replay; CPU time differs at each replay. It is metering, like service telemetry, kept in `usage`. |
+| Toolsets and subscriptions stay the tenant's; tasks and events name their namespace | Per namespace | The customer registers its tools once and receives every webhook; its handler acts for `ctx.namespace`. |
+| No namespace stage in the workers' fairness | Drawing a namespace after the tenant | With thousands of namespaces the draw costs; `activeRuns` bounds an end user's share of the queue. |
+| `rewind-core` and `rewind-format` know nothing of namespaces | A field of `run_started` | It is run metadata, like the tenant and labels, and never changes what a run does. |
+
+Taken while freezing the contracts:
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A namespace's name is 1 to 128 letters, digits, `-`, `_`, `.`, `:` and `@`, case-sensitive; `*` stands for the tenant in `usage` and `quota_alerts`. A namespace is created at first use | DNS labels; creating them explicitly | It is the customer's id for the end user, often a UUID, `user_…` or an email; a token or a run is enough to create one. |
+| Opaque tokens are `rewind_nt_` and 43 base-62 characters, their SHA-256 is their id; 1 hour by default, 30 days at most | JWTs signed by Rewind | They reuse the keys' mechanism and are revoked one by one. |
+| A signed token's header names a registered key, `kid` `rk_…`, a JWK (Ed25519 with EdDSA, P-256 with ES256, RSA with RS256); claims `sub` (the namespace), `aud` `rewind`, `iat` and `exp` at most 30 days apart, and optionally `permissions`, `labels`, `jti`. A key records the permissions its tokens may carry, among those its registrant holds | A JWKS URL fetched from the customer | No outbound request at authentication; a key is revoked by deleting it. |
+| Revoking a namespace's tokens sets its `tokens_revoked_before`, which also refuses the signed tokens issued earlier | A list of revoked `jti` | One timestamp per namespace, read with the namespace. |
+| A token holds a subset of `runs:read`, `runs:start`, `runs:control`, `runs:quarantine`, `runs:delete`, `toolsets:read`, `credentials:write`, `tasks:work` and `tasks:approve`; by default `runs:read`, `runs:start`, `runs:control` and `toolsets:read` | Any permission | Never administration, toolsets, subscriptions, namespaces or tokens. |
+| `namespaces:read` goes to `owner`, `harness` and `reader`; `namespaces:write` and `tokens:write` to `owner` and `harness` | `owner` only | The customer's backend manages its end users without being an owner. |
+| A key's or a member's read without the header covers every namespace; with one, that namespace, and a run of another is 404 | The header on every request | The customer holds every namespace, and the dashboard reads them all. |
+| Existing rows move to a namespace named `migrated` | A default namespace | There is none, and the migration needs one name. |
+| The CLI uses the namespace `local` against its own embedded server when none is given; against a remote server, a start without one is a usage error (64) | `local` everywhere | Local development needs no flag; a remote tenant's runs always name their end user. |
+| The SDK binds a namespace with `rewind.namespace(name)`, takes a token with `new Rewind({ token })`, and gives handlers `ctx.namespace` | A `namespace` field in every call | One client per end user, as the header is per request. |
+| A namespace being erased refuses runs and tokens: 409 `namespace-deleting` | Recreating it | A late request must not undo an erasure. |
+| Erasing a namespace keeps the tenant's `*` usage | Subtracting it | Erasing end users must not reset the tenant's ceiling. |
+| The tenant's `scripts` is the sum over its namespaces: a script run in two namespaces counts twice | Distinct scripts across the tenant | One counter per namespace is all the lock of `create_run` needs. |
+| `--run-quota` becomes `--quota-active-runs`, `--quota-runs-per-month`, `--quota-cpu-per-month`, `--quota-scripts`, `--quota-max-ttl` and `--quota-max-script-lines` for the tenants a server creates; the operator changes a tenant's ceiling with `PUT /v1/organizations/{tenant}/quotas` | Changing store rows (replaces the decision of `--run-quota`) | A ceiling is the customer's offer, and offers change. |
+| `GET /v1/organization/quota-alerts` lists the alerts of a month | Alerts only on a namespace's page | The Namespaces view shows the tenant's alerts. |
+| Quota alerts are leased and acknowledged as feed items are (`claim_quota_alerts`, `ack_quota_alerts`); the event's id is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}` | Sending them from the write that records them | Delivery stays in the worker role, at least once, and receivers deduplicate by id. |
 
 ## Architecture (approved for 0.1)
 

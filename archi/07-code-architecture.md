@@ -90,8 +90,8 @@ observable through the port alone (the egress rules, an identity provider): thei
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
-| `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role; end users' tokens and the keys that sign them | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `rewind-runtime` (V8); a fake in engine tests |
@@ -99,7 +99,7 @@ observable through the port alone (the egress rules, an identity provider): thei
 | `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `rewind-check` (tsgo) |
 | `ReadModel` | Projections for questions across runs | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `SpanExporter` | Export spans derived from committed entries | memory (engine), `rewind-otel` (OpenTelemetry) |
-| `SecretStore` | Credentials per toolset and per run, encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `SecretStore` | Credentials per toolset, per namespace and toolset, and per run, encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`rewind-server`) |
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
@@ -114,9 +114,10 @@ Methods (declared in `crates/rewind-engine/src/ports/journal/mod.rs`):
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
 put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
-create_run(NewRun { run: (tenant, id), started, metadata, created_at }, key?) -> Created { run, created } | QuotaExceeded
+create_run(NewRun { run: (tenant, id), namespace, started, metadata, created_at }, key?)
+    -> Created { run, created } | QuotaExceeded { quota, scope, limit, used, resets_at } | NamespaceDeleting
 enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
-get_run(run)                       list_runs(RunFilter { tenant, status, labels, quarantined, after, limit })
+get_run(run)                       list_runs(RunFilter { tenant, namespace, status, labels, quarantined, after, limit })
 acquire_runnable(AcquireRunnable { owner, epochs, tenants, now, lease_duration, sticky_grace, draw }) -> Lease { run, fence }
 acquire_run(run, owner, now, lease_duration) -> Lease   # any run that has not ended, quarantined or not
 acquire_quarantined(owner, build, epochs, tenants, now, lease_duration) -> Lease   # each quarantined run once per build
@@ -128,12 +129,13 @@ record_failure(lease, error, now) -> Failures { count, quarantined }
 quarantine(lease, kind, reason, now)   release_quarantine(run)
 fire_due_timers(now, limit)        next_timer()
 expire_due_runs(now, limit) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
-claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, toolset, tools }}, now, limit)
+claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, namespace?, toolset, tools }}, now, limit)
     -> [ClaimedTask { task, token, previous_claim_expired }]
 heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)    next_tool_attempt(after)
 defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
-approve_tool_task(task, now) / reject_tool_task(task, failure, now)    resume_parked(Run(run) | Toolset { tenant, toolset }, now)
+approve_tool_task(task, now) / reject_tool_task(task, failure, now)
+resume_parked(Run(run) | Toolset { tenant, toolset } | Namespace { tenant, namespace, toolset }, now)
 tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
@@ -144,6 +146,15 @@ drop_payloads([(tenant, digest)], started) -> count
 runs_to_archive(now, limit)        archive_run(run, document, now)
 runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
+put_namespace(tenant, name, exceptions, now) / get_namespace(tenant, name)
+list_namespaces(NamespaceFilter { tenant, prefix, above, order, month, after, limit }) -> [NamespaceUsage]
+namespace_usage(tenant, Namespace(name) | Tenant, month) -> Usage { cpu, runs_started, active_runs, scripts, days }
+revoke_namespace_tokens(tenant, name, now)    namespace_has_script(tenant, name, digest)
+delete_namespace(tenant, name, now) -> Started | NotFound    namespaces_to_erase(limit)
+drop_namespace(tenant, name) -> Dropped | RunsLeft
+record_usage([UsageDelta { tenant, namespace, day, cpu }], now) -> [QuotaAlert]
+quota_alerts(tenant, namespace?, month)
+claim_quota_alerts(owner, now, lease_duration, limit) / ack_quota_alerts(ids, now)
 claim_feed(consumer, owner, now, lease_duration, limit)    ack_feed(ids)
 ```
 
@@ -168,9 +179,27 @@ Contracts, all covered by the conformance suite:
 - `key` is an idempotency key. `create_run` with a key already used in the tenant returns the
   existing run; `enqueue` with a key already seen for that run does nothing
   ([storage](06-storage-and-scale.md#idempotency-of-the-api)).
-- `create_run` returns `QuotaExceeded` when the tenant already has its maximum of active runs
-  ([tenancy](06-storage-and-scale.md#tenancy-identity-and-access)); a retried request with its key
-  still returns its run.
+- `create_run` creates the run's namespace if it does not exist, with the tenant's defaults.
+  Under a lock of the namespace and of the tenant, it refuses the run (`QuotaExceeded`) when the
+  namespace's limit or the tenant's ceiling of `activeRuns`, `runsPerMonth` or `scripts` is
+  reached, a script already counted in the namespace passing `scripts`; it names the quota, the
+  scope, the limit, the use and, for a monthly quota, the start of the next month. A first
+  refusal of `activeRuns` in a month records its alert. A created run counts in the month's
+  `runs_started` of its namespace and of the tenant, and in its script's `namespace_scripts`
+  row; crossing 80 % or 100 % of `runsPerMonth` or `scripts` records the alert. A namespace being
+  deleted refuses every run (`NamespaceDeleting`). A retried request with its key still returns
+  its run, whatever the quotas ([quotas](06-storage-and-scale.md#quotas)). Idempotency keys are
+  unique per namespace.
+- `record_usage` adds CPU time to the namespace's day and to the tenant's (`*`), and records
+  the alerts of `cpuPerMonth` whose 80 % or 100 % the addition crosses, once per tenant,
+  namespace or `*`, month and threshold. `claim_quota_alerts` leases the alerts not yet sent,
+  as `claim_feed` leases feed items; `ack_quota_alerts` marks them sent.
+- `delete_run` removes one from the run's `namespace_scripts` row, and the row at zero.
+  `delete_namespace` marks the namespace; `namespaces_to_erase` lists the marked ones;
+  `drop_namespace` removes a marked namespace with its usage and alerts, but not the tenant's
+  `*` rows, once it has no run left (`RunsLeft` otherwise).
+- `revoke_namespace_tokens` sets the namespace's `tokens_revoked_before`, which refuses the
+  signed tokens issued earlier.
 - `acquire_runnable` only returns runs whose epoch is in `epochs` and whose tenant is in
   `tenants`, and never a quarantined run. It draws a tenant among those with runnable work
   (ordered by id, the one at `draw` modulo their number), then takes that tenant's oldest
@@ -254,6 +283,13 @@ Contracts, all covered by the conformance suite:
   `put_role(role) / get_role(tenant, name) / list_roles(tenant) / delete_role(tenant, name) ->
   Deleted | NotFound | InUse`: the tenant's own roles, their permissions as strings that the
   server interprets; `InUse` while a grant points to the role, decided in the same transaction.
+  `put_token(token) / find_token(hash) / revoke_token(tenant, hash, now) / revoke_tokens(tenant,
+  namespace, now) -> count / count_tokens(tenant, namespace, now)`: end users' opaque tokens, by
+  the SHA-256 of their secret, with their tenant, namespace, permissions, labels, expiry, creator
+  and dates; `find_token` returns a token even when it is revoked or expired, and the server
+  refuses it. `put_token_key(key) / find_token_key(kid) / list_token_keys(tenant) /
+  delete_token_key(tenant, kid)`: the public keys a tenant signs its tokens with (a JWK), named
+  `rk_…`, with the permissions their tokens may carry.
   `put_grant(grant, keep) / grant(tenant, principal) / list_grants(tenant) /
   delete_grant(tenant, principal, keep)`: one grant per (tenant, principal), a principal being
   `user:<id>`, `key:<hash>` or `invitation:<id>`; `keep` names a role (`owner`) that the write
@@ -295,26 +331,30 @@ Contracts, all covered by the conformance suite:
   `(run, index)`; of the snapshots of a run, the one with the highest history length wins
   ([read model](05-testing-and-observability.md#read-model)). `search_runs(query, order,
   page)` takes the typed terms of the [query language](05-testing-and-observability.md#query-language)
-  (each negatable, all joined by "and"), `run_stats(query, window)` the counts, series,
-  durations and facets of the runs a query matches, `failure_groups(query, window)` its runs
-  grouped by fingerprint; `scripts(filter)`, `tool_stats(filter)`, `observed_shapes(tenant,
-  tools)`. Service state comes from whoever changes it: `record_tasks(run, tasks)` keeps the
+  (each negatable, all joined by "and"; `namespace` among them), and a scope: the tenant, a
+  namespace, labels. `run_stats(query, window)` the counts, series, durations and facets of the
+  runs a query matches, `failure_groups(query, window)` its runs grouped by fingerprint;
+  `scripts(filter)`, `tool_stats(filter)`, both with an optional namespace,
+  `observed_shapes(tenant, tools)`. Service state comes from whoever changes it: `record_tasks(run, tasks)` keeps the
   furthest state of each call's task (its attempt, and whether it waits for an approval, is
   parked or deferred), and `attempts(run)` reads the attempts back for `tool_stats`' retries;
   `record_quarantine(run, quarantine, at)` keeps the latest. `purge(ended_before, tenants)`
   and `delete_run(run)` serve [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
-- **`SecretStore`**: `put(tenant, owner, credentials)`, where the owner is a toolset or a
-  run; `resolve(tenant, run, toolset)`, which returns the run's credentials if it has some,
-  else the toolset's, never merged; `delete(tenant, owner)`. Credentials are headers and
+- **`SecretStore`**: `put(tenant, owner, credentials)`, where the owner is a toolset, a run, or
+  a namespace's toolset; `resolve(tenant, run, namespace, toolset)`, which returns the run's
+  credentials if it has some, else the namespace's for the toolset, else the toolset's, never
+  merged; `delete(tenant, owner)`, and `delete_namespace(tenant, namespace)` for an erased end
+  user. Credentials are headers and
   environment variables per MCP server. Envelope encryption: each tenant has a data key, itself
   encrypted by a master key from the deployment's configuration. Secrets leave the store only
   toward the dispatcher ([credentials](04-tools.md#credentials)).
 - **`WebhookSender`**: `send(subscription, event)`. Each delivery is signed with HMAC, and
   retried when it fails. Events are `run.completed`, `run.failed`, `run.cancelled`,
-  `run.aborted`, `run.suspended`, `run.quarantined`, `tool.schema_changed` and
-  `credentials.expired`, with a deterministic id for receivers to deduplicate. Subscriptions
+  `run.aborted`, `run.suspended`, `run.quarantined`, `tool.schema_changed`,
+  `credentials.expired` and `quota.alert`, with a deterministic id for receivers to deduplicate;
+  every event about a run names its namespace. Subscriptions
   are kept by the `JournalStore`.
 - **`Clock`** and **`Entropy`**: unchanged.
 
@@ -331,7 +371,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryAccess`, `MemoryIdentity`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
 | `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa) of `/v1` and `/auth`, the catalog of permissions and the built-in roles, the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
-| `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog, heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
+| `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog (which also reports each call's CPU time), heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
 | `rewind-store-turso` | adapter | embedded `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
 | `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `AccessStore`, `ReadModel` and `SecretStore` |
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
@@ -449,10 +489,16 @@ clients. The evals use its DTOs, with the engine in process
 
 Conventions:
 
-- Authentication by a Bearer token: an API key, or a WorkOS access token for the dashboard. It
-  designates the tenant; the caller's grant says what it may do, and every endpoint requires one
-  permission of the catalog ([access](06-storage-and-scale.md#tenancy-identity-and-access)). A
-  missing permission is 403, with a message that names it.
+- Authentication by a Bearer token: an API key, a WorkOS access token for the dashboard, or an
+  end user's token (opaque `rewind_nt_…`, or a JWT the customer signed with a registered key). It
+  designates the tenant; the caller's grant, or a token's own permissions, say what it may do,
+  and every endpoint requires one permission of the catalog
+  ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)). A missing permission
+  is 403, with a message that names it.
+- `Rewind-Namespace` names the namespace of a key's or a member's request: required to start a
+  run, `/v1/check` and `/v1/test`; on reads, it narrows to that namespace. A token's namespace is
+  its own: the header may repeat it, and naming another is 403
+  ([namespaces](06-storage-and-scale.md#namespaces)).
 - `Idempotency-Key` on run creation (start and fork) and on signals
   ([idempotency](06-storage-and-scale.md#idempotency-of-the-api)).
 - Errors are `application/problem+json`, with a message written for a model. Their `type` is
@@ -470,6 +516,7 @@ Conventions:
 |  | `GET /v1/toolsets/{id}/declarations` | `toolsets:read` | The declarations, `format=dts` or `prompt` |
 |  | `GET /v1/toolsets/{id}/search` | `toolsets:read` | `search_tools`, for large toolsets |
 |  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
+|  | `PUT /v1/namespaces/{name}/toolsets/{id}/credentials` | `credentials:write` | Sets or renews an end user's credentials for the toolset |
 | Scripts | `POST /v1/check` | `runs:start` | Type-check only |
 |  | `POST /v1/test` | `runs:start` | Runs a scenario in mock mode, in virtual time |
 | Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl` |
@@ -502,8 +549,8 @@ Conventions:
 | Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
 |  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
 |  | `GET /v1/tools/stats` | `runs:read` | Latency, errors, retries |
-|  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a key limited to labels) |
-| Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, or the user with their email, name and picture), the grant (role, allowed labels), the permissions it holds; for a member, the organization and every organization of the user |
+|  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a token, a header, or a grant limited to labels) |
+| Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user |
 | | `POST /v1/organizations` | a member, even without organization | Creates an organization: in WorkOS with the caller's membership, then the tenant and the caller's `owner` grant; if the second step fails, the organization is deleted in WorkOS |
 | | `PATCH /v1/organization` | `organization:write` | The organization's name and default role |
 | | `GET /v1/invitations` | a member, even without organization | The pending invitations sent to the caller's email |
@@ -522,6 +569,20 @@ Conventions:
 | | `GET /v1/api-keys` | `api_keys:read` | The tenant's keys, without their secret, each with its grant |
 | | `POST /v1/api-keys` | `api_keys:write` | Creates a key with a name, a role and allowed labels; an operator may name another tenant. The secret is only in this answer |
 | | `DELETE /v1/api-keys/{id}` | `api_keys:write` | Revokes a key |
+| Namespaces | `GET /v1/namespaces` | `namespaces:read` | The namespaces, paged: `prefix`, `above` (a share of a limit, `0.8`), `order` (`cpu`, `runs`, `scripts`, `name`); each with its limits, its exceptions and its use this month |
+|  | `GET /v1/namespaces/{name}` | `namespaces:read` | One namespace: its limits and exceptions, its use per day over a `month`, its alerts, its tokens in use |
+|  | `PUT /v1/namespaces/{name}` | `namespaces:write` | Creates the namespace, or sets its exceptions; `null` gives a quota back to the default |
+|  | `DELETE /v1/namespaces/{name}` | `namespaces:write` | Erases the end user in the background (202): tokens, runs, credentials, usage |
+|  | `GET /v1/organization/namespace-defaults` | `namespaces:read` | The default limits of every namespace, and the tenant's ceiling |
+|  | `PUT /v1/organization/namespace-defaults` | `namespaces:write` | Sets the default limits |
+|  | `GET /v1/organization/quota-alerts` | `namespaces:read` | The alerts of a `month`, of one `namespace` or of all |
+| Tokens | `POST /v1/namespaces/{name}/tokens` | `tokens:write` | Mints an end user's opaque token: `ttl`, `permissions`, `labels`; creates the namespace if needed. The secret is only in this answer |
+|  | `DELETE /v1/namespaces/{name}/tokens` | `tokens:write` | Revokes the namespace's opaque tokens and the signed ones issued before now |
+|  | `DELETE /v1/tokens/{id}` | `tokens:write` | Revokes one opaque token |
+|  | `GET /v1/organization/token-keys` | `tokens:write` | The keys the tenant signs its tokens with |
+|  | `POST /v1/organization/token-keys` | `tokens:write` | Registers a public key (a JWK: Ed25519, P-256 or RSA) with a name and the permissions its tokens may carry; answers its `kid` |
+|  | `DELETE /v1/organization/token-keys/{kid}` | `tokens:write` | Deletes a key: every token it signed is refused |
+| Operator | `PUT /v1/organizations/{tenant}/quotas` | the operator | Sets a tenant's ceiling |
 | Server | `GET /v1/server` | any caller | The server's version, epochs and roles |
 | | `POST /v1/server/stop` | the operator | Stops the embedded server, when the CLI replaces it with one of its own version |
 
@@ -589,6 +650,9 @@ and worker.
 
 - The socket is mode 0600 and takes no token. Its one caller is the operator of the implicit
   tenant `local`.
+- The CLI names a namespace with `--namespace` or `REWIND_NAMESPACE`. Against its own embedded
+  server it uses `local` when none is given; against a remote server, a command that starts a
+  run without one is a usage error (64).
 - `rewind server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
 - Virtual time is an option of the server (`--virtual-time`, `--real-time`), kept in the
   `meta` table.
@@ -631,6 +695,7 @@ Commands:
 | `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
 | `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
+| `rewind namespaces list\|show\|quotas\|delete` | The namespaces and their use; one namespace; sets its exceptions, or the defaults with `--defaults`; erases one |
 | `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a
@@ -666,7 +731,8 @@ Its build is what `rewind-server` serves:
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
 | Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
-| API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys are shown to whoever holds their permissions |
+| API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read` |
+| Namespace | The filter of a namespace, kept in the URL (`?ns=`), is sent as `Rewind-Namespace` on every request |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 

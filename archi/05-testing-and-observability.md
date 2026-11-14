@@ -166,8 +166,10 @@ Given by the harness when it starts a run and stored with the run. The script ne
 it, and it is not part of the journal's events, so it is never replayed and never ends
 up in a cassette.
 
-- `labels`: a string map (agent, conversation, end user, environment…), used to filter in
-  the dashboard and as span attributes.
+- `namespace`: the end user the run belongs to
+  ([namespaces](06-storage-and-scale.md#namespaces)). A fork has its parent's.
+- `labels`: a string map (agent, conversation, environment…), used to filter in the dashboard
+  and as span attributes.
 - `trace_context`: the W3C `traceparent` and `tracestate`.
 - `idempotency_key`: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
 - The tenant ([decided](08-decisions.md#taken-after-the-layering-november-2026): it lives here, never in the core).
@@ -178,7 +180,7 @@ up in a cassette.
 `JournalStore` is shaped by the write path's invariants. Questions across runs go to a
 separate **read model** behind the `ReadModel` port, filled by the projector:
 
-- `run_summaries`: status, script and its first line, toolset, labels, mode, the parent of a
+- `run_summaries`: namespace, status, script and its first line, toolset, labels, mode, the parent of a
   fork, start and end, last activity, number of tool calls and errors, history length; for a
   run that waits, what it waits for and when it wakes; for a run that ended badly, the error's
   name, message, line and fingerprint; whether it is quarantined.
@@ -186,7 +188,7 @@ separate **read model** behind the `ReadModel` port, filled by the projector:
 - `run_waits`: what an active run waits for: a signal (its name, the timeout as wake time), a
   timer (its due time), a tool call dispatched by Rewind, or a host tool's call; each with
   the entry that opened it and its callsite.
-- `tool_calls`: run, `seq`, tool, callsite line, scheduled and completed at, outcome,
+- `tool_calls`: run, `seq`, the run's namespace, tool, callsite line, scheduled and completed at, outcome,
   error kind, payload digests, and the furthest state its task reached: its attempt, and
   whether it waits for an approval, is parked or deferred.
 
@@ -218,6 +220,7 @@ and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 
 | Term | Matches runs |
 | --- | --- |
+| `namespace:alice`, `namespace:alice,bob` | in one of these namespaces |
 | `@agent:triage` | carrying the label `agent` with value `triage`. `@customer:acme*`: a value starting with `acme`; `@conversation:*`: the label is set |
 | `status:failed,aborted` | with one of these statuses |
 | `tool:github.close_issue`, `tool:github.*` | that scheduled a call to this tool, or to a tool starting with `github.` |
@@ -235,7 +238,9 @@ and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 Field names are case-sensitive and a term that cannot be read is refused with its position
 (`invalid-query`), so a client can underline it. Logs and payloads are never searched: they may
 hold what a tool returned, which the read model does not index. The server limits every query
-to the caller's tenant, and for a key limited to labels, to its labels.
+to the caller's tenant; to a token's namespace, or the namespace of the `Rewind-Namespace`
+header; and for a grant or a token limited to labels, to its labels. Statistics, failure groups,
+scripts and tool statistics are limited the same way.
 
 ### Dashboard
 
@@ -252,6 +257,7 @@ single-page application, served by `rewind-server`.
 | Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor |
 | Tools | Latency, error rate and retries, per tool and per toolset |
 | Organization | The members and their grants, the invitations, the roles and their permissions, the API keys; each part shown to whoever holds its permission |
+| Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search, and a filter of those above 80 %. A namespace's page: its cumulative CPU against its quota over the month, its alerts, its tokens in use, its exceptions, and the actions its permissions allow (change its limits, revoke its tokens, delete it) |
 
 - **The time cursor.** The commit invariant makes a history a sequence of steps: a trigger
   (the start, a tool result, a timer, a signal, a cancellation) and the commands committed
@@ -264,9 +270,13 @@ single-page application, served by `rewind-server`.
   script computes in between is not recorded, and the dashboard does not execute code.
 - **Searches.** The query follows the operator from one view to another in the URL. Saved
   searches are kept in the browser.
+- **The namespace filter.** A search field beside the organization picker (a tenant can have
+  many thousands of namespaces) narrows every view to one namespace: it is kept in the URL
+  (`?ns=`) and sent as the `Rewind-Namespace` header. Without it, Runs shows each run's namespace
+  in a column and a facet.
 - **Signing in.** Members sign in with GitHub or a code by email, on the dashboard's pages, and
   pick an organization; someone without one creates it or accepts an invitation. A server
-  without WorkOS asks for an API key ([access](06-storage-and-scale.md#tenancy-identity-and-access)).
+  without WorkOS asks for an API key ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 - It is a client of the **public HTTP API**, with no direct access to the store. The SDK,
   the agent tools and the dashboard see the same thing.
 - Access is scoped by tenant, since it exposes code and payloads, and by the caller's

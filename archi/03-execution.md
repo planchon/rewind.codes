@@ -11,7 +11,12 @@ column in `script.ts`):
 - an import of anything other than `rewind` and `rewind:tools`, a dynamic `import()`, a `require`;
 - an import of a name `rewind` does not export, or of a tool the run's toolset does not have;
 - no default export, or a default export that is certainly not a function (a literal, an
-  object, a class).
+  object, a class);
+- more lines than its namespace's `maxScriptLines`
+  ([quotas](06-storage-and-scale.md#quotas)).
+
+A run is started in a namespace, the end user it acts for, and the start must pass that
+namespace's quotas and its tenant's ([quotas](06-storage-and-scale.md#quotas)).
 
 Starting a run also type-checks the script against the toolset's declarations, as
 `rewind check` does, so that most mistakes are refused before a run exists.
@@ -182,6 +187,7 @@ can fix step 7 without redoing the side effects of steps 1 to 6
 | Input | The parent's, unless the request overrides it |
 | TTL | A new one |
 | Toolset | The parent's |
+| Namespace | The parent's: a fork never leaves it |
 
 The engine replays the new script against the parent's history:
 
@@ -341,7 +347,9 @@ response, like any host abort.
 
 Every run has a deadline, `expires_at`, recorded in `run_started`: the time the run was
 started plus a TTL of **30 days by default**. The harness can set another TTL when it
-starts the run, up to a maximum set by the deployment.
+starts the run, up to a maximum set by the deployment, and by the `maxTtl` of the run's
+namespace and of its tenant ([quotas](06-storage-and-scale.md#quotas)); the default is lowered
+to that maximum.
 
 When the deadline passes, the scheduler enqueues `cancel_requested { reason: "ttl" }`.
 The run then follows the cancellation path, grace activation included.
@@ -373,6 +381,11 @@ without one: filling or copying an array over a huge length. Such a call that mu
 elements than the heap holds ends at once, as the heap limit ends it. What V8 still runs to its
 end is bounded by the worker's container
 ([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
+
+The CPU time of each call is also reported to the engine, which counts the calls that execute,
+not those of a replay, toward the namespace's `cpuPerMonth`
+([quotas](06-storage-and-scale.md#quotas)). That count is metering: it never ends, pauses or
+changes a run, and it is not in the journal.
 
 The CPU budget applies to each call into the script (`main(input)` or one delivery, 5 s by
 default), not to the whole activation: an activation can replay the full history, and a long

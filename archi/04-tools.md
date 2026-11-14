@@ -8,7 +8,7 @@ A toolset has three kinds of tools:
 | --- | --- | --- |
 | MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
 | Built-ins: `http`, `webhook` | The dispatcher of Rewind | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)) |
-| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks` | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
+| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
 
 Rewind calls MCP tools and built-ins directly. Their results go back to the script, never to
 the agent. The harness is on the path only for its host tools, and they are optional: a
@@ -170,16 +170,20 @@ the server declares nothing.
 
 | Step | What happens |
 | --- | --- |
-| Sent | By the harness, per toolset or per run: `PUT /v1/toolsets/{id}/credentials`, `PUT /v1/runs/{id}/credentials` |
+| Sent | By the harness, per toolset, per end user (a namespace) and toolset, or per run: `PUT /v1/toolsets/{id}/credentials`, `PUT /v1/namespaces/{name}/toolsets/{id}/credentials`, `PUT /v1/runs/{id}/credentials` |
 | Stored | Encrypted in the `SecretStore`, with a data key per tenant, itself encrypted by a master key from the deployment's configuration |
-| Resolved | By the dispatcher, at call time: the run's credentials if it has some, else the toolset's |
+| Resolved | By the dispatcher, at call time: the run's credentials if it has some, else those of its namespace for its toolset, else the toolset's; never merged |
 | Used | Injected into the MCP transport |
 
 Credentials never enter the journal, the isolate, a cassette or OpenTelemetry.
 
 A token can expire during a long sleep. A 401 from the server parks the task, and the
 harness gets the webhook `credentials.expired`. Once the harness has renewed the
-credentials, the task is `ready` again, and the call is sent with the same idempotency key.
+credentials (the run's, its namespace's or the toolset's), the task is `ready` again, and the
+call is sent with the same idempotency key.
+
+An end user's credentials stay theirs: Alice's GitHub token, set on her namespace, is never
+sent for a run of Bob's.
 
 ## The `http` tool and egress
 

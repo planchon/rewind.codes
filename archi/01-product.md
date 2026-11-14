@@ -51,19 +51,22 @@ directory (Turso, local files), or of a remote one
 2. The harness puts those declarations in the system prompt and exposes the **agent
    tools** to its model (below).
 3. When the model calls `run_script`, the harness calls
-   `runs.start({ script, toolset, input, wait: "30s" })`. If the run finishes within
+   `runs.start({ script, toolset, input, wait: "30s" })` in the namespace of the end user the
+   agent acts for ([below](#end-users-and-namespaces)). If the run finishes within
    `wait`, the result is returned inline. Otherwise the harness gets a run id and the
    current state ("suspended, waiting for signal `approval`"). The harness can attach
-   `labels` (agent, conversation, end user…) and its `traceparent`, so the run is
+   `labels` (agent, conversation…) and its `traceparent`, so the run is
    searchable in the dashboard and appears under the agent's span in its traces.
    It also passes an `idempotencyKey`, so a retried request returns the same run instead
    of starting a second one, and may set a `ttl` (30 days by default, see
    [execution](03-execution.md#run-ttl)).
 4. Host tools are executed by the harness through an SDK worker (long-poll), like
    Temporal activity workers. This is how a script calls harness functions, another
-   LLM, a sub-agent, or a human.
+   LLM, a sub-agent, or a human. Each task says the namespace of its run, and the handler
+   acts for that end user.
 5. The harness receives lifecycle webhooks (`run.completed`, `run.failed`,
-   `run.suspended`) to resume the agent conversation when a long run ends.
+   `run.suspended`), each naming its namespace, to resume the agent conversation when a long
+   run ends, and `quota.alert` when an end user nears or passes a limit.
 
 ```ts
 import { Rewind } from "@rewind.codes/sdk";
@@ -84,7 +87,7 @@ const toolset = await rewind.toolsets.create({
 
 rewind.worker({ toolset: toolset.id, tools: { ask_user: async ({ question }, ctx) => { /* … */ } } });
 
-const run = await rewind.runs.start({
+const run = await rewind.namespace(user.id).runs.start({ // the end user's namespace
   toolset: toolset.id,
   script: code,
   input: {},
@@ -93,6 +96,32 @@ const run = await rewind.runs.start({
   labels: { agent: "triage", conversation: conversation.id },
   traceparent, // the LLM call that wrote the script
 });
+```
+
+### End users and namespaces
+
+A harness serves its own users, the **end users** of its product. Each one has a
+**namespace**: their runs, the scripts those runs ran, their credentials and their consumption
+live there, and nothing of one end user is visible to another
+([namespaces](06-storage-and-scale.md#namespaces)).
+
+- The harness's backend holds its API key, which reaches every namespace, and names the
+  namespace of each request (the header `Rewind-Namespace`, set by `rewind.namespace(name)`).
+- An agent acting for one end user gets a **token** of that end user's namespace, minted by the
+  harness's backend, or signed by it with a key it registered. With it the agent, and every
+  script its model writes, can only reach that namespace: an id of another end user's run
+  answers 404.
+- **Quotas** per namespace (CPU per month, active runs, runs per month, distinct scripts, the
+  longest TTL, the longest script) protect the platform and the harness from an end user who
+  abuses its product ([quotas](06-storage-and-scale.md#quotas)).
+
+```ts
+// In the harness's backend, with its key:
+const { token } = await rewind.namespaces.tokens.create(user.id, { ttl: "1h" });
+
+// In the agent acting for that user:
+const asUser = new Rewind({ url: process.env.REWIND_URL, token });
+const agentTools = asUser.agentTools({ toolset: toolset.id });
 ```
 
 ## Agent tools
@@ -120,8 +149,8 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
-the lifecycle webhooks. An API key whose grant is limited to these labels makes the scope hold for every
-tool that takes a `run_id` ([access](06-storage-and-scale.md#tenancy-identity-and-access)).
+the lifecycle webhooks. A token or an API key limited to these labels makes the scope hold for
+every tool that takes a `run_id`, within the namespace the agent acts in ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 
 ### What `run_script` returns
 

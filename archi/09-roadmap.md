@@ -34,9 +34,11 @@ findings fixed. On November 12, 2026: `cargo fmt --check`, `cargo clippy --works
 `cargo test --workspace` (795 tests, Postgres, MinIO and a Collector in Docker) pass, the
 SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the seven criteria of
 [0.1 is done when](#01-is-done-when). Not yet done: the evals with real models (they need
-API keys), a run of the CI workflow on GitHub, the gVisor profile on a Linux host, and accounts,
-organizations and access ([06](06-storage-and-scale.md#tenancy-identity-and-access)), designed on
-November 14, 2026 and being built (see [Workstreams](#workstreams)).
+API keys), a run of the CI workflow on GitHub, the gVisor profile on a Linux host, accounts,
+organizations and access ([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)), designed on
+November 14, 2026 and being built, and namespaces ([06](06-storage-and-scale.md#namespaces)),
+designed the same day, whose contracts are frozen and which are being built (see
+[Workstreams](#workstreams)).
 
 | Crate | State |
 | --- | --- |
@@ -74,28 +76,29 @@ November 14, 2026 and being built (see [Workstreams](#workstreams)).
 | Pinned toolset (schemas, policies, declarations) | [04](04-tools.md#toolsets-and-code-generation) | `rewind-codegen` | The runtime (`rewind:tools`), the checker, the dispatcher, the SDK, the model's prompt |
 | HTTP API `/v1` (OpenAPI) | [07](07-code-architecture.md#http-api-v1) | `rewind-api` (DTOs, OpenAPI document, Rust client), `rewind-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
 | Sandbox lib (`rewind.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `rewind-runtime` (the globals that exist) | `rewind-check`, the prompt |
-| Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
+| Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
+| Namespaces: their quotas, usage and alerts, end users' tokens and token keys, credentials per namespace, `Rewind-Namespace` | [06](06-storage-and-scale.md#namespaces), [07](07-code-architecture.md#ports) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, conformance) | The stores, `rewind-runtime`, `rewind-server`, the CLI, the SDK, the dashboard |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
-The six were approved in November 2026, access and identity on the 14th.
+The six were approved in November 2026, access and identity and namespaces on the 14th.
 
 ## Workstreams
 
 | Workstream | Crates | What remains | Depends on (contracts) |
 | --- | --- | --- | --- |
 | Domain and format | `rewind-core`, `rewind-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
-| Engine | `rewind-engine` | Nothing beyond what `rewind-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
-| Runtime (V8) | `rewind-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
-| Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing | Engine ports, stored format v1, access and identity |
+| Engine | `rewind-engine` | Namespaces in the use cases: the limits at start and fork (lines, TTL), the namespace of forks and tasks, the CPU counted per call outside replay and written every 10 s, the credentials of a namespace, the erasure of a namespace in the retention loop, the sending of quota alerts | Engine ports, stored format v1, pinned toolset, namespaces |
+| Runtime (V8) | `rewind-runtime` | The CPU time of each call into the script, reported to the engine | Engine ports, pinned toolset, sandbox lib, namespaces |
+| Stores | `rewind-store-turso`, `rewind-store-postgres` | Namespaces: the tables of 06, the quota checks of `create_run`, usage, alerts, tokens, token keys, credentials per namespace, the namespace in the read model; the migration to `migrated` | Engine ports, stored format v1, access and identity, namespaces |
 | Identity | `rewind-workos` | Confirming WorkOS's code for a closed sign-up once the Waitlist is enabled on WorkOS Staging ([08](08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)) | Access and identity |
 | Blobs | `rewind-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `rewind-codegen`, `rewind-mcp` | `rewind-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `rewind-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `rewind-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `rewind-otel` | Nothing beyond what `rewind-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `rewind-server`, `rewind-api` | `/auth`, access tokens, the organization, member, invitation and role endpoints, the wiring of WorkOS | Engine ports, HTTP API `/v1`, access and identity |
-| CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
-| TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
-| Dashboard | `dashboard` | Sign-in, onboarding, the organization picker, the waitlist, the Organization views; the views following the caller's permissions | HTTP API `/v1`, access and identity |
+| Server | `rewind-server`, `rewind-api` | `/auth`, access tokens, the organization, member, invitation and role endpoints, the wiring of WorkOS; end users' tokens (opaque and signed), `Rewind-Namespace`, the namespace, token and token-key endpoints, the operator's ceilings and `--quota-…` | Engine ports, HTTP API `/v1`, access and identity, namespaces |
+| CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes; `--namespace`, `rewind namespaces` | HTTP API `/v1`, stored format v1, sandbox lib, namespaces |
+| TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats; `rewind.namespace(name)`, tokens, `rewind.namespaces`, `ctx.namespace` | HTTP API `/v1`, pinned toolset, namespaces |
+| Dashboard | `dashboard` | Sign-in, onboarding, the organization picker, the waitlist, the Organization views; the views following the caller's permissions; the namespace filter and the Namespaces views | HTTP API `/v1`, access and identity, namespaces |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | WorkOS's variables on Railway, `/auth` rewritten by Vercel and the edge | Engine ports, HTTP API `/v1`, access and identity |
 
@@ -113,9 +116,11 @@ specified.
 - **Tool task lifecycle**: host tools that last days, the `approval` policy, tool
   concurrency, toolset change during a run ([04](04-tools.md#tool-task-lifecycle)).
 - **Credentials** resolved at dispatch ([04](04-tools.md#credentials)).
-- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
+- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 - **Accounts, organizations and access**: WorkOS for identity only, Rewind's permissions, roles and
-  grants, sign-in on the dashboard's pages ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
+  grants, sign-in on the dashboard's pages ([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
+- **Namespaces**: one per end user of a customer, end users' tokens, quotas against abuse and
+  their alerts ([06](06-storage-and-scale.md#namespaces)).
 - **Egress of the `http` tool** ([04](04-tools.md#the-http-tool-and-egress)), and of MCP
   servers ([04](04-tools.md#where-mcp-servers-may-be)).
 - **Retention and deletion** (was question 11)

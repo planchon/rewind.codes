@@ -16,23 +16,30 @@ conformance suite, shipped by `rewind-engine` behind the `conformance` feature.
 
 ## Tables
 
-Every key starts with the tenant ([tenancy](#tenancy-identity-and-access)).
+Every key starts with the tenant, and what belongs to an end user names its namespace
+([tenancy](#tenancy-namespaces-identity-and-access)).
 
 ```
-tenants    (id PK, data_key, active_run_quota, retention)   -- data_key encrypted by the master key
+tenants    (id PK, data_key, quotas, namespace_defaults, retention)   -- data_key encrypted by the master key
+namespaces (tenant, name, quotas, tokens_revoked_before, created_at, last_active_at, deleting_since)
+                                                           PK (tenant, name)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
+tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created_by, created_at,
+            revoked_at)                                    index (tenant, namespace)
+token_keys (kid PK, tenant, name, jwk, permissions, created_by, created_at)
 roles      (tenant, name, description, permissions, created_at, updated_at)   PK (tenant, name)
 grants     (tenant, principal, role, allowed_labels, granted_by, granted_at)   PK (tenant, principal)
                                                            -- principal: user:…, key:…, invitation:…
 access_settings (tenant PK, default_role)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
+namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, namespace, digest)
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
-runs       (tenant, id, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
+runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
             expires_at, quarantine, failures, attempts, lease_owner, lease_until, fence,
             sticky_worker,
             parent, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
             archive)
-            PK (tenant, id), UNIQUE (tenant, idempotency_key)
+            PK (tenant, id), UNIQUE (tenant, namespace, idempotency_key), index (tenant, namespace, status)
 history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
 inbox      (id, run_id, event, received_at)
 signal_keys (run_id, key)                                  PK (run_id, key)
@@ -43,21 +50,27 @@ webhook_tokens (token PK, run_id, name)
 payloads   (tenant, digest, bytes, preview, value, unreferenced_since, deletion_started_at)
                                                            PK (tenant, digest)  -- value up to 64 KiB
 payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
-secrets    (tenant, owner, ciphertext)                     PK (tenant, owner)   -- owner: a toolset or a run
+secrets    (tenant, owner, ciphertext)                     PK (tenant, owner)
+                                                 -- owner: a toolset, a run, or a namespace's toolset
 subscriptions (tenant, id, url, secret, events)
+usage      (tenant, namespace, day, cpu_ms, runs_started)  PK (tenant, namespace, day)  -- namespace *: the tenant
+quota_alerts (tenant, namespace, quota, period, threshold, used, quota_limit, raised_at,
+              lease_owner, lease_until, sent_at)           PK (tenant, namespace, quota, period, threshold)
 feed       (id, consumer, run_id, fence, from_idx, to_idx, lease_owner, lease_until)
 meta       (key PK, value)                                 -- schema version; virtual time (embedded)
 
 -- read model, written only by the projector
-run_summaries (run_id PK, script, toolset, status, labels, started_at, ended_at,
+run_summaries (run_id PK, namespace, script, toolset, status, labels, started_at, ended_at,
                last_activity_at, tool_calls, errors, history_len)
-tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, outcome,
+tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, completed_at, outcome,
                error_kind, args_digest, result_digest)      PK (run_id, seq)
 ```
 
-`event` columns hold the `rewind-format` v1 JSON of the event. `labels`, `trace_context`,
-`idempotency_key` and `parent` are run metadata: stored with the run, never in its events
-([05](05-testing-and-observability.md#run-metadata)).
+`event` columns hold the `rewind-format` v1 JSON of the event. `namespace`, `labels`,
+`trace_context`, `idempotency_key` and `parent` are run metadata: stored with the run, never in
+its events ([05](05-testing-and-observability.md#run-metadata)). `namespaces`, `namespace_scripts`,
+`usage` and `quota_alerts` belong to the `JournalStore`, which checks quotas when it creates a run;
+`tokens` and `token_keys` to the `AccessStore`.
 
 `epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
@@ -73,7 +86,7 @@ journal document of an archived run, in the `BlobStore`.
 
 - **Workers** hold nothing a run needs: their instance cache only saves a replay. They pick
   runnable runs with `FOR UPDATE SKIP LOCKED` (Postgres), among the epochs they support and
-  outside quarantine, with the [fairness](#tenancy-identity-and-access) between tenants and
+  outside quarantine, with the [fairness](#tenancy-namespaces-identity-and-access) between tenants and
   the priority of the [sticky worker](03-execution.md#sticky-execution). Acquiring a lease
   increments `fence`. The lease lasts 30 s, and the worker renews it about every 10 s while
   it works on the run, during the replay as during the execution: a long replay keeps its
@@ -105,7 +118,7 @@ retries without knowing.
 
 | Request | Key | A second request with the same key | Without a key |
 | --- | --- | --- | --- |
-| Start a run | Unique per tenant | Returns the existing run | A second run starts and repeats every effect |
+| Start a run | Unique per namespace | Returns the existing run | A second run starts and repeats every effect |
 | Send a signal | Unique per run | Is acknowledged and ignored | A second `approval` stays in the mailbox and approves the script's next `signal("approval")` |
 
 - A signal's key is kept in `signal_keys` for the life of the run, not in the inbox. It
@@ -154,15 +167,16 @@ Consequences:
   and preview are store metadata kept next to the digest in the `payloads` table, not part
   of the domain model ([decided](08-decisions.md#taken-after-the-layering-november-2026)).
 
-## Tenancy, identity and access
+## Tenancy, namespaces, identity and access
 
-Three questions are kept apart:
+Four questions are kept apart:
 
 | Question | Answered by |
 | --- | --- |
-| Who calls? | An API key, or a member's session with WorkOS |
-| Which tenant? | The key's tenant, or the member's organization |
-| What may the caller do? | Rewind alone: the caller's grant, its role and the role's permissions |
+| Who calls? | An API key, a member's session with WorkOS, or an end user's token |
+| Which tenant? | The key's tenant, the member's organization, or the token's |
+| Which namespace? | The token's; for the customer's keys and members, the `Rewind-Namespace` header |
+| What may the caller do? | Rewind alone: the caller's grant, its role and the role's permissions; for a token, the permissions it was given |
 
 WorkOS holds identity and nothing else: users, organizations, memberships, invitations and
 the waitlist. It never says what someone may do. Rewind configures no role or permission there,
@@ -173,23 +187,106 @@ access token ([decided](08-decisions.md#taken-for-accounts-organizations-and-acc
 
 A tenant is a WorkOS organization: the tenant's id is the organization's id (`org_01J…`, which
 fits the tenant ids' alphabet). Rewind copies no user, organization or membership: WorkOS is
-their only source. A tenant's record (quota, retention) is created with the organization, or
+their only source. A tenant's record (quotas, retention) is created with the organization, or
 at the first request of a member of an organization that has none.
 
 The tenant is part of every storage key:
 
 | Data | Key |
 | --- | --- |
-| Runs and their metadata | `(tenant, id)` |
-| Idempotency keys of runs | `(tenant, key)` |
+| Runs and their metadata | `(tenant, id)`, with their namespace |
+| Idempotency keys of runs | `(tenant, namespace, key)` |
+| Namespaces, their usage, alerts and script counts | `(tenant, namespace)` |
 | Scripts, toolsets | `(tenant, digest)` |
 | Payloads | `(tenant, digest)`; blobs at `{tenant}/sha256/…` |
-| Read model, secrets, quotas, keys, roles, grants | Per tenant |
+| Read model, secrets, quotas, keys, tokens, roles, grants | Per tenant |
 
-- **Quota**: each tenant has a maximum number of active runs. Above it, starting a run
-  returns 429.
+- **Quotas**: per namespace and per tenant ([quotas](#quotas)).
 - **Fairness**: workers draw a tenant at random among those with runnable work, then take
-  that tenant's oldest runnable run. A large tenant cannot starve the others.
+  that tenant's oldest runnable run. A large tenant cannot starve the others, and an end
+  user's share of its tenant's queue is bounded by its namespace's `activeRuns`.
+
+### Namespaces
+
+A tenant is a customer of Rewind, and serves its own users, its **end users**. A namespace
+isolates one end user: the runs started for them and everything that follows from those runs.
+An agent acting for Alice holds a token of Alice's namespace and cannot see or reach anything of
+Bob's, whatever script its model writes.
+
+- **Name.** The customer's own id for the end user: 1 to 128 letters, digits, `-`, `_`, `.`, `:`
+  and `@`, case-sensitive. `*` is not a name: it stands for the tenant in `usage` and
+  `quota_alerts`. A namespace's name appears in webhooks, the dashboard and the service's logs,
+  so an opaque id is better than an email.
+- **Created at first use**: when a token is minted for it, when a signed token naming it is first
+  used, or when a run is created in it, with the tenant's default limits. `PUT
+  /v1/namespaces/{name}` creates it ahead, or sets its exceptions.
+- **What belongs to a namespace**: its runs, with their journals, signals, idempotency keys,
+  tool tasks, webhook tokens, read model rows and payload references; the end user's credentials
+  per toolset; its usage and alerts; its tokens. A fork stays in its parent's namespace, and
+  nothing a run does reaches another namespace.
+- **What stays the tenant's**: toolsets; subscriptions, since lifecycle webhooks go to the
+  customer, each event naming its namespace; members, roles, keys and token keys; the storage of
+  scripts and payloads, deduplicated per tenant, which a token reads only through its namespace
+  (the scripts its runs ran, the payloads its runs hold).
+- **The customer names the namespace** with the header `Rewind-Namespace`. Creating in a
+  namespace requires it: starting a run, `/v1/check` and `/v1/test`, which apply the namespace's
+  limits (400 without it). There is no default namespace. A fork takes its parent's namespace.
+  Reading without the header covers every namespace of the tenant; with it, that namespace
+  only: a run of another namespace is 404, for a fork, a signal or a cancellation too.
+- **An end user's token fixes the namespace.** A header naming another is 403; anything of
+  another namespace is 404; lists hold its namespace only; `tasks:work` claims only the tasks of
+  its namespace's runs.
+- **Deleting a namespace** erases an end user ([retention](#retention-and-deletion)).
+
+### Quotas
+
+Quotas protect the platform and the customer against an end user who abuses the customer's
+product. Six limits, each optional:
+
+| Quota | Counts | Above it | Alert |
+| --- | --- | --- | --- |
+| `cpuPerMonth` | The CPU time of the isolates running the namespace's scripts in the calendar month (UTC), replays excluded | Nothing is refused, nothing is paused | At 80 % and 100 % |
+| `activeRuns` | The runs active now | Starting or forking a run: 429 | At the first refusal of the month |
+| `runsPerMonth` | The runs created in the month, forks included | 429 until the 1st of the next month | At 80 % and 100 % |
+| `scripts` | The distinct scripts with at least one run kept in the namespace: active, ended or archived | 429 for a script new to the namespace, until a run is erased | At 80 % and 100 % |
+| `maxTtl` | The TTL a run may ask for; the default TTL is lowered to it | 400 `invalid-request` | |
+| `maxScriptLines` | The lines of the source sent | 422 `invalid-script` with a diagnostic, also from `/v1/check` and `/v1/test` | |
+
+Three levels:
+
+- **The tenant's defaults** (`namespace_defaults`), set by the customer (`namespaces:write`), apply
+  to every namespace.
+- **A namespace's exceptions**, set by the customer: a paying end user, or a blocked one
+  (`activeRuns: 0`). Per quota, a namespace's limit is its exception if it has one, else the
+  default.
+- **The tenant's ceiling** (`quotas`), set by the operator: the customer's offer. For
+  `cpuPerMonth`, `activeRuns`, `runsPerMonth` and `scripts` it bounds the tenant's totals, the sum
+  over its namespaces; `maxTtl` and `maxScriptLines` bound every namespace.
+
+A start passes its namespace's limit and the tenant's ceiling. `create_run` checks both under a
+lock of the namespace and of the tenant, so two concurrent starts cannot take the same last
+place. A refusal (`quota-exceeded`) says which quota, at which scope (`namespace` or
+`organization`), the limit, the use and when it frees (`resetsAt`, with `Retry-After` for a
+monthly quota), in words written for a model that never name another namespace. A retried
+request with its idempotency key still returns its run.
+
+- **Counting.** `runsPerMonth` is counted in `usage`, under the lock `create_run` takes.
+  `scripts` is counted in `namespace_scripts`: a run adds one to its script's row, erasing a run
+  removes one, and a row at zero is removed.
+- **CPU time.** The runtime reports the CPU time of each call into the script, which its
+  watchdog measures anyway. The engine counts the calls that execute and leaves out those of a
+  replay, which are the cost of the instance cache, not the end user's. A worker adds them up per
+  tenant, namespace and UTC day and writes them to `usage` about every 10 s, with its lease
+  renewals, along with the tenant's own row (namespace `*`). A worker that dies loses at most
+  10 s of counting.
+- **CPU time is not in the journal.** It measures what the service spent, and differs from one
+  replay to the next: it is metering, like service telemetry, and never changes what a run does.
+- **Alerts.** A threshold crossed is recorded once per tenant, namespace (or `*`), quota, month
+  and threshold, in `quota_alerts`, by the write that crosses it. The worker role sends it to the
+  tenant's subscriptions as the event `quota.alert` (`namespace`, `quota`, `threshold`, `used`,
+  `limit`, `period`; `namespace` is null for the tenant's ceiling), and the dashboard lists it.
+  The customer decides what follows: telling the end user, raising their limits, or blocking
+  them.
 
 ### Who calls
 
@@ -202,6 +299,26 @@ Every request to `/v1` carries a Bearer token, and nothing else authenticates it
   `https://api.workos.com`, the deployment's `client_id`, the expiry with 30 s of leeway. `sub`
   is the user, `sid` the session, `org_id` the tenant. A token without `org_id` reaches only
   the onboarding endpoints (who am I, create an organization, the invitations sent to me).
+- **An end user's token**, for an agent acting for one end user, in one of two forms the
+  customer chooses:
+  - **Opaque**, `rewind_nt_…`, minted by the customer's backend with
+    `POST /v1/namespaces/{name}/tokens` (`tokens:write`): one namespace, its permissions, optional
+    labels, an expiry (1 hour by default, 30 days at most). Stored hashed, as keys are; its
+    SHA-256 is its id.
+  - **Signed by the customer**: a JWT signed with a key whose public part the customer registered
+    (`POST /v1/organization/token-keys`, `tokens:write`), EdDSA (Ed25519), ES256 or RS256. Rewind
+    names the key `rk_…`, and the token's header gives that name as `kid`. Claims: `sub` the
+    namespace, `aud` `rewind`, `iat` and `exp` (at most 30 days apart), and optionally
+    `permissions`, `labels` and `jti`. The customer mints them without calling Rewind; a key
+    records the permissions its tokens may carry.
+
+  A Bearer starting with `rewind_nt_` is an opaque token; a JWT whose `kid` starts with `rk_` is
+  a customer's token; any other JWT is a WorkOS access token. `DELETE
+  /v1/namespaces/{name}/tokens` revokes the namespace's opaque tokens and refuses its signed
+  tokens issued before that moment (`tokens_revoked_before`); `DELETE /v1/tokens/{id}` revokes
+  one; deleting a token key invalidates every token it signed. Every request reads the token's
+  state again: a revocation applies from the next request, and closes an event stream opened
+  with the token.
 
 The dashboard gets its access token from `/auth`, the only routes that read a cookie
 ([07](07-code-architecture.md#sign-in-auth)). People sign in with GitHub or with a 6-digit code
@@ -238,7 +355,7 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `runs:delete` | Erase a run | yes | yes | | |
 | `toolsets:read` | List toolsets, read their declarations, search their tools | yes | yes | | yes |
 | `toolsets:write` | Register a toolset | yes | yes | | |
-| `credentials:write` | Set the credentials of a toolset or a run | yes | yes | | |
+| `credentials:write` | Set the credentials of a toolset, a namespace or a run | yes | yes | | |
 | `tasks:work` | Claim host-tool tasks, heartbeat, defer, complete, fail | yes | yes | yes | |
 | `tasks:approve` | Approve or reject a parked task | yes | yes | | |
 | `subscriptions:read` | List the lifecycle webhooks | yes | yes | | yes |
@@ -251,9 +368,13 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `api_keys:read` | List the tenant's keys | yes | | | |
 | `api_keys:write` | Create and revoke keys | yes | | | |
 | `organization:write` | Rename the organization, set its default role | yes | | | |
+| `namespaces:read` | List the namespaces, their limits, usage, alerts and tokens in use | yes | yes | | yes |
+| `namespaces:write` | Set the default limits and a namespace's exceptions, delete a namespace | yes | yes | | |
+| `tokens:write` | Mint and revoke end users' tokens; register and delete token keys | yes | yes | | |
 
 The roles `harness`, `worker` and `reader` give exactly what the key roles of the same names
-gave before roles became data.
+gave before roles became data. A grant applies in every namespace of its tenant: the customer
+holds all rights on its namespaces, and there is no grant per namespace.
 
 Rules, enforced by the server:
 
@@ -277,9 +398,16 @@ Rules, enforced by the server:
   without waiting for the access token to expire. An event stream opened with an access token
   is closed at the token's expiry, and the dashboard resumes it with `from`.
 - **The operator.** The key given with `--admin-key` has the role `operator`: every permission
-  in its own tenant, the keys of every tenant (`POST /v1/api-keys` with a `tenant`), and the
-  stop of the embedded server. `operator` is not a role of any organization; only an operator
-  creates an operator key.
+  in its own tenant, the keys of every tenant (`POST /v1/api-keys` with a `tenant`), the ceiling
+  of every tenant (`PUT /v1/organizations/{tenant}/quotas`), and the stop of the embedded server.
+  `operator` is not a role of any organization; only an operator creates an operator key.
+- **Tokens.** A token holds the permissions it was given, among `runs:read`, `runs:start`,
+  `runs:control`, `runs:quarantine`, `runs:delete`, `toolsets:read`, `credentials:write`,
+  `tasks:work` and `tasks:approve`, by default `runs:read`, `runs:start`, `runs:control` and
+  `toolsets:read`, and only within its namespace. It never holds another permission. Whoever mints
+  a token or registers a token key must hold every permission it gives; a signed token that asks
+  for a permission its key may not give is refused (401). A token's labels work as a grant's.
+  `credentials:write` in a token covers its runs and its namespace's credentials.
 
 ## Retention and deletion
 
@@ -292,7 +420,14 @@ Active runs are never touched. Defaults, configurable per tenant:
 | Payloads | As long as a run's journal, live or archived, references them; deleted 24 h after the last reference is gone |
 
 - `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-  rows, its credentials and its payload references. Tool arguments can hold personal data.
+  rows, its credentials, its payload references and its count in `namespace_scripts`. Tool
+  arguments can hold personal data.
+- `DELETE /v1/namespaces/{name}` erases an end user and answers 202. The namespace stops taking
+  runs and tokens (409 `namespace-deleting`); its tokens are revoked and its active runs
+  cancelled through the normal path; then, in the background, its runs are erased as `DELETE
+  /v1/runs/{id}` erases one, then its credentials, its usage and alerts, and the namespace. The
+  tenant's own usage row keeps what the namespace consumed: deleting an end user gives nothing
+  back to the tenant's ceiling.
 - A `payload_refs` table, filled at commit, records which runs reference a payload. Cleanup
   deletes the payloads that no run has referenced for 24 h, per tenant.
 - A blob delete cannot be undone or fenced, so no commit may count on a blob being deleted. A
