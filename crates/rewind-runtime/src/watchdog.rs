@@ -51,7 +51,7 @@ struct State {
     requested: bool,
     fired: bool,
     shutdown: bool,
-    /// The thread's CPU time when the current call started, until it is disarmed.
+    /// The thread's CPU time when the current call started, while it is armed.
     started: Option<Duration>,
 }
 

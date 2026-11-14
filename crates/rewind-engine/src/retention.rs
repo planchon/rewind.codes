@@ -20,7 +20,7 @@
 //!     for each run of the namespace:
 //!         ended or quarantined → erased as DELETE /v1/runs/{id} erases it
 //!         active               → cancel_requested, once (an ordinary cancellation, its grace
-//!                                included): erased by a later round, once it has ended
+//!                                included): erased by the next round once it has ended
 //!     no run left → its credentials, then drop_namespace: its use, alerts and script counts
 //! ```
 //!
@@ -125,7 +125,7 @@ where
     /// Goes on erasing the namespaces marked for erasure, up to `batch` of them: cancels their
     /// active runs, erases their other runs, and once a namespace has no run left, erases its
     /// credentials, then its use, alerts and script counts with it. A run cancelled here is
-    /// erased by a later round, once it has ended.
+    /// erased by a following round, once it has ended.
     pub async fn erase_namespaces(&self, now: Timestamp) -> Result<Erased, RetentionError> {
         let mut erased = Erased::default();
         for (tenant, namespace) in self.journal.namespaces_to_erase(self.batch).await? {
@@ -141,7 +141,7 @@ where
                     erased.namespaces += 1;
                     tracing::info!(%tenant, %namespace, "namespace erased");
                 }
-                // A run was created while it was being marked: a later round erases it.
+                // A run was created while it was being marked: the next round erases it.
                 DropNamespace::RunsLeft | DropNamespace::NotFound => {}
             }
         }
@@ -172,8 +172,8 @@ where
             };
             after = Some(RunCursor::from(last));
             for record in &page {
-                // A quarantined run takes no cancellation until it is released: the erasure of
-                // its end user does not wait for that.
+                // A quarantined run takes no cancellation while it stays quarantined: the
+                // erasure of its end user does not wait for an operator.
                 if record.status.is_terminal() || record.quarantine.is_some() {
                     if self.delete_run(&record.run, now).await? {
                         erased.runs += 1;
@@ -191,7 +191,7 @@ where
                         tracing::info!(run = %record.run, "run cancelled: its namespace is being erased");
                     }
                     // Cancelled by an earlier round, or ended since it was listed: erased by a
-                    // later round.
+                    // following round.
                     Ok(Enqueued::Duplicate | Enqueued::RunEnded) => left += 1,
                     // Erased since it was listed.
                     Err(StoreError::RunNotFound(_)) => {}

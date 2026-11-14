@@ -359,7 +359,7 @@ async fn an_erased_namespace_has_its_runs_cancelled_then_erased() {
         .cpu;
     assert!(tenant_cpu > Duration::ZERO);
 
-    // Nothing to erase until a namespace is marked.
+    // Nothing to erase while no namespace is marked.
     let now = engine.clock().now();
     assert_eq!(
         housekeeper.erase_namespaces(now).await.unwrap().namespaces,
@@ -397,8 +397,8 @@ async fn an_erased_namespace_has_its_runs_cancelled_then_erased() {
             .status
             .is_terminal()
     );
-    let later = engine.clock().now();
-    let erased = housekeeper.erase_namespaces(later).await.unwrap();
+    let ended_at = engine.clock().now();
+    let erased = housekeeper.erase_namespaces(ended_at).await.unwrap();
     assert_eq!((erased.runs, erased.namespaces), (1, 1));
     assert!(engine.get_run(&waiting).await.unwrap().is_none());
     assert!(

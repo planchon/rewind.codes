@@ -244,8 +244,8 @@ Contracts, all covered by the conformance suite:
   refused; `tool_task` finds the task a live token holds. `complete_tool_task` writes the outcome
   to the run's inbox, and drops the outcome of a task that no longer exists. Approving a task
   parked by `schema_changed` marks it `schema_change_approved`. `resume_parked` makes ready again
-  the tasks parked by `credentials_expired`, once the run's or the toolset's credentials are
-  renewed.
+  the tasks parked by `credentials_expired`, once the run's, the namespace's or the toolset's
+  credentials are renewed.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
   failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
   `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.

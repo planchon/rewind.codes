@@ -934,9 +934,9 @@ pub(crate) async fn claim_quota_alerts(
         .collect::<Result<Vec<_>, Error>>()?;
     open.sort_by(|a, b| (a.raised_at, &a.key).cmp(&(b.raised_at, &b.key)));
     open.truncate(max);
-    let until = now.saturating_add(lease_duration);
+    let lease_until = now.saturating_add(lease_duration);
     for alert in &open {
-        let mut params = vec![text(owner), ts(until)];
+        let mut params = vec![text(owner), ts(lease_until)];
         params.extend(key_values(&alert.key));
         sql::execute(
             connection,
