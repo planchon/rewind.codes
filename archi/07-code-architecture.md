@@ -551,7 +551,9 @@ described in the OpenAPI document like `/v1`.
   waitlist), or 401 without a session.
 - `rewind_session` holds the access token, the refresh token and the pending token of a step,
   sealed with AES-256-GCM (`workos`'s `seal`, keyed by `WORKOS_COOKIE_PASSWORD`). Both cookies
-  are `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/auth`. A `POST` takes a JSON body only (415
+  are `HttpOnly`, `Secure` and `Path=/auth`. `rewind_session` is `SameSite=Strict`; `rewind_oauth`
+  is `SameSite=Lax`, since the browser comes back to `/auth/callback` from GitHub and WorkOS, a
+  navigation from another site, which a `Strict` cookie would miss. The callback only reads it. A `POST` takes a JSON body only (415
   otherwise), which a form of another site cannot send without a preflight.
 - The server always keeps the refresh token WorkOS returns last. The access token lives 5
   minutes (WorkOS's setting); the browser keeps it in memory only.
