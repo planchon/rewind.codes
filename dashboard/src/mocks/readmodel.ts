@@ -422,8 +422,10 @@ export function runStats(world: World, query: RunStatsQuery, now: number): RunSt
   const scripts = new Map<string, number>();
   const waits = new Map<string, number>();
   const signals = new Map<string, number>();
+  const namespaces = new Map<string, number>();
   for (const r of inWindow) {
     tally(byStatus, [r.status]);
+    tally(namespaces, [r.namespace]);
     for (const [k, v] of Object.entries(r.labels)) {
       let values = keys.get(k);
       if (!values) {
@@ -480,6 +482,7 @@ export function runStats(world: World, query: RunStatsQuery, now: number): RunSt
       scripts: topValues(scripts, top),
       waiting: topValues(waits, top),
       signals: topValues(signals, top),
+      namespaces: topValues(namespaces, top),
     },
   };
   if (w.since !== null) stats.since = new Date(w.since).toISOString();

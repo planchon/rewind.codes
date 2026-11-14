@@ -1361,6 +1361,13 @@
             },
             "type": "array"
           },
+          "namespaces": {
+            "description": "Namespaces, for a reader of every namespace; a reader of one sees only its own.",
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
           "scripts": {
             "description": "Script digests.",
             "items": {
@@ -2680,15 +2687,30 @@
       "Problem": {
         "allOf": [
           {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/QuotaReached",
-                "description": "With `quota-exceeded`: the quota reached."
+            "description": "With `quota-exceeded`: the quota reached, its scope, its limit, what is used, and when a monthly quota frees.",
+            "properties": {
+              "limit": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
               },
-              {
-                "type": "null"
+              "quota": {
+                "$ref": "#/components/schemas/QuotaKind"
+              },
+              "resetsAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/QuotaScope"
+              },
+              "used": {
+                "format": "int64",
+                "minimum": 0,
+                "type": "integer"
               }
-            ]
+            },
+            "type": "object"
           },
           {
             "properties": {
@@ -5649,7 +5671,7 @@
     },
     "securitySchemes": {
       "bearer": {
-        "description": "An API key of the tenant (`rewind_sk_…`), or a member's access token from `/auth`. The embedded server's unix socket takes none.",
+        "description": "An API key of the tenant (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token: opaque (`rewind_nt_…`), or a JWT the customer signed with a key it registered (`kid` `rk_…`). The embedded server's unix socket takes none.",
         "scheme": "bearer",
         "type": "http"
       },
@@ -6822,12 +6844,15 @@
         "operationId": "checkScript",
         "parameters": [
           {
-            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "description": "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.",
             "in": "header",
             "name": "Rewind-Namespace",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -9303,6 +9328,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9863,6 +9897,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9949,12 +9992,15 @@
             }
           },
           {
-            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "description": "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.",
             "in": "header",
             "name": "Rewind-Namespace",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -10149,6 +10195,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10272,6 +10327,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10352,6 +10416,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -10447,6 +10520,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10536,6 +10618,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -10658,6 +10749,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -10774,6 +10874,15 @@
               "format": "int64",
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -10900,6 +11009,15 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11003,6 +11121,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -11137,6 +11264,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11254,6 +11390,15 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11344,6 +11489,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -11470,6 +11624,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -11601,6 +11764,15 @@
               "enum": [
                 "llm"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }
@@ -11736,6 +11908,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11815,6 +11996,15 @@
             "in": "path",
             "name": "digest",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -12315,6 +12505,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12395,6 +12594,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -12491,6 +12699,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -12606,6 +12823,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -12712,6 +12938,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -12814,6 +13049,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -12909,6 +13153,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12995,12 +13248,15 @@
         "operationId": "testScript",
         "parameters": [
           {
-            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "description": "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.",
             "in": "header",
             "name": "Rewind-Namespace",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -13227,6 +13483,15 @@
             "required": false,
             "schema": {
               "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }

@@ -2166,6 +2166,8 @@ export interface components {
             errors: components["schemas"]["FacetValue"][];
             /** @description The most frequent label keys, each with its most frequent values. */
             labels: components["schemas"]["LabelFacet"][];
+            /** @description Namespaces, for a reader of every namespace; a reader of one sees only its own. */
+            namespaces?: components["schemas"]["FacetValue"][];
             /** @description Script digests. */
             scripts: components["schemas"]["FacetValue"][];
             /** @description Signals waited for. */
@@ -2660,7 +2662,16 @@ export interface components {
          *       "type": "urn:rewind:problem:run-ended"
          *     }
          */
-        Problem: (components["schemas"]["QuotaReached"] | null) & {
+        Problem: {
+            /** Format: int64 */
+            limit?: number;
+            quota?: components["schemas"]["QuotaKind"];
+            /** Format: date-time */
+            resetsAt?: string;
+            scope?: components["schemas"]["QuotaScope"];
+            /** Format: int64 */
+            used?: number;
+        } & {
             /** @description What went wrong in this request, and what to do instead. Written for a model. */
             detail: string;
             /** @description With `invalid-script`: why the script was refused, with locations in `script.ts`. */
@@ -4671,9 +4682,9 @@ export interface operations {
     checkScript: {
         parameters: {
             query?: never;
-            header: {
-                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
-                "Rewind-Namespace": string;
+            header?: {
+                /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -6712,7 +6723,10 @@ export interface operations {
                  */
                 run?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description SHA-256 of the canonical JSON, lowercase hex. */
                 digest: string;
@@ -7118,7 +7132,10 @@ export interface operations {
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7183,11 +7200,11 @@ export interface operations {
     startRun: {
         parameters: {
             query?: never;
-            header: {
+            header?: {
                 /** @description A request repeated with the same key in the namespace returns the run the first one started (200). */
                 "Idempotency-Key"?: string | null;
-                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
-                "Rewind-Namespace": string;
+                /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -7325,7 +7342,10 @@ export interface operations {
                 /** @description Groups at most (50 by default, 500 at most). */
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7404,7 +7424,10 @@ export interface operations {
                 /** @description Values per facet (10 by default, 50 at most). */
                 top?: number;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7472,7 +7495,10 @@ export interface operations {
                 /** @description Wait up to this long for the run to end before answering. */
                 wait?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -7549,7 +7575,10 @@ export interface operations {
     deleteRun: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -7624,7 +7653,10 @@ export interface operations {
     cancelRun: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -7715,7 +7747,10 @@ export interface operations {
     setRunCredentials: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -7803,7 +7838,10 @@ export interface operations {
     getRunEntry: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -7896,6 +7934,8 @@ export interface operations {
             header?: {
                 /** @description Resume after this entry: the same as `from` set to it plus one. */
                 "Last-Event-ID"?: string | null;
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -7976,6 +8016,8 @@ export interface operations {
             header?: {
                 /** @description A request repeated with the same key returns the fork the first one started (200). */
                 "Idempotency-Key"?: string | null;
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
             };
             path: {
                 /** @description The parent run's id. */
@@ -8084,7 +8126,10 @@ export interface operations {
     giveUpRun: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -8173,7 +8218,10 @@ export interface operations {
                 /** @description `journal` by default. */
                 as?: "journal" | "cassette";
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -8250,7 +8298,10 @@ export interface operations {
     releaseRun: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -8339,6 +8390,8 @@ export interface operations {
             header?: {
                 /** @description The same key sent twice to a run delivers one signal. */
                 "Idempotency-Key"?: string | null;
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8444,7 +8497,10 @@ export interface operations {
                 /** @description `llm` by default. */
                 format?: "llm";
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The run id. */
                 id: string;
@@ -8532,7 +8588,10 @@ export interface operations {
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -8597,7 +8656,10 @@ export interface operations {
     getScript: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description SHA-256 of the source, lowercase hex. */
                 digest: string;
@@ -9023,7 +9085,10 @@ export interface operations {
                  */
                 wait?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9088,7 +9153,10 @@ export interface operations {
     approveTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The task's id, from the run's state or the webhook. */
                 id: string;
@@ -9172,7 +9240,10 @@ export interface operations {
     rejectTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The task's id. */
                 id: string;
@@ -9261,7 +9332,10 @@ export interface operations {
     completeTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The claim's token. */
                 token: string;
@@ -9349,7 +9423,10 @@ export interface operations {
     deferTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The claim's token. */
                 token: string;
@@ -9429,7 +9506,10 @@ export interface operations {
     failTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The claim's token. */
                 token: string;
@@ -9508,7 +9588,10 @@ export interface operations {
     heartbeatTask: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path: {
                 /** @description The claim's token. */
                 token: string;
@@ -9585,9 +9668,9 @@ export interface operations {
     testScript: {
         parameters: {
             query?: never;
-            header: {
-                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
-                "Rewind-Namespace": string;
+            header?: {
+                /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace"?: string | null;
             };
             path?: never;
             cookie?: never;
@@ -9759,7 +9842,10 @@ export interface operations {
                 /** @description Calls scheduled before this time. Now by default. */
                 until?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
             path?: never;
             cookie?: never;
         };

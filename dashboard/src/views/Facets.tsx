@@ -82,7 +82,7 @@ export function FacetList({
   onToggle,
 }: {
   facets: FacetCounts | undefined;
-  /** The namespaces of the runs shown, when the views read every namespace. */
+  /** The namespaces of the runs the query matches, when the views read every namespace. */
   namespaces?: FacetValue[] | undefined;
   q: string;
   onToggle: (field: string, value: string) => void;

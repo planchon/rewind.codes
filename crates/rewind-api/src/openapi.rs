@@ -19,8 +19,8 @@ use utoipa::{Modify, OpenApi};
 
 use crate::auth::SESSION_COOKIE;
 use crate::events::StreamEvent;
-use crate::namespaces::SignedTokenClaims;
-use crate::problem::{self, Problem};
+use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
+use crate::problem::{self, Problem, QuotaReached};
 use crate::webhooks::{
     WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
 };
@@ -134,7 +134,16 @@ use crate::webhooks::{
         operations::join_waitlist,
         operations::sign_out,
     ),
-    components(schemas(Problem, StreamEvent, WebhookEvent, WebhookEventType, SignedTokenClaims)),
+    components(schemas(
+        Problem,
+        QuotaKind,
+        QuotaReached,
+        QuotaScope,
+        StreamEvent,
+        WebhookEvent,
+        WebhookEventType,
+        SignedTokenClaims
+    )),
     modifiers(&Conventions),
     security(("bearer" = [])),
     tags(
@@ -223,8 +232,10 @@ impl Modify for Conventions {
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
-                        "An API key of the tenant (`rewind_sk_…`), or a member's access token \
-                         from `/auth`. The embedded server's unix socket takes none.",
+                        "An API key of the tenant (`rewind_sk_…`), a member's access token from \
+                         `/auth`, or an end user's token: opaque (`rewind_nt_…`), or a JWT the \
+                         customer signed with a key it registered (`kid` `rk_…`). The embedded \
+                         server's unix socket takes none.",
                     ))
                     .build(),
             ),
@@ -239,7 +250,11 @@ impl Modify for Conventions {
 
         for (path, item) in &mut openapi.paths.paths {
             let sign_in = path.starts_with("/auth/");
+            let namespaced = NAMESPACED.iter().any(|prefix| path.starts_with(prefix));
             for operation in operations_mut(item) {
+                if namespaced {
+                    add_namespace_header(operation);
+                }
                 let unauthenticated = operation
                     .security
                     .as_ref()
@@ -263,6 +278,46 @@ impl Modify for Conventions {
 
         openapi.webhooks = Some(webhooks_paths().into());
     }
+}
+
+/// The paths whose operations act in a namespace: the header `Rewind-Namespace` names it for
+/// a key or a member, and narrows what they read.
+const NAMESPACED: [&str; 7] = [
+    "/v1/runs",
+    "/v1/check",
+    "/v1/test",
+    "/v1/scripts",
+    "/v1/tools/stats",
+    "/v1/payloads",
+    "/v1/tasks",
+];
+
+/// Declares the optional header `Rewind-Namespace` on an operation that does not declare it
+/// itself (those that require it with a key say so in their own description).
+fn add_namespace_header(operation: &mut utoipa::openapi::path::Operation) {
+    let parameters = operation.parameters.get_or_insert_with(Vec::new);
+    if parameters
+        .iter()
+        .any(|parameter| matches!(parameter, RefOr::T(parameter) if parameter.name == crate::headers::NAMESPACE))
+    {
+        return;
+    }
+    parameters.push(
+        ParameterBuilder::new()
+            .name(crate::headers::NAMESPACE)
+            .parameter_in(ParameterIn::Header)
+            .required(Required::False)
+            .description(Some(
+                "The namespace (the end user) a key's or a member's request reads: only its \
+                 resources. With an end user's token, its own namespace or nothing; another \
+                 is `forbidden`.",
+            ))
+            .schema(Some(utoipa::openapi::schema::Object::with_type(
+                utoipa::openapi::schema::Type::String,
+            )))
+            .build()
+            .into(),
+    );
 }
 
 fn is_empty_requirement(requirement: &utoipa::openapi::security::SecurityRequirement) -> bool {
@@ -473,7 +528,7 @@ mod operations {
     /// at start and the checker's own rules. Nothing runs.
     #[utoipa::path(
         post, path = "/v1/check", tag = "scripts", operation_id = "checkScript",
-        params(("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.")),
+        params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = CheckRequest,
         responses(
             (status = 200, description = "The diagnostics; `ok` when none is an error.", body = CheckResult),
@@ -488,7 +543,7 @@ mod operations {
     /// really called.
     #[utoipa::path(
         post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
-        params(("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.")),
+        params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
             (status = 200, description = "The outcome and the expectations that do not hold.", body = TestResult),
@@ -528,7 +583,7 @@ mod operations {
         post, path = "/v1/runs", tag = "runs", operation_id = "startRun",
         params(
             ("Idempotency-Key" = Option<String>, Header, description = "A request repeated with the same key in the namespace returns the run the first one started (200)."),
-            ("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing."),
+            ("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing."),
         ),
         request_body = StartRun,
         responses(

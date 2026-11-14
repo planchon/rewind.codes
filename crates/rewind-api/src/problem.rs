@@ -213,7 +213,43 @@ pub struct Problem {
     pub query: Option<QuerySpan>,
     /// With `quota-exceeded`: the quota reached.
     #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
+    #[schema(schema_with = quota_reached_fields)]
     pub quota: Option<QuotaReached>,
+}
+
+/// The schema of the fields a `quota-exceeded` problem adds at its top level: every one
+/// optional, since other problems have none.
+fn quota_reached_fields() -> utoipa::openapi::schema::Object {
+    use utoipa::openapi::schema::{ObjectBuilder, Type};
+    use utoipa::openapi::{KnownFormat, Ref, SchemaFormat};
+    ObjectBuilder::new()
+        .description(Some(
+            "With `quota-exceeded`: the quota reached, its scope, its limit, what is used, and \
+             when a monthly quota frees.",
+        ))
+        .property("quota", Ref::from_schema_name("QuotaKind"))
+        .property("scope", Ref::from_schema_name("QuotaScope"))
+        .property(
+            "limit",
+            ObjectBuilder::new()
+                .schema_type(Type::Integer)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64)))
+                .minimum(Some(0)),
+        )
+        .property(
+            "used",
+            ObjectBuilder::new()
+                .schema_type(Type::Integer)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::Int64)))
+                .minimum(Some(0)),
+        )
+        .property(
+            "resetsAt",
+            ObjectBuilder::new()
+                .schema_type(Type::String)
+                .format(Some(SchemaFormat::KnownFormat(KnownFormat::DateTime))),
+        )
+        .build()
 }
 
 /// The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries

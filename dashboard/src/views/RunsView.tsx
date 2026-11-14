@@ -31,7 +31,7 @@ function readSort(params: URLSearchParams): RunSort {
   return sort === "activity" || sort === "wakes" ? sort : "started";
 }
 
-/** The namespaces of the runs shown, the most frequent first. */
+/** The namespaces of the runs shown, the most frequent first, until the statistics answer. */
 function namespacesShown(pages: readonly RunPage[] | undefined): FacetValue[] {
   const counts = new Map<string, number>();
   for (const page of pages ?? [])
@@ -88,9 +88,10 @@ export function RunsView() {
   const stats = useRunStats(`facets|${q}`, () => ({ ...(q ? { q } : {}), top: 10 }), 30_000);
   const fault = queryFault(runs.error) ?? queryFault(stats.error);
   const all = useNamespace() === null;
+  const counted = stats.data?.facets.namespaces;
   const shown = useMemo(
-    () => (all ? namespacesShown(runs.data?.pages) : []),
-    [all, runs.data?.pages],
+    () => (all ? (counted?.length ? counted : namespacesShown(runs.data?.pages)) : []),
+    [all, counted, runs.data?.pages],
   );
   const { values, onTyping } = useNamespaceValues(all, shown);
 

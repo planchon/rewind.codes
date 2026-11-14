@@ -424,6 +424,7 @@ pub(crate) fn facets(facets: &ports::Facets) -> Facets {
         scripts: values(&facets.scripts),
         waiting: values(&facets.waiting),
         signals: values(&facets.signals),
+        namespaces: values(&facets.namespaces),
     }
 }
 

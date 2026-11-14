@@ -549,6 +549,9 @@ pub struct Facets {
     pub waiting: Vec<FacetValue>,
     /// Signals waited for.
     pub signals: Vec<FacetValue>,
+    /// Namespaces, for a reader of every namespace; a reader of one sees only its own.
+    #[serde(default)]
+    pub namespaces: Vec<FacetValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
