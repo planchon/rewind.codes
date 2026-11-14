@@ -68,6 +68,7 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
   const last = entries[entries.length - 1]?.recordedAt ?? first;
   const run: Run = {
     id: fixture.id,
+    namespace: fixture.namespace,
     status,
     script: fixture.script.digest,
     toolset: fixture.toolset,
@@ -236,6 +237,7 @@ export function summarize(fixture: RunFixture, now: number): MockRun {
   );
   const summary: MockRun = {
     id: run.id,
+    namespace: run.namespace,
     status: run.status,
     script: run.script,
     headline:

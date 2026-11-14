@@ -1,5 +1,6 @@
 // Data hooks over the API, cached by TanStack Query. Content-addressed data (scripts, payloads)
-// never goes stale.
+// never goes stale. Every read names the namespace of the filter (`?ns=`), and is cached under it:
+// what was read for one end user is never shown for another.
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -7,7 +8,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { useApi } from "../app/session";
+import { useNamespace, useScopedApi } from "../app/namespace";
 import { followRun, type StreamState } from "./events";
 import type {
   Entry,
@@ -19,15 +20,20 @@ import type {
   ToolStatsQuery,
 } from "./types";
 
+/** The client of the run views, and the namespace it names (part of every key). */
+function useScope() {
+  return { api: useScopedApi(), ns: useNamespace() };
+}
+
 /** Runs matching a query, page after page. `makeQuery` resolves relative times at fetch time. */
 export function useRuns(
   key: string,
   makeQuery: () => ListRunsQuery,
   refetchMs: number | false = 15_000,
 ) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useInfiniteQuery({
-    queryKey: ["runs", key],
+    queryKey: ["runs", ns, key],
     queryFn: ({ pageParam, signal }) =>
       api.runs(pageParam ? { ...makeQuery(), cursor: pageParam } : makeQuery(), signal),
     initialPageParam: "",
@@ -42,9 +48,9 @@ export function useRunStats(
   makeQuery: () => RunStatsQuery,
   refetchMs: number | false = false,
 ) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["run-stats", key],
+    queryKey: ["run-stats", ns, key],
     queryFn: ({ signal }) => api.runStats(makeQuery(), signal),
     refetchInterval: refetchMs,
     placeholderData: keepPreviousData,
@@ -57,9 +63,9 @@ export function useFailures(
   makeQuery: () => FailuresQuery,
   refetchMs: number | false = false,
 ) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["failures", key],
+    queryKey: ["failures", ns, key],
     queryFn: ({ signal }) => api.failures(makeQuery(), signal),
     refetchInterval: refetchMs,
     placeholderData: keepPreviousData,
@@ -67,14 +73,14 @@ export function useFailures(
 }
 
 export function useRun(id: string) {
-  const api = useApi();
-  return useQuery({ queryKey: ["run", id], queryFn: ({ signal }) => api.run(id, signal) });
+  const { api, ns } = useScope();
+  return useQuery({ queryKey: ["run", ns, id], queryFn: ({ signal }) => api.run(id, signal) });
 }
 
 export function useScripts(key: string, query: ListScriptsQuery) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useInfiniteQuery({
-    queryKey: ["scripts", key],
+    queryKey: ["scripts", ns, key],
     queryFn: ({ pageParam, signal }) =>
       api.scripts(pageParam ? { ...query, cursor: pageParam } : query, signal),
     initialPageParam: "",
@@ -84,9 +90,9 @@ export function useScripts(key: string, query: ListScriptsQuery) {
 }
 
 export function useScript(digest: string | undefined) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["script", digest],
+    queryKey: ["script", ns, digest],
     queryFn: ({ signal }) => api.script(digest ?? "", signal),
     enabled: Boolean(digest),
     staleTime: Number.POSITIVE_INFINITY,
@@ -98,19 +104,19 @@ export function useToolStats(
   makeQuery: () => ToolStatsQuery,
   refetchMs: number | false = 30_000,
 ) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["tool-stats", key],
+    queryKey: ["tool-stats", ns, key],
     queryFn: ({ signal }) => api.toolStats(makeQuery(), signal),
     refetchInterval: refetchMs,
   });
 }
 
 export function usePayloadValue(digest: string, run: string, enabled: boolean) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
     // A digest names one value, whichever run it is read through.
-    queryKey: ["payload", digest],
+    queryKey: ["payload", ns, digest],
     queryFn: ({ signal }) => api.payload(digest, run, signal),
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
@@ -118,9 +124,9 @@ export function usePayloadValue(digest: string, run: string, enabled: boolean) {
 }
 
 export function useRunEntry(id: string, idx: number, enabled: boolean) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["entry", id, idx],
+    queryKey: ["entry", ns, id, idx],
     queryFn: ({ signal }) => api.entry(id, idx, signal),
     enabled,
     staleTime: Number.POSITIVE_INFINITY,
@@ -129,9 +135,9 @@ export function useRunEntry(id: string, idx: number, enabled: boolean) {
 
 /** The LLM trace, read again when the journal has grown to `historyLen` entries. */
 export function useRunTrace(id: string, historyLen: number) {
-  const api = useApi();
+  const { api, ns } = useScope();
   return useQuery({
-    queryKey: ["trace", id, historyLen],
+    queryKey: ["trace", ns, id, historyLen],
     queryFn: ({ signal }) => api.trace(id, signal),
     placeholderData: keepPreviousData,
   });
@@ -152,7 +158,7 @@ export interface RunJournal {
  * Entries are applied at most every `flushMs`, so a long history loads in a few renders.
  */
 export function useRunJournal(id: string, flushMs = 80): RunJournal {
-  const api = useApi();
+  const { api, ns } = useScope();
   const queryClient = useQueryClient();
   const [journal, setJournal] = useState<RunJournal>({
     entries: [],
@@ -174,7 +180,7 @@ export function useRunJournal(id: string, flushMs = 80): RunJournal {
     const refresh = () => {
       refreshTimer = undefined;
       lastRefresh = Date.now();
-      void queryClient.invalidateQueries({ queryKey: ["run", id] }, { cancelRefetch: false });
+      void queryClient.invalidateQueries({ queryKey: ["run", ns, id] }, { cancelRefetch: false });
     };
     const scheduleRefresh = () => {
       if (refreshTimer !== undefined) return;
@@ -219,7 +225,7 @@ export function useRunJournal(id: string, flushMs = 80): RunJournal {
       clearTimeout(flushTimer);
       clearTimeout(refreshTimer);
     };
-  }, [api, id, flushMs, queryClient]);
+  }, [api, ns, id, flushMs, queryClient]);
 
   return journal;
 }

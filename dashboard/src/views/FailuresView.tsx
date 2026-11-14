@@ -2,9 +2,9 @@
 // name and its message with what varies set aside), across the many scripts models write. A group
 // opens its runs; its latest run opens on the step that failed.
 import type { ReactNode } from "react";
-import { Link, useNavigate } from "react-router";
 import { queryFault } from "../api/client";
 import { useFailures } from "../api/queries";
+import { Link, useNavigate } from "../app/namespace";
 import { Ago, Empty, Loading, ProblemView, RunId } from "../components/bits";
 import { Sparkline } from "../components/Charts";
 import { QueryBar } from "../components/QueryBar";

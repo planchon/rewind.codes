@@ -4,10 +4,11 @@
 // the run as it was after a step, and hovering a call or a variable shows its value then.
 import { FileCode, MessageSquareText } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import { ApiError } from "../../api/client";
 import { useRun, useRunJournal, useScript } from "../../api/queries";
 import { isEnded } from "../../api/types";
+import { Link } from "../../app/namespace";
 import { Loading, ProblemView, useNow } from "../../components/bits";
 import { CodeView, type LineMark } from "../../components/CodeView";
 import { OutcomeGlyph } from "../../components/Status";

@@ -2,10 +2,9 @@
 // it is quarantined, what it waits for.
 import { Download } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router";
 import type { JournalState } from "../../api/queries";
 import type { Run, Waiting } from "../../api/types";
-import { useApi } from "../../app/session";
+import { Link, NS_PARAM, useNavigate, useScopedApi } from "../../app/namespace";
 import { Ago, CopyButton, Digest, LabelList, RunId, Time, useNow } from "../../components/bits";
 import {
   ForkTag,
@@ -38,7 +37,7 @@ function LiveState({ state }: { state: JournalState }) {
 }
 
 function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette" }) {
-  const api = useApi();
+  const api = useScopedApi();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   return (
@@ -117,6 +116,18 @@ export function RunHeader({
         </span>
       </div>
       <dl className="run-meta">
+        <div>
+          <dt>namespace</dt>
+          <dd>
+            <Link
+              className="mono"
+              to={`/runs?${new URLSearchParams({ [NS_PARAM]: run.namespace })}`}
+              title="The end user the run acts for: their runs"
+            >
+              {run.namespace}
+            </Link>
+          </dd>
+        </div>
         <div>
           <dt>script</dt>
           <dd>

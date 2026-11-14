@@ -19,7 +19,18 @@
     "rules": {
       "recommended": true,
       "style": {
-        "noDescendingSpecificity": "off"
+        "noDescendingSpecificity": "off",
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "react-router": {
+                "importNames": ["Link", "NavLink", "Navigate", "useNavigate"],
+                "message": "Use the ones of src/app/namespace.tsx: they keep the namespace filter (?ns=)."
+              }
+            }
+          }
+        }
       }
     }
   },
@@ -29,5 +40,17 @@
         "organizeImports": "on"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/app/namespace.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }

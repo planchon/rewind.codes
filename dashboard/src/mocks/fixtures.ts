@@ -5,6 +5,7 @@
 import type { Labels, Quarantine, Waiting } from "../api/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { fakeDigest, JournalBuilder } from "./journal";
+import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -19,6 +20,8 @@ export interface ScriptFixture {
 
 export interface RunFixture {
   id: string;
+  /** The end user the run acts for. */
+  namespace: string;
   script: ScriptFixture;
   toolset: string;
   labels: Labels;
@@ -45,6 +48,8 @@ export interface World {
   embedded: boolean;
   /** Identity and access: the sign-in, organizations, roles, grants, API keys. */
   access: AccessWorld;
+  /** The end users of each tenant, their quotas, use and alerts. */
+  namespaces: Map<string, NamespaceWorld>;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -310,6 +315,18 @@ export interface WorldOptions {
   log?: (line: string) => void;
 }
 
+/**
+ * The end user a run acts for, unless it names one: tests run in `local`, triage for alice,
+ * digests for chen, support for several.
+ */
+function namespaceOf(labels: Labels, n: number): string {
+  if (labels.env === "test") return "local";
+  if (labels.agent === "triage") return "alice";
+  if (labels.agent === "digest") return "chen";
+  const spread = ["bob", "bob", "bob", "alice", "dana", "erin", "user_2fQ81", "user_7Kd02"];
+  return spread[n % spread.length] ?? "bob";
+}
+
 export function createWorld(options: WorldOptions): World {
   const { now } = options;
   const runs: RunFixture[] = [];
@@ -332,6 +349,7 @@ export function createWorld(options: WorldOptions): World {
     });
     const fixture: RunFixture = {
       id: runId(start, n),
+      namespace: namespaceOf(labels, n),
       script: s,
       toolset,
       labels,
@@ -714,8 +732,9 @@ export function createWorld(options: WorldOptions): World {
       now - 4 * DAY - 7 * HOUR,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-77", user: "u-1203", env: "prod" },
+      { agent: "support", conversation: "c-77", env: "prod" },
       { email: "lee@example.org" },
+      { namespace: "bob" },
     );
     const j = r.journal;
     j.after(15)
@@ -752,9 +771,10 @@ export function createWorld(options: WorldOptions): World {
       now - 47 * MINUTE,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-81", user: "u-1288", env: "prod" },
+      { agent: "support", conversation: "c-81", env: "prod" },
       { email: "kim@example.org" },
       {
+        namespace: "bob",
         taskStates: { 2: { state: "approval" } },
       },
     );
@@ -772,8 +792,9 @@ export function createWorld(options: WorldOptions): World {
       now - 12 * MINUTE,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-85", user: "u-1301", env: "prod" },
+      { agent: "support", conversation: "c-85", env: "prod" },
       { email: "jo@example.org" },
+      { namespace: "dana" },
     );
     r.journal
       .after(15)
@@ -803,9 +824,10 @@ export function createWorld(options: WorldOptions): World {
       now - 2 * DAY - 3 * HOUR,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-63", user: "u-1101", env: "prod" },
+      { agent: "support", conversation: "c-63", env: "prod" },
       { email: "ana@example.org" },
       {
+        namespace: "erin",
         errorAt: { line: 7, column: 20 },
       },
     );
@@ -939,19 +961,23 @@ export function createWorld(options: WorldOptions): World {
   const payloads = new Map<string, unknown>();
   for (const r of runs)
     for (const [digest, value] of r.journal.payloads) payloads.set(digest, value);
+  const access = createAccessWorld({
+    requireKey: options.requireKey,
+    ...(options.workos !== undefined ? { workos: options.workos } : {}),
+    ...(options.tokenTtlMs !== undefined ? { tokenTtlMs: options.tokenTtlMs } : {}),
+    ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
+    ...(options.log ? { log: options.log } : {}),
+  });
   const world: World = {
     now,
     scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW],
     runs,
     payloads,
     embedded: options.embedded ?? false,
-    access: createAccessWorld({
-      requireKey: options.requireKey,
-      ...(options.workos !== undefined ? { workos: options.workos } : {}),
-      ...(options.tokenTtlMs !== undefined ? { tokenTtlMs: options.tokenTtlMs } : {}),
-      ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
-      ...(options.log ? { log: options.log } : {}),
-    }),
+    access,
+    namespaces: new Map([
+      [access.tenant, createNamespaceWorld({ now, names: runs.map((r) => r.namespace) })],
+    ]),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   return world;

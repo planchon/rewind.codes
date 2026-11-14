@@ -18,7 +18,8 @@ const ACCOUNTS = `
 [mock]   alan@example.net      reader in Acme limited to agent:triage; verifies his email first
 [mock]   margaret@example.net  no organization yet, invited to Globex
 [mock]   any other email       sign-ups are closed: the waitlist
-[mock] "Continue with GitHub" signs in as ada@example.net.`;
+[mock] "Continue with GitHub" signs in as ada@example.net.
+[mock] Namespaces: bob is above his CPU quota, chen pays for more, erin is blocked.`;
 
 export function mockApi(): Plugin {
   return {

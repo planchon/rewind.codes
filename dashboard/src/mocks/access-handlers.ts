@@ -97,7 +97,8 @@ export function runsWorld(world: World, caller: Caller): World {
   return { ...world, runs: world.runs.filter((r) => pairs.every(([k, v]) => r.labels[k] === v)) };
 }
 
-async function json<T>(request: Request): Promise<T | Response> {
+/** A request's JSON body, or the refusal the server answers. */
+export async function json<T>(request: Request): Promise<T | Response> {
   if (!request.headers.get("Content-Type")?.includes("application/json")) {
     return problem(
       415,

@@ -2,10 +2,10 @@
 // durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
 // figure, bar and row opens the runs behind it. Polled every 10 seconds.
 import type { ReactNode } from "react";
-import { Link } from "react-router";
 import { queryFault } from "../api/client";
 import { useFailures, useRunStats, useToolStats } from "../api/queries";
 import type { RunStatus } from "../api/types";
+import { Link } from "../app/namespace";
 import { useSettings } from "../app/settings";
 import { Empty, Loading, ProblemView } from "../components/bits";
 import { Meter, StackedBars, Tile } from "../components/Charts";

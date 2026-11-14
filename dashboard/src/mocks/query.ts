@@ -4,6 +4,7 @@
 import type { RunMode, RunStatus, RunSummary, WaitKind } from "../api/types";
 import { RUN_STATUSES, WAIT_KINDS } from "../api/types";
 import { FIELDS, operandValues } from "../model/query";
+import { namespaceNameProblem } from "../model/quotas";
 
 /** A run summary with what the read model's other tables know of it. */
 export interface MockRun extends RunSummary {
@@ -215,6 +216,16 @@ function field(name: string, operand: string, now: number): Predicate {
   if (!operand) throw new Error(`${name}: expected a value after the colon`);
   const ended = (r: MockRun) => (r.endedAt ? Date.parse(r.endedAt) : null);
   switch (name) {
+    case "namespace": {
+      const names = exact(name, operand).map((value) => {
+        if (namespaceNameProblem(value) !== null)
+          throw new Error(
+            `namespace: "${value}" is not a namespace: 1 to 128 letters, digits, -, _, ., : and @`,
+          );
+        return value;
+      });
+      return (r) => names.includes(r.namespace);
+    }
     case "status": {
       const statuses = enumerated<RunStatus>(name, operand, RUN_STATUSES);
       return (r) => statuses.includes(r.status);

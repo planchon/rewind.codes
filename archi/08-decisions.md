@@ -831,6 +831,18 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Every subquery of a Postgres query repeats the tenant, label and tool vocabularies have extended statistics (MCV), id and digest prefixes become `uuid` and `bytea` ranges, and every text compared or ordered uses the "C" collation | Letting the planner guess | On 200k runs and 1M calls, a rare label went from a sequential scan (80 ms) to an index scan (0.2 ms), and paging a frequent label from a hash of every run (73 ms) to an ordered read (0.5 ms). "C" gives byte order, which the contract's tie-breaks are. |
 | Postgres answers statistics, failure groups, scripts and tool statistics each in one SQL statement over indexed sets: the window's runs by start, waiting runs from a partial index on active runs, quarantined runs from their own table; percentiles with `percentile_disc` | Loading rows into Rust | One consistent snapshot per answer, without moving the tenant's rows. A test checks that `percentile_disc` is the nearest rank for up to 500 values at p50, p95 and p99. |
 
+### Taken while building the dashboard's namespaces (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The run views read through a client bound to the namespace of the filter, which sends `Rewind-Namespace` with each of their requests, and their cache is keyed by it; the Namespaces views and the filter's suggestions read without the header | The header on every request of the dashboard | A read with the header covers one namespace; the suggestions and the Namespaces view need every end user. What was read for one end user is never shown for another. |
+| The app's `Link`, `NavLink`, `Navigate` and `useNavigate` carry `ns` to wherever they lead, unless the target names one; Biome refuses the router's own elsewhere | Adding `ns` at each link; keeping the filter in memory | The URL stays the filter's only state, and a link that forgot it would widen the views without a word. |
+| The filter suggests the namespaces whose name starts with what is typed, the most active this month first (`order=runs`), eight at most; a valid name the list does not offer is taken as typed | Loading every namespace; searching inside names | A tenant can have many thousands, and `GET /v1/namespaces` takes a prefix; without `namespaces:read` the filter still narrows. |
+| Picking a namespace on a run's page opens the runs of that namespace | Staying on the page | A run belongs to one namespace: under another, it is not found. |
+| Over every namespace, the Runs view's Namespace facet counts the runs shown, which its title says | The facets of `GET /v1/runs/stats` | `RunStats.facets` carries no namespace. |
+| A quota's share is floored: orange from 80 %, red at 100 %; a CPU above its quota keeps a full bar and shows its share (`160%`); a limit of 0 shows "blocked" | Rounding the share | A meter never turns orange below the threshold that alerts, and an overrun reads at a glance. |
+| Erasing a namespace asks to type its name | The inline "Yes" of the other destructive actions | Erasing an end user takes their runs and cannot be undone. |
+
 ### Taken while deploying Rewind on Railway and Vercel (November 2026)
 
 | Decision | Alternative rejected | Why |

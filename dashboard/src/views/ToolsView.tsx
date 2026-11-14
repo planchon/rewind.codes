@@ -1,9 +1,10 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
 // host-tool group), over a window, optionally for one toolset.
 import { Fragment } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 import { useToolStats } from "../api/queries";
 import type { ToolStats } from "../api/types";
+import { keepNamespace, Link } from "../app/namespace";
 import { Empty, Loading, ProblemView, Time } from "../components/bits";
 import { useTooltip } from "../components/Tooltip";
 import {
@@ -102,7 +103,7 @@ export function ToolsView() {
   const key = writeToolFilters(filters).toString();
   const stats = useToolStats(`tools:${key}`, () => toToolStatsQuery(filters, Date.now()));
   const update = (patch: Partial<ToolFilters>) =>
-    setParams(writeToolFilters({ ...filters, ...patch }));
+    setParams((current) => keepNamespace(current, writeToolFilters({ ...filters, ...patch })));
   const tip = useTooltip();
 
   const tools = stats.data?.tools ?? [];

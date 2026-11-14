@@ -2,10 +2,11 @@
 // approval, a timer, a tool), with the line it is paused on and when it wakes. The soonest to
 // wake first. A row opens the run at its last step. Polled every 10 seconds.
 import { Fragment, type ReactNode } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 import { queryFault } from "../api/client";
 import { useRunStats, useRuns, useScript } from "../api/queries";
 import type { RunSummary, RunWait, WaitCounts, WaitKind } from "../api/types";
+import { Link, useNavigate } from "../app/namespace";
 import { Empty, LabelList, Loading, ProblemView, RunId, useNow } from "../components/bits";
 import { QueryBar } from "../components/QueryBar";
 import { SaveSearch } from "../components/SaveSearch";

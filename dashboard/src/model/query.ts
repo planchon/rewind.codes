@@ -31,6 +31,7 @@ export const FIELDS: readonly FieldSpec[] = [
   { name: "fingerprint", doc: "a failure group" },
   { name: "quarantined", doc: "quarantined:yes or no" },
   { name: "mode", doc: "mode:live or mock" },
+  { name: "namespace", doc: "the end user: namespace:alice,bob" },
 ];
 
 const FIELD_NAMES = new Set(FIELDS.map((f) => f.name));
@@ -255,6 +256,17 @@ export interface Suggestion {
   raw?: boolean;
 }
 
+/** A value a field takes that the facets do not count: the namespaces, read from their list. */
+export interface FieldValue {
+  value: string;
+  /** Runs with this value. */
+  count?: number;
+  detail?: string;
+}
+
+/** Values to suggest per field, beside those of the facets. */
+export type FieldValues = Partial<Record<string, readonly FieldValue[]>>;
+
 export interface Suggestions {
   /** The part of the query the suggestion replaces. */
   from: number;
@@ -275,9 +287,21 @@ function counted(values: { value: string; runs: number }[] | undefined): Map<str
 }
 
 /** The values a field takes, most frequent first where the facets count them. */
-function fieldValues(field: string, facets: Facets | undefined): Suggestion[] {
-  const from = (values: { value: string; runs: number }[] | undefined) =>
-    (values ?? []).map((v) => ({ insert: v.value, label: v.value, count: v.runs }));
+function fieldValues(
+  field: string,
+  facets: Facets | undefined,
+  values: FieldValues | undefined,
+): Suggestion[] {
+  const from = (list: { value: string; runs: number }[] | undefined) =>
+    (list ?? []).map((v) => ({ insert: v.value, label: v.value, count: v.runs }));
+  const given = values?.[field];
+  if (given)
+    return given.map((v) => ({
+      insert: v.value,
+      label: v.value,
+      ...(v.count !== undefined ? { count: v.count } : {}),
+      ...(v.detail ? { detail: v.detail } : {}),
+    }));
   switch (field) {
     case "status": {
       const counts = counted(facets?.statuses);
@@ -350,15 +374,27 @@ function before(operand: string): { kept: string; typed: string } {
   return { kept: values.map(quoteValue).join(","), typed };
 }
 
+/** The field whose value the caret is in, and the value typed so far (after its last comma). */
+export function typedField(text: string, caret: number): { field: string; value: string } | null {
+  const term = splitTerms(text).find((t) => t.start <= caret && caret <= t.end);
+  if (term?.kind !== "field" || term.field === null) return null;
+  const typed = text.slice(term.start + (term.negated ? 1 : 0), caret);
+  const colon = typed.indexOf(":");
+  if (colon <= 0) return null;
+  return { field: typed.slice(0, colon), value: before(typed.slice(colon + 1)).typed };
+}
+
 /**
  * What to suggest for the term the caret is in: field names and label keys while a name is
- * typed, then the values that exist for it (the facets of the current query), at most `limit`.
+ * typed, then the values that exist for it (the facets of the current query, or the values
+ * given), at most `limit`.
  */
 export function suggest(
   text: string,
   caret: number,
   facets: Facets | undefined,
   limit = 12,
+  values?: FieldValues,
 ): Suggestions | null {
   const term = splitTerms(text).find((t) => t.start <= caret && caret <= t.end);
   const from = term ? term.start + (term.negated || term.raw === "-" ? 1 : 0) : caret;
@@ -381,7 +417,7 @@ export function suggest(
   } else if (colon > 0 && FIELD_NAMES.has(typed.slice(0, colon))) {
     const field = typed.slice(0, colon);
     const { kept, typed: value } = before(typed.slice(colon + 1));
-    items = fieldValues(field, facets)
+    items = fieldValues(field, facets, values)
       .filter((s) => startsWith(s.insert, value) || startsWith(s.label, value))
       .map((s) => ({
         ...s,

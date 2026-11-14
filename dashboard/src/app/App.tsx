@@ -3,7 +3,6 @@ import { Lock } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import {
   createHashRouter,
-  Navigate,
   Outlet,
   type RouteObject,
   RouterProvider,
@@ -13,6 +12,8 @@ import { ApiError } from "../api/client";
 import { WHOAMI } from "../api/organization";
 import { ProblemView } from "../components/bits";
 import { FailuresView } from "../views/FailuresView";
+import { NamespacesView } from "../views/namespaces/NamespacesView";
+import { NamespaceView } from "../views/namespaces/NamespaceView";
 import { OverviewView } from "../views/OverviewView";
 import { ApiKeysView } from "../views/org/ApiKeysView";
 import { InvitationsView } from "../views/org/InvitationsView";
@@ -30,6 +31,7 @@ import { useAccess } from "./access";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
+import { Navigate } from "./namespace";
 import { SessionProvider, type SessionProviderProps, useSession } from "./session";
 import { SettingsProvider } from "./settings";
 
@@ -89,6 +91,7 @@ function ToolStats() {
 function Home() {
   const access = useAccess();
   if (access.can("runs:read")) return <Navigate to="/overview" replace />;
+  if (access.can("namespaces:read")) return <Navigate to="/namespaces" replace />;
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
   return <CannotRead />;
 }
@@ -113,6 +116,8 @@ export const routes: RouteObject[] = [
           { path: "tools", element: <ToolStats /> },
         ],
       },
+      { path: "namespaces", element: <NamespacesView /> },
+      { path: "namespaces/:name", element: <NamespaceView /> },
       {
         path: "organization",
         element: <OrganizationView />,

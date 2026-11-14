@@ -15,7 +15,15 @@ import {
 } from "react";
 import type { Facets } from "../api/types";
 import { formatCount } from "../model/format";
-import { isKnownField, type Suggestion, splitTerms, suggest, utf16Span } from "../model/query";
+import {
+  type FieldValues,
+  isKnownField,
+  type Suggestion,
+  splitTerms,
+  suggest,
+  typedField,
+  utf16Span,
+} from "../model/query";
 
 export interface QueryFault {
   message: string;
@@ -29,6 +37,13 @@ export interface QueryBarProps {
   value: string;
   onSubmit: (q: string) => void;
   facets?: Facets | undefined;
+  /** Values to suggest that the facets do not count, per field: the namespaces. */
+  values?: FieldValues | undefined;
+  /**
+   * The field whose value is being typed, and what is typed of it; `null` when no value is.
+   * For a parent that looks the values up as they are typed.
+   */
+  onTyping?: (typed: { field: string; value: string } | null) => void;
   /** The server could not read `value`: where and why. */
   fault?: QueryFault | null;
   placeholder?: string;
@@ -78,6 +93,8 @@ export function QueryBar({
   value,
   onSubmit,
   facets,
+  values,
+  onTyping,
   fault = null,
   placeholder = '@agent:triage status:failed tool:github.* error:timeout "rate limit"',
   children,
@@ -105,9 +122,14 @@ export function QueryBar({
   }, [value]);
 
   const suggestions = useMemo(
-    () => (open ? suggest(draft, caret, facets) : null),
-    [open, draft, caret, facets],
+    () => (open ? suggest(draft, caret, facets, 12, values) : null),
+    [open, draft, caret, facets, values],
   );
+  const typing = useRef(onTyping);
+  typing.current = onTyping;
+  useEffect(() => {
+    typing.current?.(open ? typedField(draft, caret) : null);
+  }, [open, draft, caret]);
   const items = suggestions?.items ?? [];
   const shown = items.length > 0;
   const bad = fault && draft === value ? utf16Span(value, fault.start, fault.end) : null;

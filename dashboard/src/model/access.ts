@@ -25,6 +25,9 @@ export const PERMISSIONS: readonly Permission[] = [
   "api_keys:read",
   "api_keys:write",
   "organization:write",
+  "namespaces:read",
+  "namespaces:write",
+  "tokens:write",
 ];
 
 /** The permissions a grant limited to labels cannot use: it cannot administer. */

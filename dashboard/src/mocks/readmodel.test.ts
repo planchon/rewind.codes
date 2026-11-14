@@ -32,6 +32,17 @@ describe("the mocked read model", () => {
     expect(ids("calls:>=5 mode:live").length).toBeGreaterThan(0);
   });
 
+  it("reads the namespace of runs: an exact name, never a pattern", () => {
+    const runs = (q: string) => listRuns(world, { q, limit: 500 }, NOW).runs;
+    const bob = world.runs.filter((r) => r.namespace === "bob").length;
+    expect(runs("namespace:bob")).toHaveLength(bob);
+    expect(runs("namespace:bob").every((r) => r.namespace === "bob")).toBe(true);
+    expect(runs("namespace:bob,alice").length).toBeGreaterThan(bob);
+    expect(runs("-namespace:bob").some((r) => r.namespace === "bob")).toBe(false);
+    expect(refusal("namespace:bo*").message).toBe("namespace: * is not accepted here");
+    expect(refusal("namespace:a/b").message).toMatch(/is not a namespace/);
+  });
+
   it("names the term it cannot read, in characters", () => {
     expect(refusal("@env:prod stauts:failed")).toMatchObject({ start: 10, end: 23 });
     expect(refusal("@who:😀 stauts:x").start).toBe(7);

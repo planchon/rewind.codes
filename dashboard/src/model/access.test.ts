@@ -39,7 +39,7 @@ describe("access", () => {
     expect(canGive(reader, held)).toBe(true);
     expect(canGive({ ...reader, permissions: ["runs:read", "runs:start"] }, held)).toBe(false);
     expect(missingPermissions(["runs:start", "runs:read"], held)).toEqual(["runs:start"]);
-    expect(permissionsOf("operator", [])?.length).toBe(20);
+    expect(permissionsOf("operator", [])?.length).toBe(23);
     expect(permissionsOf("gone", [reader])).toBeUndefined();
   });
 
