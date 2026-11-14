@@ -215,6 +215,7 @@ pub(super) async fn tool_stats(
         .store
         .tool_stats(&rewind_engine::ports::ToolStatsFilter {
             tenant: caller.tenant.clone(),
+            namespace: None,
             toolset,
             since: Some(since),
             until: Some(until),

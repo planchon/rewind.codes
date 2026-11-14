@@ -60,6 +60,7 @@ fn run(id: &str) -> Run {
     let at = Timestamp::from_second(1_762_682_531).unwrap();
     Run {
         id: id.into(),
+        namespace: "alice".parse().unwrap(),
         status: RunStatus::Completed,
         quarantine: None,
         script: "aa".repeat(32),

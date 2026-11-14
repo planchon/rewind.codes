@@ -8,11 +8,13 @@
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
 //!   table: [`toolsets`], [`scripts`], [`runs`] (with [`events`], the journal entries and the
 //!   event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`], [`access`] (with the
-//!   catalog of permissions and the built-in roles) and [`admin`] (the server); and the
-//!   dashboard's sign-in, [`auth`];
+//!   catalog of permissions and the built-in roles), [`namespaces`] (the end users, their
+//!   quotas and their tokens) and [`admin`] (the server); and the dashboard's sign-in,
+//!   [`auth`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
 //! - the query language of the run lists ([`query`]);
-//! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, the webhook signature;
+//! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, `Rewind-Namespace`, the
+//!   webhook signature;
 //! - the paths ([`routes`]);
 //! - the OpenAPI 3.1 document generated from the DTOs ([`openapi`]), committed at
 //!   `api/openapi.json`, from which the TypeScript SDK and the dashboard generate their types;
@@ -37,6 +39,7 @@ pub mod common;
 mod error;
 pub mod events;
 pub mod headers;
+pub mod namespaces;
 pub mod openapi;
 pub mod organization;
 pub mod problem;

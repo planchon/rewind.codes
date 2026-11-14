@@ -206,6 +206,7 @@ async fn completed_run(journal: &MemoryJournal, n: u128) -> String {
         .create_run(
             NewRun {
                 run: run.clone(),
+                namespace: rewind_engine::ports::NamespaceName::migrated(),
                 started: started.clone(),
                 metadata: RunMetadata::default(),
                 created_at: now,
@@ -415,7 +416,8 @@ async fn the_claim_outlasts_every_delivery_and_a_delivery_its_window() {
     let event = |n: u128| WebhookEvent {
         id: format!("e/{n}"),
         tenant: TenantId::local(),
-        run: run_ref(n).id,
+        namespace: None,
+        run: Some(run_ref(n).id),
         labels: BTreeMap::new(),
         occurred_at: Timestamp(0),
         kind: WebhookEventKind::RunQuarantined { reason: "x".into() },
@@ -479,7 +481,8 @@ async fn the_engine_never_waits_for_a_receiver() {
     let event = WebhookEvent {
         id: "r/quarantined/1".into(),
         tenant: TenantId::local(),
-        run: run_ref(1).id,
+        namespace: None,
+        run: Some(run_ref(1).id),
         labels: BTreeMap::new(),
         occurred_at: Timestamp(0),
         kind: WebhookEventKind::RunQuarantined { reason: "x".into() },

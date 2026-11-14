@@ -234,13 +234,21 @@ where
             return Err(ForkError::ParentNotStarted(parent.id));
         };
 
-        let ttl = request.ttl.unwrap_or(self.config.default_ttl);
-        if ttl.is_zero() || ttl > self.config.max_ttl {
+        // A fork stays in its parent's namespace, and passes its bounds.
+        let bounds = self
+            .namespace_bounds(&parent.tenant, &record.namespace)
+            .await
+            .map_err(ForkError::Start)?;
+        let ttl = request.ttl.unwrap_or(bounds.default_ttl);
+        if ttl.is_zero() || ttl > bounds.max_ttl {
             return Err(ForkError::Start(StartError::InvalidTtl {
                 requested: ttl,
-                max: self.config.max_ttl,
+                max: bounds.max_ttl,
             }));
         }
+        bounds
+            .check_lines(&request.script)
+            .map_err(ForkError::Start)?;
         let refused = |nul| ForkError::Start(StartError::NulCharacter(nul));
         text::refuse_nul("the script", request.script.source()).map_err(refused)?;
         let metadata = RunMetadata {
@@ -285,6 +293,7 @@ where
         let now = self.clock.now();
         let fork = NewRun {
             run: RunRef::new(parent.tenant.clone(), self.entropy.run_id()),
+            namespace: record.namespace.clone(),
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: record.toolset,
@@ -308,9 +317,10 @@ where
                 tracing::debug!(run = %created.run, parent = %parent, "fork started");
                 Ok(created)
             }
-            CreateRun::QuotaExceeded { quota } => {
-                Err(ForkError::Start(StartError::QuotaExceeded { quota }))
+            CreateRun::QuotaExceeded(exceeded) => {
+                Err(ForkError::Start(StartError::QuotaExceeded(exceeded)))
             }
+            CreateRun::NamespaceDeleting => Err(ForkError::Start(StartError::NamespaceDeleting)),
         }
     }
 

@@ -239,6 +239,7 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
             .apply(
                 &ProjectedRun {
                     run: run.clone(),
+                    namespace: record.namespace.clone(),
                     script: record.script,
                     headline: String::new(),
                     toolset: record.toolset,
@@ -269,14 +270,24 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
     let secrets = engine.secrets();
     assert_eq!(
         secrets
-            .resolve(&erased.tenant, erased.id, toolset)
+            .resolve(
+                &erased.tenant,
+                erased.id,
+                &rewind_engine::ports::NamespaceName::new("local").unwrap(),
+                toolset
+            )
             .await
             .unwrap(),
         None
     );
     assert_eq!(
         secrets
-            .resolve(&kept.tenant, kept.id, toolset)
+            .resolve(
+                &kept.tenant,
+                kept.id,
+                &rewind_engine::ports::NamespaceName::new("local").unwrap(),
+                toolset
+            )
             .await
             .unwrap(),
         Some(credentials(&kept.id.to_string()))
@@ -330,6 +341,7 @@ async fn the_read_model_keeps_runs_for_its_retention() {
         .apply(
             &ProjectedRun {
                 run: run.clone(),
+                namespace: record.namespace.clone(),
                 script: record.script,
                 headline: String::new(),
                 toolset: record.toolset,

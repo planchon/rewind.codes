@@ -282,14 +282,24 @@ impl Render for ServerRender {
             url: String::new(),
             message,
         };
-        let run = RunRef::new(event.tenant.clone(), event.run);
+        let at = timestamp(event.occurred_at);
+        if let WebhookEventKind::QuotaAlert(alert) = &event.kind {
+            let body = rewind_api::webhooks::WebhookEvent::QuotaAlert {
+                timestamp: at,
+                data: crate::views::quota_alert(alert),
+            };
+            return serde_json::to_vec(&body).map_err(|error| failed(error.to_string()));
+        }
+        let run_id = event
+            .run
+            .ok_or_else(|| failed("a run's event without its run".to_owned()))?;
+        let run = RunRef::new(event.tenant.clone(), run_id);
         let record = self
             .store
             .get_run(&run)
             .await
             .map_err(|error| failed(format!("the run cannot be read: {error}")))?
-            .ok_or_else(|| failed(format!("run {} no longer exists", event.run)))?;
-        let at = timestamp(event.occurred_at);
+            .ok_or_else(|| failed(format!("run {run_id} no longer exists")))?;
         let task = |seq| {
             task_id(&TaskRef {
                 run: run.clone(),
@@ -302,6 +312,7 @@ impl Render for ServerRender {
                     timestamp: at,
                     data: ToolSchemaChanged {
                         run_id: run.id.to_string(),
+                        namespace: crate::views::namespace(&record.namespace),
                         labels: Labels::from(event.labels.clone()),
                         task_id: task(*seq),
                         seq: seq.0,
@@ -317,6 +328,7 @@ impl Render for ServerRender {
                     timestamp: at,
                     data: CredentialsExpired {
                         run_id: run.id.to_string(),
+                        namespace: crate::views::namespace(&record.namespace),
                         labels: Labels::from(event.labels.clone()),
                         task_id: task(*seq),
                         seq: seq.0,
@@ -597,7 +609,8 @@ mod tests {
         let event = WebhookEvent {
             id: "r/1".into(),
             tenant: TenantId::local(),
-            run: rewind_core::RunId::from_u128(1),
+            namespace: None,
+            run: Some(rewind_core::RunId::from_u128(1)),
             labels: BTreeMap::new(),
             occurred_at: rewind_core::Timestamp(0),
             kind: WebhookEventKind::RunQuarantined { reason: "x".into() },
@@ -664,7 +677,8 @@ mod tests {
         WebhookEvent {
             id: "r/1".into(),
             tenant: TenantId::local(),
-            run: rewind_core::RunId::from_u128(1),
+            namespace: None,
+            run: Some(rewind_core::RunId::from_u128(1)),
             labels: BTreeMap::new(),
             occurred_at: rewind_core::Timestamp(0),
             kind: WebhookEventKind::RunQuarantined { reason: "x".into() },

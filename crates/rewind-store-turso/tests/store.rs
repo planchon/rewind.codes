@@ -101,6 +101,7 @@ async fn runs_survive_a_restart() {
         let store = open(&path).await;
         let new_run = NewRun {
             run: run(),
+            namespace: rewind_engine::ports::NamespaceName::migrated(),
             started: started(),
             metadata: RunMetadata {
                 labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
@@ -152,6 +153,7 @@ async fn runs_survive_a_restart() {
         .create_run(
             NewRun {
                 run: RunRef::new(TenantId::local(), RunId::from_u128(2)),
+                namespace: rewind_engine::ports::NamespaceName::migrated(),
                 started: started(),
                 metadata: RunMetadata::default(),
                 created_at: T0,
@@ -250,6 +252,7 @@ async fn secrets_are_encrypted_at_rest() {
             .resolve(
                 &TenantId::local(),
                 RunId::from_u128(1),
+                &rewind_engine::ports::NamespaceName::migrated(),
                 Digest::of(b"toolset")
             )
             .await
@@ -267,6 +270,7 @@ async fn secrets_are_encrypted_at_rest() {
             .resolve(
                 &TenantId::local(),
                 RunId::from_u128(1),
+                &rewind_engine::ports::NamespaceName::migrated(),
                 Digest::of(b"toolset")
             )
             .await,
@@ -288,6 +292,7 @@ async fn a_claim_reads_past_tasks_without_a_free_slot() {
     let store = open(&dir.path().join("journal.db")).await;
     let new_run = NewRun {
         run: run(),
+        namespace: rewind_engine::ports::NamespaceName::migrated(),
         started: started(),
         metadata: RunMetadata::default(),
         created_at: T0,

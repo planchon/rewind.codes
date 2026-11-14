@@ -43,13 +43,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -392,6 +392,13 @@ SELECT hash, tenant, 'unnamed ' || CASE role WHEN 'admin' THEN 'operator' ELSE r
 FROM api_keys_v1;
 
 DROP TABLE api_keys_v1;
+"#;
+
+/// Namespaces (`archi/06-storage-and-scale.md`, "Namespaces"): the end user a run belongs to. The
+/// runs that existed before namespaces belong to `migrated`.
+const V3: &str = r#"
+ALTER TABLE runs ADD COLUMN namespace TEXT NOT NULL DEFAULT 'migrated';
+ALTER TABLE run_summaries ADD COLUMN namespace TEXT NOT NULL DEFAULT 'migrated';
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

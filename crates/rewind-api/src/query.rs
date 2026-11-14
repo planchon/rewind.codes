@@ -18,9 +18,10 @@ use winnow::prelude::*;
 use winnow::token::take_while;
 
 use crate::common::{Duration, RunMode, RunStatus, Timestamp};
+use crate::namespaces::NamespaceName;
 
 /// The fields of the language, in the order error messages list them.
-pub const FIELDS: [&str; 18] = [
+pub const FIELDS: [&str; 19] = [
     "status",
     "tool",
     "error",
@@ -39,6 +40,7 @@ pub const FIELDS: [&str; 18] = [
     "fingerprint",
     "quarantined",
     "mode",
+    "namespace",
 ];
 
 /// A query: every term must hold. Empty, it matches every run.
@@ -67,6 +69,8 @@ pub struct QuerySpan {
 /// What one term asks of a run. A list means "any of".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Filter {
+    /// In one of these namespaces (exact names).
+    Namespace(Vec<NamespaceName>),
     /// `@key:value`, `@key:prefix*`, `@key:*`.
     Label {
         key: String,
@@ -350,6 +354,18 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
         return Err(format!("{name}: expected a value after the colon"));
     }
     Ok(match name {
+        "namespace" => Filter::Namespace(
+            exact(name, operand)?
+                .into_iter()
+                .map(|value| {
+                    NamespaceName::new(value.clone()).map_err(|_| {
+                        format!(
+                            "namespace: {value:?} is not a namespace: 1 to 128 letters, digits, -, _, ., : and @"
+                        )
+                    })
+                })
+                .collect::<Result<_, _>>()?,
+        ),
         "status" => Filter::Status(enumerated(name, operand, &STATUSES)?),
         "tool" => Filter::Tool(patterns(operand)?),
         "signal" => Filter::Signal(patterns(operand)?),
@@ -762,6 +778,28 @@ mod tests {
                 }
             )]
         );
+    }
+
+    #[test]
+    fn a_namespace_is_named_exactly() {
+        assert_eq!(
+            filters("namespace:alice,user_2f:x@y.z -namespace:bob"),
+            vec![
+                (
+                    false,
+                    Filter::Namespace(vec![
+                        NamespaceName::new("alice").unwrap(),
+                        NamespaceName::new("user_2f:x@y.z").unwrap()
+                    ])
+                ),
+                (
+                    true,
+                    Filter::Namespace(vec![NamespaceName::new("bob").unwrap()])
+                ),
+            ]
+        );
+        assert!(parse("namespace:al*").is_err());
+        assert!(parse("namespace:a/b").is_err());
     }
 
     #[test]

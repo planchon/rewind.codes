@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use rewind_core::{Digest, Epoch, RunId, RunStarted, RunStatus, Timestamp};
 
+use crate::ports::namespaces::{NamespaceName, QuotaExceeded};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 /// Given by the harness when it starts a run, and stored with the run. The script never sees
@@ -13,8 +14,7 @@ use crate::ports::tenancy::{RunRef, TenantId};
 /// the run's [`RunRef`], and the idempotency key is given to `create_run` beside it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunMetadata {
-    /// A bounded string map (agent, conversation, end user…), to filter runs and as span
-    /// attributes.
+    /// A bounded string map (agent, conversation…), to filter runs and as span attributes.
     pub labels: BTreeMap<String, String>,
     pub trace_context: Option<TraceContext>,
     /// For a fork, the run it was forked from, in the same tenant, and where it was forced live
@@ -43,6 +43,9 @@ pub struct TraceContext {
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewRun {
     pub run: RunRef,
+    /// The end user the run belongs to; a fork's is its parent's. Created with the tenant's
+    /// defaults if it does not exist.
+    pub namespace: NamespaceName,
     pub started: RunStarted,
     pub metadata: RunMetadata,
     pub created_at: Timestamp,
@@ -52,10 +55,11 @@ pub struct NewRun {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateRun {
     Created(Created),
-    /// The tenant already has its maximum of active runs: nothing was created.
-    QuotaExceeded {
-        quota: u32,
-    },
+    /// The namespace's limit or the tenant's ceiling of `active_runs`, `runs_per_month` or
+    /// `scripts` is reached: nothing was created.
+    QuotaExceeded(QuotaExceeded),
+    /// The namespace is being erased: nothing was created.
+    NamespaceDeleting,
 }
 
 /// The run a `create_run` resolved to.
@@ -127,6 +131,7 @@ pub struct Archive {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunRecord {
     pub run: RunRef,
+    pub namespace: NamespaceName,
     pub script: Digest,
     pub toolset: Digest,
     pub status: RunStatus,
@@ -156,6 +161,8 @@ pub struct RunRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFilter {
     pub tenant: TenantId,
+    /// Runs of this namespace only.
+    pub namespace: Option<NamespaceName>,
     pub status: Option<RunStatus>,
     /// Runs carrying all of these labels.
     pub labels: BTreeMap<String, String>,
@@ -171,6 +178,7 @@ impl RunFilter {
     pub fn new(tenant: TenantId) -> Self {
         Self {
             tenant,
+            namespace: None,
             status: None,
             labels: BTreeMap::new(),
             quarantined: None,

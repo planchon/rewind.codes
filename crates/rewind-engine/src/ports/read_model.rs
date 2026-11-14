@@ -8,12 +8,14 @@ use rewind_core::{
 };
 
 use crate::ports::journal::{Quarantine, QuarantineKind};
+use crate::ports::namespaces::NamespaceName;
 use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
 
 /// What the projector knows of a run besides its entries: the run's metadata, from its record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectedRun {
     pub run: RunRef,
+    pub namespace: NamespaceName,
     pub script: Digest,
     /// The first line of the script that is not blank, trimmed: searched as text.
     pub headline: String,
@@ -204,6 +206,7 @@ impl From<&Quarantine> for QuarantineNote {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSummary {
     pub run: RunRef,
+    pub namespace: NamespaceName,
     pub script: Digest,
     pub headline: String,
     pub toolset: Digest,
@@ -295,6 +298,9 @@ pub struct Term {
 /// A typed predicate on a run. A list inside a predicate means "any of".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Predicate {
+    /// The run is in one of these namespaces. The server adds it, not negated, for a token or a
+    /// `Rewind-Namespace` header.
+    Namespace(BTreeSet<NamespaceName>),
     /// The run's id, hyphenated and lowercase, starts with one of these.
     Id(Vec<String>),
     Status(BTreeSet<RunStatus>),
@@ -443,6 +449,7 @@ pub struct RunStats {
 /// most frequent first, then by value; at most `top` per facet.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Facets {
+    pub namespaces: Vec<FacetValue>,
     pub statuses: Vec<FacetValue>,
     /// The `top` most frequent label keys, each with its most frequent values.
     pub labels: Vec<LabelFacet>,
@@ -519,6 +526,8 @@ pub struct FailureGroup {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScriptFilter {
     pub tenant: TenantId,
+    /// Only the runs of this namespace count.
+    pub namespace: Option<NamespaceName>,
     /// Only the runs started at or after this time count.
     pub since: Option<Timestamp>,
     /// Only this script.
@@ -534,6 +543,7 @@ impl ScriptFilter {
     pub fn new(tenant: TenantId) -> Self {
         Self {
             tenant,
+            namespace: None,
             since: None,
             digest: None,
             labels: BTreeMap::new(),
@@ -561,6 +571,8 @@ pub struct ScriptSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolStatsFilter {
     pub tenant: TenantId,
+    /// Only the calls of this namespace's runs.
+    pub namespace: Option<NamespaceName>,
     pub toolset: Option<Digest>,
     /// Calls scheduled at or after.
     pub since: Option<Timestamp>,

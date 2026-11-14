@@ -117,6 +117,11 @@ pub(super) fn after(sql: &mut Sql, order: RunOrder, cursor: &SearchCursor) {
 
 fn predicate(sql: &mut Sql, predicate: &Predicate) {
     match predicate {
+        Predicate::Namespace(names) => one_of(
+            sql,
+            "s.namespace",
+            names.iter().map(|name| text(name.as_str())),
+        ),
         Predicate::Id(prefixes) => any_prefix(sql, "s.run_id", prefixes),
         Predicate::Status(statuses) => {
             one_of(sql, "s.status", statuses.iter().map(|s| text(s.as_str())))

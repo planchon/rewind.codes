@@ -61,11 +61,17 @@ pub enum Permission {
     ApiKeysWrite,
     #[serde(rename = "organization:write")]
     OrganizationWrite,
+    #[serde(rename = "namespaces:read")]
+    NamespacesRead,
+    #[serde(rename = "namespaces:write")]
+    NamespacesWrite,
+    #[serde(rename = "tokens:write")]
+    TokensWrite,
 }
 
 impl Permission {
     /// The catalog, in the order of `archi/06-storage-and-scale.md`.
-    pub const ALL: [Permission; 20] = [
+    pub const ALL: [Permission; 23] = [
         Permission::RunsRead,
         Permission::RunsStart,
         Permission::RunsControl,
@@ -86,7 +92,37 @@ impl Permission {
         Permission::ApiKeysRead,
         Permission::ApiKeysWrite,
         Permission::OrganizationWrite,
+        Permission::NamespacesRead,
+        Permission::NamespacesWrite,
+        Permission::TokensWrite,
     ];
+
+    /// The permissions an end user's token may hold: those that act within one namespace
+    /// (`archi/06-storage-and-scale.md`, "What the caller may do").
+    pub const TOKEN: [Permission; 9] = [
+        Permission::RunsRead,
+        Permission::RunsStart,
+        Permission::RunsControl,
+        Permission::RunsQuarantine,
+        Permission::RunsDelete,
+        Permission::ToolsetsRead,
+        Permission::CredentialsWrite,
+        Permission::TasksWork,
+        Permission::TasksApprove,
+    ];
+
+    /// The permissions of a token minted or signed without `permissions`.
+    pub const TOKEN_DEFAULT: [Permission; 4] = [
+        Permission::RunsRead,
+        Permission::RunsStart,
+        Permission::RunsControl,
+        Permission::ToolsetsRead,
+    ];
+
+    /// Whether an end user's token may hold this permission.
+    pub fn in_token(self) -> bool {
+        Self::TOKEN.contains(&self)
+    }
 
     /// As the API and the store write it: `runs:read`.
     pub fn as_str(self) -> &'static str {
@@ -111,6 +147,9 @@ impl Permission {
             Permission::ApiKeysRead => "api_keys:read",
             Permission::ApiKeysWrite => "api_keys:write",
             Permission::OrganizationWrite => "organization:write",
+            Permission::NamespacesRead => "namespaces:read",
+            Permission::NamespacesWrite => "namespaces:write",
+            Permission::TokensWrite => "tokens:write",
         }
     }
 
@@ -137,7 +176,10 @@ impl Permission {
                 "List toolsets, read their declarations and search their tools."
             }
             Permission::ToolsetsWrite => "Register a toolset.",
-            Permission::CredentialsWrite => "Set the credentials of a toolset or a run.",
+            Permission::CredentialsWrite => {
+                "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or \
+                 of a run."
+            }
             Permission::TasksWork => {
                 "Claim host-tool tasks, and heartbeat, defer, complete or fail them."
             }
@@ -152,6 +194,16 @@ impl Permission {
             Permission::ApiKeysRead => "List the tenant's API keys.",
             Permission::ApiKeysWrite => "Create and revoke API keys.",
             Permission::OrganizationWrite => "Rename the organization and set its default role.",
+            Permission::NamespacesRead => {
+                "List the namespaces (the end users), their limits, use, alerts and tokens in use."
+            }
+            Permission::NamespacesWrite => {
+                "Set the default limits of namespaces and a namespace's exceptions, and erase a \
+                 namespace."
+            }
+            Permission::TokensWrite => {
+                "Mint and revoke end users' tokens, and register and delete the keys that sign them."
+            }
         }
     }
 }
@@ -199,7 +251,7 @@ pub const OPERATOR: &str = "operator";
 /// set another.
 pub const DEFAULT_ROLE: BuiltInRole = BuiltInRole::Reader;
 
-const HARNESS: [Permission; 14] = [
+const HARNESS: [Permission; 17] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
@@ -214,16 +266,20 @@ const HARNESS: [Permission; 14] = [
     Permission::SubscriptionsWrite,
     Permission::MembersRead,
     Permission::RolesRead,
+    Permission::NamespacesRead,
+    Permission::NamespacesWrite,
+    Permission::TokensWrite,
 ];
 
 const WORKER: [Permission; 1] = [Permission::TasksWork];
 
-const READER: [Permission; 5] = [
+const READER: [Permission; 6] = [
     Permission::RunsRead,
     Permission::ToolsetsRead,
     Permission::SubscriptionsRead,
     Permission::MembersRead,
     Permission::RolesRead,
+    Permission::NamespacesRead,
 ];
 
 impl BuiltInRole {
@@ -486,9 +542,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_catalog_has_twenty_permissions_written_once() {
+    fn the_catalog_has_twenty_three_permissions_written_once() {
         let names: BTreeSet<&str> = Permission::ALL.iter().map(|p| p.as_str()).collect();
-        assert_eq!(names.len(), 20);
+        assert_eq!(names.len(), 23);
         for permission in Permission::ALL {
             assert_eq!(Permission::parse(permission.as_str()), Some(permission));
             assert_eq!(
@@ -502,7 +558,7 @@ mod tests {
             Ok(Permission::ApiKeysWrite)
         );
         assert!("runs:everything".parse::<Permission>().is_err());
-        assert_eq!(PermissionList::catalog().permissions.len(), 20);
+        assert_eq!(PermissionList::catalog().permissions.len(), 23);
     }
 
     fn names(permissions: &[Permission]) -> Vec<&'static str> {
@@ -530,6 +586,9 @@ mod tests {
                 "subscriptions:write",
                 "members:read",
                 "roles:read",
+                "namespaces:read",
+                "namespaces:write",
+                "tokens:write",
             ]
         );
         assert_eq!(names(BuiltInRole::Worker.permissions()), ["tasks:work"]);
@@ -541,6 +600,7 @@ mod tests {
                 "subscriptions:read",
                 "members:read",
                 "roles:read",
+                "namespaces:read",
             ]
         );
         assert_eq!(fixed_permissions(OPERATOR), Some(&Permission::ALL[..]));
@@ -551,7 +611,8 @@ mod tests {
 
     /// What the key roles allowed before roles became data: `reader` the reading endpoints of
     /// its tenant, `harness` everything of its tenant but the administration, `worker` the
-    /// host-tool tasks, the administration only `admin`, now `operator`.
+    /// host-tool tasks, the administration only `admin`, now `operator`. The permissions of
+    /// namespaces came after: `harness` manages its end users, `reader` reads them.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum Former {
         Read,
@@ -566,7 +627,8 @@ mod tests {
             | Permission::ToolsetsRead
             | Permission::SubscriptionsRead
             | Permission::MembersRead
-            | Permission::RolesRead => Former::Read,
+            | Permission::RolesRead
+            | Permission::NamespacesRead => Former::Read,
             Permission::RunsStart
             | Permission::RunsControl
             | Permission::RunsQuarantine
@@ -574,7 +636,9 @@ mod tests {
             | Permission::ToolsetsWrite
             | Permission::CredentialsWrite
             | Permission::TasksApprove
-            | Permission::SubscriptionsWrite => Former::Write,
+            | Permission::SubscriptionsWrite
+            | Permission::NamespacesWrite
+            | Permission::TokensWrite => Former::Write,
             Permission::TasksWork => Former::Tasks,
             Permission::MembersInvite
             | Permission::MembersManage
@@ -605,6 +669,34 @@ mod tests {
                     "{role} and {permission}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_token_holds_only_permissions_that_act_within_a_namespace() {
+        assert_eq!(
+            names(&Permission::TOKEN),
+            [
+                "runs:read",
+                "runs:start",
+                "runs:control",
+                "runs:quarantine",
+                "runs:delete",
+                "toolsets:read",
+                "credentials:write",
+                "tasks:work",
+                "tasks:approve",
+            ]
+        );
+        assert!(Permission::TOKEN_DEFAULT.iter().all(|p| p.in_token()));
+        for never in [
+            Permission::ToolsetsWrite,
+            Permission::SubscriptionsWrite,
+            Permission::NamespacesRead,
+            Permission::TokensWrite,
+            Permission::MembersInvite,
+        ] {
+            assert!(!never.in_token(), "{never}");
         }
     }
 

@@ -883,6 +883,7 @@ mod tests {
             .create_run(
                 NewRun {
                     run: run.clone(),
+                    namespace: crate::ports::NamespaceName::migrated(),
                     started,
                     metadata: RunMetadata::default(),
                     created_at: clock.now(),

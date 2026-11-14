@@ -36,6 +36,7 @@ mod dispatcher;
 mod executor;
 pub mod identity;
 mod journal;
+mod namespaces;
 mod read_model;
 mod secrets;
 mod telemetry;
@@ -44,7 +45,7 @@ mod webhooks;
 
 pub use access::{
     AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, InvalidPrincipal, Principal,
-    Role, RoleDeletion,
+    Role, RoleDeletion, Token, TokenKey,
 };
 pub use blob::{BlobError, BlobStore};
 pub use checker::{
@@ -69,6 +70,12 @@ pub use journal::{
     RunRecord, STICKY_GRACE, StoreError, StoredScript, StoredToolset, TaskFilter, TaskRef,
     TaskState, TaskToken, TaskUpdate, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
     deferred_timeout_failure,
+};
+pub use namespaces::{
+    Day, DayUsage, DeleteNamespace, DropNamespace, InvalidNamespace, Month, Namespace,
+    NamespaceCursor, NamespaceFilter, NamespaceName, NamespaceOrder, NamespaceUsage,
+    NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas,
+    Threshold, Usage, UsageDelta, UsageOf, limits,
 };
 pub use read_model::{
     Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,

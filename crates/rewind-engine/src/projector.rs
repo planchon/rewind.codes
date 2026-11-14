@@ -341,6 +341,7 @@ where
         let toolset = lookups.toolsets.get(&key).and_then(Option::as_ref);
         let run = ProjectedRun {
             run: record.run.clone(),
+            namespace: record.namespace.clone(),
             script: record.script,
             headline,
             toolset: record.toolset,
@@ -498,7 +499,8 @@ where
         let event = WebhookEvent {
             id: format!("{}/quarantined/{}", run.id, quarantine.since.as_millis()),
             tenant: run.tenant.clone(),
-            run: run.id,
+            namespace: Some(record.namespace.clone()),
+            run: Some(run.id),
             labels: record.metadata.labels.clone(),
             occurred_at: quarantine.since,
             kind: WebhookEventKind::RunQuarantined {
@@ -529,7 +531,8 @@ pub(crate) fn lifecycle_events(
     let event = |index: u64, occurred_at: Timestamp, kind: WebhookEventKind| WebhookEvent {
         id: format!("{}/{index}", record.run.id),
         tenant: record.run.tenant.clone(),
-        run: record.run.id,
+        namespace: Some(record.namespace.clone()),
+        run: Some(record.run.id),
         labels: record.metadata.labels.clone(),
         occurred_at,
         kind,

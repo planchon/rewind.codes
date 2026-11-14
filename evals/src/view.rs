@@ -85,6 +85,7 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
     let (trace, _) = rewind_engine::telemetry::trace_of(&record);
     Ok(Run {
         id: run.id.to_string(),
+        namespace: namespace_of(&record)?,
         status,
         quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
             cause: match quarantine.kind {
@@ -293,6 +294,7 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
         .unwrap_or_default();
     Ok(RunSummary {
         id: run.id.to_string(),
+        namespace: namespace_of(&record)?,
         status: record.status.into(),
         quarantined: record.quarantine.is_some(),
         script: record.script.to_hex(),
@@ -460,6 +462,18 @@ pub fn check_result(diagnostics: &[rewind_engine::ports::Diagnostic]) -> CheckRe
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         diagnostics,
     }
+}
+
+/// The run's namespace as the API names it: the engine and the API check the same rule.
+fn namespace_of(
+    record: &rewind_engine::ports::RunRecord,
+) -> Result<rewind_api::namespaces::NamespaceName, EngineError> {
+    rewind_api::namespaces::NamespaceName::new(record.namespace.as_str()).map_err(|_| {
+        EngineError::Store(rewind_engine::ports::StoreError::Backend(format!(
+            "run {} has an invalid namespace",
+            record.run.id
+        )))
+    })
 }
 
 #[cfg(test)]

@@ -30,8 +30,15 @@ use rewind_engine::ports::{
     TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
     ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
+use rewind_engine::ports::{
+    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind,
+    QuotaScope, Quotas, Usage, UsageDelta, UsageOf,
+};
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
+
+use crate::namespaces_not_kept;
 use uuid::Uuid;
 
 use crate::codec::{self, decode_labels, encode_labels};
@@ -77,7 +84,7 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels::text, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at, attempts"
+         ended_at, archive_document, archived_at, parent_at, attempts, namespace"
     };
 }
 
@@ -144,8 +151,11 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
             archived_at: row.ts(23)?,
         }),
     };
+    let namespace = row.text(26)?;
     Ok(RunRecord {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
+        namespace: NamespaceName::new(namespace.clone())
+            .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         status: codec::parse_status(&row.text(4)?)?,
@@ -235,7 +245,11 @@ fn task_from_row(row: &PgRow) -> Result<TaskRow, Error> {
 fn tenant_from_row(row: &PgRow) -> Result<Tenant, Error> {
     Ok(Tenant {
         id: row.tenant(0)?,
-        active_run_quota: row.opt_u32(1)?,
+        quotas: Quotas {
+            active_runs: row.opt_u32(1)?,
+            ..Quotas::default()
+        },
+        namespace_defaults: Quotas::default(),
         retention: Retention {
             journal: row.duration(2)?,
             archive: row.duration(3)?,
@@ -517,6 +531,9 @@ fn lease_from_row(row: &PgRow) -> Result<Lease, Error> {
     })
 }
 
+/// The host-tool selection of a claim: tenant, toolset, tools and namespace.
+type HostSelection<'a> = (&'a TenantId, Option<Digest>, Vec<String>, Option<&'a str>);
+
 /// What a claim knows of a concurrency slot: another claim is deciding on it, or this many
 /// calls are in flight.
 #[derive(Clone, Copy)]
@@ -571,8 +588,13 @@ impl PostgresStore {
             .fetch_one(&mut *tx)
             .await?;
             if active >= quota {
-                let quota = u32::try_from(quota).unwrap_or(u32::MAX);
-                return Ok(CreateRun::QuotaExceeded { quota });
+                return Ok(CreateRun::QuotaExceeded(QuotaExceeded {
+                    quota: QuotaKind::ActiveRuns,
+                    scope: QuotaScope::Tenant,
+                    limit: u64::try_from(quota).unwrap_or_default(),
+                    used: u64::try_from(active).unwrap_or_default(),
+                    resets_at: None,
+                }));
             }
         }
         let trace = run.metadata.trace_context.as_ref();
@@ -580,8 +602,10 @@ impl PostgresStore {
         // A run id already used, in any tenant, violates `runs`' keys: a conflict.
         let inserted: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
-             traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13) \
+             traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
+             namespace) \
+             VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13, \
+             $14) \
              ON CONFLICT (tenant, idempotency_key) DO NOTHING RETURNING id",
         )
         .bind(tenant(tenant_id))
@@ -597,6 +621,7 @@ impl PostgresStore {
         .bind(parent.and_then(|parent| parent.at).map(int))
         .bind(idempotency_key)
         .bind(ts(run.created_at))
+        .bind(run.namespace.as_str())
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {
@@ -954,7 +979,7 @@ impl PostgresStore {
         // $1 now, $2 page size, $3–$5 the last task read; the filter's values from $6.
         let mut selection = String::new();
         let mut scope_tenants = None;
-        let mut host: Option<(&TenantId, Option<Digest>, Vec<String>)> = None;
+        let mut host: Option<HostSelection<'_>> = None;
         match filter {
             TaskFilter::All => {}
             TaskFilter::Dispatched { tenants } => {
@@ -965,15 +990,23 @@ impl PostgresStore {
             }
             TaskFilter::Host {
                 tenant: host_tenant,
+                namespace,
                 toolset,
                 tools,
             } => {
                 selection.push_str(
                     " AND NOT dispatched AND tenant = $6 \
                      AND ($7::bytea IS NULL OR toolset = $7) \
-                     AND (cardinality($8::text[]) = 0 OR tool = ANY($8))",
+                     AND (cardinality($8::text[]) = 0 OR tool = ANY($8)) \
+                     AND ($9::text IS NULL OR run_id IN \
+                         (SELECT id FROM runs WHERE tenant = $6 AND namespace = $9))",
                 );
-                host = Some((host_tenant, *toolset, tools.iter().cloned().collect()));
+                host = Some((
+                    host_tenant,
+                    *toolset,
+                    tools.iter().cloned().collect(),
+                    namespace.as_ref().map(NamespaceName::as_str),
+                ));
             }
         }
         // The pages after the first start after the last task read, `$3`–`$5`.
@@ -1010,11 +1043,12 @@ impl PostgresStore {
             if let Some(tenants) = &scope_tenants {
                 statement = statement.bind(tenants.clone());
             }
-            if let Some((host_tenant, toolset, tools)) = &host {
+            if let Some((host_tenant, toolset, tools, namespace)) = &host {
                 statement = statement
                     .bind(tenant(host_tenant))
                     .bind(toolset.map(bytes))
-                    .bind(tools.clone());
+                    .bind(tools.clone())
+                    .bind(*namespace);
             }
             let rows = statement.fetch_all(&mut *tx).await?;
             let tasks = rows
@@ -1335,12 +1369,24 @@ impl PostgresStore {
 
     async fn resume_parked_once(&self, scope: &ParkedScope, now: Timestamp) -> Result<usize, Fail> {
         let mut tx = self.pool.begin().await?;
-        let (tenant_id, toolset, run) = match scope {
-            ParkedScope::Run(run) => (&run.tenant, None, Some(uuid(run.id))),
-            ParkedScope::Toolset { tenant, toolset } => (tenant, Some(bytes(*toolset)), None),
+        let (tenant_id, toolset, run, namespace) = match scope {
+            ParkedScope::Run(run) => (&run.tenant, None, Some(uuid(run.id)), None),
+            ParkedScope::Toolset { tenant, toolset } => (tenant, Some(bytes(*toolset)), None, None),
+            ParkedScope::Namespace {
+                tenant,
+                namespace,
+                toolset,
+            } => (
+                tenant,
+                Some(bytes(*toolset)),
+                None,
+                Some(namespace.as_str()),
+            ),
         };
         let parked = "tenant = $1 AND ($2::bytea IS NULL OR toolset = $2) \
                       AND ($3::uuid IS NULL OR run_id = $3) \
+                      AND ($4::text IS NULL OR run_id IN \
+                          (SELECT id FROM runs WHERE tenant = $1 AND namespace = $4)) \
                       AND state = 'parked' AND parked_kind = 'credentials_expired'";
         let runs: Vec<Uuid> = sqlx::query_scalar(&format!(
             "SELECT DISTINCT run_id FROM tool_tasks WHERE {parked}"
@@ -1348,6 +1394,7 @@ impl PostgresStore {
         .bind(tenant(tenant_id))
         .bind(toolset.clone())
         .bind(run)
+        .bind(namespace)
         .fetch_all(&mut *tx)
         .await?;
         if runs.is_empty() {
@@ -1355,12 +1402,13 @@ impl PostgresStore {
         }
         lock_runs(&mut tx, &runs.into_iter().collect()).await?;
         let resumed = sqlx::query(&format!(
-            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = $4, due_at = $4, \
+            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = $5, due_at = $5, \
                  parked_kind = NULL, parked_reason = NULL WHERE {parked}"
         ))
         .bind(tenant(tenant_id))
         .bind(toolset)
         .bind(run)
+        .bind(namespace)
         .bind(ts(now))
         .execute(&mut *tx)
         .await?;
@@ -2039,6 +2087,7 @@ impl JournalStore for PostgresStore {
              AND ($2::text IS NULL OR status = $2) \
              AND labels @> $3::jsonb{quarantined} \
              AND ($4::bigint IS NULL OR (created_at, id) > ($4, $5)) \
+             AND ($7::text IS NULL OR namespace = $7) \
              ORDER BY created_at, id LIMIT $6",
             columns = run_columns!(),
         ))
@@ -2048,6 +2097,7 @@ impl JournalStore for PostgresStore {
         .bind(filter.after.map(|after| ts(after.created_at)))
         .bind(filter.after.map(|after| uuid(after.id)))
         .bind(filter.limit.map(limit))
+        .bind(filter.namespace.as_ref().map(NamespaceName::as_str))
         .fetch_all(&self.pool)
         .await
         .map_err(Error::from)?;
@@ -2905,6 +2955,15 @@ impl JournalStore for PostgresStore {
     // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
+        let kept = Quotas {
+            active_runs: record.quotas.active_runs,
+            ..Quotas::default()
+        };
+        if record.quotas != kept || record.namespace_defaults != Quotas::default() {
+            return Err(namespaces_not_kept(
+                "a tenant's ceiling other than its active runs, or its namespaces' defaults",
+            ));
+        }
         sqlx::query(
             "INSERT INTO tenants (id, active_run_quota, journal_retention_ms, \
                  archive_retention_ms, read_model_retention_ms, payload_grace_ms) \
@@ -2916,7 +2975,7 @@ impl JournalStore for PostgresStore {
                  payload_grace_ms = EXCLUDED.payload_grace_ms",
         )
         .bind(tenant(&record.id))
-        .bind(record.active_run_quota.map(i64::from))
+        .bind(record.quotas.active_runs.map(i64::from))
         .bind(ms(record.retention.journal))
         .bind(ms(record.retention.archive))
         .bind(ms(record.retention.read_model))
@@ -2951,6 +3010,124 @@ impl JournalStore for PostgresStore {
             .iter()
             .map(tenant_from_row)
             .collect::<Result<_, Error>>()?)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Namespaces, their use and their alerts: not kept by this store (see
+    // `namespaces_not_kept`).
+
+    async fn put_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _exceptions: Option<&Quotas>,
+        _now: Timestamp,
+    ) -> Result<NamespaceWrite, StoreError> {
+        Err(namespaces_not_kept("put_namespace"))
+    }
+
+    async fn get_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+    ) -> Result<Option<Namespace>, StoreError> {
+        // This store keeps no namespace record (`put_namespace` and `delete_namespace` are
+        // refused): no namespace has exceptions or is being erased, and the tenant's defaults
+        // apply to every one.
+        Ok(None)
+    }
+
+    async fn list_namespaces(
+        &self,
+        _filter: &NamespaceFilter,
+    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+        Err(namespaces_not_kept("list_namespaces"))
+    }
+
+    async fn namespace_usage(
+        &self,
+        _tenant: &TenantId,
+        _of: &UsageOf,
+        _month: Month,
+    ) -> Result<Usage, StoreError> {
+        Err(namespaces_not_kept("namespace_usage"))
+    }
+
+    async fn namespace_has_script(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _script: Digest,
+    ) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("namespace_has_script"))
+    }
+
+    async fn revoke_namespace_tokens(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("revoke_namespace_tokens"))
+    }
+
+    async fn delete_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<DeleteNamespace, StoreError> {
+        Err(namespaces_not_kept("delete_namespace"))
+    }
+
+    async fn namespaces_to_erase(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
+        Err(namespaces_not_kept("namespaces_to_erase"))
+    }
+
+    async fn drop_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+    ) -> Result<DropNamespace, StoreError> {
+        Err(namespaces_not_kept("drop_namespace"))
+    }
+
+    async fn record_usage(
+        &self,
+        _deltas: &[UsageDelta],
+        _now: Timestamp,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("record_usage"))
+    }
+
+    async fn quota_alerts(
+        &self,
+        _tenant: &TenantId,
+        _namespace: Option<&NamespaceName>,
+        _month: Month,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("quota_alerts"))
+    }
+
+    async fn claim_quota_alerts(
+        &self,
+        _owner: &str,
+        _now: Timestamp,
+        _lease_duration: Duration,
+        _limit: usize,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("claim_quota_alerts"))
+    }
+
+    async fn ack_quota_alerts(
+        &self,
+        _keys: &[QuotaAlertKey],
+        _now: Timestamp,
+    ) -> Result<(), StoreError> {
+        Err(namespaces_not_kept("ack_quota_alerts"))
     }
 
     // ---------------------------------------------------------------------------------------

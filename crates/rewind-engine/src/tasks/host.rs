@@ -19,9 +19,9 @@ use rewind_core::{
 
 use crate::engine::{Engine, EngineError};
 use crate::ports::{
-    BlobStore, ClaimedTask, Clock, Entropy, JournalStore, ScriptExecutor, SecretStore, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, TenantId, ToolDispatcher, ToolTask, TraceContext,
-    WebhookSender,
+    BlobStore, ClaimedTask, Clock, Entropy, JournalStore, NamespaceName, ScriptExecutor,
+    SecretStore, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, TenantId, ToolDispatcher,
+    ToolTask, TraceContext, WebhookSender,
 };
 
 /// What a harness's worker claims (`GET /v1/tasks`): the host tools of one tenant, optionally
@@ -29,6 +29,8 @@ use crate::ports::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostClaim {
     pub tenant: TenantId,
+    /// The tasks of this namespace's runs only: a worker holding an end user's token.
+    pub namespace: Option<NamespaceName>,
     pub toolset: Option<Digest>,
     /// Empty: every host tool.
     pub tools: BTreeSet<String>,
@@ -42,6 +44,8 @@ pub struct HostTask {
     /// The claim's secret token. It changes with each claim.
     pub token: TaskToken,
     pub task: TaskRef,
+    /// The namespace of the task's run: the end user the handler acts for.
+    pub namespace: NamespaceName,
     pub tool: String,
     pub args: JsonValue,
     /// The same on every attempt: the handler recognizes a call it already made.
@@ -87,6 +91,7 @@ where
     pub async fn claim_host_tasks(&self, claim: &HostClaim) -> Result<Vec<HostTask>, EngineError> {
         let filter = TaskFilter::Host {
             tenant: claim.tenant.clone(),
+            namespace: claim.namespace.clone(),
             toolset: claim.toolset,
             tools: claim.tools.clone(),
         };
@@ -242,6 +247,7 @@ where
         Ok(Some(HostTask {
             token: token.clone(),
             task: task.task.clone(),
+            namespace: record.namespace.clone(),
             tool: task.tool.clone(),
             args: self.task_args(task).await?,
             idempotency_key: self.task_key(&record, task).await?,

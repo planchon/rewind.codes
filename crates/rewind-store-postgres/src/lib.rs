@@ -30,6 +30,16 @@
 
 mod access;
 mod codec;
+
+/// The refusal of what this store does not keep of namespaces: quotas other than the tenant's
+/// active runs, use, alerts, namespace records, end users' tokens and token keys, credentials
+/// per namespace, and the namespace filters of tasks and of the read model
+/// (`archi/09-roadmap.md`, "Workstreams").
+pub(crate) fn namespaces_not_kept(what: &str) -> rewind_engine::ports::StoreError {
+    rewind_engine::ports::StoreError::Backend(format!(
+        "{what}: the Postgres store does not keep this part of namespaces"
+    ))
+}
 mod journal;
 mod read_model;
 mod schema;

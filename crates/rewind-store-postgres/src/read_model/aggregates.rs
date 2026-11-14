@@ -138,7 +138,7 @@ pub(super) async fn run_stats(
     let tenant_id = tenant(&query.tenant).to_owned();
     let mut sql = Sql::new(
         "WITH win AS MATERIALIZED (SELECT s.run_id, s.status, s.started_at, s.ended_at, \
-             s.script, s.error FROM run_summaries s WHERE ",
+             s.script, s.error, s.namespace FROM run_summaries s WHERE ",
     );
     push_matching(&mut sql, query);
     if window.since.is_some() || window.until.is_some() {
@@ -236,6 +236,11 @@ pub(super) async fn run_stats(
         )
         .push_bind(top)
         .push(
+            ") UNION ALL (SELECT 'namespace', win.namespace, NULL, count(*) FROM win \
+                 GROUP BY win.namespace ORDER BY count(*) DESC, win.namespace LIMIT ",
+        )
+        .push_bind(top)
+        .push(
             ") UNION ALL (SELECT 'signal', w.name, NULL, count(DISTINCT w.run_id) FROM win \
                  JOIN run_waits w ON w.run_id = win.run_id AND w.tenant = ",
         )
@@ -318,6 +323,10 @@ pub(super) async fn run_stats(
             "tool" => stats.facets.tools.push(value(count(runs.unwrap_or(0))?)),
             "error" => stats.facets.errors.push(value(count(runs.unwrap_or(0))?)),
             "script" => stats.facets.scripts.push(value(count(runs.unwrap_or(0))?)),
+            "namespace" => stats
+                .facets
+                .namespaces
+                .push(value(count(runs.unwrap_or(0))?)),
             "signal" => stats.facets.signals.push(value(count(runs.unwrap_or(0))?)),
             other => return Err(Error::Corrupt(format!("a statistic {other:?}"))),
         }
@@ -339,6 +348,7 @@ pub(super) async fn run_stats(
         key.values = ranked(label_values.remove(&key.key).unwrap_or_default(), top);
     }
     let facets = &mut stats.facets;
+    facets.namespaces = ranked(std::mem::take(&mut facets.namespaces), top);
     facets.statuses = ranked(std::mem::take(&mut facets.statuses), top);
     facets.labels = keys;
     facets.tools = ranked(std::mem::take(&mut facets.tools), top);
@@ -505,6 +515,10 @@ pub(super) async fn scripts(
          FROM run_summaries s WHERE s.tenant = ",
     );
     sql.push_bind(tenant(&filter.tenant).to_owned());
+    if let Some(namespace) = &filter.namespace {
+        sql.push(" AND s.namespace = ")
+            .push_bind(namespace.as_str().to_owned());
+    }
     if let Some(since) = filter.since {
         sql.push(" AND s.started_at >= ").push_bind(ts(since));
     }
@@ -598,6 +612,10 @@ pub(super) async fn tool_stats(
     sql.push_bind(tenant_id.clone())
         .push(" AND s.tenant = ")
         .push_bind(tenant_id);
+    if let Some(namespace) = &filter.namespace {
+        sql.push(" AND s.namespace = ")
+            .push_bind(namespace.as_str().to_owned());
+    }
     if let Some(toolset) = filter.toolset {
         sql.push(" AND s.toolset = ").push_bind(bytes(toolset));
     }

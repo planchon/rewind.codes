@@ -4,6 +4,7 @@ use std::future::Future;
 
 use rewind_core::{Digest, RunId};
 
+use crate::ports::namespaces::NamespaceName;
 use crate::ports::tenancy::TenantId;
 
 /// A secret value. It is never printed: `Debug` redacts it.
@@ -44,10 +45,15 @@ pub struct ServerCredentials {
     pub env: BTreeMap<String, Secret>,
 }
 
-/// Whose credentials: a toolset's, or a run's, which override them.
+/// Whose credentials: a toolset's; an end user's for a toolset, which override them for the
+/// runs of its namespace; or a run's, which override both.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum SecretOwner {
     Toolset(Digest),
+    Namespace {
+        namespace: NamespaceName,
+        toolset: Digest,
+    },
     Run(RunId),
 }
 
@@ -65,9 +71,10 @@ pub enum SecretError {
 ///
 /// The contract, checked by the conformance suite:
 ///
-/// - `put` stores or replaces the credentials of an owner; `delete` removes them.
-/// - `resolve` returns the run's credentials if it has some, else the toolset's, whole: the
-///   two are never merged.
+/// - `put` stores or replaces the credentials of an owner; `delete` removes them;
+///   `delete_namespace` removes those of every toolset for one namespace.
+/// - `resolve` returns the run's credentials if it has some, else its namespace's for the
+///   toolset, else the toolset's, whole: they are never merged.
 /// - Every method is scoped by the tenant: the credentials of one tenant are never visible to
 ///   another.
 ///
@@ -86,6 +93,7 @@ pub trait SecretStore: Send + Sync {
         &self,
         tenant: &TenantId,
         run: RunId,
+        namespace: &NamespaceName,
         toolset: Digest,
     ) -> impl Future<Output = Result<Option<Credentials>, SecretError>> + Send;
 
@@ -95,6 +103,14 @@ pub trait SecretStore: Send + Sync {
         tenant: &TenantId,
         owner: &SecretOwner,
     ) -> impl Future<Output = Result<bool, SecretError>> + Send;
+
+    /// Removes the namespace's credentials, for every toolset: an end user erased. Returns how
+    /// many toolsets had some.
+    fn delete_namespace(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+    ) -> impl Future<Output = Result<usize, SecretError>> + Send;
 }
 
 #[cfg(test)]

@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 
 use crate::access::{Grant, Permission};
 use crate::common::{Labels, Timestamp};
+use crate::namespaces::NamespaceName;
 
 /// A person, as the identity provider knows them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -56,6 +57,31 @@ pub enum Principal {
     },
     /// A member, signed in on the dashboard.
     User { user: User },
+    /// An end user's token: it reaches its namespace only, with its own permissions.
+    Token {
+        /// `opaque` (`rewind_nt_…`) or `signed` (a JWT the customer signed).
+        token: TokenKind,
+        /// For an opaque token: its id (`DELETE /v1/tokens/{id}`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// For a signed token: the key that signed it, and its `jti` if it has one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kid: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        jti: Option<String>,
+        namespace: NamespaceName,
+        #[serde(default, skip_serializing_if = "Labels::is_empty")]
+        labels: Labels,
+        expires_at: Timestamp,
+    },
+}
+
+/// The form of an end user's token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenKind {
+    Opaque,
+    Signed,
 }
 
 /// `GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which

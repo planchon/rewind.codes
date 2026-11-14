@@ -114,6 +114,7 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::TaskNotWaiting
                 | ProblemType::RoleInUse
                 | ProblemType::LastOwner
+                | ProblemType::NamespaceDeleting
                 | ProblemType::TaskGone
                 | ProblemType::QuotaExceeded
                 | ProblemType::Unauthorized
@@ -177,6 +178,7 @@ mod tests {
                 instance: None,
                 diagnostics: Vec::new(),
                 query: None,
+                quota: None,
             }
             .into(),
         );

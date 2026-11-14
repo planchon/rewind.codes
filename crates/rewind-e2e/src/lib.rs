@@ -619,6 +619,7 @@ async fn work(engine: &CorpusEngine) -> Result<usize, String> {
     let tenant = TenantId::local();
     let claim = HostClaim {
         tenant: tenant.clone(),
+        namespace: None,
         toolset: None,
         tools: BTreeSet::new(),
         limit: 100,

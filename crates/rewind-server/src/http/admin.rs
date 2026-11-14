@@ -154,7 +154,11 @@ pub(crate) async fn ensure_tenant(app: &App, tenant: &TenantId) -> Result<(), Ap
         app.store
             .put_tenant(&Tenant {
                 id: tenant.clone(),
-                active_run_quota: app.settings.run_quota,
+                quotas: rewind_engine::ports::Quotas {
+                    active_runs: app.settings.run_quota,
+                    ..Default::default()
+                },
+                namespace_defaults: rewind_engine::ports::Quotas::default(),
                 retention: app.settings.retention,
             })
             .await?;

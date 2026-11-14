@@ -11,6 +11,7 @@ use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
 use crate::common::{Duration, Labels};
+use crate::namespaces::NamespaceName;
 
 /// `GET /v1/tasks`: claims host-tool tasks that are ready, waiting up to `wait` for one.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
@@ -49,6 +50,8 @@ pub struct Task {
     /// The task's id, as listed in the run's state.
     pub id: String,
     pub run_id: String,
+    /// The namespace of the run: the end user the handler acts for.
+    pub namespace: NamespaceName,
     pub seq: u32,
     pub tool: String,
     /// The arguments, validated against the tool's input schema.

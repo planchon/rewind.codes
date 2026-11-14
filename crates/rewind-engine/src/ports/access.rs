@@ -6,6 +6,10 @@
 //! keeps the API keys, the tenants' own roles, the grants and each tenant's default role. It
 //! never interprets a permission: permissions are strings the server reads, and the built-in
 //! roles are not stored, the server knows them. The engine never reads this store.
+//!
+//! It also keeps end users' tokens: opaque tokens, each bound to one namespace with its own
+//! permissions, and the public keys a tenant signs its end users' tokens with
+//! (`archi/06-storage-and-scale.md`, "Who calls").
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -16,6 +20,7 @@ use std::str::FromStr;
 use rewind_core::{Digest, Timestamp};
 
 use super::journal::StoreError;
+use super::namespaces::NamespaceName;
 use super::tenancy::TenantId;
 
 /// Who holds a grant: a member, an API key, or an invitation not yet accepted. Written
@@ -166,6 +171,49 @@ pub struct Grant {
     pub granted_at: Timestamp,
 }
 
+/// An end user's opaque token, as the store keeps it: hashed (`rewind_nt_…` is never stored),
+/// bound to one namespace, with the permissions it was given. It holds no grant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    /// SHA-256 of the token: its id. Tokens are looked up by it.
+    pub hash: Digest,
+    pub tenant: TenantId,
+    pub namespace: NamespaceName,
+    /// Permissions of the catalog, as the server names them, among those a token may hold.
+    pub permissions: BTreeSet<String>,
+    /// When not empty, the token only reaches the runs carrying all of these labels.
+    pub labels: BTreeMap<String, String>,
+    pub expires_at: Timestamp,
+    /// The key or member that minted it.
+    pub created_by: Principal,
+    pub created_at: Timestamp,
+    pub revoked_at: Option<Timestamp>,
+}
+
+impl Token {
+    /// Whether the token authenticates at `now`: neither revoked nor expired.
+    pub fn is_live(&self, now: Timestamp) -> bool {
+        self.revoked_at.is_none() && now < self.expires_at
+    }
+}
+
+/// A public key a tenant signs its end users' tokens with: a JWK, named `rk_…` (the `kid` of
+/// the tokens it signs), with the permissions its tokens may carry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TokenKey {
+    /// `rk_…`, unique across tenants.
+    pub kid: String,
+    pub tenant: TenantId,
+    /// What the key is for.
+    pub name: String,
+    /// The public key, as the JSON text of a JWK. The store keeps it without reading it.
+    pub jwk: String,
+    /// The permissions its tokens may carry, as the server names them.
+    pub permissions: BTreeSet<String>,
+    pub created_by: Principal,
+    pub created_at: Timestamp,
+}
+
 /// What [`AccessStore::delete_role`] did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RoleDeletion {
@@ -224,6 +272,9 @@ pub enum GrantClaim {
 ///   to the role, decided in the same transaction.
 /// - **Claims.** `claim_grant` moves an invitation's grant to the user who accepted it, unless
 ///   the user already has one, atomically.
+/// - **Tokens.** Found by their hash, unique across tenants; `revoke_tokens` revokes every live
+///   token of one namespace of one tenant, and `count_tokens` counts the live ones. Token keys
+///   are found by their `kid`, unique across tenants; deleting one is scoped by its tenant.
 /// - **Time.** Stores never read a clock: every method that depends on time takes it.
 ///
 /// Lists are ordered: keys by creation time then hash, roles by name, grants by principal
@@ -252,6 +303,66 @@ pub trait AccessStore: Send + Sync {
         &self,
         hash: Digest,
         now: Timestamp,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // End users' tokens
+
+    /// Stores an opaque token. A hash already stored is a `Conflict`.
+    fn put_token(&self, token: &Token) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The token with this hash, revoked or expired or not: the caller refuses those.
+    fn find_token(
+        &self,
+        hash: Digest,
+    ) -> impl Future<Output = Result<Option<Token>, StoreError>> + Send;
+
+    /// Revokes a token of the tenant at `now`. Returns `false` for a token of another tenant,
+    /// an unknown one, or one already revoked.
+    fn revoke_token(
+        &self,
+        tenant: &TenantId,
+        hash: Digest,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Revokes at `now` every token of the namespace not yet revoked. Returns how many.
+    fn revoke_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// The tokens of the namespace live at `now`: neither revoked nor expired.
+    fn count_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// Stores a token key. A `kid` already stored is a `Conflict`.
+    fn put_token_key(&self, key: &TokenKey) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The key with this `kid`, in any tenant: the token's tenant is the key's.
+    fn find_token_key(
+        &self,
+        kid: &str,
+    ) -> impl Future<Output = Result<Option<TokenKey>, StoreError>> + Send;
+
+    /// The tenant's token keys, by creation time then `kid`.
+    fn list_token_keys(
+        &self,
+        tenant: &TenantId,
+    ) -> impl Future<Output = Result<Vec<TokenKey>, StoreError>> + Send;
+
+    /// Deletes a key of the tenant. Returns `false` for a key of another tenant or an unknown
+    /// one.
+    fn delete_token_key(
+        &self,
+        tenant: &TenantId,
+        kid: &str,
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------

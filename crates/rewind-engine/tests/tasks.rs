@@ -176,6 +176,7 @@ fn worker_config() -> EngineConfig {
 fn host_claim(tenant: &TenantId) -> HostClaim {
     HostClaim {
         tenant: tenant.clone(),
+        namespace: None,
         toolset: None,
         tools: BTreeSet::new(),
         limit: 10,
@@ -1075,7 +1076,10 @@ async fn a_start_above_the_tenants_quota_is_refused() {
     engine
         .journal()
         .put_tenant(&Tenant {
-            active_run_quota: Some(1),
+            quotas: rewind_engine::ports::Quotas {
+                active_runs: Some(1),
+                ..Default::default()
+            },
             ..Tenant::new(acme.clone())
         })
         .await
@@ -1089,7 +1093,15 @@ async fn a_start_above_the_tenants_quota_is_refused() {
 
     assert_eq!(
         engine.start_run(request()).await,
-        Err(StartError::QuotaExceeded { quota: 1 })
+        Err(StartError::QuotaExceeded(
+            rewind_engine::ports::QuotaExceeded {
+                quota: rewind_engine::ports::QuotaKind::ActiveRuns,
+                scope: rewind_engine::ports::QuotaScope::Tenant,
+                limit: 1,
+                used: 1,
+                resets_at: None,
+            }
+        ))
     );
     assert_eq!(
         engine

@@ -4248,6 +4248,7 @@ name = "rewind-engine"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.3.4",
+ "jiff",
  "regex",
  "rewind-core",
  "rewind-engine",

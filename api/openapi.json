@@ -440,6 +440,67 @@
         ],
         "type": "object"
       },
+      "CreateToken": {
+        "additionalProperties": false,
+        "description": "`POST /v1/namespaces/{name}/tokens`: an end user's opaque token.",
+        "properties": {
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The runs the token reaches carry all of these labels, and the runs it starts get them."
+          },
+          "permissions": {
+            "description": "Among [`Permission::TOKEN`], each held by the caller; [`Permission::TOKEN_DEFAULT`]\nwhen absent.",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "ttl": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Duration",
+                "description": "How long the token lives: 1 hour by default, 30 days at most."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "CreateTokenKey": {
+        "additionalProperties": false,
+        "description": "`POST /v1/organization/token-keys`: a public key the customer signs end users' tokens with.",
+        "properties": {
+          "jwk": {
+            "description": "The public key as a JWK (RFC 7517): `OKP` with `crv` `Ed25519`, `EC` with `crv` `P-256`,\nor `RSA` of at least 2048 bits. A private part is refused.",
+            "type": "object"
+          },
+          "name": {
+            "description": "What the key is for.",
+            "type": "string"
+          },
+          "permissions": {
+            "description": "The permissions its tokens may carry, among [`Permission::TOKEN`] and held by the caller;\nall of those the caller holds when absent.",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "jwk"
+        ],
+        "type": "object"
+      },
       "CreateToolset": {
         "additionalProperties": false,
         "description": "`POST /v1/toolsets`: MCP servers, host tools and the `http` tool, with a policy per tool.\nRegistering connects to the MCP servers, lists their tools and pins their schemas. The\ntoolset is content-addressed: registering the same toolset twice gives the same id.",
@@ -541,6 +602,9 @@
             "description": "What the server answered.",
             "type": "string"
           },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
           "runId": {
             "type": "string"
           },
@@ -568,12 +632,37 @@
         },
         "required": [
           "runId",
+          "namespace",
           "labels",
           "taskId",
           "seq",
           "tool",
           "toolset",
           "message"
+        ],
+        "type": "object"
+      },
+      "DayUsage": {
+        "description": "One UTC day of use.",
+        "properties": {
+          "cpu": {
+            "$ref": "#/components/schemas/Duration"
+          },
+          "day": {
+            "description": "The day, `2026-11-14`.",
+            "format": "date",
+            "type": "string"
+          },
+          "runsStarted": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "day",
+          "cpu",
+          "runsStarted"
         ],
         "type": "object"
       },
@@ -2183,6 +2272,160 @@
         ],
         "type": "string"
       },
+      "Namespace": {
+        "description": "A namespace with its limits and its use of a month.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deletingSince": {
+            "description": "Set while the namespace is being erased: it takes no run and no token.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exceptions": {
+            "$ref": "#/components/schemas/Quotas",
+            "description": "The namespace's exceptions to the defaults."
+          },
+          "lastActiveAt": {
+            "description": "The last run created in it, or the last CPU time counted for it.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Quotas",
+            "description": "The limits that apply: per quota, the namespace's exception, else the tenant's default."
+          },
+          "name": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/QuotaUsage",
+            "description": "Its use of the month listed."
+          }
+        },
+        "required": [
+          "name",
+          "limits",
+          "exceptions",
+          "usage",
+          "createdAt",
+          "lastActiveAt"
+        ],
+        "type": "object"
+      },
+      "NamespaceDefaults": {
+        "description": "`GET /v1/organization/namespace-defaults`: the limits of every namespace without an\nexception, and the tenant's ceiling with its use of the month.",
+        "properties": {
+          "ceiling": {
+            "$ref": "#/components/schemas/Quotas",
+            "description": "Set by the operator: the customer's offer, on its totals across namespaces."
+          },
+          "defaults": {
+            "$ref": "#/components/schemas/Quotas"
+          },
+          "month": {
+            "description": "The month, `2026-11`.",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/QuotaUsage",
+            "description": "The tenant's use of the month, across its namespaces."
+          }
+        },
+        "required": [
+          "defaults",
+          "ceiling",
+          "month",
+          "usage"
+        ],
+        "type": "object"
+      },
+      "NamespaceDetail": {
+        "description": "`GET /v1/namespaces/{name}`: one namespace, its use day by day, its alerts and its tokens.",
+        "properties": {
+          "alerts": {
+            "description": "The alerts of the month.",
+            "items": {
+              "$ref": "#/components/schemas/QuotaAlert"
+            },
+            "type": "array"
+          },
+          "days": {
+            "description": "The days of the month with some use, oldest first.",
+            "items": {
+              "$ref": "#/components/schemas/DayUsage"
+            },
+            "type": "array"
+          },
+          "month": {
+            "description": "The month, `2026-11`.",
+            "type": "string"
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/Namespace"
+          },
+          "tokens": {
+            "description": "Opaque tokens of the namespace neither revoked nor expired.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "tokensRevokedBefore": {
+            "description": "Signed tokens issued before this are refused.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "namespace",
+          "month",
+          "days",
+          "alerts",
+          "tokens"
+        ],
+        "type": "object"
+      },
+      "NamespaceList": {
+        "description": "`GET /v1/namespaces`: a page of namespaces.",
+        "properties": {
+          "month": {
+            "description": "The month whose use is listed, `2026-11`.",
+            "type": "string"
+          },
+          "namespaces": {
+            "items": {
+              "$ref": "#/components/schemas/Namespace"
+            },
+            "type": "array"
+          },
+          "next": {
+            "description": "The cursor of the next page, absent on the last one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "month",
+          "namespaces"
+        ],
+        "type": "object"
+      },
+      "NamespaceName": {
+        "description": "A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,\n`-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: it stands for the tenant in\nthe store's usage and alerts.",
+        "example": "user_2fQ81",
+        "pattern": "^[A-Za-z0-9._:@-]{1,128}$",
+        "type": "string"
+      },
       "OnInterruption": {
         "description": "After an interruption (the dispatcher or the worker died mid-call).",
         "enum": [
@@ -2300,7 +2543,10 @@
           "roles:write",
           "api_keys:read",
           "api_keys:write",
-          "organization:write"
+          "organization:write",
+          "namespaces:read",
+          "namespaces:write",
+          "tokens:write"
         ],
         "type": "string"
       },
@@ -2376,67 +2622,170 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "description": "An end user's token: it reaches its namespace only, with its own permissions.",
+            "properties": {
+              "expires_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "id": {
+                "description": "For an opaque token: its id (`DELETE /v1/tokens/{id}`).",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "jti": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kid": {
+                "description": "For a signed token: the key that signed it, and its `jti` if it has one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "enum": [
+                  "token"
+                ],
+                "type": "string"
+              },
+              "labels": {
+                "$ref": "#/components/schemas/Labels"
+              },
+              "namespace": {
+                "$ref": "#/components/schemas/NamespaceName"
+              },
+              "token": {
+                "$ref": "#/components/schemas/TokenKind",
+                "description": "`opaque` (`rewind_nt_…`) or `signed` (a JWT the customer signed)."
+              }
+            },
+            "required": [
+              "token",
+              "namespace",
+              "expires_at",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
       "Problem": {
-        "description": "An error answered by the API, as `application/problem+json` (RFC 9457).",
-        "example": {
-          "detail": "run 0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10 has ended (completed): a signal can only be sent to a run that is still active",
-          "status": 409,
-          "title": "The run has ended",
-          "type": "urn:rewind:problem:run-ended"
-        },
-        "properties": {
-          "detail": {
-            "description": "What went wrong in this request, and what to do instead. Written for a model.",
-            "type": "string"
-          },
-          "diagnostics": {
-            "description": "With `invalid-script`: why the script was refused, with locations in `script.ts`.",
-            "items": {
-              "$ref": "#/components/schemas/Diagnostic"
-            },
-            "type": "array"
-          },
-          "instance": {
-            "description": "The path of the request, or of the resource the problem is about.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "query": {
+        "allOf": [
+          {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/QuerySpan",
-                "description": "With `invalid-query`: where the term at fault is in the query."
+                "$ref": "#/components/schemas/QuotaReached",
+                "description": "With `quota-exceeded`: the quota reached."
               },
               {
                 "type": "null"
               }
             ]
           },
-          "status": {
-            "description": "The HTTP status code.",
-            "format": "int32",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "title": {
-            "description": "A short summary of the kind of problem, the same for every occurrence.",
-            "type": "string"
-          },
-          "type": {
-            "description": "Identifies the kind of problem: `urn:rewind:problem:<slug>`.",
-            "type": "string"
+          {
+            "properties": {
+              "detail": {
+                "description": "What went wrong in this request, and what to do instead. Written for a model.",
+                "type": "string"
+              },
+              "diagnostics": {
+                "description": "With `invalid-script`: why the script was refused, with locations in `script.ts`.",
+                "items": {
+                  "$ref": "#/components/schemas/Diagnostic"
+                },
+                "type": "array"
+              },
+              "instance": {
+                "description": "The path of the request, or of the resource the problem is about.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "query": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/QuerySpan",
+                    "description": "With `invalid-query`: where the term at fault is in the query."
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "description": "The HTTP status code.",
+                "format": "int32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "description": "A short summary of the kind of problem, the same for every occurrence.",
+                "type": "string"
+              },
+              "type": {
+                "description": "Identifies the kind of problem: `urn:rewind:problem:<slug>`.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "title",
+              "status",
+              "detail"
+            ],
+            "type": "object"
+          }
+        ],
+        "description": "An error answered by the API, as `application/problem+json` (RFC 9457).",
+        "example": {
+          "detail": "run 0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10 has ended (completed): a signal can only be sent to a run that is still active",
+          "status": 409,
+          "title": "The run has ended",
+          "type": "urn:rewind:problem:run-ended"
+        }
+      },
+      "PutCeiling": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling.",
+        "properties": {
+          "ceiling": {
+            "$ref": "#/components/schemas/Quotas"
           }
         },
         "required": [
-          "type",
-          "title",
-          "status",
-          "detail"
+          "ceiling"
+        ],
+        "type": "object"
+      },
+      "PutNamespace": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota\nabsent from `exceptions` follows the tenant's default.",
+        "properties": {
+          "exceptions": {
+            "$ref": "#/components/schemas/Quotas"
+          }
+        },
+        "type": "object"
+      },
+      "PutNamespaceDefaults": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/organization/namespace-defaults`: replaces the defaults.",
+        "properties": {
+          "defaults": {
+            "$ref": "#/components/schemas/Quotas"
+          }
+        },
+        "required": [
+          "defaults"
         ],
         "type": "object"
       },
@@ -2503,6 +2852,243 @@
         ],
         "type": "object"
       },
+      "QuotaAlert": {
+        "description": "A limit crossed: sent once as the webhook `quota.alert`, and listed by the API.",
+        "properties": {
+          "limit": {
+            "description": "The limit, in the same unit.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "namespace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName",
+                "description": "The namespace; absent (`null` in the webhook) for the tenant's ceiling."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period": {
+            "description": "The calendar month, `2026-11`.",
+            "type": "string"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/QuotaKind"
+          },
+          "raisedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "sentAt": {
+            "description": "When it was delivered to the tenant's subscriptions.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "threshold": {
+            "description": "80 or 100: the share of the limit crossed; for `active_runs`, 100 at the first refusal\nof the month.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "used": {
+            "description": "The use when the alert was raised: milliseconds for `cpu_per_month`, a count otherwise.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quota",
+          "threshold",
+          "used",
+          "limit",
+          "period",
+          "raisedAt"
+        ],
+        "type": "object"
+      },
+      "QuotaAlertList": {
+        "description": "`GET /v1/organization/quota-alerts`: the alerts of a month, newest first.",
+        "properties": {
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/QuotaAlert"
+            },
+            "type": "array"
+          },
+          "month": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "month",
+          "alerts"
+        ],
+        "type": "object"
+      },
+      "QuotaKind": {
+        "description": "A quota, as `quota-exceeded` and `quota.alert` name it.",
+        "enum": [
+          "cpu_per_month",
+          "active_runs",
+          "runs_per_month",
+          "scripts",
+          "max_ttl",
+          "max_script_lines"
+        ],
+        "type": "string"
+      },
+      "QuotaReached": {
+        "description": "The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries\n`Retry-After`.",
+        "properties": {
+          "limit": {
+            "description": "The limit: a count for `active_runs`, `runs_per_month` and `scripts`.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/QuotaKind"
+          },
+          "resetsAt": {
+            "description": "When a monthly quota frees: the first instant of the next month (UTC). Absent for\n`active_runs` and `scripts`, which free when runs end or are erased.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/QuotaScope"
+          },
+          "used": {
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "quota",
+          "scope",
+          "limit",
+          "used"
+        ],
+        "type": "object"
+      },
+      "QuotaScope": {
+        "description": "Which limit a quota belongs to: the namespace's (its exception, else the default), or the\ntenant's ceiling.",
+        "enum": [
+          "namespace",
+          "organization"
+        ],
+        "type": "string"
+      },
+      "QuotaUsage": {
+        "description": "What a namespace, or the tenant, used in a calendar month.",
+        "properties": {
+          "activeRuns": {
+            "description": "Runs active now.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/Duration",
+            "description": "CPU time of the month, replays excluded."
+          },
+          "runsStarted": {
+            "description": "Runs created in the month, forks included.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "scripts": {
+            "description": "Distinct scripts with at least one run kept.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu",
+          "activeRuns",
+          "runsStarted",
+          "scripts"
+        ],
+        "type": "object"
+      },
+      "Quotas": {
+        "additionalProperties": false,
+        "description": "Limits, each optional: an absent one does not limit. The same shape serves a tenant's\ndefaults for every namespace, a namespace's exceptions, the limits that apply to a\nnamespace, and the tenant's ceiling, which bounds its totals.",
+        "properties": {
+          "activeRuns": {
+            "description": "Runs active at once. Starting or forking one more is refused (429).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "cpuPerMonth": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Duration",
+                "description": "CPU time of the isolates running the namespace's scripts in a calendar month (UTC),\nreplays excluded. Never refused: crossing 80 % and 100 % sends `quota.alert`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "maxScriptLines": {
+            "description": "The most lines a script may have (422 `invalid-script` above it).",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "maxTtl": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Duration",
+                "description": "The longest TTL a run may ask for; the default TTL is lowered to it (400 above it)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "runsPerMonth": {
+            "description": "Runs created in a calendar month, forks included (429 above it).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "scripts": {
+            "description": "Distinct scripts with at least one run kept in the namespace (429 for a new one above\nit).",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "RejectTask": {
         "additionalProperties": false,
         "description": "`POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message.",
@@ -2515,6 +3101,27 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RevokedTokens": {
+        "description": "`DELETE /v1/namespaces/{name}/tokens`.",
+        "properties": {
+          "revoked": {
+            "description": "Opaque tokens revoked.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "revokedBefore": {
+            "description": "Signed tokens issued before this are refused.",
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revoked",
+          "revokedBefore"
+        ],
         "type": "object"
       },
       "Role": {
@@ -2673,6 +3280,10 @@
           "mode": {
             "$ref": "#/components/schemas/RunMode"
           },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName",
+            "description": "The end user the run belongs to. A fork has its parent's."
+          },
           "output": {
             "oneOf": [
               {
@@ -2735,6 +3346,7 @@
         },
         "required": [
           "id",
+          "namespace",
           "status",
           "script",
           "toolset",
@@ -3034,6 +3646,9 @@
             "format": "date-time",
             "type": "string"
           },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
           "parent": {
             "type": [
               "string",
@@ -3079,6 +3694,7 @@
         },
         "required": [
           "id",
+          "namespace",
           "status",
           "quarantined",
           "script",
@@ -3490,6 +4106,55 @@
         ],
         "type": "object"
       },
+      "SignedTokenClaims": {
+        "description": "The claims of a token the customer signs. Its header names the key: `kid` `rk_…`.",
+        "properties": {
+          "aud": {
+            "description": "[`TOKEN_AUDIENCE`].",
+            "type": "string"
+          },
+          "exp": {
+            "description": "Expires at, in seconds since the Unix epoch, at most 30 days after `iat`.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "iat": {
+            "description": "Issued at, in seconds since the Unix epoch.",
+            "format": "int64",
+            "type": "integer"
+          },
+          "jti": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "permissions": {
+            "description": "Among those the key may give; [`Permission::TOKEN_DEFAULT`] when absent.",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "sub": {
+            "$ref": "#/components/schemas/NamespaceName",
+            "description": "The namespace."
+          }
+        },
+        "required": [
+          "sub",
+          "aud",
+          "iat",
+          "exp"
+        ],
+        "type": "object"
+      },
       "StartRun": {
         "additionalProperties": false,
         "description": "`POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a\nscript that cannot run is refused (`invalid-script`) before any run exists.\n\nWith the `Idempotency-Key` header, a request repeated with the same key returns the run the\nfirst one started, instead of starting a second one.",
@@ -3756,6 +4421,10 @@
             "$ref": "#/components/schemas/Labels",
             "description": "The run's labels."
           },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName",
+            "description": "The namespace of the run: the end user the handler acts for."
+          },
           "runId": {
             "type": "string"
           },
@@ -3798,6 +4467,7 @@
           "token",
           "id",
           "runId",
+          "namespace",
           "seq",
           "tool",
           "args",
@@ -3954,6 +4624,125 @@
           "trace"
         ],
         "type": "object"
+      },
+      "Token": {
+        "description": "An end user's opaque token.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "The SHA-256 of the secret, in hexadecimal (`DELETE /v1/tokens/{id}`).",
+            "type": "string"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": "array"
+          },
+          "token": {
+            "description": "`rewind_nt_…`: only in the answer of `POST /v1/namespaces/{name}/tokens`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "namespace",
+          "permissions",
+          "expiresAt",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "TokenAlgorithm": {
+        "description": "The algorithm of a token key, from its JWK: Ed25519 (`OKP`), P-256 (`EC`) or RSA.",
+        "enum": [
+          "EdDSA",
+          "ES256",
+          "RS256"
+        ],
+        "type": "string"
+      },
+      "TokenKey": {
+        "description": "A registered token key.",
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/TokenAlgorithm"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "jwk": {
+            "type": "object"
+          },
+          "kid": {
+            "description": "`rk_…`: the `kid` of the tokens it signs.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "kid",
+          "name",
+          "algorithm",
+          "jwk",
+          "permissions",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "TokenKeyList": {
+        "description": "`GET /v1/organization/token-keys`.",
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/TokenKey"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "TokenKind": {
+        "description": "The form of an end user's token.",
+        "enum": [
+          "opaque",
+          "signed"
+        ],
+        "type": "string"
       },
       "Tool": {
         "description": "A pinned tool.",
@@ -4115,6 +4904,9 @@
             "description": "What changed, as the dispatcher saw it: the tool is gone, its input schema refuses the\ncall's arguments, or its output schema changed. Written for the harness developer and\nthe model.",
             "type": "string"
           },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName"
+          },
           "runId": {
             "type": "string"
           },
@@ -4144,6 +4936,7 @@
         },
         "required": [
           "runId",
+          "namespace",
           "labels",
           "taskId",
           "seq",
@@ -4811,6 +5604,30 @@
               "type"
             ],
             "type": "object"
+          },
+          {
+            "description": "A namespace, or the tenant (`namespace` null), crossed 80 % or 100 % of a limit; for\n`active_runs`, a first refusal of the month. Sent once per namespace, quota, month and\nthreshold; its `webhook-id` is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}`.",
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/QuotaAlert"
+              },
+              "timestamp": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "quota.alert"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "timestamp",
+              "data",
+              "type"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -4824,7 +5641,8 @@
           "run.suspended",
           "run.quarantined",
           "tool.schema_changed",
-          "credentials.expired"
+          "credentials.expired",
+          "quota.alert"
         ],
         "type": "string"
       }
@@ -4844,7 +5662,7 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`) or a member's access token from `/auth`, except over the embedded server's unix socket and to the inbound webhook URL. What the caller may do is its grant's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds.",
+    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), except over the embedded server's unix socket and to the inbound webhook URL. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
@@ -5992,6 +6810,17 @@
       "post": {
         "description": "Against the sandbox lib and the toolset's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
         "operationId": "checkScript",
+        "parameters": [
+          {
+            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -6262,6 +7091,729 @@
         "summary": "Accept an invitation",
         "tags": [
           "organization"
+        ]
+      }
+    },
+    "/v1/namespaces": {
+      "get": {
+        "description": "The end users of the organization, each with the limits that apply, its exceptions and\nits use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.",
+        "operationId": "listNamespaces",
+        "parameters": [
+          {
+            "description": "Names starting with this.",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the namespaces that used at least this share of one of their limits this month:\n`0.8` for 80 %.",
+            "in": "query",
+            "name": "above",
+            "required": false,
+            "schema": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "order",
+            "required": false,
+            "schema": {
+              "description": "How `GET /v1/namespaces` orders the namespaces: by a use of the month, the largest first, or\nby name.",
+              "enum": [
+                "cpu",
+                "runs",
+                "scripts",
+                "name"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The calendar month whose use is listed, `2026-11`; the current one by default.",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The `next` cursor of the previous page.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "50 by default, 500 at most.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceList"
+                }
+              }
+            },
+            "description": "A page of namespaces."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the namespaces",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/namespaces/{name}": {
+      "delete": {
+        "description": "An end user who leaves: revokes the namespace's tokens, cancels its active runs, then\nerases in the background its runs, credentials and use. Requires `namespaces:write`.",
+        "operationId": "deleteNamespace",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "The erasure started."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such namespace."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Erase a namespace",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "get": {
+        "description": "Its limits and exceptions, its use day by day over a month, its alerts and its tokens in\nuse. Requires `namespaces:read`.",
+        "operationId": "getNamespace",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The calendar month, `2026-11`; the current one by default.",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceDetail"
+                }
+              }
+            },
+            "description": "The namespace."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such namespace."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Read a namespace",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "put": {
+        "description": "Replaces the namespace's exceptions to the default limits; a quota absent from them\nfollows the default. Requires `namespaces:write`.",
+        "operationId": "putNamespace",
+        "parameters": [
+          {
+            "description": "The namespace: 1 to 128 letters, digits, -, _, ., : and @.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutNamespace"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceDetail"
+                }
+              }
+            },
+            "description": "Created or changed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The namespace is being erased (`namespace-deleting`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Create a namespace, or set its exceptions",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/namespaces/{name}/tokens": {
+      "delete": {
+        "description": "Its opaque tokens, and the signed tokens issued before now. Requires `tokens:write`.",
+        "operationId": "revokeNamespaceTokens",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedTokens"
+                }
+              }
+            },
+            "description": "Revoked."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such namespace."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Revoke the namespace's tokens",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "post": {
+        "description": "An opaque token of the namespace, with permissions among those a token may hold and the\ncaller holds, optional labels and a life (1 hour by default, 30 days at most). Creates\nthe namespace if needed. Requires `tokens:write`.",
+        "operationId": "createToken",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateToken"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Token"
+                }
+              }
+            },
+            "description": "Minted; the answer holds the token, once."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The namespace is being erased (`namespace-deleting`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Mint an end user's token",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/namespaces/{name}/toolsets/{id}/credentials": {
+      "put": {
+        "description": "A call of a run of the namespace uses the run's credentials if it has some, else these,\nelse the toolset's. Requires `credentials:write`.",
+        "operationId": "setNamespaceCredentials",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The toolset's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Credentials"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored. Calls parked by `credentials.expired` are ready again."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such toolset."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Set or renew an end user's credentials for a toolset",
+        "tags": [
+          "namespaces"
         ]
       }
     },
@@ -7039,6 +8591,499 @@
         ]
       }
     },
+    "/v1/organization/namespace-defaults": {
+      "get": {
+        "description": "The limits of every namespace without an exception, and the organization's ceiling\nwith its use of the month. Requires `namespaces:read`.",
+        "operationId": "getNamespaceDefaults",
+        "parameters": [
+          {
+            "description": "The calendar month, `2026-11`; the current one by default.",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceDefaults"
+                }
+              }
+            },
+            "description": "The defaults and the ceiling."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Read the default limits",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "put": {
+        "description": "Requires `namespaces:write`.",
+        "operationId": "putNamespaceDefaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutNamespaceDefaults"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceDefaults"
+                }
+              }
+            },
+            "description": "Changed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Set the default limits",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/organization/quota-alerts": {
+      "get": {
+        "description": "The alerts of a month, of one namespace or of the whole organization, newest first.\nRequires `namespaces:read`.",
+        "operationId": "listQuotaAlerts",
+        "parameters": [
+          {
+            "description": "The calendar month, `2026-11`; the current one by default.",
+            "in": "query",
+            "name": "month",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One namespace's alerts; every alert of the tenant without it.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaAlertList"
+                }
+              }
+            },
+            "description": "The alerts."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the quota alerts",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/organization/token-keys": {
+      "get": {
+        "description": "The public keys the organization signs its end users' tokens with. Requires\n`tokens:write`.",
+        "operationId": "listTokenKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenKeyList"
+                }
+              }
+            },
+            "description": "The keys."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the token keys",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "post": {
+        "description": "A public key (a JWK: Ed25519, P-256 or RSA) and the permissions its tokens may carry,\namong those a token may hold and the caller holds. Answers its `kid`. Requires\n`tokens:write`.",
+        "operationId": "createTokenKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTokenKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenKey"
+                }
+              }
+            },
+            "description": "Registered."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Register a token key",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/organization/token-keys/{kid}": {
+      "delete": {
+        "description": "Every token it signed is refused from the next request. Requires `tokens:write`.",
+        "operationId": "deleteTokenKey",
+        "parameters": [
+          {
+            "description": "The key's `kid`.",
+            "in": "path",
+            "name": "kid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such key."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Delete a token key",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
     "/v1/organizations": {
       "post": {
         "description": "For a member, even without organization: the organization in the identity provider with\nthe caller as a member, then its tenant and the caller's `owner` grant. Switch to it with\n`POST /auth/session`.",
@@ -7128,6 +9173,102 @@
         "summary": "Create an organization",
         "tags": [
           "organization"
+        ]
+      }
+    },
+    "/v1/organizations/{tenant}/quotas": {
+      "put": {
+        "description": "The limits of its totals across namespaces: the customer's offer. The operator only.",
+        "operationId": "putCeiling",
+        "parameters": [
+          {
+            "description": "The tenant (the organization's id).",
+            "in": "path",
+            "name": "tenant",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutCeiling"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Changed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such tenant."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Set an organization's ceiling",
+        "tags": [
+          "namespaces"
         ]
       }
     },
@@ -7786,7 +9927,7 @@
         "operationId": "startRun",
         "parameters": [
           {
-            "description": "A request repeated with the same key returns the run the first one started (200).",
+            "description": "A request repeated with the same key in the namespace returns the run the first one started (200).",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -7795,6 +9936,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -7869,6 +10019,16 @@
             },
             "description": "No such toolset."
           },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The namespace is being erased (`namespace-deleting`)."
+          },
           "413": {
             "content": {
               "application/problem+json": {
@@ -7897,7 +10057,7 @@
                 }
               }
             },
-            "description": "The tenant already has its maximum of active runs (`quota-exceeded`)."
+            "description": "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`)."
           },
           "500": {
             "content": {
@@ -10823,6 +12983,17 @@
       "post": {
         "description": "In virtual time, against a cassette, mock handlers and static responses. No tool is\nreally called.",
         "operationId": "testScript",
+        "parameters": [
+          {
+            "description": "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10918,6 +13089,92 @@
         "summary": "Run a scenario in mock mode (`test_script`)",
         "tags": [
           "scripts"
+        ]
+      }
+    },
+    "/v1/tokens/{id}": {
+      "delete": {
+        "description": "Requires `tokens:write`.",
+        "operationId": "revokeToken",
+        "parameters": [
+          {
+            "description": "The token's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such token."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Revoke an end user's token",
+        "tags": [
+          "namespaces"
         ]
       }
     },
@@ -11655,6 +13912,10 @@
       "name": "access"
     },
     {
+      "description": "The end users of the organization: their limits, use and alerts, their credentials, and their tokens.",
+      "name": "namespaces"
+    },
+    {
       "description": "The server itself.",
       "name": "server"
     },
@@ -11713,6 +13974,60 @@
           }
         },
         "summary": "The lifecycle event `credentials.expired`",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "quota.alert": {
+      "post": {
+        "description": "Sent to every subscription to `quota.alert` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.",
+        "operationId": "webhook_quota_alert",
+        "parameters": [
+          {
+            "description": "The delivery's id; a retried delivery keeps it.",
+            "in": "header",
+            "name": "webhook-id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "When the delivery was signed, in seconds since the Unix epoch.",
+            "in": "header",
+            "name": "webhook-timestamp",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated.",
+            "in": "header",
+            "name": "webhook-signature",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookEvent"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "2XX": {
+            "description": "Received."
+          }
+        },
+        "summary": "The lifecycle event `quota.alert`",
         "tags": [
           "webhooks"
         ]

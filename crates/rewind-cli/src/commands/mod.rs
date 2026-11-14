@@ -46,11 +46,23 @@ pub(crate) struct Server<'a> {
 impl Server<'_> {
     /// The remote server of `--url`, or the embedded server of `--dir`, started if need be.
     pub(crate) async fn client(&self) -> Result<Client, CliError> {
+        let namespace = |name: &str| {
+            rewind_api::namespaces::NamespaceName::new(name)
+                .map_err(|error| CliError::Usage(format!("--namespace: {error}")))
+        };
         match &self.global.url {
-            Some(url) => Ok(Client::remote(url, self.global.api_key.as_deref())?),
+            Some(url) => {
+                let client = Client::remote(url, self.global.api_key.as_deref())?;
+                Ok(match &self.global.namespace {
+                    Some(name) => client.with_namespace(namespace(name)?),
+                    None => client,
+                })
+            }
             None => {
                 let launcher = Launcher::new(&self.global.dir).map_err(server_error)?;
-                launcher.connect().await.map_err(server_error)
+                let client = launcher.connect().await.map_err(server_error)?;
+                let name = self.global.namespace.as_deref().unwrap_or("local");
+                Ok(client.with_namespace(namespace(name)?))
             }
         }
     }

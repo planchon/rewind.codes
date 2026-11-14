@@ -17,6 +17,11 @@ use crate::ports::{
     TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask, Trigger,
     WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
+use crate::ports::{
+    Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
+    NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
+    QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf,
+};
 
 /// `JournalStore` in memory: engine tests and mock mode. It is the reference implementation
 /// of the store contract, and passes the conformance suite.
@@ -31,8 +36,14 @@ struct State {
     toolsets: HashMap<(TenantId, Digest), StoredToolset>,
     /// Run ids are unique across tenants.
     runs: BTreeMap<RunId, Run>,
-    idempotency_keys: HashMap<(TenantId, String), RunId>,
+    idempotency_keys: HashMap<(TenantId, NamespaceName, String), RunId>,
     tenants: BTreeMap<TenantId, Tenant>,
+    namespaces: BTreeMap<(TenantId, NamespaceName), Namespace>,
+    /// Use per day; `None` is the tenant's own row.
+    usage: BTreeMap<(TenantId, Option<NamespaceName>, Day), DayUsage>,
+    /// Runs kept per script, per namespace.
+    namespace_scripts: BTreeMap<(TenantId, NamespaceName, Digest), u64>,
+    alerts: BTreeMap<QuotaAlertKey, AlertRow>,
     subscriptions: BTreeMap<(TenantId, String), Subscription>,
     payloads: BTreeMap<(TenantId, Digest), StoredPayload>,
     /// Token → (run, signal name).
@@ -88,6 +99,12 @@ struct StoredPayload {
 }
 
 #[derive(Debug)]
+struct AlertRow {
+    alert: QuotaAlert,
+    claimed_until: Option<Timestamp>,
+}
+
+#[derive(Debug)]
 struct FeedRow {
     item: FeedItem,
     claimed_until: Option<Timestamp>,
@@ -106,6 +123,147 @@ impl MemoryJournal {
 }
 
 impl State {
+    fn tenant(&self, tenant: &TenantId) -> Tenant {
+        self.tenants
+            .get(tenant)
+            .cloned()
+            .unwrap_or_else(|| Tenant::new(tenant.clone()))
+    }
+
+    /// The namespace's limits: its exceptions over the tenant's defaults.
+    fn limits(&self, tenant: &TenantId, namespace: &NamespaceName) -> Quotas {
+        let record = self.tenant(tenant);
+        match self.namespaces.get(&(tenant.clone(), namespace.clone())) {
+            Some(found) => found.exceptions.over(&record.namespace_defaults),
+            None => record.namespace_defaults,
+        }
+    }
+
+    /// CPU time and runs created in a month, of a namespace or of the tenant (`None`).
+    fn month_usage(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> DayUsage {
+        let mut total = DayUsage::default();
+        for ((owner, of, day), usage) in &self.usage {
+            if owner == tenant && of.as_ref() == namespace && month.contains(*day) {
+                total.cpu += usage.cpu;
+                total.runs_started += usage.runs_started;
+            }
+        }
+        total
+    }
+
+    fn active_runs(&self, tenant: &TenantId, namespace: Option<&NamespaceName>) -> u64 {
+        self.runs
+            .values()
+            .filter(|run| {
+                run.record.run.tenant == *tenant
+                    && namespace.is_none_or(|name| run.record.namespace == *name)
+                    && !run.is_terminal()
+            })
+            .count() as u64
+    }
+
+    /// Distinct scripts with a run kept: of a namespace, or summed over the tenant's.
+    fn scripts(&self, tenant: &TenantId, namespace: Option<&NamespaceName>) -> u64 {
+        self.namespace_scripts
+            .keys()
+            .filter(|(owner, name, _)| owner == tenant && namespace.is_none_or(|n| name == n))
+            .count() as u64
+    }
+
+    fn usage_of(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+        days: bool,
+    ) -> Usage {
+        let total = self.month_usage(tenant, namespace, month);
+        Usage {
+            cpu: total.cpu,
+            runs_started: total.runs_started,
+            active_runs: self.active_runs(tenant, namespace),
+            scripts: self.scripts(tenant, namespace),
+            days: if days {
+                self.usage
+                    .iter()
+                    .filter(|((owner, of, day), _)| {
+                        owner == tenant && of.as_ref() == namespace && month.contains(*day)
+                    })
+                    .map(|((_, _, day), usage)| (*day, usage.clone()))
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
+    /// Records an alert unless one with this key exists. Returns it when recorded.
+    fn raise(
+        &mut self,
+        key: QuotaAlertKey,
+        used: u64,
+        limit: u64,
+        now: Timestamp,
+    ) -> Option<QuotaAlert> {
+        if self.alerts.contains_key(&key) {
+            return None;
+        }
+        let alert = QuotaAlert {
+            key: key.clone(),
+            used,
+            limit,
+            raised_at: now,
+            sent_at: None,
+        };
+        self.alerts.insert(
+            key,
+            AlertRow {
+                alert: alert.clone(),
+                claimed_until: None,
+            },
+        );
+        Some(alert)
+    }
+
+    /// Records the alerts of the thresholds a use crosses from `before` to `after`.
+    #[allow(clippy::too_many_arguments)]
+    fn raise_crossed(
+        &mut self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        quota: QuotaKind,
+        month: Month,
+        (before, after): (u64, u64),
+        limit: Option<u64>,
+        now: Timestamp,
+    ) -> Vec<QuotaAlert> {
+        let Some(limit) = limit else {
+            return Vec::new();
+        };
+        Threshold::crossed(before, after, limit)
+            .into_iter()
+            .filter_map(|threshold| {
+                self.raise(
+                    QuotaAlertKey {
+                        tenant: tenant.clone(),
+                        namespace: namespace.cloned(),
+                        quota,
+                        period: month,
+                        threshold,
+                    },
+                    after,
+                    limit,
+                    now,
+                )
+            })
+            .collect()
+    }
+
     fn run(&self, run: &RunRef) -> Result<&Run, StoreError> {
         self.runs
             .get(&run.id)
@@ -290,11 +448,15 @@ fn matches_filter(filter: &TaskFilter, run: &Run, task: &Task) -> bool {
         }
         TaskFilter::Host {
             tenant,
+            namespace,
             toolset,
             tools,
         } => {
             matches!(task.route, ToolRoute::Host { .. })
                 && run.record.run.tenant == *tenant
+                && namespace
+                    .as_ref()
+                    .is_none_or(|name| *name == run.record.namespace)
                 && toolset.is_none_or(|digest| digest == run.record.toolset)
                 && (tools.is_empty() || tools.contains(&task.tool))
         }
@@ -373,8 +535,12 @@ impl JournalStore for MemoryJournal {
     ) -> Result<CreateRun, StoreError> {
         let mut state = self.lock()?;
         let tenant = run.run.tenant.clone();
+        let name = run.namespace.clone();
         if let Some(key) = &idempotency_key
-            && let Some(existing) = state.idempotency_keys.get(&(tenant.clone(), key.clone()))
+            && let Some(existing) =
+                state
+                    .idempotency_keys
+                    .get(&(tenant.clone(), name.clone(), key.clone()))
         {
             return Ok(CreateRun::Created(Created {
                 run: RunRef::new(tenant, *existing),
@@ -387,22 +553,148 @@ impl JournalStore for MemoryJournal {
                 run.run.id
             )));
         }
-        if let Some(quota) = state
-            .tenants
-            .get(&tenant)
-            .and_then(|found| found.active_run_quota)
-        {
-            let active = state
-                .runs
-                .values()
-                .filter(|existing| existing.record.run.tenant == tenant && !existing.is_terminal())
-                .count();
-            if active >= quota as usize {
-                return Ok(CreateRun::QuotaExceeded { quota });
+        let now = run.created_at;
+        let namespace = state
+            .namespaces
+            .entry((tenant.clone(), name.clone()))
+            .or_insert_with(|| Namespace::new(tenant.clone(), name.clone(), now))
+            .clone();
+        if namespace.deleting_since.is_some() {
+            return Ok(CreateRun::NamespaceDeleting);
+        }
+        let limits = state.limits(&tenant, &name);
+        let ceiling = state.tenant(&tenant).quotas;
+        let month = Month::of(now);
+        let script = run.started.script;
+        let new_script =
+            !state
+                .namespace_scripts
+                .contains_key(&(tenant.clone(), name.clone(), script));
+        let runs_of_namespace = state.month_usage(&tenant, Some(&name), month).runs_started;
+        let runs_of_tenant = state.month_usage(&tenant, None, month).runs_started;
+        let scripts_of_namespace = state.scripts(&tenant, Some(&name));
+        let scripts_of_tenant = state.scripts(&tenant, None);
+        let checks = [
+            (
+                QuotaKind::ActiveRuns,
+                QuotaScope::Namespace,
+                limits.active_runs.map(u64::from),
+                state.active_runs(&tenant, Some(&name)),
+            ),
+            (
+                QuotaKind::ActiveRuns,
+                QuotaScope::Tenant,
+                ceiling.active_runs.map(u64::from),
+                state.active_runs(&tenant, None),
+            ),
+            (
+                QuotaKind::RunsPerMonth,
+                QuotaScope::Namespace,
+                limits.runs_per_month,
+                runs_of_namespace,
+            ),
+            (
+                QuotaKind::RunsPerMonth,
+                QuotaScope::Tenant,
+                ceiling.runs_per_month,
+                runs_of_tenant,
+            ),
+            (
+                QuotaKind::Scripts,
+                QuotaScope::Namespace,
+                limits.scripts.filter(|_| new_script),
+                scripts_of_namespace,
+            ),
+            (
+                QuotaKind::Scripts,
+                QuotaScope::Tenant,
+                ceiling.scripts.filter(|_| new_script),
+                scripts_of_tenant,
+            ),
+        ];
+        for (quota, scope, limit, used) in checks {
+            let Some(limit) = limit else { continue };
+            if used < limit {
+                continue;
             }
+            if quota == QuotaKind::ActiveRuns {
+                state.raise(
+                    QuotaAlertKey {
+                        tenant: tenant.clone(),
+                        namespace: (scope == QuotaScope::Namespace).then(|| name.clone()),
+                        quota,
+                        period: month,
+                        threshold: Threshold::Reached,
+                    },
+                    used,
+                    limit,
+                    now,
+                );
+            }
+            return Ok(CreateRun::QuotaExceeded(QuotaExceeded {
+                quota,
+                scope,
+                limit,
+                used,
+                resets_at: (quota == QuotaKind::RunsPerMonth).then(|| month.end()),
+            }));
+        }
+        let day = Day::of(now);
+        for of in [Some(name.clone()), None] {
+            state
+                .usage
+                .entry((tenant.clone(), of, day))
+                .or_default()
+                .runs_started += 1;
+        }
+        *state
+            .namespace_scripts
+            .entry((tenant.clone(), name.clone(), script))
+            .or_default() += 1;
+        if let Some(found) = state.namespaces.get_mut(&(tenant.clone(), name.clone())) {
+            found.last_active_at = found.last_active_at.max(now);
+        }
+        state.raise_crossed(
+            &tenant,
+            Some(&name),
+            QuotaKind::RunsPerMonth,
+            month,
+            (runs_of_namespace, runs_of_namespace + 1),
+            limits.runs_per_month,
+            now,
+        );
+        state.raise_crossed(
+            &tenant,
+            None,
+            QuotaKind::RunsPerMonth,
+            month,
+            (runs_of_tenant, runs_of_tenant + 1),
+            ceiling.runs_per_month,
+            now,
+        );
+        if new_script {
+            state.raise_crossed(
+                &tenant,
+                Some(&name),
+                QuotaKind::Scripts,
+                month,
+                (scripts_of_namespace, scripts_of_namespace + 1),
+                limits.scripts,
+                now,
+            );
+            state.raise_crossed(
+                &tenant,
+                None,
+                QuotaKind::Scripts,
+                month,
+                (scripts_of_tenant, scripts_of_tenant + 1),
+                ceiling.scripts,
+                now,
+            );
         }
         let record = RunRecord {
             run: run.run.clone(),
+            namespace: name.clone(),
             script: run.started.script,
             toolset: run.started.toolset,
             status: rewind_core::RunStatus::Pending,
@@ -436,7 +728,9 @@ impl JournalStore for MemoryJournal {
             },
         );
         if let Some(key) = idempotency_key {
-            state.idempotency_keys.insert((tenant, key), run.run.id);
+            state
+                .idempotency_keys
+                .insert((tenant, name, key), run.run.id);
         }
         state.push_inbox(run.run.id, Trigger::RunStarted(run.started), run.created_at);
         Ok(CreateRun::Created(Created {
@@ -478,6 +772,12 @@ impl JournalStore for MemoryJournal {
             .values()
             .map(|run| &run.record)
             .filter(|record| record.run.tenant == filter.tenant)
+            .filter(|record| {
+                filter
+                    .namespace
+                    .as_ref()
+                    .is_none_or(|name| record.namespace == *name)
+            })
             .filter(|record| filter.status.is_none_or(|status| record.status == status))
             .filter(|record| {
                 filter
@@ -1177,6 +1477,15 @@ impl JournalStore for MemoryJournal {
                 ParkedScope::Toolset { tenant, toolset } => {
                     run.record.run.tenant == *tenant && run.record.toolset == *toolset
                 }
+                ParkedScope::Namespace {
+                    tenant,
+                    namespace,
+                    toolset,
+                } => {
+                    run.record.run.tenant == *tenant
+                        && run.record.namespace == *namespace
+                        && run.record.toolset == *toolset
+                }
             };
             if !in_scope {
                 continue;
@@ -1491,7 +1800,22 @@ impl JournalStore for MemoryJournal {
             return Ok(false);
         };
         if let Some(key) = removed.record.idempotency_key {
-            state.idempotency_keys.remove(&(run.tenant.clone(), key));
+            state.idempotency_keys.remove(&(
+                run.tenant.clone(),
+                removed.record.namespace.clone(),
+                key,
+            ));
+        }
+        let counted = (
+            run.tenant.clone(),
+            removed.record.namespace.clone(),
+            removed.record.script,
+        );
+        if let Some(count) = state.namespace_scripts.get_mut(&counted) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.namespace_scripts.remove(&counted);
+            }
         }
         state.feed.retain(|_, row| row.item.run.id != run.id);
         for ((tenant, _), stored) in state.payloads.iter_mut() {
@@ -1515,6 +1839,353 @@ impl JournalStore for MemoryJournal {
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
         Ok(self.lock()?.tenants.values().cloned().collect())
+    }
+
+    async fn put_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        exceptions: Option<&Quotas>,
+        now: Timestamp,
+    ) -> Result<NamespaceWrite, StoreError> {
+        let mut state = self.lock()?;
+        let namespace = state
+            .namespaces
+            .entry((tenant.clone(), name.clone()))
+            .or_insert_with(|| Namespace::new(tenant.clone(), name.clone(), now));
+        if namespace.deleting_since.is_some() {
+            return Ok(NamespaceWrite::Deleting);
+        }
+        if let Some(exceptions) = exceptions {
+            namespace.exceptions = exceptions.clone();
+        }
+        Ok(NamespaceWrite::Written(namespace.clone()))
+    }
+
+    async fn get_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> Result<Option<Namespace>, StoreError> {
+        Ok(self
+            .lock()?
+            .namespaces
+            .get(&(tenant.clone(), name.clone()))
+            .cloned())
+    }
+
+    async fn list_namespaces(
+        &self,
+        filter: &NamespaceFilter,
+    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+        let state = self.lock()?;
+        let key = |usage: &Usage| match filter.order {
+            NamespaceOrder::Cpu => usage.of(QuotaKind::CpuPerMonth).unwrap_or(0),
+            NamespaceOrder::Runs => usage.runs_started,
+            NamespaceOrder::Scripts => usage.scripts,
+            NamespaceOrder::Name => 0,
+        };
+        let mut listed: Vec<(u64, NamespaceUsage)> = state
+            .namespaces
+            .iter()
+            .filter(|((tenant, name), _)| {
+                *tenant == filter.tenant
+                    && filter
+                        .prefix
+                        .as_deref()
+                        .is_none_or(|prefix| name.as_str().starts_with(prefix))
+            })
+            .map(|((tenant, name), namespace)| {
+                let usage = state.usage_of(tenant, Some(name), filter.month, false);
+                let limits = state.limits(tenant, name);
+                (
+                    key(&usage),
+                    NamespaceUsage {
+                        namespace: namespace.clone(),
+                        limits,
+                        usage,
+                    },
+                )
+            })
+            .filter(|(_, listed)| {
+                filter.above_percent.is_none_or(|percent| {
+                    [
+                        QuotaKind::CpuPerMonth,
+                        QuotaKind::ActiveRuns,
+                        QuotaKind::RunsPerMonth,
+                        QuotaKind::Scripts,
+                    ]
+                    .into_iter()
+                    .any(|quota| {
+                        match (listed.limits.limit(quota), listed.usage.of(quota)) {
+                            (Some(limit), Some(used)) if limit > 0 => {
+                                u128::from(used) * 100 >= u128::from(limit) * u128::from(percent)
+                            }
+                            _ => false,
+                        }
+                    })
+                })
+            })
+            .collect();
+        listed.sort_by(|(a_key, a), (b_key, b)| {
+            b_key
+                .cmp(a_key)
+                .then_with(|| a.namespace.name.cmp(&b.namespace.name))
+        });
+        Ok(listed
+            .into_iter()
+            .filter(|(key, listed)| {
+                filter.after.as_ref().is_none_or(|after| {
+                    *key < after.key || (*key == after.key && listed.namespace.name > after.name)
+                })
+            })
+            .take(filter.limit)
+            .map(|(_, listed)| listed)
+            .collect())
+    }
+
+    async fn namespace_usage(
+        &self,
+        tenant: &TenantId,
+        of: &UsageOf,
+        month: Month,
+    ) -> Result<Usage, StoreError> {
+        let state = self.lock()?;
+        let namespace = match of {
+            UsageOf::Namespace(name) => Some(name),
+            UsageOf::Tenant => None,
+        };
+        Ok(state.usage_of(tenant, namespace, month, true))
+    }
+
+    async fn namespace_has_script(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        script: Digest,
+    ) -> Result<bool, StoreError> {
+        Ok(self
+            .lock()?
+            .namespace_scripts
+            .contains_key(&(tenant.clone(), name.clone(), script)))
+    }
+
+    async fn revoke_namespace_tokens(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.lock()?;
+        Ok(
+            match state.namespaces.get_mut(&(tenant.clone(), name.clone())) {
+                Some(namespace) => {
+                    namespace.tokens_revoked_before = Some(now);
+                    true
+                }
+                None => false,
+            },
+        )
+    }
+
+    async fn delete_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<DeleteNamespace, StoreError> {
+        let mut state = self.lock()?;
+        Ok(
+            match state.namespaces.get_mut(&(tenant.clone(), name.clone())) {
+                Some(namespace) => {
+                    namespace.deleting_since.get_or_insert(now);
+                    DeleteNamespace::Started
+                }
+                None => DeleteNamespace::NotFound,
+            },
+        )
+    }
+
+    async fn namespaces_to_erase(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
+        let state = self.lock()?;
+        let mut marked: Vec<(Timestamp, TenantId, NamespaceName)> = state
+            .namespaces
+            .values()
+            .filter_map(|namespace| {
+                namespace
+                    .deleting_since
+                    .map(|since| (since, namespace.tenant.clone(), namespace.name.clone()))
+            })
+            .collect();
+        marked.sort();
+        Ok(marked
+            .into_iter()
+            .take(limit)
+            .map(|(_, tenant, name)| (tenant, name))
+            .collect())
+    }
+
+    async fn drop_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> Result<DropNamespace, StoreError> {
+        let mut state = self.lock()?;
+        let key = (tenant.clone(), name.clone());
+        if !state
+            .namespaces
+            .get(&key)
+            .is_some_and(|namespace| namespace.deleting_since.is_some())
+        {
+            return Ok(DropNamespace::NotFound);
+        }
+        if state
+            .runs
+            .values()
+            .any(|run| run.record.run.tenant == *tenant && run.record.namespace == *name)
+        {
+            return Ok(DropNamespace::RunsLeft);
+        }
+        state.namespaces.remove(&key);
+        state
+            .usage
+            .retain(|(owner, of, _), _| !(owner == tenant && of.as_ref() == Some(name)));
+        state.alerts.retain(|alert, _| {
+            !(alert.tenant == *tenant && alert.namespace.as_ref() == Some(name))
+        });
+        state
+            .namespace_scripts
+            .retain(|(owner, of, _), _| !(owner == tenant && of == name));
+        Ok(DropNamespace::Dropped)
+    }
+
+    async fn record_usage(
+        &self,
+        deltas: &[UsageDelta],
+        now: Timestamp,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        let mut state = self.lock()?;
+        let mut raised = Vec::new();
+        let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        for delta in deltas {
+            let month = Month::of_day(delta.day);
+            let tenant = &delta.tenant;
+            let exists = state
+                .namespaces
+                .contains_key(&(tenant.clone(), delta.namespace.clone()));
+            let limits = state.limits(tenant, &delta.namespace);
+            let ceiling = state.tenant(tenant).quotas;
+            let added = millis(delta.cpu);
+            if exists {
+                let before = millis(state.month_usage(tenant, Some(&delta.namespace), month).cpu);
+                state
+                    .usage
+                    .entry((tenant.clone(), Some(delta.namespace.clone()), delta.day))
+                    .or_default()
+                    .cpu += delta.cpu;
+                if let Some(found) = state
+                    .namespaces
+                    .get_mut(&(tenant.clone(), delta.namespace.clone()))
+                {
+                    found.last_active_at = found.last_active_at.max(now);
+                }
+                raised.extend(state.raise_crossed(
+                    tenant,
+                    Some(&delta.namespace),
+                    QuotaKind::CpuPerMonth,
+                    month,
+                    (before, before.saturating_add(added)),
+                    limits.limit(QuotaKind::CpuPerMonth),
+                    now,
+                ));
+            }
+            let before = millis(state.month_usage(tenant, None, month).cpu);
+            state
+                .usage
+                .entry((tenant.clone(), None, delta.day))
+                .or_default()
+                .cpu += delta.cpu;
+            raised.extend(state.raise_crossed(
+                tenant,
+                None,
+                QuotaKind::CpuPerMonth,
+                month,
+                (before, before.saturating_add(added)),
+                ceiling.limit(QuotaKind::CpuPerMonth),
+                now,
+            ));
+        }
+        Ok(raised)
+    }
+
+    async fn quota_alerts(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        let state = self.lock()?;
+        let mut alerts: Vec<QuotaAlert> = state
+            .alerts
+            .values()
+            .map(|row| &row.alert)
+            .filter(|alert| {
+                alert.key.tenant == *tenant
+                    && alert.key.period == month
+                    && namespace.is_none_or(|name| alert.key.namespace.as_ref() == Some(name))
+            })
+            .cloned()
+            .collect();
+        alerts.sort_by(|a, b| {
+            b.raised_at
+                .cmp(&a.raised_at)
+                .then_with(|| a.key.cmp(&b.key))
+        });
+        Ok(alerts)
+    }
+
+    async fn claim_quota_alerts(
+        &self,
+        _owner: &str,
+        now: Timestamp,
+        lease_duration: Duration,
+        limit: usize,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        let mut state = self.lock()?;
+        let mut open: Vec<(Timestamp, QuotaAlertKey)> = state
+            .alerts
+            .iter()
+            .filter(|(_, row)| {
+                row.alert.sent_at.is_none() && row.claimed_until.is_none_or(|until| until <= now)
+            })
+            .map(|(key, row)| (row.alert.raised_at, key.clone()))
+            .collect();
+        open.sort();
+        let mut claimed = Vec::new();
+        for (_, key) in open.into_iter().take(limit) {
+            if let Some(row) = state.alerts.get_mut(&key) {
+                row.claimed_until = Some(now.saturating_add(lease_duration));
+                claimed.push(row.alert.clone());
+            }
+        }
+        Ok(claimed)
+    }
+
+    async fn ack_quota_alerts(
+        &self,
+        keys: &[QuotaAlertKey],
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        for key in keys {
+            if let Some(row) = state.alerts.get_mut(key) {
+                row.alert.sent_at.get_or_insert(now);
+            }
+        }
+        Ok(())
     }
 
     async fn claim_feed(

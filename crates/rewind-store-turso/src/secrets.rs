@@ -12,7 +12,8 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rewind_core::{Digest, RunId};
 use rewind_engine::ports::{
-    Credentials, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials, TenantId,
+    Credentials, NamespaceName, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials,
+    TenantId,
 };
 use serde_json::{Map, Value};
 use turso::{Connection, Value as SqlValue};
@@ -111,12 +112,21 @@ fn secret_aad(tenant_id: &TenantId, owner: &str) -> Vec<u8> {
     format!("rewind secret\0{tenant_id}\0{owner}").into_bytes()
 }
 
-/// `toolset:<digest>` or `run:<id>`.
+/// `toolset:<digest>`, `namespace:<name>/toolset:<digest>` or `run:<id>`. A namespace's name
+/// holds no `/`.
 fn owner_key(owner: &SecretOwner) -> String {
     match owner {
         SecretOwner::Toolset(digest) => format!("toolset:{digest}"),
+        SecretOwner::Namespace { namespace, toolset } => {
+            format!("{}toolset:{toolset}", namespace_prefix(namespace))
+        }
         SecretOwner::Run(run) => format!("run:{run}"),
     }
+}
+
+/// What every owner key of a namespace starts with.
+fn namespace_prefix(namespace: &NamespaceName) -> String {
+    format!("namespace:{namespace}/")
 }
 
 /// The tenant's data key; created first if `create` and the tenant has none.
@@ -242,11 +252,21 @@ impl SecretStore for TursoStore {
         &self,
         tenant_id: &TenantId,
         run: RunId,
+        namespace: &NamespaceName,
         toolset: Digest,
     ) -> Result<Option<Credentials>, SecretError> {
         let connection = self.connection().await?;
-        // The run's credentials, whole, else the toolset's: never merged.
-        for owner in [SecretOwner::Run(run), SecretOwner::Toolset(toolset)] {
+        // The run's credentials, whole, else its namespace's for the toolset, else the
+        // toolset's: never merged.
+        let of_namespace = SecretOwner::Namespace {
+            namespace: namespace.clone(),
+            toolset,
+        };
+        for owner in [
+            SecretOwner::Run(run),
+            of_namespace,
+            SecretOwner::Toolset(toolset),
+        ] {
             let owner = owner_key(&owner);
             let row = sql::query_row(
                 &connection,
@@ -277,6 +297,26 @@ impl SecretStore for TursoStore {
         )
         .await?;
         Ok(deleted > 0)
+    }
+
+    async fn delete_namespace(
+        &self,
+        tenant_id: &TenantId,
+        namespace: &NamespaceName,
+    ) -> Result<usize, SecretError> {
+        let connection = self.connection().await?;
+        let prefix = namespace_prefix(namespace);
+        let deleted = sql::execute(
+            &connection,
+            "DELETE FROM secrets WHERE tenant = ? AND substr(owner, 1, ?) = ?",
+            vec![
+                tenant(tenant_id),
+                SqlValue::Integer(i64::try_from(prefix.len()).unwrap_or(i64::MAX)),
+                text(prefix),
+            ],
+        )
+        .await?;
+        Ok(usize::try_from(deleted).unwrap_or(usize::MAX))
     }
 }
 

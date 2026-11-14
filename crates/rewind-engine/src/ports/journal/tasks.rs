@@ -24,6 +24,7 @@ use rewind_core::{
     Digest, Payload, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolPolicy, ToolRoute,
 };
 
+use crate::ports::namespaces::NamespaceName;
 use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
 
 /// A tool task: the call `seq` of a run.
@@ -144,6 +145,8 @@ pub enum TaskFilter {
     /// harness's worker long-polls through `GET /v1/tasks`.
     Host {
         tenant: TenantId,
+        /// The tasks of this namespace's runs only: an end user's token.
+        namespace: Option<NamespaceName>,
         toolset: Option<Digest>,
         /// Empty: every host tool.
         tools: BTreeSet<String>,
@@ -168,6 +171,13 @@ pub enum ParkedScope {
     Run(RunRef),
     /// The toolset's credentials were renewed: every run of the tenant with this toolset.
     Toolset { tenant: TenantId, toolset: Digest },
+    /// An end user's credentials for a toolset were renewed: every run of the namespace with
+    /// this toolset.
+    Namespace {
+        tenant: TenantId,
+        namespace: NamespaceName,
+        toolset: Digest,
+    },
 }
 
 /// The failure a deferred task ends with when no answer came before its deadline. Every store

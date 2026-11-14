@@ -356,6 +356,7 @@ async fn engines_sharing_a_database_lose_and_duplicate_nothing() {
         let store = &stores[n as usize % ENGINES];
         let new_run = NewRun {
             run: run_ref(n),
+            namespace: rewind_engine::ports::NamespaceName::migrated(),
             started: started(),
             metadata: RunMetadata::default(),
             created_at: now(),

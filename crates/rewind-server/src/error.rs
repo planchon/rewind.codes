@@ -21,6 +21,45 @@ impl ApiError {
         Self(Box::new(Problem::new(kind, detail)))
     }
 
+    /// `quota-exceeded`, its detail written for a model: which quota, at which scope, and what
+    /// to do. It never names another namespace.
+    pub(crate) fn quota_exceeded(exceeded: &rewind_engine::ports::QuotaExceeded) -> Self {
+        use rewind_api::namespaces::{QuotaKind, QuotaScope};
+        use rewind_engine::ports::{QuotaKind as Kind, QuotaScope as Scope};
+        let quota = match exceeded.quota {
+            Kind::CpuPerMonth => QuotaKind::CpuPerMonth,
+            Kind::ActiveRuns => QuotaKind::ActiveRuns,
+            Kind::RunsPerMonth => QuotaKind::RunsPerMonth,
+            Kind::Scripts => QuotaKind::Scripts,
+            Kind::MaxTtl => QuotaKind::MaxTtl,
+            Kind::MaxScriptLines => QuotaKind::MaxScriptLines,
+        };
+        let (scope, whose) = match exceeded.scope {
+            Scope::Namespace => (QuotaScope::Namespace, "this namespace"),
+            Scope::Tenant => (QuotaScope::Organization, "the organization"),
+        };
+        let what = match exceeded.quota {
+            Kind::ActiveRuns => "active runs: wait for runs to end, or cancel some",
+            Kind::RunsPerMonth => "runs this month: wait for the next month",
+            Kind::Scripts => "distinct scripts: reuse a script that already ran, or erase old runs",
+            _ => "of this quota",
+        };
+        let detail = format!(
+            "{whose} has {} of its {} {what}",
+            exceeded.used, exceeded.limit
+        );
+        Self(Box::new(Problem::quota_exceeded(
+            detail,
+            rewind_api::problem::QuotaReached {
+                quota,
+                scope,
+                limit: exceeded.limit,
+                used: exceeded.used,
+                resets_at: exceeded.resets_at.map(rewind_api::common::timestamp),
+            },
+        )))
+    }
+
     pub(crate) fn invalid(detail: impl Into<String>) -> Self {
         Self::new(ProblemType::InvalidRequest, detail)
     }
@@ -185,9 +224,23 @@ impl From<StartError> for ApiError {
             StartError::InputTooLarge { .. } => {
                 Self::new(ProblemType::PayloadTooLarge, error.to_string())
             }
-            StartError::QuotaExceeded { .. } => Self::new(
-                ProblemType::QuotaExceeded,
-                format!("{error}: wait for runs to end, or cancel some"),
+            StartError::QuotaExceeded(exceeded) => Self::quota_exceeded(&exceeded),
+            StartError::NamespaceDeleting => Self::new(
+                ProblemType::NamespaceDeleting,
+                "this namespace is being erased: it takes no run",
+            ),
+            StartError::ScriptTooLong { lines, max } => Self::invalid_script(
+                error.to_string(),
+                vec![Diagnostic {
+                    severity: Severity::Error,
+                    code: "rewind/max-script-lines".into(),
+                    message: format!(
+                        "the script has {lines} lines; this namespace accepts at most {max}"
+                    ),
+                    location: None,
+                    frame: None,
+                    hint: Some("split the work into a shorter script".into()),
+                }],
             ),
             StartError::Checker(error) => error.into(),
             StartError::Store(error) => error.into(),

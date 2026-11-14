@@ -20,6 +20,7 @@ use utoipa::ToSchema;
 
 use crate::Error;
 use crate::common::{Labels, Timestamp};
+use crate::namespaces::{NamespaceName, QuotaAlert};
 use crate::runs::Run;
 
 // -------------------------------------------------------------------------------------------
@@ -92,10 +93,12 @@ pub enum WebhookEventType {
     ToolSchemaChanged,
     #[serde(rename = "credentials.expired")]
     CredentialsExpired,
+    #[serde(rename = "quota.alert")]
+    QuotaAlert,
 }
 
 impl WebhookEventType {
-    pub const ALL: [WebhookEventType; 8] = [
+    pub const ALL: [WebhookEventType; 9] = [
         WebhookEventType::RunCompleted,
         WebhookEventType::RunFailed,
         WebhookEventType::RunCancelled,
@@ -104,6 +107,7 @@ impl WebhookEventType {
         WebhookEventType::RunQuarantined,
         WebhookEventType::ToolSchemaChanged,
         WebhookEventType::CredentialsExpired,
+        WebhookEventType::QuotaAlert,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -116,6 +120,7 @@ impl WebhookEventType {
             WebhookEventType::RunQuarantined => "run.quarantined",
             WebhookEventType::ToolSchemaChanged => "tool.schema_changed",
             WebhookEventType::CredentialsExpired => "credentials.expired",
+            WebhookEventType::QuotaAlert => "quota.alert",
         }
     }
 }
@@ -181,6 +186,14 @@ pub enum WebhookEvent {
         timestamp: Timestamp,
         data: CredentialsExpired,
     },
+    /// A namespace, or the tenant (`namespace` null), crossed 80 % or 100 % of a limit; for
+    /// `active_runs`, a first refusal of the month. Sent once per namespace, quota, month and
+    /// threshold; its `webhook-id` is `quota.alert:{namespace or *}:{quota}:{period}:{threshold}`.
+    #[serde(rename = "quota.alert")]
+    QuotaAlert {
+        timestamp: Timestamp,
+        data: QuotaAlert,
+    },
 }
 
 impl WebhookEvent {
@@ -194,6 +207,7 @@ impl WebhookEvent {
             WebhookEvent::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
             WebhookEvent::ToolSchemaChanged { .. } => WebhookEventType::ToolSchemaChanged,
             WebhookEvent::CredentialsExpired { .. } => WebhookEventType::CredentialsExpired,
+            WebhookEvent::QuotaAlert { .. } => WebhookEventType::QuotaAlert,
         }
     }
 
@@ -206,7 +220,8 @@ impl WebhookEvent {
             | WebhookEvent::RunSuspended { timestamp, .. }
             | WebhookEvent::RunQuarantined { timestamp, .. }
             | WebhookEvent::ToolSchemaChanged { timestamp, .. }
-            | WebhookEvent::CredentialsExpired { timestamp, .. } => *timestamp,
+            | WebhookEvent::CredentialsExpired { timestamp, .. }
+            | WebhookEvent::QuotaAlert { timestamp, .. } => *timestamp,
         }
     }
 }
@@ -226,6 +241,7 @@ pub struct RunEvent {
 #[serde(rename_all = "camelCase")]
 pub struct ToolSchemaChanged {
     pub run_id: String,
+    pub namespace: NamespaceName,
     pub labels: Labels,
     /// For `POST /v1/tasks/{id}/approve` and `/reject`.
     pub task_id: String,
@@ -249,6 +265,7 @@ pub struct ToolSchemaChanged {
 #[serde(rename_all = "camelCase")]
 pub struct CredentialsExpired {
     pub run_id: String,
+    pub namespace: NamespaceName,
     pub labels: Labels,
     pub task_id: String,
     pub seq: u32,
@@ -412,7 +429,8 @@ mod tests {
             "type": "credentials.expired",
             "timestamp": "2026-11-09T10:02:11Z",
             "data": {
-                "runId": "r1", "labels": {}, "taskId": "t1", "seq": 2, "tool": "github.list_issues",
+                "runId": "r1", "namespace": "alice", "labels": {}, "taskId": "t1", "seq": 2,
+                "tool": "github.list_issues",
                 "server": "github", "toolset": "ab", "message": "401 Unauthorized"
             }
         }))

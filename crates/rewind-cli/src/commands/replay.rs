@@ -388,6 +388,11 @@ async fn load(
         .create_run(
             NewRun {
                 run: run.clone(),
+                // A local replay, in the embedded server's namespace.
+                namespace: rewind_engine::ports::NamespaceName::new(
+                    rewind_engine::ports::NamespaceName::LOCAL,
+                )
+                .map_err(|error| fail(&error))?,
                 started: started.clone(),
                 metadata: RunMetadata::default(),
                 created_at: *recorded_at,

@@ -55,6 +55,7 @@ pub(super) async fn claim(
     }
     let claim = HostClaim {
         tenant: caller.tenant.clone(),
+        namespace: None,
         toolset,
         tools: query.tools.into_iter().collect::<BTreeSet<_>>(),
         limit: usize::try_from(query.limit.unwrap_or(1).clamp(1, 100)).unwrap_or(1),
@@ -91,6 +92,7 @@ fn view(task: HostTask) -> Task {
         token: task.token.0,
         id: task_id(&task.task),
         run_id: task.task.run.id.to_string(),
+        namespace: crate::views::namespace(&task.namespace),
         seq: task.task.seq.0,
         tool: task.tool,
         args: task.args,

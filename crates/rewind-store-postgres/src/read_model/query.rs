@@ -58,6 +58,12 @@ pub(super) fn push_matching(sql: &mut Sql<'_>, query: &RunQuery) {
 
 fn push_predicate(sql: &mut Sql<'_>, predicate: &Predicate) {
     match predicate {
+        Predicate::Namespace(names) => {
+            let names: Vec<&str> = names.iter().map(|name| name.as_str()).collect();
+            push_any(sql, &names, |sql, name| {
+                sql.push("s.namespace = ").push_bind((*name).to_owned());
+            });
+        }
         Predicate::Id(prefixes) => {
             let ranges: Vec<_> = prefixes.iter().filter_map(|p| id_range(p)).collect();
             push_any(sql, &ranges, |sql, (low, high)| {
@@ -344,7 +350,7 @@ fn digest_range(prefix: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.toolset, s.headline, s.status, \
      s.mode, s.labels::text, s.parent, s.started_at, s.ended_at, s.last_activity_at, \
      s.tool_calls, s.errors, s.history_len, s.wakes_at, s.error, s.message, s.line, \
-     s.signature, s.fingerprint, q.kind, q.reason, q.since";
+     s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace";
 
 fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
     let ending = match row.opt_text(16)? {
@@ -365,8 +371,11 @@ fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
         }),
         None => None,
     };
+    let namespace = row.text(24)?;
     Ok(RunSummary {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
+        namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
+            .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         headline: row.text(4)?,

@@ -21,10 +21,10 @@ use serde_json::json;
 use super::{T0, check, tenant};
 use crate::ports::{
     Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,
-    Predicate, ProjectedRun, QuarantineKind, QuarantineNote, Range, ReadModel, RunOrder, RunQuery,
-    RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor,
-    StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope, TextMatch, ToolStats,
-    ToolStatsFilter, Wait, WaitKind, WaitingFor,
+    NamespaceName, Predicate, ProjectedRun, QuarantineKind, QuarantineNote, Range, ReadModel,
+    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
+    SearchCursor, StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope, TextMatch,
+    ToolStats, ToolStatsFilter, Wait, WaitKind, WaitingFor,
 };
 
 /// Runs every check, each on new stores.
@@ -75,10 +75,23 @@ pub async fn run_all<S: ReadModel>(new_store: impl Fn() -> S) {
     eprintln!("read model conformance: projections_ignore_order_and_repetition");
     projections_ignore_order_and_repetition(&new_store(), &new_store()).await;
     check!("read model", new_store(), runs_are_purged_and_deleted);
+    check!(
+        "read model",
+        new_store(),
+        runs_scripts_and_tools_are_scoped_by_namespace
+    );
 }
 
 // -------------------------------------------------------------------------------------------
 // Building runs
+
+fn alice() -> NamespaceName {
+    NamespaceName::new("alice").expect("valid")
+}
+
+fn bob() -> NamespaceName {
+    NamespaceName::new("bob").expect("valid")
+}
 
 fn acme() -> TenantId {
     tenant("acme")
@@ -414,6 +427,7 @@ fn run(
 ) -> ProjectedRun {
     ProjectedRun {
         run: RunRef::new(tenant, id(n)),
+        namespace: alice(),
         script: script(script_n),
         headline: headline.into(),
         toolset: toolset(toolset_n),
@@ -1021,6 +1035,7 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
         summary(store, acme(), 4).await,
         RunSummary {
             run: RunRef::new(acme(), id(4)),
+            namespace: alice(),
             script: script(2),
             headline: "// Ask before closing".into(),
             toolset: toolset(1),
@@ -1070,6 +1085,7 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
         summary(store, acme(), 2).await,
         RunSummary {
             run: RunRef::new(acme(), id(2)),
+            namespace: alice(),
             script: script(1),
             headline: "// Deploy the release".into(),
             toolset: toolset(1),
@@ -1892,6 +1908,7 @@ pub async fn stats_count_the_runs_of_a_query<S: ReadModel>(store: &S) {
             waiting: waiting_now.clone(),
             quarantined: 1,
             facets: Facets {
+                namespaces: values(&[("alice", 9)]),
                 statuses: values(&[("active", 3), ("failed", 3), ("aborted", 1)]),
                 labels: vec![
                     LabelFacet {
@@ -1957,6 +1974,7 @@ pub async fn stats_count_the_runs_of_a_query<S: ReadModel>(store: &S) {
             waiting: waiting_now.clone(),
             quarantined: 1,
             facets: Facets {
+                namespaces: values(&[("alice", 5)]),
                 statuses: values(&[
                     ("active", 2),
                     ("aborted", 1),
@@ -2850,6 +2868,7 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
     let stats = store
         .tool_stats(&ToolStatsFilter {
             tenant: acme(),
+            namespace: None,
             toolset: None,
             since: None,
             until: None,
@@ -2891,6 +2910,7 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
     let of_toolset = store
         .tool_stats(&ToolStatsFilter {
             tenant: acme(),
+            namespace: None,
             toolset: Some(toolset(2)),
             since: None,
             until: None,
@@ -2907,6 +2927,7 @@ pub async fn scripts_and_tools_are_aggregated<S: ReadModel>(store: &S) {
     let windowed = store
         .tool_stats(&ToolStatsFilter {
             tenant: acme(),
+            namespace: None,
             toolset: None,
             since: Some(at(1_000)),
             until: Some(at(3_000)),
@@ -3085,6 +3106,7 @@ pub async fn attempts_give_retries<S: ReadModel>(store: &S) {
     let stats = store
         .tool_stats(&ToolStatsFilter {
             tenant: acme(),
+            namespace: None,
             toolset: None,
             since: None,
             until: None,
@@ -3170,6 +3192,7 @@ pub async fn projections_ignore_order_and_repetition<S: ReadModel>(ordered: &S, 
         );
         let filter = ToolStatsFilter {
             tenant: tenant.clone(),
+            namespace: None,
             toolset: None,
             since: None,
             until: None,
@@ -3202,6 +3225,108 @@ pub async fn projections_ignore_order_and_repetition<S: ReadModel>(ordered: &S, 
 
 /// Purging and deleting remove everything of a run: summary, labels, waits, calls, task
 /// states, quarantine. Projected again, the run has none of its records.
+/// The namespace of a run, from its record: a term, a facet, and a filter of scripts and tool
+/// statistics.
+pub async fn runs_scripts_and_tools_are_scoped_by_namespace<S: ReadModel>(store: &S) {
+    let live = RunMode::Live;
+    let in_bob = |mut run: ProjectedRun| {
+        run.namespace = bob();
+        run
+    };
+    apply_all(
+        store,
+        &[
+            Fixture::new(
+                run(acme(), 1, 1, 1, "// one", &[], None),
+                History::started(0)
+                    .call(0, 1, "github.list_issues")
+                    .result(10, 1, json!([]).into())
+                    .complete(20),
+                live,
+            ),
+            Fixture::new(
+                in_bob(run(acme(), 2, 1, 1, "// two", &[], None)),
+                History::started(0)
+                    .call(0, 1, "slack.post")
+                    .result(10, 1, json!({}).into())
+                    .complete(20),
+                live,
+            ),
+            Fixture::new(
+                in_bob(run(acme(), 3, 2, 1, "// three", &[], None)),
+                History::started(0).complete(20),
+                live,
+            ),
+        ],
+    )
+    .await;
+    assert_eq!(summary(store, acme(), 2).await.namespace, bob());
+    check_terms(
+        store,
+        &acme(),
+        &[1, 2, 3],
+        vec![
+            (Predicate::Namespace(BTreeSet::from([bob()])), vec![2, 3]),
+            (
+                Predicate::Namespace(BTreeSet::from([alice(), bob()])),
+                vec![1, 2, 3],
+            ),
+            (
+                Predicate::Namespace(BTreeSet::from(
+                    [NamespaceName::new("carol").expect("valid")],
+                )),
+                vec![],
+            ),
+        ],
+    )
+    .await;
+    let stats = store
+        .run_stats(
+            &RunQuery::new(acme()),
+            &StatsWindow {
+                since: None,
+                until: None,
+                bucket_ms: None,
+                top: 10,
+            },
+        )
+        .await
+        .expect("run_stats");
+    assert_eq!(stats.facets.namespaces, values(&[("bob", 2), ("alice", 1)]));
+    let scripts_of = |namespace: NamespaceName| async move {
+        let mut filter = ScriptFilter::new(acme());
+        filter.namespace = Some(namespace);
+        store
+            .scripts(&filter)
+            .await
+            .expect("scripts")
+            .into_iter()
+            .map(|summary| (summary.script, summary.runs))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(scripts_of(alice()).await, [(script(1), 1)]);
+    let mut of_bob = vec![(script(1), 1), (script(2), 1)];
+    of_bob.sort();
+    assert_eq!(scripts_of(bob()).await, of_bob);
+    let tools_of = |namespace: NamespaceName| async move {
+        store
+            .tool_stats(&ToolStatsFilter {
+                tenant: acme(),
+                namespace: Some(namespace),
+                toolset: None,
+                since: None,
+                until: None,
+            })
+            .await
+            .expect("tool_stats")
+            .into_iter()
+            .map(|stats| stats.tool)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(tools_of(alice()).await, ["github.list_issues"]);
+    assert_eq!(tools_of(bob()).await, ["slack.post"]);
+}
+
 pub async fn runs_are_purged_and_deleted<S: ReadModel>(store: &S) {
     let fixtures = plain_runs();
     apply_all(store, &fixtures).await;

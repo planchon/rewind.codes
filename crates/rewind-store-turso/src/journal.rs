@@ -17,7 +17,14 @@ use rewind_engine::ports::{
     TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask,
     TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
 };
+use rewind_engine::ports::{
+    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind,
+    QuotaScope, Quotas, Usage, UsageDelta, UsageOf,
+};
 use turso::{Connection, Row, Value};
+
+use crate::namespaces_not_kept;
 
 use crate::codec::{self, decode_labels, encode_labels};
 use crate::sql::{
@@ -45,7 +52,7 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at, attempts"
+         ended_at, archive_document, archived_at, parent_at, attempts, namespace"
     };
 }
 
@@ -86,8 +93,11 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
             archived_at: row.ts(23)?,
         }),
     };
+    let namespace = row.text(26)?;
     Ok(RunRecord {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
+        namespace: NamespaceName::new(namespace.clone())
+            .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
         script: row.digest(2)?,
         toolset: row.digest(3)?,
         status: codec::parse_status(&row.text(4)?)?,
@@ -482,7 +492,11 @@ async fn set_task_state(
 fn tenant_from_row(row: &Row) -> Result<Tenant, Error> {
     Ok(Tenant {
         id: row.tenant(0)?,
-        active_run_quota: row.opt_u32(1)?,
+        quotas: Quotas {
+            active_runs: row.opt_u32(1)?,
+            ..Quotas::default()
+        },
+        namespace_defaults: Quotas::default(),
         retention: Retention {
             journal: row.duration(2)?,
             archive: row.duration(3)?,
@@ -714,7 +728,13 @@ impl JournalStore for TursoStore {
                 .transpose()?
                 .unwrap_or(0);
                 if active >= u64::from(quota) {
-                    return Ok(CreateRun::QuotaExceeded { quota });
+                    return Ok(CreateRun::QuotaExceeded(QuotaExceeded {
+                        quota: QuotaKind::ActiveRuns,
+                        scope: QuotaScope::Tenant,
+                        limit: u64::from(quota),
+                        used: active,
+                        resets_at: None,
+                    }));
                 }
             }
             let trace = run.metadata.trace_context.as_ref();
@@ -722,8 +742,8 @@ impl JournalStore for TursoStore {
                 connection,
                 "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
                  expires_at, expiry_enqueued, failures, attempts, fence, labels, traceparent, \
-                 tracestate, parent, parent_at, idempotency_key, created_at, updated_at) \
-                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 tracestate, parent, parent_at, idempotency_key, created_at, updated_at, namespace) \
+                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 vec![
                     run_id(run.run.id),
                     tenant(tenant_id),
@@ -742,6 +762,7 @@ impl JournalStore for TursoStore {
                     opt_text(idempotency_key.as_deref()),
                     ts(run.created_at),
                     ts(run.created_at),
+                    text(run.namespace.as_str()),
                 ],
             )
             .await?;
@@ -805,6 +826,10 @@ impl JournalStore for TursoStore {
         let mut query =
             concat!("SELECT ", run_columns!(), " FROM runs WHERE tenant = ?").to_owned();
         let mut params = vec![tenant(&filter.tenant)];
+        if let Some(namespace) = &filter.namespace {
+            query.push_str(" AND namespace = ?");
+            params.push(text(namespace.as_str()));
+        }
         if let Some(status) = filter.status {
             query.push_str(" AND status = ?");
             params.push(text(status.as_str()));
@@ -1525,11 +1550,16 @@ impl JournalStore for TursoStore {
                 ),
                 TaskFilter::Host {
                     tenant: host_tenant,
+                    namespace,
                     toolset,
                     tools,
                 } => {
                     let mut clause = "t.dispatched = 0 AND r.tenant = ?".to_owned();
                     filter_params.push(tenant(host_tenant));
+                    if let Some(namespace) = namespace {
+                        clause.push_str(" AND r.namespace = ?");
+                        filter_params.push(text(namespace.as_str()));
+                    }
                     if let Some(toolset) = toolset {
                         clause.push_str(" AND r.toolset = ?");
                         filter_params.push(digest(*toolset));
@@ -1861,6 +1891,14 @@ impl JournalStore for TursoStore {
             } => (
                 "SELECT id FROM runs WHERE tenant = ? AND toolset = ?",
                 vec![tenant(owner), digest(*toolset)],
+            ),
+            ParkedScope::Namespace {
+                tenant: owner,
+                namespace,
+                toolset,
+            } => (
+                "SELECT id FROM runs WHERE tenant = ? AND namespace = ? AND toolset = ?",
+                vec![tenant(owner), text(namespace.as_str()), digest(*toolset)],
             ),
         };
         params.splice(0..0, [ts(now), ts(now)]);
@@ -2387,6 +2425,15 @@ impl JournalStore for TursoStore {
     // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
+        let kept = Quotas {
+            active_runs: record.quotas.active_runs,
+            ..Quotas::default()
+        };
+        if record.quotas != kept || record.namespace_defaults != Quotas::default() {
+            return Err(namespaces_not_kept(
+                "a tenant's ceiling other than its active runs, or its namespaces' defaults",
+            ));
+        }
         let connection = self.connection().await?;
         sql::execute(
             &connection,
@@ -2396,7 +2443,8 @@ impl JournalStore for TursoStore {
             vec![
                 tenant(&record.id),
                 record
-                    .active_run_quota
+                    .quotas
+                    .active_runs
                     .map_or(Value::Null, |quota| int(u64::from(quota))),
                 ms(record.retention.journal),
                 ms(record.retention.archive),
@@ -2433,6 +2481,124 @@ impl JournalStore for TursoStore {
             .iter()
             .map(tenant_from_row)
             .collect::<Result<_, Error>>()?)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Namespaces, their use and their alerts: not kept by this store (see
+    // `namespaces_not_kept`).
+
+    async fn put_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _exceptions: Option<&Quotas>,
+        _now: Timestamp,
+    ) -> Result<NamespaceWrite, StoreError> {
+        Err(namespaces_not_kept("put_namespace"))
+    }
+
+    async fn get_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+    ) -> Result<Option<Namespace>, StoreError> {
+        // This store keeps no namespace record (`put_namespace` and `delete_namespace` are
+        // refused): no namespace has exceptions or is being erased, and the tenant's defaults
+        // apply to every one.
+        Ok(None)
+    }
+
+    async fn list_namespaces(
+        &self,
+        _filter: &NamespaceFilter,
+    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+        Err(namespaces_not_kept("list_namespaces"))
+    }
+
+    async fn namespace_usage(
+        &self,
+        _tenant: &TenantId,
+        _of: &UsageOf,
+        _month: Month,
+    ) -> Result<Usage, StoreError> {
+        Err(namespaces_not_kept("namespace_usage"))
+    }
+
+    async fn namespace_has_script(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _script: Digest,
+    ) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("namespace_has_script"))
+    }
+
+    async fn revoke_namespace_tokens(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("revoke_namespace_tokens"))
+    }
+
+    async fn delete_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<DeleteNamespace, StoreError> {
+        Err(namespaces_not_kept("delete_namespace"))
+    }
+
+    async fn namespaces_to_erase(
+        &self,
+        _limit: usize,
+    ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
+        Err(namespaces_not_kept("namespaces_to_erase"))
+    }
+
+    async fn drop_namespace(
+        &self,
+        _tenant: &TenantId,
+        _name: &NamespaceName,
+    ) -> Result<DropNamespace, StoreError> {
+        Err(namespaces_not_kept("drop_namespace"))
+    }
+
+    async fn record_usage(
+        &self,
+        _deltas: &[UsageDelta],
+        _now: Timestamp,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("record_usage"))
+    }
+
+    async fn quota_alerts(
+        &self,
+        _tenant: &TenantId,
+        _namespace: Option<&NamespaceName>,
+        _month: Month,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("quota_alerts"))
+    }
+
+    async fn claim_quota_alerts(
+        &self,
+        _owner: &str,
+        _now: Timestamp,
+        _lease_duration: Duration,
+        _limit: usize,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        Err(namespaces_not_kept("claim_quota_alerts"))
+    }
+
+    async fn ack_quota_alerts(
+        &self,
+        _keys: &[QuotaAlertKey],
+        _now: Timestamp,
+    ) -> Result<(), StoreError> {
+        Err(namespaces_not_kept("ack_quota_alerts"))
     }
 
     // ---------------------------------------------------------------------------------------

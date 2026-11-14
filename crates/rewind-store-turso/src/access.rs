@@ -8,9 +8,11 @@
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role,
-    RoleDeletion, StoreError, TenantId,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
+    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
 };
+
+use crate::namespaces_not_kept;
 use turso::{Connection, Row};
 
 use crate::codec::{
@@ -212,6 +214,59 @@ impl AccessStore for TursoStore {
         )
         .await?;
         Ok(revoked > 0)
+    }
+
+    // End users' tokens and token keys: not kept by this store (see `namespaces_not_kept`).
+
+    async fn put_token(&self, _token: &Token) -> Result<(), StoreError> {
+        Err(namespaces_not_kept("put_token"))
+    }
+
+    async fn find_token(&self, _hash: Digest) -> Result<Option<Token>, StoreError> {
+        Err(namespaces_not_kept("find_token"))
+    }
+
+    async fn revoke_token(
+        &self,
+        _tenant: &TenantId,
+        _hash: Digest,
+        _now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("revoke_token"))
+    }
+
+    async fn revoke_tokens(
+        &self,
+        _tenant: &TenantId,
+        _namespace: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        Err(namespaces_not_kept("revoke_tokens"))
+    }
+
+    async fn count_tokens(
+        &self,
+        _tenant: &TenantId,
+        _namespace: &NamespaceName,
+        _now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        Err(namespaces_not_kept("count_tokens"))
+    }
+
+    async fn put_token_key(&self, _key: &TokenKey) -> Result<(), StoreError> {
+        Err(namespaces_not_kept("put_token_key"))
+    }
+
+    async fn find_token_key(&self, _kid: &str) -> Result<Option<TokenKey>, StoreError> {
+        Err(namespaces_not_kept("find_token_key"))
+    }
+
+    async fn list_token_keys(&self, _tenant: &TenantId) -> Result<Vec<TokenKey>, StoreError> {
+        Err(namespaces_not_kept("list_token_keys"))
+    }
+
+    async fn delete_token_key(&self, _tenant: &TenantId, _kid: &str) -> Result<bool, StoreError> {
+        Err(namespaces_not_kept("delete_token_key"))
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {

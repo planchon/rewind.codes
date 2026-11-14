@@ -144,6 +144,7 @@ impl Projected {
         };
         RunSummary {
             run: self.run.run.clone(),
+            namespace: self.run.namespace.clone(),
             script: self.run.script,
             headline: self.run.headline.clone(),
             toolset: self.run.toolset,
@@ -295,6 +296,7 @@ impl Row {
                 .any(|prefix| hex.starts_with(prefix.as_str()))
         };
         match predicate {
+            Predicate::Namespace(names) => names.contains(&summary.namespace),
             Predicate::Id(prefixes) => {
                 let id = summary.run.id.to_string();
                 prefixes
@@ -442,6 +444,7 @@ fn latency(mut values: Vec<u64>) -> Option<Latency> {
 }
 
 fn facets(rows: &[&Row], top: usize) -> Facets {
+    let mut namespaces: BTreeMap<String, u64> = BTreeMap::new();
     let mut statuses: BTreeMap<String, u64> = BTreeMap::new();
     let mut labels: BTreeMap<&str, (u64, BTreeMap<String, u64>)> = BTreeMap::new();
     let mut tools: BTreeMap<String, u64> = BTreeMap::new();
@@ -451,6 +454,9 @@ fn facets(rows: &[&Row], top: usize) -> Facets {
     let mut signals: BTreeMap<String, u64> = BTreeMap::new();
     for row in rows {
         let summary = &row.summary;
+        *namespaces
+            .entry(summary.namespace.as_str().to_owned())
+            .or_default() += 1;
         *statuses
             .entry(summary.status.as_str().to_owned())
             .or_default() += 1;
@@ -486,6 +492,7 @@ fn facets(rows: &[&Row], top: usize) -> Facets {
     keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     keys.truncate(top);
     Facets {
+        namespaces: ranked(namespaces, top),
         statuses: ranked(statuses, top),
         labels: keys
             .into_iter()
@@ -689,6 +696,10 @@ impl ReadModel for MemoryReadModel {
         for projected in state.runs.values() {
             if projected.run.run.tenant != filter.tenant
                 || filter
+                    .namespace
+                    .as_ref()
+                    .is_some_and(|name| projected.run.namespace != *name)
+                || filter
                     .digest
                     .is_some_and(|digest| projected.run.script != digest)
                 || !filter
@@ -742,6 +753,10 @@ impl ReadModel for MemoryReadModel {
         let mut stats: BTreeMap<String, (ToolStats, Vec<u64>)> = BTreeMap::new();
         for projected in state.runs.values() {
             if projected.run.run.tenant != filter.tenant
+                || filter
+                    .namespace
+                    .as_ref()
+                    .is_some_and(|name| projected.run.namespace != *name)
                 || filter
                     .toolset
                     .is_some_and(|toolset| projected.run.toolset != toolset)

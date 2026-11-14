@@ -10,6 +10,8 @@ use std::time::Duration;
 
 use rewind_core::RunId;
 
+use super::namespaces::Quotas;
+
 /// The tenant a run, a script, a toolset or a payload belongs to: 1 to 64 ASCII letters,
 /// digits, `-` and `_`. It appears in storage keys and blob paths (`{tenant}/sha256/…`), hence
 /// the restricted alphabet.
@@ -100,8 +102,11 @@ impl TenantScope {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tenant {
     pub id: TenantId,
-    /// The most runs that may be active at once; starting one more is refused (429).
-    pub active_run_quota: Option<u32>,
+    /// The ceiling, set by the operator: the customer's offer, on the tenant's totals across its
+    /// namespaces (`archi/06-storage-and-scale.md`, "Quotas").
+    pub quotas: Quotas,
+    /// The limits of every namespace without an exception, set by the customer.
+    pub namespace_defaults: Quotas,
     pub retention: Retention,
 }
 
@@ -110,7 +115,8 @@ impl Tenant {
     pub fn new(id: TenantId) -> Self {
         Self {
             id,
-            active_run_quota: None,
+            quotas: Quotas::default(),
+            namespace_defaults: Quotas::default(),
             retention: Retention::default(),
         }
     }

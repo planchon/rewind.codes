@@ -406,6 +406,7 @@ mod tests {
             .create_run(
                 NewRun {
                     run: run.clone(),
+                    namespace: crate::ports::NamespaceName::migrated(),
                     started: RunStarted {
                         script: Digest::of(b"script"),
                         toolset: Digest::of(b"toolset"),

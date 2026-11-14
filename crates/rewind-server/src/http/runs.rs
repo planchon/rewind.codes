@@ -28,7 +28,7 @@ use rewind_engine::trace::{TraceInput, render_trace};
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
-use crate::extract::{Body, Idempotency, OptionalBody, Query};
+use crate::extract::{Body, Idempotency, NamespaceHeader, OptionalBody, Query};
 use crate::http::{search, toolsets};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
@@ -40,9 +40,11 @@ pub(super) async fn start(
     State(app): State<Arc<App>>,
     caller: Caller,
     Idempotency(key): Idempotency,
+    namespace: NamespaceHeader,
     Body(request): Body<StartRun>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::RunsStart)?;
+    let namespace = namespace.required()?;
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
     let stored = match &request.toolset {
@@ -52,6 +54,7 @@ pub(super) async fn start(
     let input = request.input;
     let start = rewind_engine::StartRun {
         tenant: caller.tenant.clone(),
+        namespace,
         script: Script::new(request.script),
         toolset: stored.toolset,
         declarations: stored.declarations,

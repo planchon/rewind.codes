@@ -14,6 +14,7 @@ use crate::common::{
     AbortReason, Callsite, Duration, Labels, LogLevel, Payload, RunMode, RunStatus, Timestamp,
     ToolFailure,
 };
+use crate::namespaces::NamespaceName;
 pub use crate::query::WaitKind;
 use crate::tasks::{ParkedReason, TaskState};
 use crate::toolsets::Credentials;
@@ -94,6 +95,8 @@ pub(crate) fn empty_object() -> Value {
 pub struct Run {
     /// The run id (a UUID v7).
     pub id: String,
+    /// The end user the run belongs to. A fork has its parent's.
+    pub namespace: NamespaceName,
     pub status: RunStatus,
     /// Set while the run is quarantined: its activations are stopped until it is released or
     /// given up. Quarantine is not a status.
@@ -377,6 +380,7 @@ impl RunSort {
 #[serde(rename_all = "camelCase")]
 pub struct RunSummary {
     pub id: String,
+    pub namespace: NamespaceName,
     pub status: RunStatus,
     pub quarantined: bool,
     pub script: String,

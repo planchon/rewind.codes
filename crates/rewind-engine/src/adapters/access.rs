@@ -4,8 +4,8 @@ use std::sync::{Mutex, MutexGuard};
 use rewind_core::{Digest, Timestamp};
 
 use crate::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role,
-    RoleDeletion, StoreError, TenantId,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
+    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
 };
 
 /// `AccessStore` in memory, for engine and server tests. It passes the conformance suite: the
@@ -18,6 +18,8 @@ pub struct MemoryAccess {
 #[derive(Debug, Default)]
 struct State {
     keys: BTreeMap<Digest, ApiKey>,
+    tokens: BTreeMap<Digest, Token>,
+    token_keys: BTreeMap<String, TokenKey>,
     roles: BTreeMap<(TenantId, String), Role>,
     grants: BTreeMap<(TenantId, Principal), Grant>,
     default_roles: BTreeMap<TenantId, String>,
@@ -97,6 +99,115 @@ impl AccessStore for MemoryAccess {
             }
             _ => Ok(false),
         }
+    }
+
+    async fn put_token(&self, token: &Token) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        if state.tokens.contains_key(&token.hash) {
+            return Err(StoreError::Conflict(format!(
+                "a token with hash {} already exists",
+                token.hash.short()
+            )));
+        }
+        state.tokens.insert(token.hash, token.clone());
+        Ok(())
+    }
+
+    async fn find_token(&self, hash: Digest) -> Result<Option<Token>, StoreError> {
+        Ok(self.lock()?.tokens.get(&hash).cloned())
+    }
+
+    async fn revoke_token(
+        &self,
+        tenant: &TenantId,
+        hash: Digest,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.lock()?;
+        match state.tokens.get_mut(&hash) {
+            Some(token) if token.tenant == *tenant && token.revoked_at.is_none() => {
+                token.revoked_at = Some(now);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn revoke_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let mut revoked = 0;
+        for token in state.tokens.values_mut() {
+            if token.tenant == *tenant
+                && token.namespace == *namespace
+                && token.revoked_at.is_none()
+            {
+                token.revoked_at = Some(now);
+                revoked += 1;
+            }
+        }
+        Ok(revoked)
+    }
+
+    async fn count_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        Ok(self
+            .lock()?
+            .tokens
+            .values()
+            .filter(|token| {
+                token.tenant == *tenant && token.namespace == *namespace && token.is_live(now)
+            })
+            .count() as u64)
+    }
+
+    async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        if state.token_keys.contains_key(&key.kid) {
+            return Err(StoreError::Conflict(format!(
+                "a token key {} already exists",
+                key.kid
+            )));
+        }
+        state.token_keys.insert(key.kid.clone(), key.clone());
+        Ok(())
+    }
+
+    async fn find_token_key(&self, kid: &str) -> Result<Option<TokenKey>, StoreError> {
+        Ok(self.lock()?.token_keys.get(kid).cloned())
+    }
+
+    async fn list_token_keys(&self, tenant: &TenantId) -> Result<Vec<TokenKey>, StoreError> {
+        let mut keys: Vec<TokenKey> = self
+            .lock()?
+            .token_keys
+            .values()
+            .filter(|key| key.tenant == *tenant)
+            .cloned()
+            .collect();
+        keys.sort_by(|a, b| (a.created_at, &a.kid).cmp(&(b.created_at, &b.kid)));
+        Ok(keys)
+    }
+
+    async fn delete_token_key(&self, tenant: &TenantId, kid: &str) -> Result<bool, StoreError> {
+        let mut state = self.lock()?;
+        if state
+            .token_keys
+            .get(kid)
+            .is_some_and(|key| key.tenant == *tenant)
+        {
+            state.token_keys.remove(kid);
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {

@@ -305,6 +305,7 @@ mod tests {
     fn active_run() -> Run {
         Run {
             id: "r1".into(),
+            namespace: "local".parse().unwrap(),
             status: RunStatus::Active,
             quarantine: None,
             script: "s".into(),

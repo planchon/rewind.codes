@@ -92,7 +92,7 @@ pub fn timestamp(time: rewind_core::Timestamp) -> Timestamp {
 
 /// A duration, written as scripts write them (`"500ms"`, `"30s"`, `"1h30m"`, `"2d"`, `"1w"`)
 /// or as a number of milliseconds. Written back in the first form.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Duration(std::time::Duration);
 
 impl Duration {

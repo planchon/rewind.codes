@@ -54,6 +54,7 @@ fn at() -> Timestamp {
 fn base_run(id: &str, status: RunStatus) -> Run {
     Run {
         id: id.into(),
+        namespace: "local".parse().unwrap(),
         status,
         quarantine: None,
         script: "aa".repeat(32),
@@ -306,6 +307,7 @@ async fn list(
         .values()
         .map(|run| RunSummary {
             id: run.id.clone(),
+            namespace: run.namespace.clone(),
             status: run.status,
             quarantined: run.quarantine.is_some(),
             script: run.script.clone(),

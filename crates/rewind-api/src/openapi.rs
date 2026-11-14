@@ -19,6 +19,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::auth::SESSION_COOKIE;
 use crate::events::StreamEvent;
+use crate::namespaces::SignedTokenClaims;
 use crate::problem::{self, Problem};
 use crate::webhooks::{
     WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
@@ -30,12 +31,17 @@ use crate::webhooks::{
     info(
         title = "Rewind API",
         description = "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, \
-            webhooks, reading, the organization, access and the server; and `/auth`, the \
-            dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
-            (`rewind_sk_…`) or a member's access token from `/auth`, except over the embedded \
-            server's unix socket and to the inbound webhook URL. What the caller may do is its \
-            grant's: every operation requires one permission of the catalog \
-            (`GET /v1/permissions`), and answers 403 without it. `/auth` is for a browser: it \
+            webhooks, reading, the organization, access, namespaces and the server; and `/auth`, \
+            the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
+            (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
+            (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with \
+            `rk_`), except over the embedded server's unix socket and to the inbound webhook \
+            URL. What the caller may do is its grant's, or its token's: every operation requires \
+            one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. \
+            A key or a member names the namespace (the end user) a request acts for with the \
+            header `Rewind-Namespace`: required to start a run, check or test a script, it \
+            narrows a read to that namespace. An end user's token reaches its own namespace \
+            only. `/auth` is for a browser: it \
             reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are \
             `application/problem+json`, with a `detail` written for a model. Fields are \
             camelCase, enumerated values snake_case, times RFC 3339, and durations a number and \
@@ -100,6 +106,21 @@ use crate::webhooks::{
         operations::list_api_keys,
         operations::create_api_key,
         operations::revoke_api_key,
+        operations::list_namespaces,
+        operations::get_namespace,
+        operations::put_namespace,
+        operations::delete_namespace,
+        operations::set_namespace_credentials,
+        operations::get_namespace_defaults,
+        operations::put_namespace_defaults,
+        operations::list_quota_alerts,
+        operations::create_token,
+        operations::revoke_namespace_tokens,
+        operations::revoke_token,
+        operations::list_token_keys,
+        operations::create_token_key,
+        operations::delete_token_key,
+        operations::put_ceiling,
         operations::get_server,
         operations::stop_server,
         operations::get_auth_config,
@@ -113,7 +134,7 @@ use crate::webhooks::{
         operations::join_waitlist,
         operations::sign_out,
     ),
-    components(schemas(Problem, StreamEvent, WebhookEvent, WebhookEventType)),
+    components(schemas(Problem, StreamEvent, WebhookEvent, WebhookEventType, SignedTokenClaims)),
     modifiers(&Conventions),
     security(("bearer" = [])),
     tags(
@@ -125,6 +146,7 @@ use crate::webhooks::{
         (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
+        (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, their credentials, and their tokens."),
         (name = "server", description = "The server itself."),
         (name = "auth", description = "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist."),
     )
@@ -350,6 +372,11 @@ mod operations {
         MagicAuthVerification, OrganizationSelection, SessionRequest, WaitlistRequest,
     };
     use crate::events::{Entry, EventsQuery, StreamEvent};
+    use crate::namespaces::{
+        CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
+        NamespaceListQuery, NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults,
+        QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token, TokenKey, TokenKeyList,
+    };
     use crate::organization::{
         CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
         Organization, OrganizationSettings, UpdateOrganization,
@@ -446,6 +473,7 @@ mod operations {
     /// at start and the checker's own rules. Nothing runs.
     #[utoipa::path(
         post, path = "/v1/check", tag = "scripts", operation_id = "checkScript",
+        params(("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.")),
         request_body = CheckRequest,
         responses(
             (status = 200, description = "The diagnostics; `ok` when none is an error.", body = CheckResult),
@@ -460,6 +488,7 @@ mod operations {
     /// really called.
     #[utoipa::path(
         post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
+        params(("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
             (status = 200, description = "The outcome and the expectations that do not hold.", body = TestResult),
@@ -497,7 +526,10 @@ mod operations {
     /// when the run ends or `wait` passes, whichever comes first.
     #[utoipa::path(
         post, path = "/v1/runs", tag = "runs", operation_id = "startRun",
-        params(("Idempotency-Key" = Option<String>, Header, description = "A request repeated with the same key returns the run the first one started (200).")),
+        params(
+            ("Idempotency-Key" = Option<String>, Header, description = "A request repeated with the same key in the namespace returns the run the first one started (200)."),
+            ("Rewind-Namespace" = String, Header, description = "The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing."),
+        ),
         request_body = StartRun,
         responses(
             (status = 201, description = "Started.", body = Run),
@@ -505,7 +537,8 @@ mod operations {
             (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The input is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
             (status = 422, description = "The script was refused before any run exists (`invalid-script`), with `diagnostics`.", body = Problem, content_type = "application/problem+json"),
-            (status = 429, description = "The tenant already has its maximum of active runs (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
+            (status = 429, description = "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn start_run() {}
@@ -1147,6 +1180,204 @@ mod operations {
         )
     )]
     pub(super) fn revoke_api_key() {}
+
+    // ---------------------------------------------------------------------------------------
+    // Namespaces
+
+    /// List the namespaces
+    ///
+    /// The end users of the organization, each with the limits that apply, its exceptions and
+    /// its use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.
+    #[utoipa::path(
+        get, path = "/v1/namespaces", tag = "namespaces", operation_id = "listNamespaces",
+        params(NamespaceListQuery),
+        responses((status = 200, description = "A page of namespaces.", body = NamespaceList))
+    )]
+    pub(super) fn list_namespaces() {}
+
+    /// Read a namespace
+    ///
+    /// Its limits and exceptions, its use day by day over a month, its alerts and its tokens in
+    /// use. Requires `namespaces:read`.
+    #[utoipa::path(
+        get, path = "/v1/namespaces/{name}", tag = "namespaces", operation_id = "getNamespace",
+        params(("name" = String, Path, description = "The namespace."), NamespaceQuery),
+        responses(
+            (status = 200, description = "The namespace.", body = NamespaceDetail),
+            (status = 404, description = "No such namespace.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_namespace() {}
+
+    /// Create a namespace, or set its exceptions
+    ///
+    /// Replaces the namespace's exceptions to the default limits; a quota absent from them
+    /// follows the default. Requires `namespaces:write`.
+    #[utoipa::path(
+        put, path = "/v1/namespaces/{name}", tag = "namespaces", operation_id = "putNamespace",
+        params(("name" = String, Path, description = "The namespace: 1 to 128 letters, digits, -, _, ., : and @.")),
+        request_body = PutNamespace,
+        responses(
+            (status = 200, description = "Created or changed.", body = NamespaceDetail),
+            (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn put_namespace() {}
+
+    /// Erase a namespace
+    ///
+    /// An end user who leaves: revokes the namespace's tokens, cancels its active runs, then
+    /// erases in the background its runs, credentials and use. Requires `namespaces:write`.
+    #[utoipa::path(
+        delete, path = "/v1/namespaces/{name}", tag = "namespaces", operation_id = "deleteNamespace",
+        params(("name" = String, Path, description = "The namespace.")),
+        responses(
+            (status = 202, description = "The erasure started."),
+            (status = 404, description = "No such namespace.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn delete_namespace() {}
+
+    /// Set or renew an end user's credentials for a toolset
+    ///
+    /// A call of a run of the namespace uses the run's credentials if it has some, else these,
+    /// else the toolset's. Requires `credentials:write`.
+    #[utoipa::path(
+        put, path = "/v1/namespaces/{name}/toolsets/{id}/credentials", tag = "namespaces", operation_id = "setNamespaceCredentials",
+        params(
+            ("name" = String, Path, description = "The namespace."),
+            ("id" = String, Path, description = "The toolset's id."),
+        ),
+        request_body = Credentials,
+        responses(
+            (status = 204, description = "Stored. Calls parked by `credentials.expired` are ready again."),
+            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn set_namespace_credentials() {}
+
+    /// Read the default limits
+    ///
+    /// The limits of every namespace without an exception, and the organization's ceiling
+    /// with its use of the month. Requires `namespaces:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/namespace-defaults", tag = "namespaces", operation_id = "getNamespaceDefaults",
+        params(NamespaceQuery),
+        responses((status = 200, description = "The defaults and the ceiling.", body = NamespaceDefaults))
+    )]
+    pub(super) fn get_namespace_defaults() {}
+
+    /// Set the default limits
+    ///
+    /// Requires `namespaces:write`.
+    #[utoipa::path(
+        put, path = "/v1/organization/namespace-defaults", tag = "namespaces", operation_id = "putNamespaceDefaults",
+        request_body = PutNamespaceDefaults,
+        responses((status = 200, description = "Changed.", body = NamespaceDefaults))
+    )]
+    pub(super) fn put_namespace_defaults() {}
+
+    /// List the quota alerts
+    ///
+    /// The alerts of a month, of one namespace or of the whole organization, newest first.
+    /// Requires `namespaces:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/quota-alerts", tag = "namespaces", operation_id = "listQuotaAlerts",
+        params(QuotaAlertQuery),
+        responses((status = 200, description = "The alerts.", body = QuotaAlertList))
+    )]
+    pub(super) fn list_quota_alerts() {}
+
+    /// Mint an end user's token
+    ///
+    /// An opaque token of the namespace, with permissions among those a token may hold and the
+    /// caller holds, optional labels and a life (1 hour by default, 30 days at most). Creates
+    /// the namespace if needed. Requires `tokens:write`.
+    #[utoipa::path(
+        post, path = "/v1/namespaces/{name}/tokens", tag = "namespaces", operation_id = "createToken",
+        params(("name" = String, Path, description = "The namespace.")),
+        request_body = CreateToken,
+        responses(
+            (status = 201, description = "Minted; the answer holds the token, once.", body = Token),
+            (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn create_token() {}
+
+    /// Revoke the namespace's tokens
+    ///
+    /// Its opaque tokens, and the signed tokens issued before now. Requires `tokens:write`.
+    #[utoipa::path(
+        delete, path = "/v1/namespaces/{name}/tokens", tag = "namespaces", operation_id = "revokeNamespaceTokens",
+        params(("name" = String, Path, description = "The namespace.")),
+        responses(
+            (status = 200, description = "Revoked.", body = RevokedTokens),
+            (status = 404, description = "No such namespace.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn revoke_namespace_tokens() {}
+
+    /// Revoke an end user's token
+    ///
+    /// Requires `tokens:write`.
+    #[utoipa::path(
+        delete, path = "/v1/tokens/{id}", tag = "namespaces", operation_id = "revokeToken",
+        params(("id" = String, Path, description = "The token's id.")),
+        responses(
+            (status = 204, description = "Revoked."),
+            (status = 404, description = "No such token.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn revoke_token() {}
+
+    /// List the token keys
+    ///
+    /// The public keys the organization signs its end users' tokens with. Requires
+    /// `tokens:write`.
+    #[utoipa::path(
+        get, path = "/v1/organization/token-keys", tag = "namespaces", operation_id = "listTokenKeys",
+        responses((status = 200, description = "The keys.", body = TokenKeyList))
+    )]
+    pub(super) fn list_token_keys() {}
+
+    /// Register a token key
+    ///
+    /// A public key (a JWK: Ed25519, P-256 or RSA) and the permissions its tokens may carry,
+    /// among those a token may hold and the caller holds. Answers its `kid`. Requires
+    /// `tokens:write`.
+    #[utoipa::path(
+        post, path = "/v1/organization/token-keys", tag = "namespaces", operation_id = "createTokenKey",
+        request_body = CreateTokenKey,
+        responses((status = 201, description = "Registered.", body = TokenKey))
+    )]
+    pub(super) fn create_token_key() {}
+
+    /// Delete a token key
+    ///
+    /// Every token it signed is refused from the next request. Requires `tokens:write`.
+    #[utoipa::path(
+        delete, path = "/v1/organization/token-keys/{kid}", tag = "namespaces", operation_id = "deleteTokenKey",
+        params(("kid" = String, Path, description = "The key's `kid`.")),
+        responses(
+            (status = 204, description = "Deleted."),
+            (status = 404, description = "No such key.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn delete_token_key() {}
+
+    /// Set an organization's ceiling
+    ///
+    /// The limits of its totals across namespaces: the customer's offer. The operator only.
+    #[utoipa::path(
+        put, path = "/v1/organizations/{tenant}/quotas", tag = "namespaces", operation_id = "putCeiling",
+        params(("tenant" = String, Path, description = "The tenant (the organization's id).")),
+        request_body = PutCeiling,
+        responses(
+            (status = 204, description = "Changed."),
+            (status = 404, description = "No such tenant.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn put_ceiling() {}
 
     // ---------------------------------------------------------------------------------------
     // Server

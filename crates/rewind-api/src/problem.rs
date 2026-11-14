@@ -9,6 +9,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::common::Timestamp;
+use crate::namespaces::{QuotaKind, QuotaScope};
 use crate::query::{QueryError, QuerySpan};
 use crate::scripts::Diagnostic;
 
@@ -41,6 +43,8 @@ pub enum ProblemType {
     RoleInUse,
     /// 409: a change that would leave the organization without an `owner`.
     LastOwner,
+    /// 409: starting a run in, or minting a token for, a namespace being erased.
+    NamespaceDeleting,
     /// 410: the task no longer exists: its run ended, it was completed, or its claim expired
     /// and another worker took it.
     TaskGone,
@@ -53,7 +57,8 @@ pub enum ProblemType {
     /// 422: the toolset was refused: an invalid schema, a duplicate tool name, or a transport
     /// this server does not allow.
     InvalidToolset,
-    /// 429: the tenant already has its maximum of active runs.
+    /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
+    /// `scripts`; `quota` says which, at which scope, and when it frees.
     QuotaExceeded,
     /// 500: a fault of the platform.
     Internal,
@@ -66,7 +71,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 20] = [
+    pub const ALL: [ProblemType; 21] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -77,6 +82,7 @@ impl ProblemType {
         ProblemType::TaskNotWaiting,
         ProblemType::RoleInUse,
         ProblemType::LastOwner,
+        ProblemType::NamespaceDeleting,
         ProblemType::TaskGone,
         ProblemType::PayloadTooLarge,
         ProblemType::UnsupportedMediaType,
@@ -102,6 +108,7 @@ impl ProblemType {
             ProblemType::TaskNotWaiting => "urn:rewind:problem:task-not-waiting",
             ProblemType::RoleInUse => "urn:rewind:problem:role-in-use",
             ProblemType::LastOwner => "urn:rewind:problem:last-owner",
+            ProblemType::NamespaceDeleting => "urn:rewind:problem:namespace-deleting",
             ProblemType::TaskGone => "urn:rewind:problem:task-gone",
             ProblemType::PayloadTooLarge => "urn:rewind:problem:payload-too-large",
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
@@ -126,7 +133,8 @@ impl ProblemType {
             | ProblemType::NotQuarantined
             | ProblemType::TaskNotWaiting
             | ProblemType::RoleInUse
-            | ProblemType::LastOwner => 409,
+            | ProblemType::LastOwner
+            | ProblemType::NamespaceDeleting => 409,
             ProblemType::TaskGone => 410,
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
@@ -151,12 +159,13 @@ impl ProblemType {
             ProblemType::TaskNotWaiting => "The task does not wait for the harness",
             ProblemType::RoleInUse => "The role is in use",
             ProblemType::LastOwner => "The organization would have no owner",
+            ProblemType::NamespaceDeleting => "The namespace is being erased",
             ProblemType::TaskGone => "The task no longer exists",
             ProblemType::PayloadTooLarge => "Payload too large",
             ProblemType::UnsupportedMediaType => "Unsupported media type",
             ProblemType::InvalidScript => "The script was refused",
             ProblemType::InvalidToolset => "The toolset was refused",
-            ProblemType::QuotaExceeded => "Too many active runs",
+            ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",
             ProblemType::ToolsetUnavailable => "A server of the toolset is unavailable",
             ProblemType::IdentityUnavailable => "The identity provider is unavailable",
@@ -202,6 +211,25 @@ pub struct Problem {
     /// With `invalid-query`: where the term at fault is in the query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<QuerySpan>,
+    /// With `quota-exceeded`: the quota reached.
+    #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
+    pub quota: Option<QuotaReached>,
+}
+
+/// The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries
+/// `Retry-After`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaReached {
+    pub quota: QuotaKind,
+    pub scope: QuotaScope,
+    /// The limit: a count for `active_runs`, `runs_per_month` and `scripts`.
+    pub limit: u64,
+    pub used: u64,
+    /// When a monthly quota frees: the first instant of the next month (UTC). Absent for
+    /// `active_runs` and `scripts`, which free when runs end or are erased.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets_at: Option<Timestamp>,
 }
 
 impl Problem {
@@ -214,7 +242,16 @@ impl Problem {
             instance: None,
             diagnostics: Vec::new(),
             query: None,
+            quota: None,
         }
+    }
+
+    /// The `quota-exceeded` problem of a quota reached; `detail` is written for a model and
+    /// never names another namespace.
+    pub fn quota_exceeded(detail: impl Into<String>, reached: QuotaReached) -> Self {
+        let mut problem = Self::new(ProblemType::QuotaExceeded, detail);
+        problem.quota = Some(reached);
+        problem
     }
 
     pub fn with_instance(mut self, instance: impl Into<String>) -> Self {

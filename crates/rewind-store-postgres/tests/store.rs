@@ -51,6 +51,7 @@ fn started() -> RunStarted {
 fn new_run(run: RunRef) -> NewRun {
     NewRun {
         run,
+        namespace: rewind_engine::ports::NamespaceName::migrated(),
         started: started(),
         metadata: RunMetadata::default(),
         created_at: T0,
@@ -468,6 +469,7 @@ async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
                 .resolve(
                     &TenantId::local(),
                     RunId::from_u128(1),
+                    &rewind_engine::ports::NamespaceName::migrated(),
                     Digest::of(b"toolset")
                 )
                 .await
@@ -480,6 +482,7 @@ async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
             .resolve(
                 &TenantId::local(),
                 RunId::from_u128(9),
+                &rewind_engine::ports::NamespaceName::migrated(),
                 Digest::of(b"other")
             )
             .await
@@ -497,6 +500,7 @@ async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
             .resolve(
                 &TenantId::local(),
                 RunId::from_u128(1),
+                &rewind_engine::ports::NamespaceName::migrated(),
                 Digest::of(b"toolset")
             )
             .await,
@@ -759,6 +763,7 @@ fn projected_run(n: u128) -> ProjectedRun {
             TenantId::local(),
             RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0001_0000 | n),
         ),
+        namespace: rewind_engine::ports::NamespaceName::migrated(),
         script: Digest::of(b"script"),
         headline: format!("// Run {n}"),
         toolset: Digest::of(b"toolset"),

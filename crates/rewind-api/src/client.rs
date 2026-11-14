@@ -21,7 +21,13 @@ use crate::access::{
 use crate::admin::ServerInfo;
 use crate::common::Duration;
 use crate::events::{Entry, EventsQuery, StreamEvent};
-use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey};
+use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE};
+use crate::namespaces::{
+    CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
+    NamespaceListQuery, NamespaceName, NamespaceQuery, PutCeiling, PutNamespace,
+    PutNamespaceDefaults, QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token, TokenKey,
+    TokenKeyList,
+};
 use crate::organization::{
     CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
     Organization, OrganizationSettings, UpdateOrganization,
@@ -55,6 +61,8 @@ pub struct Client {
     http: reqwest::Client,
     base: Url,
     api_key: Option<HeaderValue>,
+    /// Sent as `Rewind-Namespace` on every request.
+    namespace: Option<NamespaceName>,
 }
 
 /// The API key is never printed.
@@ -63,6 +71,7 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("base", &self.base.as_str())
             .field("api_key", &self.api_key.as_ref().map(|_| "…"))
+            .field("namespace", &self.namespace)
             .finish()
     }
 }
@@ -91,6 +100,7 @@ impl Client {
             http: builder().build().map_err(config_error)?,
             base,
             api_key,
+            namespace: None,
         })
     }
 
@@ -106,7 +116,23 @@ impl Client {
             http,
             base: Url::parse(EMBEDDED_BASE).map_err(|error| Error::Config(error.to_string()))?,
             api_key: None,
+            namespace: None,
         })
+    }
+
+    /// The same client, acting for the end user of `namespace`: every request carries
+    /// `Rewind-Namespace`. A key needs it to start a run; on a read, it narrows the answer to
+    /// that namespace.
+    pub fn with_namespace(&self, namespace: NamespaceName) -> Self {
+        Self {
+            namespace: Some(namespace),
+            ..self.clone()
+        }
+    }
+
+    /// The namespace this client sends, if any.
+    pub fn namespace(&self) -> Option<&NamespaceName> {
+        self.namespace.as_ref()
     }
 
     pub fn base_url(&self) -> &Url {
@@ -611,6 +637,144 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Namespaces
+
+    /// `GET /v1/namespaces`.
+    pub async fn list_namespaces(
+        &self,
+        query: &NamespaceListQuery,
+    ) -> Result<NamespaceList, Error> {
+        let request = self.request_with(Method::GET, routes::NAMESPACES, &[], query)?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/namespaces/{name}`.
+    pub async fn get_namespace(
+        &self,
+        name: &NamespaceName,
+        query: &NamespaceQuery,
+    ) -> Result<NamespaceDetail, Error> {
+        let request = self.request_with(Method::GET, routes::NAMESPACE, &[name.as_str()], query)?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/namespaces/{name}`.
+    pub async fn put_namespace(
+        &self,
+        name: &NamespaceName,
+        namespace: &PutNamespace,
+    ) -> Result<NamespaceDetail, Error> {
+        let request = self
+            .request(Method::PUT, routes::NAMESPACE, &[name.as_str()])?
+            .json(namespace);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/namespaces/{name}`: the erasure goes on in the background.
+    pub async fn delete_namespace(&self, name: &NamespaceName) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::NAMESPACE, &[name.as_str()])?;
+        self.empty(request).await
+    }
+
+    /// `PUT /v1/namespaces/{name}/toolsets/{id}/credentials`.
+    pub async fn set_namespace_credentials(
+        &self,
+        name: &NamespaceName,
+        toolset: &str,
+        credentials: &Credentials,
+    ) -> Result<(), Error> {
+        let request = self
+            .request(
+                Method::PUT,
+                routes::NAMESPACE_CREDENTIALS,
+                &[name.as_str(), toolset],
+            )?
+            .json(credentials);
+        self.empty(request).await
+    }
+
+    /// `GET /v1/organization/namespace-defaults`.
+    pub async fn namespace_defaults(
+        &self,
+        query: &NamespaceQuery,
+    ) -> Result<NamespaceDefaults, Error> {
+        let request = self.request_with(Method::GET, routes::NAMESPACE_DEFAULTS, &[], query)?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/organization/namespace-defaults`.
+    pub async fn put_namespace_defaults(
+        &self,
+        defaults: &PutNamespaceDefaults,
+    ) -> Result<NamespaceDefaults, Error> {
+        let request = self
+            .request(Method::PUT, routes::NAMESPACE_DEFAULTS, &[])?
+            .json(defaults);
+        self.json(request).await
+    }
+
+    /// `GET /v1/organization/quota-alerts`.
+    pub async fn quota_alerts(&self, query: &QuotaAlertQuery) -> Result<QuotaAlertList, Error> {
+        let request = self.request_with(Method::GET, routes::QUOTA_ALERTS, &[], query)?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/namespaces/{name}/tokens`: the answer holds the token, once.
+    pub async fn create_token(
+        &self,
+        name: &NamespaceName,
+        token: &CreateToken,
+    ) -> Result<Token, Error> {
+        let request = self
+            .request(Method::POST, routes::NAMESPACE_TOKENS, &[name.as_str()])?
+            .json(token);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/namespaces/{name}/tokens`.
+    pub async fn revoke_namespace_tokens(
+        &self,
+        name: &NamespaceName,
+    ) -> Result<RevokedTokens, Error> {
+        let request = self.request(Method::DELETE, routes::NAMESPACE_TOKENS, &[name.as_str()])?;
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/tokens/{id}`.
+    pub async fn revoke_token(&self, token: &str) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::TOKEN, &[token])?;
+        self.empty(request).await
+    }
+
+    /// `GET /v1/organization/token-keys`.
+    pub async fn list_token_keys(&self) -> Result<TokenKeyList, Error> {
+        let request = self.request(Method::GET, routes::TOKEN_KEYS, &[])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/organization/token-keys`.
+    pub async fn create_token_key(&self, key: &CreateTokenKey) -> Result<TokenKey, Error> {
+        let request = self
+            .request(Method::POST, routes::TOKEN_KEYS, &[])?
+            .json(key);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/organization/token-keys/{kid}`.
+    pub async fn delete_token_key(&self, kid: &str) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::TOKEN_KEY, &[kid])?;
+        self.empty(request).await
+    }
+
+    /// `PUT /v1/organizations/{tenant}/quotas`: the operator only.
+    pub async fn put_ceiling(&self, tenant: &str, ceiling: &PutCeiling) -> Result<(), Error> {
+        let request = self
+            .request(Method::PUT, routes::ORGANIZATION_QUOTAS, &[tenant])?
+            .json(ceiling);
+        self.empty(request).await
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Server
 
     /// `GET /v1/server`.
@@ -662,11 +826,14 @@ impl Client {
     }
 
     fn authorized(&self, method: Method, url: Url) -> RequestBuilder {
-        let request = self.http.request(method, url);
-        match &self.api_key {
-            Some(key) => request.header(AUTHORIZATION, key.clone()),
-            None => request,
+        let mut request = self.http.request(method, url);
+        if let Some(key) = &self.api_key {
+            request = request.header(AUTHORIZATION, key.clone());
         }
+        if let Some(namespace) = &self.namespace {
+            request = request.header(NAMESPACE, namespace.as_str());
+        }
+        request
     }
 
     async fn send(&self, request: RequestBuilder) -> Result<Response, Error> {
@@ -763,6 +930,7 @@ fn untyped_problem(status: StatusCode, body: &str) -> Problem {
         instance: None,
         diagnostics: Vec::new(),
         query: None,
+        quota: None,
     }
 }
 

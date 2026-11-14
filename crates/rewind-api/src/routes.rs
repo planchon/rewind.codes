@@ -62,6 +62,17 @@ pub const ROLE: &str = "/v1/roles/{name}";
 pub const API_KEYS: &str = "/v1/api-keys";
 pub const API_KEY: &str = "/v1/api-keys/{id}";
 
+pub const NAMESPACES: &str = "/v1/namespaces";
+pub const NAMESPACE: &str = "/v1/namespaces/{name}";
+pub const NAMESPACE_CREDENTIALS: &str = "/v1/namespaces/{name}/toolsets/{id}/credentials";
+pub const NAMESPACE_TOKENS: &str = "/v1/namespaces/{name}/tokens";
+pub const TOKEN: &str = "/v1/tokens/{id}";
+pub const NAMESPACE_DEFAULTS: &str = "/v1/organization/namespace-defaults";
+pub const QUOTA_ALERTS: &str = "/v1/organization/quota-alerts";
+pub const TOKEN_KEYS: &str = "/v1/organization/token-keys";
+pub const TOKEN_KEY: &str = "/v1/organization/token-keys/{kid}";
+pub const ORGANIZATION_QUOTAS: &str = "/v1/organizations/{tenant}/quotas";
+
 pub const SERVER: &str = "/v1/server";
 pub const SERVER_STOP: &str = "/v1/server/stop";
 
@@ -78,7 +89,7 @@ pub const AUTH_WAITLIST: &str = "/auth/waitlist";
 pub const AUTH_LOGOUT: &str = "/auth/logout";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 69] = [
+pub const OPERATIONS: [(&str, &str); 84] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -136,6 +147,21 @@ pub const OPERATIONS: [(&str, &str); 69] = [
     ("GET", API_KEYS),
     ("POST", API_KEYS),
     ("DELETE", API_KEY),
+    ("GET", NAMESPACES),
+    ("GET", NAMESPACE),
+    ("PUT", NAMESPACE),
+    ("DELETE", NAMESPACE),
+    ("PUT", NAMESPACE_CREDENTIALS),
+    ("GET", NAMESPACE_DEFAULTS),
+    ("PUT", NAMESPACE_DEFAULTS),
+    ("GET", QUOTA_ALERTS),
+    ("POST", NAMESPACE_TOKENS),
+    ("DELETE", NAMESPACE_TOKENS),
+    ("DELETE", TOKEN),
+    ("GET", TOKEN_KEYS),
+    ("POST", TOKEN_KEYS),
+    ("DELETE", TOKEN_KEY),
+    ("PUT", ORGANIZATION_QUOTAS),
     ("GET", SERVER),
     ("POST", SERVER_STOP),
     ("GET", AUTH_CONFIG),

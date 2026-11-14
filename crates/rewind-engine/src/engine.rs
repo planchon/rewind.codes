@@ -21,6 +21,7 @@ use crate::ports::{
     SecretOwner, SecretStore, Severity, StoreError, StoredScript, StoredToolset, TaskFilter,
     TenantId, TenantScope, ToolDeclarations, ToolDispatcher, Trigger, TypeChecker, WebhookSender,
 };
+use crate::ports::{NamespaceName, QuotaExceeded, Tenant, limits as namespace_limits};
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
 use crate::telemetry::TelemetryConfig;
@@ -155,6 +156,8 @@ pub struct Engine<J, B, X: ScriptExecutor, D, C, E, S, W> {
 #[derive(Debug, Clone)]
 pub struct StartRun {
     pub tenant: TenantId,
+    /// The end user the run acts for (`archi/06-storage-and-scale.md`, "Namespaces").
+    pub namespace: NamespaceName,
     pub script: Script,
     pub toolset: Toolset,
     /// The declarations generated from the toolset, stored with it.
@@ -172,11 +175,13 @@ pub struct StartRun {
 }
 
 impl StartRun {
-    /// A live run of the tenant `local`, with no declarations, TTL, metadata, idempotency key
-    /// or credentials.
+    /// A live run of the tenant `local`, in its namespace `local`, with no declarations, TTL,
+    /// metadata, idempotency key or credentials.
     pub fn new(script: Script, toolset: Toolset, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
+            namespace: NamespaceName::new(NamespaceName::LOCAL)
+                .unwrap_or_else(|_| NamespaceName::migrated()),
             script,
             toolset,
             declarations: ToolDeclarations::default(),
@@ -205,6 +210,9 @@ pub enum StartError {
     Checker(#[from] CheckerError),
     #[error("invalid TTL {requested:?}: it must be positive and at most {max:?}")]
     InvalidTtl { requested: Duration, max: Duration },
+    /// The script has more lines than its namespace's `max_script_lines`, or its tenant's.
+    #[error("the script has {lines} lines; this namespace accepts at most {max}")]
+    ScriptTooLong { lines: u64, max: u64 },
     #[error("the input is {size} bytes as canonical JSON, above the limit of {max} bytes")]
     InputTooLarge { size: usize, max: usize },
     /// A text to store (the script, a label, the idempotency key, the trace context, the
@@ -213,13 +221,47 @@ pub enum StartError {
     NulCharacter(#[from] NulCharacter),
     #[error("the executor supports no determinism epoch")]
     NoEpoch,
-    /// The tenant already has its maximum of active runs.
-    #[error("the tenant already has {quota} active runs, its maximum")]
-    QuotaExceeded { quota: u32 },
+    /// The namespace's limit or the tenant's ceiling of `active_runs`, `runs_per_month` or
+    /// `scripts` is reached.
+    #[error("the {} quota {} is reached: {} of {}", scope_name(.0), .0.quota, .0.used, .0.limit)]
+    QuotaExceeded(QuotaExceeded),
+    /// The namespace is being erased: it takes no run.
+    #[error("the namespace is being erased: it takes no run")]
+    NamespaceDeleting,
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
     Secret(#[from] SecretError),
+}
+
+/// The bounds of a start or a fork in a namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NamespaceBounds {
+    pub(crate) max_ttl: Duration,
+    /// The deployment's default TTL, lowered to `max_ttl`.
+    pub(crate) default_ttl: Duration,
+    pub(crate) max_script_lines: Option<u64>,
+}
+
+impl NamespaceBounds {
+    /// Refuses a script with more lines than `max_script_lines`.
+    pub(crate) fn check_lines(&self, script: &Script) -> Result<(), StartError> {
+        let Some(max) = self.max_script_lines else {
+            return Ok(());
+        };
+        let lines = script.source().lines().count() as u64;
+        if lines > max {
+            return Err(StartError::ScriptTooLong { lines, max });
+        }
+        Ok(())
+    }
+}
+
+fn scope_name(exceeded: &QuotaExceeded) -> &'static str {
+    match exceeded.scope {
+        crate::ports::QuotaScope::Namespace => "namespace's",
+        crate::ports::QuotaScope::Tenant => "organization's",
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -397,18 +439,53 @@ where
         self.start(request, Some(checker)).await
     }
 
+    /// The bounds of a start or a fork in a namespace: the largest TTL (the deployment's, the
+    /// namespace's and the tenant's `max_ttl`) and the most lines of a script
+    /// (`archi/06-storage-and-scale.md`, "Quotas").
+    pub(crate) async fn namespace_bounds(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+    ) -> Result<NamespaceBounds, StartError> {
+        let record = self
+            .journal
+            .get_tenant(tenant)
+            .await?
+            .unwrap_or_else(|| Tenant::new(tenant.clone()));
+        let found = self.journal.get_namespace(tenant, namespace).await?;
+        if found
+            .as_ref()
+            .is_some_and(|namespace| namespace.deleting_since.is_some())
+        {
+            return Err(StartError::NamespaceDeleting);
+        }
+        let bounds = namespace_limits(&record, found.as_ref()).tightest(&record.quotas);
+        let max_ttl = bounds
+            .max_ttl
+            .map_or(self.config.max_ttl, |max| max.min(self.config.max_ttl));
+        Ok(NamespaceBounds {
+            max_ttl,
+            default_ttl: self.config.default_ttl.min(max_ttl),
+            max_script_lines: bounds.max_script_lines.map(u64::from),
+        })
+    }
+
     async fn start<K: TypeChecker>(
         &self,
         request: StartRun,
         checker: Option<&K>,
     ) -> Result<Created, StartError> {
-        let ttl = request.ttl.unwrap_or(self.config.default_ttl);
-        if ttl.is_zero() || ttl > self.config.max_ttl {
+        let bounds = self
+            .namespace_bounds(&request.tenant, &request.namespace)
+            .await?;
+        let ttl = request.ttl.unwrap_or(bounds.default_ttl);
+        if ttl.is_zero() || ttl > bounds.max_ttl {
             return Err(StartError::InvalidTtl {
                 requested: ttl,
-                max: self.config.max_ttl,
+                max: bounds.max_ttl,
             });
         }
+        bounds.check_lines(&request.script)?;
         let input = Payload::Value(request.input);
         let size = payloads::value_size(&input).unwrap_or_default();
         if size > self.config.limits.max_payload_bytes {
@@ -448,6 +525,7 @@ where
         }
         let run = NewRun {
             run: run_ref.clone(),
+            namespace: request.namespace,
             started: RunStarted {
                 script: request.script.digest(),
                 toolset: request.toolset.digest(),
@@ -470,9 +548,10 @@ where
                 }
                 match other? {
                     CreateRun::Created(existing) => existing,
-                    CreateRun::QuotaExceeded { quota } => {
-                        return Err(StartError::QuotaExceeded { quota });
+                    CreateRun::QuotaExceeded(exceeded) => {
+                        return Err(StartError::QuotaExceeded(exceeded));
                     }
+                    CreateRun::NamespaceDeleting => return Err(StartError::NamespaceDeleting),
                 }
             }
         };

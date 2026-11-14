@@ -226,6 +226,7 @@ async fn committed_entries_are_projected_once_whatever_the_deliveries() {
         .apply(
             &rewind_engine::ports::ProjectedRun {
                 run: run.clone(),
+                namespace: record.namespace.clone(),
                 script: record.script,
                 headline: "flow".into(),
                 toolset: record.toolset,
@@ -376,7 +377,7 @@ async fn a_composition_root_turns_webhook_items_into_their_deliveries() {
     assert_eq!(deliveries.len(), 2);
     for delivery in &deliveries {
         assert_eq!(delivery.subscription.id, "sub");
-        assert_eq!(delivery.event.run, run.id);
+        assert_eq!(delivery.event.run, Some(run.id));
         assert!(matches!(
             &delivery.event.kind,
             WebhookEventKind::RunSuspended { .. }

@@ -283,6 +283,7 @@ async fn main() {
         let run = RunRef::new(tenant.clone(), RunId::from_u128(first + u128::from(n)));
         let new_run = NewRun {
             run,
+            namespace: rewind_engine::ports::NamespaceName::migrated(),
             started: started(),
             metadata: RunMetadata::default(),
             created_at: now(),

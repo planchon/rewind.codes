@@ -64,7 +64,7 @@ const RUN_TABLES: [&str; 5] = [
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.headline, s.toolset, s.status, \
      s.mode, s.labels, s.parent, s.started_at, s.ended_at, s.last_activity_at, s.tool_calls, \
      s.errors, s.history_len, s.wakes_at, s.ending_error, s.ending_message, s.ending_line, \
-     s.ending_signature, s.fingerprint, q.kind, q.reason, q.since \
+     s.ending_signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace \
      FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
 
 /// The status a terminal entry gives its run.
@@ -338,8 +338,11 @@ fn summary_of(row: &Row) -> Result<RunSummary, Error> {
         }),
         None => None,
     };
+    let namespace = row.text(24)?;
     Ok(RunSummary {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
+        namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
+            .map_err(|_| Error::Corrupt(format!("invalid namespace {namespace:?}")))?,
         script: row.digest(2)?,
         headline: row.text(3)?,
         toolset: row.digest(4)?,
@@ -505,10 +508,11 @@ impl ReadModel for TursoStore {
                 connection,
                 "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
                  labels, parent, last_activity_at, tool_calls, errors, history_len, \
-                 snapshot_len) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, 0, 0, 0, 0) \
+                 snapshot_len, namespace) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, 0, 0, 0, 0, ?) \
                  ON CONFLICT (run_id) DO UPDATE SET tenant = excluded.tenant, \
                  script = excluded.script, headline = excluded.headline, \
-                 toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent",
+                 toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent, \
+                 namespace = excluded.namespace",
                 vec![
                     id.clone(),
                     tenant(&run.run.tenant),
@@ -517,6 +521,7 @@ impl ReadModel for TursoStore {
                     digest(run.toolset),
                     text(encode_labels(&run.labels)),
                     run.parent.map_or(Value::Null, run_id),
+                    text(run.namespace.as_str()),
                 ],
             )
             .await?;
@@ -609,6 +614,10 @@ impl ReadModel for TursoStore {
         let connection = self.connection().await?;
         let mut clauses = String::new();
         let mut params = vec![tenant(&filter.tenant)];
+        if let Some(namespace) = &filter.namespace {
+            clauses.push_str(" AND s.namespace = ?");
+            params.push(text(namespace.as_str()));
+        }
         if let Some(since) = filter.since {
             clauses.push_str(" AND s.started_at >= ?");
             params.push(ts(since));
@@ -698,6 +707,10 @@ impl ReadModel for TursoStore {
                          WHERE s.tenant = ? AND c.tool IS NOT NULL AND c.scheduled_at IS NOT NULL"
             .to_owned();
         let mut params = vec![tenant(&filter.tenant)];
+        if let Some(namespace) = &filter.namespace {
+            query.push_str(" AND s.namespace = ?");
+            params.push(text(namespace.as_str()));
+        }
         if let Some(toolset) = filter.toolset {
             query.push_str(" AND s.toolset = ?");
             params.push(digest(toolset));

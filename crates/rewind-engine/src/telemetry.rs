@@ -704,6 +704,7 @@ mod tests {
     fn record(traceparent: Option<&str>) -> RunRecord {
         RunRecord {
             run: RunRef::new(TenantId::local(), RunId::from_u128(0x0123_4567_89ab_cdef)),
+            namespace: crate::ports::NamespaceName::migrated(),
             script: Digest::of(b"s"),
             toolset: Digest::of(b"t"),
             status: rewind_core::RunStatus::Active,

@@ -3,6 +3,9 @@ use std::future::Future;
 
 use rewind_core::{Payload, RunId, RunStatus, Seq, Timestamp};
 
+#[cfg(doc)]
+use crate::ports::namespaces::QuotaAlertKey;
+use crate::ports::namespaces::{NamespaceName, QuotaAlert};
 use crate::ports::secrets::Secret;
 use crate::ports::tenancy::TenantId;
 
@@ -24,6 +27,7 @@ pub struct Subscription {
 impl Subscription {
     /// Whether this subscription receives `event`.
     pub fn accepts(&self, event: &WebhookEvent) -> bool {
+        // A quota alert carries no labels: a subscription limited to labels does not get it.
         event.tenant == self.tenant
             && (self.events.is_empty() || self.events.contains(&event.kind.event_type()))
             && self
@@ -49,10 +53,13 @@ pub enum WebhookEventType {
     RunQuarantined,
     ToolSchemaChanged,
     CredentialsExpired,
+    /// A namespace, or the tenant, crossed 80 % or 100 % of a limit
+    /// (`archi/06-storage-and-scale.md`, "Quotas").
+    QuotaAlert,
 }
 
 impl WebhookEventType {
-    pub const ALL: [WebhookEventType; 8] = [
+    pub const ALL: [WebhookEventType; 9] = [
         WebhookEventType::RunCompleted,
         WebhookEventType::RunFailed,
         WebhookEventType::RunCancelled,
@@ -61,6 +68,7 @@ impl WebhookEventType {
         WebhookEventType::RunQuarantined,
         WebhookEventType::ToolSchemaChanged,
         WebhookEventType::CredentialsExpired,
+        WebhookEventType::QuotaAlert,
     ];
 
     /// The event's name on the wire, such as `run.completed`.
@@ -74,19 +82,25 @@ impl WebhookEventType {
             WebhookEventType::RunQuarantined => "run.quarantined",
             WebhookEventType::ToolSchemaChanged => "tool.schema_changed",
             WebhookEventType::CredentialsExpired => "credentials.expired",
+            WebhookEventType::QuotaAlert => "quota.alert",
         }
     }
 }
 
-/// A lifecycle event of a run.
+/// A lifecycle event of a run, or a quota alert.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WebhookEvent {
     /// Deterministic, so that a receiver can deduplicate a delivery repeated after a crash:
     /// `{run_id}/{index}` for an event projected from the journal entry `index`,
-    /// `{run_id}/{seq}/{attempt}` for an event about a tool task.
+    /// `{run_id}/{seq}/{attempt}` for an event about a tool task, the alert's
+    /// [`QuotaAlertKey::event_id`] for a quota alert.
     pub id: String,
     pub tenant: TenantId,
-    pub run: RunId,
+    /// The run's namespace; for a quota alert, the namespace's, or `None` for the tenant's
+    /// ceiling.
+    pub namespace: Option<NamespaceName>,
+    /// The run the event is about; `None` for a quota alert.
+    pub run: Option<RunId>,
     /// The run's labels, for the subscriptions' filters.
     pub labels: BTreeMap<String, String>,
     pub occurred_at: Timestamp,
@@ -121,6 +135,7 @@ pub enum WebhookEventKind {
         tool: String,
         message: String,
     },
+    QuotaAlert(QuotaAlert),
 }
 
 impl WebhookEventKind {
@@ -136,6 +151,7 @@ impl WebhookEventKind {
             WebhookEventKind::RunQuarantined { .. } => WebhookEventType::RunQuarantined,
             WebhookEventKind::ToolSchemaChanged { .. } => WebhookEventType::ToolSchemaChanged,
             WebhookEventKind::CredentialsExpired { .. } => WebhookEventType::CredentialsExpired,
+            WebhookEventKind::QuotaAlert(_) => WebhookEventType::QuotaAlert,
         }
     }
 }

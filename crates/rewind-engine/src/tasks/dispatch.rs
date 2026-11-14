@@ -370,7 +370,7 @@ where
             ToolRoute::Mcp { server } => (
                 stored.toolset.server(server).cloned(),
                 self.secrets
-                    .resolve(&run.tenant, run.id, task.toolset)
+                    .resolve(&run.tenant, run.id, &record.namespace, task.toolset)
                     .await?,
             ),
             ToolRoute::Builtin(_) | ToolRoute::Host { .. } => (None, None),
@@ -531,7 +531,8 @@ where
         let event = WebhookEvent {
             id: format!("{}/{}/{}", run.id, seq.0, task.attempt),
             tenant: run.tenant.clone(),
-            run: run.id,
+            namespace: Some(record.namespace.clone()),
+            run: Some(run.id),
             labels: record.metadata.labels.clone(),
             occurred_at: self.clock.now(),
             kind,

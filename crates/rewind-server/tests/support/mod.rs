@@ -74,7 +74,9 @@ impl TestServer {
         let args = ServerArgs::try_parse_from(args).unwrap();
         let running = rewind_server::start(args).await.unwrap();
         let url = running.url().unwrap();
-        let admin = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
+        let admin = Client::remote(&url, Some(ADMIN_KEY))
+            .unwrap()
+            .with_namespace(test_namespace());
         Self {
             running: Some(running),
             url,
@@ -119,7 +121,9 @@ impl TestServer {
 
     /// A client of this server with `key`.
     pub(crate) fn client(&self, key: Option<&str>) -> Client {
-        Client::remote(&self.url, key).unwrap()
+        Client::remote(&self.url, key)
+            .unwrap()
+            .with_namespace(test_namespace())
     }
 
     pub(crate) async fn stop(mut self) {
@@ -272,4 +276,9 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
         ..TaskQuery::default()
     };
     refused(worker.claim_tasks(&claim).await.unwrap_err());
+}
+
+/// The namespace the tests' clients act for: starting a run names one.
+pub(crate) fn test_namespace() -> rewind_api::namespaces::NamespaceName {
+    "tests".parse().unwrap()
 }

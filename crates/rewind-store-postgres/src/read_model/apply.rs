@@ -159,14 +159,16 @@ async fn lock_summary(conn: &mut PgConnection, run: &ProjectedRun) -> Result<Loc
         }
         let inserted = sqlx::query(
             "INSERT INTO run_summaries (run_id, tenant, script, toolset, headline, labels, \
-                 status, last_activity_at, tool_calls, errors, history_len, snapshot_len) \
-             VALUES ($1, $2, $3, $4, '', '{}', 'active', 0, 0, 0, 0, -1) \
+                 status, last_activity_at, tool_calls, errors, history_len, snapshot_len, \
+                 namespace) \
+             VALUES ($1, $2, $3, $4, '', '{}', 'active', 0, 0, 0, 0, -1, $5) \
              ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(id)
         .bind(tenant(&run.run.tenant))
         .bind(bytes(run.script))
         .bind(bytes(run.toolset))
+        .bind(run.namespace.as_str())
         .execute(&mut *conn)
         .await?
         .rows_affected();
@@ -477,6 +479,7 @@ mod tests {
     fn search_text_holds_each_field_in_lowercase_apart() {
         let run = ProjectedRun {
             run: RunRef::new(TenantId::local(), RunId::from_u128(4)),
+            namespace: rewind_engine::ports::NamespaceName::migrated(),
             script: Digest::of(b"s"),
             headline: "// Close THE Issues".into(),
             toolset: Digest::of(b"t"),

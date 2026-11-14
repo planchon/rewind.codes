@@ -14,8 +14,8 @@ use serde_json::json;
 
 use super::{T0, tenant};
 use crate::ports::{
-    Subscription, TenantId, WebhookError, WebhookEvent, WebhookEventKind, WebhookEventType,
-    WebhookSender,
+    Month, NamespaceName, QuotaAlert, QuotaAlertKey, QuotaKind, Subscription, TenantId, Threshold,
+    WebhookError, WebhookEvent, WebhookEventKind, WebhookEventType, WebhookSender,
 };
 
 /// The receiving side of a sender under test.
@@ -53,7 +53,8 @@ fn event(tenant: &TenantId, n: u128, index: u64, kind: WebhookEventKind) -> Webh
     WebhookEvent {
         id: format!("{run}/{index}"),
         tenant: tenant.clone(),
-        run,
+        namespace: Some(NamespaceName::new("alice").expect("valid")),
+        run: Some(run),
         labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
         occurred_at: Timestamp(T0.0 + index),
         kind,
@@ -147,10 +148,29 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
             tool: "github.list_issues".into(),
             message: "401 Unauthorized".into(),
         },
+        WebhookEventKind::QuotaAlert(QuotaAlert {
+            key: QuotaAlertKey {
+                tenant: acme.clone(),
+                namespace: Some(NamespaceName::new("alice").expect("valid")),
+                quota: QuotaKind::CpuPerMonth,
+                period: Month::of(T0),
+                threshold: Threshold::Near,
+            },
+            used: 8_000,
+            limit: 10_000,
+            raised_at: T0,
+            sent_at: None,
+        }),
     ];
     let mut expected = Vec::new();
     for (n, kind) in kinds.into_iter().enumerate() {
-        let event = event(&acme, 10 + n as u128, n as u64, kind);
+        let mut event = event(&acme, 10 + n as u128, n as u64, kind);
+        if let WebhookEventKind::QuotaAlert(alert) = &event.kind {
+            // About a namespace, not a run; no labels.
+            event.id = alert.key.event_id();
+            event.run = None;
+            event.labels = BTreeMap::new();
+        }
         sender.send(&subscription, &event).await.expect("send");
         expected.push((event.id.clone(), event.kind.event_type()));
     }

@@ -54,6 +54,11 @@ pub(crate) struct Global {
         hide_env_values = true
     )]
     pub(crate) api_key: Option<String>,
+
+    /// The namespace (the end user) the commands act for. Against the embedded server, `local`
+    /// when not given.
+    #[arg(long, global = true, env = "REWIND_NAMESPACE", value_name = "NAME")]
+    pub(crate) namespace: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

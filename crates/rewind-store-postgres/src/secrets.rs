@@ -15,7 +15,8 @@ use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rewind_core::{Digest, RunId};
 use rewind_engine::ports::{
-    Credentials, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials, TenantId,
+    Credentials, NamespaceName, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials,
+    TenantId,
 };
 use serde_json::{Map, Value};
 use sqlx::PgConnection;
@@ -129,12 +130,21 @@ fn secret_aad(tenant_id: &TenantId, owner: &str) -> Vec<u8> {
     format!("rewind secret\0{tenant_id}\0{owner}").into_bytes()
 }
 
-/// `toolset:<digest>` or `run:<id>`.
+/// `toolset:<digest>`, `namespace:<name>/toolset:<digest>` or `run:<id>`. A namespace's name
+/// holds no `/`.
 fn owner_key(owner: &SecretOwner) -> String {
     match owner {
         SecretOwner::Toolset(digest) => format!("toolset:{digest}"),
+        SecretOwner::Namespace { namespace, toolset } => {
+            format!("{}toolset:{toolset}", namespace_prefix(namespace))
+        }
         SecretOwner::Run(run) => format!("run:{run}"),
     }
+}
+
+/// What every owner key of a namespace starts with.
+fn namespace_prefix(namespace: &NamespaceName) -> String {
+    format!("namespace:{namespace}/")
 }
 
 /// The tenant's data key; created first if `create` and the tenant has none.
@@ -264,18 +274,25 @@ impl PostgresStore {
         &self,
         tenant_id: &TenantId,
         run: RunId,
+        namespace: &NamespaceName,
         toolset: Digest,
     ) -> Result<Option<Credentials>, Failure<SecretError>> {
         let mut conn = self.pool.acquire().await?;
-        // The run's credentials, whole, else the toolset's: never merged.
+        // The run's credentials, whole, else its namespace's for the toolset, else the
+        // toolset's: never merged.
         let run_owner = owner_key(&SecretOwner::Run(run));
+        let namespace_owner = owner_key(&SecretOwner::Namespace {
+            namespace: namespace.clone(),
+            toolset,
+        });
         let toolset_owner = owner_key(&SecretOwner::Toolset(toolset));
         let found: Option<(String, Vec<u8>)> = sqlx::query_as(
-            "SELECT owner, ciphertext FROM secrets WHERE tenant = $1 AND owner IN ($2, $3) \
-             ORDER BY owner = $2 DESC LIMIT 1",
+            "SELECT owner, ciphertext FROM secrets WHERE tenant = $1 AND owner IN ($2, $3, $4) \
+             ORDER BY owner = $2 DESC, owner = $3 DESC LIMIT 1",
         )
         .bind(tenant(tenant_id))
         .bind(run_owner.as_str())
+        .bind(namespace_owner.as_str())
         .bind(toolset_owner.as_str())
         .fetch_optional(&mut *conn)
         .await?;
@@ -304,9 +321,10 @@ impl SecretStore for PostgresStore {
         &self,
         tenant_id: &TenantId,
         run: RunId,
+        namespace: &NamespaceName,
         toolset: Digest,
     ) -> Result<Option<Credentials>, SecretError> {
-        Ok(retrying(|| self.resolve_once(tenant_id, run, toolset)).await?)
+        Ok(retrying(|| self.resolve_once(tenant_id, run, namespace, toolset)).await?)
     }
 
     async fn delete(&self, tenant_id: &TenantId, owner: &SecretOwner) -> Result<bool, SecretError> {
@@ -317,6 +335,21 @@ impl SecretStore for PostgresStore {
             .await
             .map_err(Error::from)?;
         Ok(deleted.rows_affected() > 0)
+    }
+
+    async fn delete_namespace(
+        &self,
+        tenant_id: &TenantId,
+        namespace: &NamespaceName,
+    ) -> Result<usize, SecretError> {
+        let deleted =
+            sqlx::query("DELETE FROM secrets WHERE tenant = $1 AND starts_with(owner, $2)")
+                .bind(tenant(tenant_id))
+                .bind(namespace_prefix(namespace))
+                .execute(&self.pool)
+                .await
+                .map_err(Error::from)?;
+        Ok(usize::try_from(deleted.rows_affected()).unwrap_or(usize::MAX))
     }
 }
 

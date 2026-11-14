@@ -174,6 +174,7 @@ pub(super) fn run_stats(found: &[Found], window: &StatsWindow) -> RunStats {
 }
 
 fn facets(found: &[&Found], top: usize) -> Facets {
+    let mut namespaces: BTreeMap<String, u64> = BTreeMap::new();
     let mut statuses: BTreeMap<String, u64> = BTreeMap::new();
     let mut labels: BTreeMap<&str, (u64, BTreeMap<String, u64>)> = BTreeMap::new();
     let mut tools: BTreeMap<String, u64> = BTreeMap::new();
@@ -183,6 +184,9 @@ fn facets(found: &[&Found], top: usize) -> Facets {
     let mut signals: BTreeMap<String, u64> = BTreeMap::new();
     for run in found {
         let summary = &run.summary;
+        *namespaces
+            .entry(summary.namespace.as_str().to_owned())
+            .or_default() += 1;
         *statuses
             .entry(summary.status.as_str().to_owned())
             .or_default() += 1;
@@ -219,6 +223,7 @@ fn facets(found: &[&Found], top: usize) -> Facets {
     keys.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
     keys.truncate(top);
     Facets {
+        namespaces: ranked(namespaces, top),
         statuses: ranked(statuses, top),
         labels: keys
             .into_iter()

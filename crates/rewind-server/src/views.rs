@@ -332,6 +332,7 @@ impl Views<'_> {
         let (trace, _) = rewind_engine::telemetry::trace_of(record);
         Ok(Run {
             id: record.run.id.to_string(),
+            namespace: namespace(&record.namespace),
             status,
             quarantine: record.quarantine.as_ref().map(|quarantine| Quarantine {
                 cause: match quarantine.kind {
@@ -576,6 +577,39 @@ fn failed_call(
         }),
         _ => None,
     })
+}
+
+/// A namespace as the API names it: the engine and the API check the same rule.
+pub(crate) fn namespace(
+    name: &rewind_engine::ports::NamespaceName,
+) -> rewind_api::namespaces::NamespaceName {
+    rewind_api::namespaces::NamespaceName::new(name.as_str())
+        .expect("the engine and the API check the same rule for namespaces")
+}
+
+/// A quota alert as the API and the webhook `quota.alert` write it.
+pub(crate) fn quota_alert(
+    alert: &rewind_engine::ports::QuotaAlert,
+) -> rewind_api::namespaces::QuotaAlert {
+    use rewind_api::namespaces::QuotaKind;
+    use rewind_engine::ports::QuotaKind as Kind;
+    rewind_api::namespaces::QuotaAlert {
+        namespace: alert.key.namespace.as_ref().map(namespace),
+        quota: match alert.key.quota {
+            Kind::CpuPerMonth => QuotaKind::CpuPerMonth,
+            Kind::ActiveRuns => QuotaKind::ActiveRuns,
+            Kind::RunsPerMonth => QuotaKind::RunsPerMonth,
+            Kind::Scripts => QuotaKind::Scripts,
+            Kind::MaxTtl => QuotaKind::MaxTtl,
+            Kind::MaxScriptLines => QuotaKind::MaxScriptLines,
+        },
+        threshold: alert.key.threshold.percent(),
+        used: alert.used,
+        limit: alert.limit,
+        period: alert.key.period.to_string(),
+        raised_at: rewind_api::common::timestamp(alert.raised_at),
+        sent_at: alert.sent_at.map(rewind_api::common::timestamp),
+    }
 }
 
 #[cfg(test)]

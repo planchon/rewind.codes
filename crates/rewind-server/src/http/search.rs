@@ -117,6 +117,12 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
 fn term(term: query::Term, now: jiff::Timestamp) -> Term {
     let mut negated = term.negated;
     let predicate = match term.filter {
+        Filter::Namespace(names) => Predicate::Namespace(
+            names
+                .iter()
+                .filter_map(|name| rewind_engine::ports::NamespaceName::new(name.as_str()).ok())
+                .collect(),
+        ),
         Filter::Label { key, values } => Predicate::Label {
             key,
             values: patterns(values),
@@ -284,6 +290,7 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
     let ending = run.ending.as_ref();
     rewind_api::runs::RunSummary {
         id: run.run.id.to_string(),
+        namespace: crate::views::namespace(&run.namespace),
         status: run.status.into(),
         quarantined: run.quarantine.is_some(),
         script: run.script.to_hex(),

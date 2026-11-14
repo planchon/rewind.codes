@@ -29,6 +29,11 @@ use rewind_engine::ports::{
     TenantId, TenantScope, ToolDeclarations, ToolStats, ToolStatsFilter, ToolTask, WebhookTarget,
     WebhookToken,
 };
+use rewind_engine::ports::{
+    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Token, TokenKey, Usage,
+    UsageDelta, UsageOf,
+};
 use rewind_store_postgres::PostgresStore;
 use rewind_store_turso::TursoStore;
 use std::collections::BTreeMap;
@@ -523,6 +528,117 @@ impl JournalStore for Store {
         each!(self, store => store.list_tenants().await)
     }
 
+    async fn put_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        exceptions: Option<&Quotas>,
+        now: Timestamp,
+    ) -> Result<NamespaceWrite, StoreError> {
+        each!(self, store => store.put_namespace(tenant, name, exceptions, now).await)
+    }
+
+    async fn get_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> Result<Option<Namespace>, StoreError> {
+        each!(self, store => store.get_namespace(tenant, name).await)
+    }
+
+    async fn list_namespaces(
+        &self,
+        filter: &NamespaceFilter,
+    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+        each!(self, store => store.list_namespaces(filter).await)
+    }
+
+    async fn namespace_usage(
+        &self,
+        tenant: &TenantId,
+        of: &UsageOf,
+        month: Month,
+    ) -> Result<Usage, StoreError> {
+        each!(self, store => store.namespace_usage(tenant, of, month).await)
+    }
+
+    async fn namespace_has_script(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        script: Digest,
+    ) -> Result<bool, StoreError> {
+        each!(self, store => store.namespace_has_script(tenant, name, script).await)
+    }
+
+    async fn revoke_namespace_tokens(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        each!(self, store => store.revoke_namespace_tokens(tenant, name, now).await)
+    }
+
+    async fn delete_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<DeleteNamespace, StoreError> {
+        each!(self, store => JournalStore::delete_namespace(store, tenant, name, now).await)
+    }
+
+    async fn namespaces_to_erase(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
+        each!(self, store => store.namespaces_to_erase(limit).await)
+    }
+
+    async fn drop_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> Result<DropNamespace, StoreError> {
+        each!(self, store => store.drop_namespace(tenant, name).await)
+    }
+
+    async fn record_usage(
+        &self,
+        deltas: &[UsageDelta],
+        now: Timestamp,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        each!(self, store => store.record_usage(deltas, now).await)
+    }
+
+    async fn quota_alerts(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        each!(self, store => store.quota_alerts(tenant, namespace, month).await)
+    }
+
+    async fn claim_quota_alerts(
+        &self,
+        owner: &str,
+        now: Timestamp,
+        lease_duration: Duration,
+        limit: usize,
+    ) -> Result<Vec<QuotaAlert>, StoreError> {
+        each!(self, store => store.claim_quota_alerts(owner, now, lease_duration, limit).await)
+    }
+
+    async fn ack_quota_alerts(
+        &self,
+        keys: &[QuotaAlertKey],
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        each!(self, store => store.ack_quota_alerts(keys, now).await)
+    }
+
     async fn claim_feed(
         &self,
         consumer: FeedConsumer,
@@ -554,6 +670,57 @@ impl AccessStore for Store {
 
     async fn revoke_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
         each!(self, store => store.revoke_key(hash, now).await)
+    }
+
+    async fn put_token(&self, token: &Token) -> Result<(), StoreError> {
+        each!(self, store => store.put_token(token).await)
+    }
+
+    async fn find_token(&self, hash: Digest) -> Result<Option<Token>, StoreError> {
+        each!(self, store => store.find_token(hash).await)
+    }
+
+    async fn revoke_token(
+        &self,
+        tenant: &TenantId,
+        hash: Digest,
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        each!(self, store => store.revoke_token(tenant, hash, now).await)
+    }
+
+    async fn revoke_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        each!(self, store => store.revoke_tokens(tenant, namespace, now).await)
+    }
+
+    async fn count_tokens(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+    ) -> Result<u64, StoreError> {
+        each!(self, store => store.count_tokens(tenant, namespace, now).await)
+    }
+
+    async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
+        each!(self, store => store.put_token_key(key).await)
+    }
+
+    async fn find_token_key(&self, kid: &str) -> Result<Option<TokenKey>, StoreError> {
+        each!(self, store => store.find_token_key(kid).await)
+    }
+
+    async fn list_token_keys(&self, tenant: &TenantId) -> Result<Vec<TokenKey>, StoreError> {
+        each!(self, store => store.list_token_keys(tenant).await)
+    }
+
+    async fn delete_token_key(&self, tenant: &TenantId, kid: &str) -> Result<bool, StoreError> {
+        each!(self, store => store.delete_token_key(tenant, kid).await)
     }
 
     async fn put_role(&self, role: &Role) -> Result<(), StoreError> {
@@ -715,12 +882,21 @@ impl SecretStore for Store {
         &self,
         tenant: &TenantId,
         run: RunId,
+        namespace: &NamespaceName,
         toolset: Digest,
     ) -> Result<Option<Credentials>, SecretError> {
-        each!(self, store => store.resolve(tenant, run, toolset).await)
+        each!(self, store => store.resolve(tenant, run, namespace, toolset).await)
     }
 
     async fn delete(&self, tenant: &TenantId, owner: &SecretOwner) -> Result<bool, SecretError> {
         each!(self, store => store.delete(tenant, owner).await)
+    }
+
+    async fn delete_namespace(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+    ) -> Result<usize, SecretError> {
+        each!(self, store => SecretStore::delete_namespace(store, tenant, namespace).await)
     }
 }

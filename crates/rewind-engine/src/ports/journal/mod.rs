@@ -31,6 +31,10 @@ pub use tasks::{
 
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
+use super::namespaces::{
+    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
+};
 use super::tenancy::{RunRef, Tenant, TenantId, TenantScope};
 use super::webhooks::Subscription;
 
@@ -85,8 +89,9 @@ pub enum StoreError {
 }
 
 /// Scripts and toolsets; runs, histories, inboxes, timers and tool tasks; leases, fencing,
-/// failure counts and quarantine; the feed; webhook tokens and subscriptions; tenants; sticky
-/// affinity; payload metadata and references; retention. API keys are the `AccessStore`'s.
+/// failure counts and quarantine; the feed; webhook tokens and subscriptions; tenants;
+/// namespaces, their quotas, use and alerts; sticky affinity; payload metadata and references;
+/// retention. API keys and tokens are the `AccessStore`'s.
 ///
 /// The contract, checked by the conformance suite (feature `conformance`, module
 /// `conformance::journal`):
@@ -97,8 +102,13 @@ pub enum StoreError {
 ///   the fence and hand out at most one live lease per run.
 /// - **Tenants.** Every key starts with the tenant: a run, a script, a toolset, a payload or a
 ///   task of one tenant is never visible to another. Run ids are unique across tenants.
-/// - **Idempotency keys.** `create_run` with a key already used in the tenant returns the
+/// - **Idempotency keys.** `create_run` with a key already used in the namespace returns the
 ///   existing run; `enqueue` with a key already seen for the run does nothing.
+/// - **Quotas.** `create_run` checks the namespace's limits and the tenant's ceiling of
+///   `active_runs`, `runs_per_month` and `scripts` under a lock of both, and counts what it
+///   creates; crossing 80 % or 100 % of a counted quota, or a first refusal of `active_runs` in
+///   a month, records one alert per tenant, namespace (or the tenant), quota, month and
+///   threshold (`archi/06-storage-and-scale.md`, "Quotas").
 /// - **Terminal runs.** A terminal commit clears the run's timers, tool tasks, inbox and
 ///   webhook tokens, and nothing is enqueued for a terminal run any more.
 /// - **Time.** Stores never read a clock: every method that depends on time takes `now`, and
@@ -148,9 +158,19 @@ pub trait JournalStore: Send + Sync {
     // The way in
 
     /// Creates a run and enqueues its `run_started`. With an idempotency key already used in
-    /// the tenant, creates nothing and returns the existing run, even above the quota. Above
-    /// the tenant's quota of active (not terminal) runs, creates nothing and returns
-    /// `QuotaExceeded`. A run id already used, in any tenant, is a `Conflict`.
+    /// the run's namespace, creates nothing and returns the existing run, whatever the quotas.
+    /// Creates the namespace if it does not exist, with the tenant's defaults; a namespace being
+    /// erased creates nothing (`NamespaceDeleting`).
+    ///
+    /// Under a lock of the namespace and of the tenant, refuses the run (`QuotaExceeded`) when,
+    /// at the namespace's limit (its exception, else the tenant's default) then at the tenant's
+    /// ceiling: the active (not terminal) runs reach `active_runs`; the runs created in the
+    /// month of `created_at` reach `runs_per_month`; or the script is new to the namespace and
+    /// its distinct scripts reach `scripts`. A first refusal of `active_runs` in a month records
+    /// its alert. A created run counts in the day's `runs_started` of its namespace and of the
+    /// tenant, adds one to its script's count in the namespace, sets the namespace's
+    /// `last_active_at`, and records the alerts of `runs_per_month` and `scripts` whose 80 % or
+    /// 100 % it crosses. A run id already used, in any tenant, is a `Conflict`.
     fn create_run(
         &self,
         run: NewRun,
@@ -564,7 +584,8 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<RunRef>, StoreError>> + Send;
 
     /// Erases a run at any time: its record, history, inbox, timers, tasks, keys, webhook
-    /// tokens, feed items and payload references. A payload left without references starts its
+    /// tokens, feed items and payload references, and one from its script's count in its
+    /// namespace (the count at zero is removed). A payload left without references starts its
     /// grace at `now`. Returns whether the run existed.
     fn delete_run(
         &self,
@@ -585,6 +606,117 @@ pub trait JournalStore: Send + Sync {
 
     /// The tenants with a record, by id.
     fn list_tenants(&self) -> impl Future<Output = Result<Vec<Tenant>, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // Namespaces, their use and their alerts
+
+    /// Creates the namespace if it does not exist. With `exceptions`, replaces its exceptions;
+    /// without, leaves them. A namespace being erased is left as it is (`Deleting`).
+    fn put_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        exceptions: Option<&Quotas>,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<NamespaceWrite, StoreError>> + Send;
+
+    fn get_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> impl Future<Output = Result<Option<Namespace>, StoreError>> + Send;
+
+    /// The tenant's namespaces matching the filter, each with its limits (its exceptions over
+    /// the tenant's defaults) and its use of `filter.month`, without days. Ordered by the use of
+    /// the order, the largest first, then by name; or by name.
+    fn list_namespaces(
+        &self,
+        filter: &NamespaceFilter,
+    ) -> impl Future<Output = Result<Vec<NamespaceUsage>, StoreError>> + Send;
+
+    /// The use of a namespace, or of the tenant across its namespaces, in a month: CPU time and
+    /// runs created over the month, with its days; active runs and distinct scripts now.
+    fn namespace_usage(
+        &self,
+        tenant: &TenantId,
+        of: &UsageOf,
+        month: Month,
+    ) -> impl Future<Output = Result<Usage, StoreError>> + Send;
+
+    /// Whether the namespace has at least one run kept of this script: what a token may read.
+    fn namespace_has_script(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        script: Digest,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Sets the namespace's `tokens_revoked_before` to `now`: its signed tokens issued earlier
+    /// are refused. Returns whether the namespace exists.
+    fn revoke_namespace_tokens(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Marks the namespace for erasure at `now`, if it is not yet: it takes no run any more.
+    fn delete_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<DeleteNamespace, StoreError>> + Send;
+
+    /// Up to `limit` namespaces marked for erasure, the oldest mark first.
+    fn namespaces_to_erase(
+        &self,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<(TenantId, NamespaceName)>, StoreError>> + Send;
+
+    /// Removes a namespace marked for erasure that has no run left, with its use and its
+    /// alerts. The tenant's own rows of use and alerts stay.
+    fn drop_namespace(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+    ) -> impl Future<Output = Result<DropNamespace, StoreError>> + Send;
+
+    /// Adds CPU time to the day of each namespace (one that no longer exists is skipped) and of
+    /// its tenant, sets the namespaces' `last_active_at`, and records the alerts of
+    /// `cpu_per_month` whose 80 % or 100 % an addition crosses, at the namespace's limit and at
+    /// the tenant's ceiling. Returns the alerts it recorded.
+    fn record_usage(
+        &self,
+        deltas: &[UsageDelta],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<QuotaAlert>, StoreError>> + Send;
+
+    /// The alerts of a month: of one namespace, or every alert of the tenant (its own
+    /// included); the newest first.
+    fn quota_alerts(
+        &self,
+        tenant: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
+    ) -> impl Future<Output = Result<Vec<QuotaAlert>, StoreError>> + Send;
+
+    /// Claims up to `limit` alerts not yet sent and not claimed (or whose claim expired), the
+    /// oldest first, until `now + lease_duration`, as `claim_feed` claims feed items.
+    fn claim_quota_alerts(
+        &self,
+        owner: &str,
+        now: Timestamp,
+        lease_duration: Duration,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<QuotaAlert>, StoreError>> + Send;
+
+    /// Marks alerts sent at `now`. Unknown keys are ignored.
+    fn ack_quota_alerts(
+        &self,
+        keys: &[QuotaAlertKey],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
     // The feed

@@ -25,6 +25,11 @@ use crate::ports::{
     TenantScope, ToolDeclarations, TraceContext, Trigger, WebhookEventType, WebhookToken,
     deferred_timeout_failure,
 };
+use crate::ports::{
+    Day, DeleteNamespace, DropNamespace, Month, NamespaceCursor, NamespaceFilter, NamespaceName,
+    NamespaceOrder, NamespaceWrite, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas,
+    Threshold, UsageDelta, UsageOf,
+};
 
 const LEASE: Duration = Duration::from_secs(30);
 const EPOCHS: &[Epoch] = &[Epoch(1)];
@@ -199,6 +204,52 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         the_feed_is_claimed_and_acknowledged_per_consumer
     );
     check!("journal", new_store(), list_runs_filters_and_pages);
+    check!(
+        "journal",
+        new_store(),
+        namespaces_are_created_at_first_use_and_keep_their_exceptions
+    );
+    check!(
+        "journal",
+        new_store(),
+        idempotency_keys_are_scoped_by_namespace
+    );
+    check!(
+        "journal",
+        new_store(),
+        active_runs_are_limited_per_namespace_then_per_tenant
+    );
+    check!(
+        "journal",
+        new_store(),
+        runs_per_month_are_counted_and_free_the_next_month
+    );
+    check!(
+        "journal",
+        new_store(),
+        scripts_count_distinct_scripts_with_runs_kept
+    );
+    check!(
+        "journal",
+        new_store(),
+        cpu_time_is_counted_per_day_and_alerts_once
+    );
+    check!(
+        "journal",
+        new_store(),
+        quota_alerts_are_claimed_and_acknowledged
+    );
+    check!("journal", new_store(), namespaces_are_listed_by_their_use);
+    check!(
+        "journal",
+        new_store(),
+        an_erased_namespace_takes_no_run_and_is_dropped_once_empty
+    );
+    check!(
+        "journal",
+        new_store(),
+        runs_tasks_and_parked_calls_are_filtered_by_namespace
+    );
 }
 
 // -------------------------------------------------------------------------------------------
@@ -239,10 +290,36 @@ fn started(epoch: u32, expires_at: Timestamp) -> RunStarted {
 fn new_run(run: RunRef) -> NewRun {
     NewRun {
         run,
+        namespace: alice(),
         started: started(1, Timestamp(T0.0 + DAY)),
         metadata: RunMetadata::default(),
         created_at: T0,
     }
+}
+
+/// A run of `namespace` running `script`, created at `at`.
+fn new_run_of(run: RunRef, namespace: &NamespaceName, script: &[u8], at: Timestamp) -> NewRun {
+    let mut started = started(1, Timestamp(at.0 + DAY));
+    started.script = Digest::of(script);
+    NewRun {
+        run,
+        namespace: namespace.clone(),
+        started,
+        metadata: RunMetadata::default(),
+        created_at: at,
+    }
+}
+
+fn namespace(name: &str) -> NamespaceName {
+    NamespaceName::new(name).expect("the suites use valid namespace names")
+}
+
+fn alice() -> NamespaceName {
+    namespace("alice")
+}
+
+fn bob() -> NamespaceName {
+    namespace("bob")
 }
 
 fn entry(index: u64, event: Event) -> HistoryEntry {
@@ -338,7 +415,7 @@ async fn create<S: JournalStore>(store: &S, run: RunRef) -> RunRef {
             assert_eq!(created.run, run);
             created.run
         }
-        CreateRun::QuotaExceeded { quota } => panic!("unexpected quota of {quota}"),
+        other => panic!("the run was not created: {other:?}"),
     }
 }
 
@@ -647,7 +724,7 @@ pub async fn idempotency_keys_are_scoped_by_tenant<S: JournalStore>(store: &S) {
 
 pub async fn quotas_limit_active_runs<S: JournalStore>(store: &S) {
     let mut limited = Tenant::new(acme());
-    limited.active_run_quota = Some(2);
+    limited.quotas.active_runs = Some(2);
     store.put_tenant(&limited).await.expect("put_tenant");
     store
         .create_run(new_run(run_ref(1)), Some("k1".into()))
@@ -659,7 +736,13 @@ pub async fn quotas_limit_active_runs<S: JournalStore>(store: &S) {
             .create_run(new_run(run_ref(3)), None)
             .await
             .expect("create_run"),
-        CreateRun::QuotaExceeded { quota: 2 }
+        CreateRun::QuotaExceeded(QuotaExceeded {
+            quota: QuotaKind::ActiveRuns,
+            scope: QuotaScope::Tenant,
+            limit: 2,
+            used: 2,
+            resets_at: None,
+        })
     );
     assert_eq!(store.get_run(&run_ref(3)).await.expect("get_run"), None);
     let retry = store
@@ -2553,6 +2636,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     );
     let host = TaskFilter::Host {
         tenant: acme(),
+        namespace: None,
         toolset: Some(Digest::of(b"another")),
         tools: BTreeSet::new(),
     };
@@ -2562,6 +2646,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     );
     let host = TaskFilter::Host {
         tenant: acme(),
+        namespace: None,
         toolset: Some(toolset_digest()),
         tools: BTreeSet::from(["ask_user".to_owned()]),
     };
@@ -2571,6 +2656,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     );
     let host = TaskFilter::Host {
         tenant: acme(),
+        namespace: None,
         toolset: None,
         tools: BTreeSet::new(),
     };
@@ -3356,7 +3442,19 @@ pub async fn deleting_a_run_erases_it<S: JournalStore>(store: &S) {
 pub async fn tenants_are_stored<S: JournalStore>(store: &S) {
     assert_eq!(store.get_tenant(&acme()).await.expect("get_tenant"), None);
     let mut tenant_record = Tenant::new(acme());
-    tenant_record.active_run_quota = Some(100);
+    tenant_record.quotas = Quotas {
+        cpu_per_month: Some(Duration::from_secs(3_600)),
+        active_runs: Some(100),
+        runs_per_month: Some(10_000),
+        scripts: Some(500),
+        max_ttl: Some(Duration::from_secs(7 * 86_400)),
+        max_script_lines: Some(2_000),
+    };
+    tenant_record.namespace_defaults = Quotas {
+        active_runs: Some(10),
+        max_script_lines: Some(300),
+        ..Quotas::default()
+    };
     tenant_record.retention.read_model = Duration::from_secs(86_400);
     store.put_tenant(&tenant_record).await.expect("put_tenant");
     store
@@ -3367,7 +3465,7 @@ pub async fn tenants_are_stored<S: JournalStore>(store: &S) {
         store.get_tenant(&acme()).await.expect("get_tenant"),
         Some(tenant_record.clone())
     );
-    tenant_record.active_run_quota = None;
+    tenant_record.quotas = Quotas::default();
     store
         .put_tenant(&tenant_record)
         .await
@@ -3505,4 +3603,879 @@ pub async fn list_runs_filters_and_pages<S: JournalStore>(store: &S) {
     assert_eq!(first.len(), 2);
     page.after = Some(RunCursor::from(&first[1]));
     assert_eq!(list(page).await, [id(3)]);
+}
+
+// -------------------------------------------------------------------------------------------
+// Namespaces, their quotas, use and alerts (`archi/06-storage-and-scale.md`, "Namespaces",
+// "Quotas")
+
+/// 2026-02-01T00:00:00Z: the month after `T0`'s.
+const FEBRUARY: Timestamp = Timestamp(1_769_904_000_000);
+
+async fn put_defaults<S: JournalStore>(store: &S, defaults: Quotas, ceiling: Quotas) {
+    let mut record = Tenant::new(acme());
+    record.namespace_defaults = defaults;
+    record.quotas = ceiling;
+    store.put_tenant(&record).await.expect("put_tenant");
+}
+
+async fn create_in<S: JournalStore>(
+    store: &S,
+    n: u128,
+    namespace: &NamespaceName,
+    script: &[u8],
+    at: Timestamp,
+) -> CreateRun {
+    store
+        .create_run(new_run_of(run_ref(n), namespace, script, at), None)
+        .await
+        .expect("create_run")
+}
+
+fn created(outcome: &CreateRun) -> bool {
+    matches!(outcome, CreateRun::Created(created) if created.created)
+}
+
+/// Commits `run_started`, then a terminal entry: the run ends `aborted`.
+async fn end<S: JournalStore>(store: &S, run: &RunRef, at: Timestamp) {
+    let lease = lease_of(store, run, at).await;
+    let consumed = inbox_ids(store, &lease).await;
+    commit(
+        store,
+        &lease,
+        Activation::new(
+            vec![run_started_entry(), aborted_entry(1)],
+            consumed,
+            RunStatus::Aborted,
+        ),
+        at,
+    )
+    .await;
+}
+
+fn alert_key(
+    namespace: Option<NamespaceName>,
+    quota: QuotaKind,
+    period: Month,
+    threshold: Threshold,
+) -> QuotaAlertKey {
+    QuotaAlertKey {
+        tenant: acme(),
+        namespace,
+        quota,
+        period,
+        threshold,
+    }
+}
+
+async fn alert_keys<S: JournalStore>(
+    store: &S,
+    namespace: Option<&NamespaceName>,
+    month: Month,
+) -> BTreeSet<QuotaAlertKey> {
+    store
+        .quota_alerts(&acme(), namespace, month)
+        .await
+        .expect("quota_alerts")
+        .into_iter()
+        .map(|alert| alert.key)
+        .collect()
+}
+
+pub async fn namespaces_are_created_at_first_use_and_keep_their_exceptions<S: JournalStore>(
+    store: &S,
+) {
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &alice())
+            .await
+            .expect("get_namespace"),
+        None
+    );
+    let written = store
+        .put_namespace(&acme(), &alice(), None, T0)
+        .await
+        .expect("put_namespace");
+    let NamespaceWrite::Written(first) = written else {
+        panic!("a new namespace is written: {written:?}");
+    };
+    assert_eq!(first.name, alice());
+    assert_eq!(first.exceptions, Quotas::default());
+    assert_eq!(first.created_at, T0);
+    let exceptions = Quotas {
+        active_runs: Some(50),
+        cpu_per_month: Some(Duration::from_secs(36_000)),
+        ..Quotas::default()
+    };
+    let changed = store
+        .put_namespace(&acme(), &alice(), Some(&exceptions), later(T0, 1))
+        .await
+        .expect("put_namespace");
+    assert!(
+        matches!(changed, NamespaceWrite::Written(ref n) if n.exceptions == exceptions && n.created_at == T0),
+        "exceptions are replaced, the creation kept: {changed:?}"
+    );
+    let kept = store
+        .put_namespace(&acme(), &alice(), None, later(T0, 2))
+        .await
+        .expect("put_namespace");
+    assert!(
+        matches!(kept, NamespaceWrite::Written(ref n) if n.exceptions == exceptions),
+        "without exceptions, they are left as they are"
+    );
+    assert!(created(&create_in(store, 1, &bob(), b"script", T0).await));
+    let bob_record = store
+        .get_namespace(&acme(), &bob())
+        .await
+        .expect("get_namespace")
+        .expect("a run creates its namespace");
+    assert_eq!(bob_record.exceptions, Quotas::default());
+    assert_eq!(record(store, &run_ref(1)).await.namespace, bob());
+    assert_eq!(
+        store
+            .get_namespace(&tenant("other"), &alice())
+            .await
+            .expect("get_namespace"),
+        None,
+        "namespaces are per tenant"
+    );
+    assert!(
+        store
+            .revoke_namespace_tokens(&acme(), &alice(), later(T0, 5))
+            .await
+            .expect("revoke_namespace_tokens")
+    );
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &alice())
+            .await
+            .expect("get_namespace")
+            .expect("alice")
+            .tokens_revoked_before,
+        Some(later(T0, 5))
+    );
+    assert!(
+        !store
+            .revoke_namespace_tokens(&acme(), &namespace("nobody"), T0)
+            .await
+            .expect("revoke_namespace_tokens")
+    );
+}
+
+pub async fn idempotency_keys_are_scoped_by_namespace<S: JournalStore>(store: &S) {
+    let in_alice = store
+        .create_run(
+            new_run_of(run_ref(1), &alice(), b"script", T0),
+            Some("k".into()),
+        )
+        .await
+        .expect("create_run");
+    let in_bob = store
+        .create_run(
+            new_run_of(run_ref(2), &bob(), b"script", T0),
+            Some("k".into()),
+        )
+        .await
+        .expect("create_run");
+    assert!(created(&in_alice) && created(&in_bob), "two runs");
+    let retried = store
+        .create_run(
+            new_run_of(run_ref(3), &alice(), b"script", T0),
+            Some("k".into()),
+        )
+        .await
+        .expect("create_run");
+    assert!(
+        matches!(retried, CreateRun::Created(ref c) if !c.created && c.run == run_ref(1)),
+        "the same key in the same namespace returns its run"
+    );
+}
+
+pub async fn active_runs_are_limited_per_namespace_then_per_tenant<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            active_runs: Some(1),
+            ..Quotas::default()
+        },
+        Quotas {
+            active_runs: Some(3),
+            ..Quotas::default()
+        },
+    )
+    .await;
+    assert!(created(&create_in(store, 1, &alice(), b"s", T0).await));
+    let refused = create_in(store, 2, &alice(), b"s", T0).await;
+    assert_eq!(
+        refused,
+        CreateRun::QuotaExceeded(QuotaExceeded {
+            quota: QuotaKind::ActiveRuns,
+            scope: QuotaScope::Namespace,
+            limit: 1,
+            used: 1,
+            resets_at: None,
+        })
+    );
+    assert_eq!(store.get_run(&run_ref(2)).await.expect("get_run"), None);
+    // A second refusal records nothing new.
+    create_in(store, 3, &alice(), b"s", T0).await;
+    let january = Month::of(T0);
+    assert_eq!(
+        alert_keys(store, Some(&alice()), january).await,
+        BTreeSet::from([alert_key(
+            Some(alice()),
+            QuotaKind::ActiveRuns,
+            january,
+            Threshold::Reached
+        )]),
+        "the first refusal of the month is an alert"
+    );
+    assert!(created(&create_in(store, 4, &bob(), b"s", T0).await));
+    store
+        .put_namespace(
+            &acme(),
+            &alice(),
+            Some(&Quotas {
+                active_runs: Some(10),
+                ..Quotas::default()
+            }),
+            T0,
+        )
+        .await
+        .expect("put_namespace");
+    assert!(
+        created(&create_in(store, 5, &alice(), b"s", T0).await),
+        "an exception raises the namespace's limit"
+    );
+    assert_eq!(
+        create_in(store, 6, &alice(), b"s", T0).await,
+        CreateRun::QuotaExceeded(QuotaExceeded {
+            quota: QuotaKind::ActiveRuns,
+            scope: QuotaScope::Tenant,
+            limit: 3,
+            used: 3,
+            resets_at: None,
+        }),
+        "the tenant's ceiling bounds the sum"
+    );
+    end(store, &run_ref(1), later(T0, 10)).await;
+    assert!(
+        created(&create_in(store, 7, &alice(), b"s", later(T0, 20)).await),
+        "an ended run frees its place"
+    );
+}
+
+pub async fn runs_per_month_are_counted_and_free_the_next_month<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            runs_per_month: Some(5),
+            ..Quotas::default()
+        },
+        Quotas::default(),
+    )
+    .await;
+    for n in 1..=5 {
+        assert!(created(&create_in(store, n, &alice(), b"s", T0).await));
+    }
+    let january = Month::of(T0);
+    assert_eq!(
+        create_in(store, 6, &alice(), b"s", T0).await,
+        CreateRun::QuotaExceeded(QuotaExceeded {
+            quota: QuotaKind::RunsPerMonth,
+            scope: QuotaScope::Namespace,
+            limit: 5,
+            used: 5,
+            resets_at: Some(FEBRUARY),
+        })
+    );
+    assert_eq!(
+        alert_keys(store, Some(&alice()), january).await,
+        BTreeSet::from([
+            alert_key(
+                Some(alice()),
+                QuotaKind::RunsPerMonth,
+                january,
+                Threshold::Near
+            ),
+            alert_key(
+                Some(alice()),
+                QuotaKind::RunsPerMonth,
+                january,
+                Threshold::Reached
+            ),
+        ]),
+        "80 % at the fourth run, 100 % at the fifth"
+    );
+    let usage = store
+        .namespace_usage(&acme(), &UsageOf::Namespace(alice()), january)
+        .await
+        .expect("namespace_usage");
+    assert_eq!(usage.runs_started, 5);
+    assert_eq!(
+        usage.days,
+        [(
+            Day::of(T0),
+            crate::ports::DayUsage {
+                cpu: Duration::ZERO,
+                runs_started: 5
+            }
+        )]
+    );
+    let tenant_usage = store
+        .namespace_usage(&acme(), &UsageOf::Tenant, january)
+        .await
+        .expect("namespace_usage");
+    assert_eq!(tenant_usage.runs_started, 5);
+    assert!(
+        created(&create_in(store, 7, &alice(), b"s", FEBRUARY).await),
+        "a new month starts again"
+    );
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Namespace(alice()), Month::of(FEBRUARY))
+            .await
+            .expect("namespace_usage")
+            .runs_started,
+        1
+    );
+}
+
+pub async fn scripts_count_distinct_scripts_with_runs_kept<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            scripts: Some(2),
+            ..Quotas::default()
+        },
+        Quotas::default(),
+    )
+    .await;
+    assert!(created(&create_in(store, 1, &alice(), b"a", T0).await));
+    assert!(created(&create_in(store, 2, &alice(), b"a", T0).await));
+    assert!(created(&create_in(store, 3, &alice(), b"b", T0).await));
+    assert!(
+        created(&create_in(store, 4, &alice(), b"b", T0).await),
+        "a script already counted passes"
+    );
+    assert_eq!(
+        create_in(store, 5, &alice(), b"c", T0).await,
+        CreateRun::QuotaExceeded(QuotaExceeded {
+            quota: QuotaKind::Scripts,
+            scope: QuotaScope::Namespace,
+            limit: 2,
+            used: 2,
+            resets_at: None,
+        })
+    );
+    assert!(
+        created(&create_in(store, 6, &bob(), b"c", T0).await),
+        "scripts are counted per namespace"
+    );
+    assert!(
+        store
+            .namespace_has_script(&acme(), &alice(), Digest::of(b"a"))
+            .await
+            .expect("namespace_has_script")
+    );
+    assert!(
+        !store
+            .namespace_has_script(&acme(), &alice(), Digest::of(b"c"))
+            .await
+            .expect("namespace_has_script")
+    );
+    for n in [1, 2] {
+        assert!(store.delete_run(&run_ref(n), T0).await.expect("delete_run"));
+    }
+    assert!(
+        !store
+            .namespace_has_script(&acme(), &alice(), Digest::of(b"a"))
+            .await
+            .expect("namespace_has_script"),
+        "erasing the last run of a script uncounts it"
+    );
+    assert!(
+        created(&create_in(store, 7, &alice(), b"c", T0).await),
+        "its place is free"
+    );
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Tenant, Month::of(T0))
+            .await
+            .expect("namespace_usage")
+            .scripts,
+        3,
+        "the tenant's count is the sum of its namespaces'"
+    );
+}
+
+pub async fn cpu_time_is_counted_per_day_and_alerts_once<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            cpu_per_month: Some(Duration::from_secs(10)),
+            ..Quotas::default()
+        },
+        Quotas {
+            cpu_per_month: Some(Duration::from_secs(20)),
+            ..Quotas::default()
+        },
+    )
+    .await;
+    store
+        .put_namespace(&acme(), &alice(), None, T0)
+        .await
+        .expect("put_namespace");
+    store
+        .put_namespace(&acme(), &bob(), None, T0)
+        .await
+        .expect("put_namespace");
+    let day = Day::of(T0);
+    let next_day = Day::of(later(T0, DAY));
+    let delta = |namespace: &NamespaceName, day: Day, secs: u64| UsageDelta {
+        tenant: acme(),
+        namespace: namespace.clone(),
+        day,
+        cpu: Duration::from_secs(secs),
+    };
+    let raised = store
+        .record_usage(&[delta(&alice(), day, 7)], later(T0, 1))
+        .await
+        .expect("record_usage");
+    assert!(raised.is_empty(), "70 % of the namespace's: {raised:?}");
+    let raised = store
+        .record_usage(&[delta(&alice(), next_day, 2)], later(T0, DAY))
+        .await
+        .expect("record_usage");
+    let january = Month::of(T0);
+    assert_eq!(
+        raised
+            .iter()
+            .map(|alert| alert.key.clone())
+            .collect::<Vec<_>>(),
+        [alert_key(
+            Some(alice()),
+            QuotaKind::CpuPerMonth,
+            january,
+            Threshold::Near
+        )]
+    );
+    assert_eq!(raised[0].used, 9_000);
+    assert_eq!(raised[0].limit, 10_000);
+    let raised = store
+        .record_usage(
+            &[delta(&alice(), next_day, 5), delta(&bob(), day, 4)],
+            later(T0, DAY + 1),
+        )
+        .await
+        .expect("record_usage");
+    let keys: BTreeSet<QuotaAlertKey> = raised.into_iter().map(|alert| alert.key).collect();
+    assert_eq!(
+        keys,
+        BTreeSet::from([
+            alert_key(
+                Some(alice()),
+                QuotaKind::CpuPerMonth,
+                january,
+                Threshold::Reached
+            ),
+            alert_key(None, QuotaKind::CpuPerMonth, january, Threshold::Near),
+        ]),
+        "alice passes 100 % and is not refused; the tenant reaches 80 % (18 s of 20)"
+    );
+    let raised = store
+        .record_usage(&[delta(&alice(), next_day, 30)], later(T0, DAY + 2))
+        .await
+        .expect("record_usage");
+    assert_eq!(
+        raised
+            .iter()
+            .map(|alert| alert.key.clone())
+            .collect::<Vec<_>>(),
+        [alert_key(
+            None,
+            QuotaKind::CpuPerMonth,
+            january,
+            Threshold::Reached
+        )],
+        "each threshold once"
+    );
+    let usage = store
+        .namespace_usage(&acme(), &UsageOf::Namespace(alice()), january)
+        .await
+        .expect("namespace_usage");
+    assert_eq!(usage.cpu, Duration::from_secs(44));
+    assert_eq!(
+        usage
+            .days
+            .iter()
+            .map(|(day, used)| (*day, used.cpu))
+            .collect::<Vec<_>>(),
+        [
+            (day, Duration::from_secs(7)),
+            (next_day, Duration::from_secs(37))
+        ]
+    );
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Tenant, january)
+            .await
+            .expect("namespace_usage")
+            .cpu,
+        Duration::from_secs(48)
+    );
+    store
+        .record_usage(&[delta(&namespace("gone"), day, 3)], later(T0, DAY + 3))
+        .await
+        .expect("record_usage");
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Tenant, january)
+            .await
+            .expect("namespace_usage")
+            .cpu,
+        Duration::from_secs(51),
+        "a namespace that no longer exists still counts for its tenant"
+    );
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Namespace(namespace("gone")), january)
+            .await
+            .expect("namespace_usage")
+            .cpu,
+        Duration::ZERO
+    );
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &alice())
+            .await
+            .expect("get_namespace")
+            .expect("alice")
+            .last_active_at,
+        later(T0, DAY + 2)
+    );
+    assert_eq!(
+        alert_keys(store, None, january).await.len(),
+        4,
+        "every alert of the tenant, its own included"
+    );
+    assert!(
+        alert_keys(store, Some(&alice()), Month::of(FEBRUARY))
+            .await
+            .is_empty()
+    );
+}
+
+pub async fn quota_alerts_are_claimed_and_acknowledged<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            active_runs: Some(1),
+            ..Quotas::default()
+        },
+        Quotas::default(),
+    )
+    .await;
+    create_in(store, 1, &alice(), b"s", T0).await;
+    create_in(store, 2, &alice(), b"s", T0).await;
+    create_in(store, 3, &bob(), b"s", T0).await;
+    create_in(store, 4, &bob(), b"s", later(T0, 1)).await;
+    let claimed = store
+        .claim_quota_alerts("w", later(T0, 2), LEASE, 1)
+        .await
+        .expect("claim_quota_alerts");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].key.namespace, Some(alice()), "the oldest first");
+    let rest = store
+        .claim_quota_alerts("v", later(T0, 2), LEASE, 10)
+        .await
+        .expect("claim_quota_alerts");
+    assert_eq!(rest.len(), 1, "a claimed alert is not claimed again");
+    assert_eq!(rest[0].key.namespace, Some(bob()));
+    store
+        .ack_quota_alerts(&[claimed[0].key.clone()], later(T0, 3))
+        .await
+        .expect("ack_quota_alerts");
+    let after_lease = later(later(T0, 2), LEASE.as_millis() as u64);
+    let again = store
+        .claim_quota_alerts("w", after_lease, LEASE, 10)
+        .await
+        .expect("claim_quota_alerts");
+    assert_eq!(
+        again
+            .iter()
+            .map(|alert| alert.key.clone())
+            .collect::<Vec<_>>(),
+        [rest[0].key.clone()],
+        "an expired claim is claimed again; a sent alert never"
+    );
+    let listed = store
+        .quota_alerts(&acme(), Some(&alice()), Month::of(T0))
+        .await
+        .expect("quota_alerts");
+    assert_eq!(listed[0].sent_at, Some(later(T0, 3)));
+}
+
+pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
+    put_defaults(
+        store,
+        Quotas {
+            runs_per_month: Some(10),
+            ..Quotas::default()
+        },
+        Quotas::default(),
+    )
+    .await;
+    let names = ["user-a", "user-b", "user-c", "other"];
+    let mut n = 0;
+    for (name, runs) in names.iter().zip([1, 3, 8, 2]) {
+        for _ in 0..runs {
+            n += 1;
+            create_in(store, n, &namespace(name), b"s", T0).await;
+        }
+    }
+    let filter = |order, prefix: Option<&str>, above, after, limit| NamespaceFilter {
+        tenant: acme(),
+        prefix: prefix.map(str::to_owned),
+        above_percent: above,
+        order,
+        month: Month::of(T0),
+        after,
+        limit,
+    };
+    let names_of = |listed: Vec<crate::ports::NamespaceUsage>| -> Vec<String> {
+        listed
+            .into_iter()
+            .map(|listed| listed.namespace.name.to_string())
+            .collect()
+    };
+    let by_runs = store
+        .list_namespaces(&filter(NamespaceOrder::Runs, None, None, None, 10))
+        .await
+        .expect("list_namespaces");
+    assert_eq!(by_runs[0].usage.runs_started, 8);
+    assert_eq!(by_runs[0].limits.runs_per_month, Some(10));
+    assert_eq!(names_of(by_runs), ["user-c", "user-b", "other", "user-a"]);
+    assert_eq!(
+        names_of(
+            store
+                .list_namespaces(&filter(NamespaceOrder::Name, Some("user-"), None, None, 10))
+                .await
+                .expect("list_namespaces")
+        ),
+        ["user-a", "user-b", "user-c"]
+    );
+    assert_eq!(
+        names_of(
+            store
+                .list_namespaces(&filter(NamespaceOrder::Runs, None, Some(80), None, 10))
+                .await
+                .expect("list_namespaces")
+        ),
+        ["user-c"],
+        "8 runs of 10"
+    );
+    let first = store
+        .list_namespaces(&filter(NamespaceOrder::Runs, None, None, None, 2))
+        .await
+        .expect("list_namespaces");
+    let last = first.last().expect("two");
+    let after = NamespaceCursor {
+        key: last.usage.runs_started,
+        name: last.namespace.name.clone(),
+    };
+    assert_eq!(
+        names_of(
+            store
+                .list_namespaces(&filter(NamespaceOrder::Runs, None, None, Some(after), 10))
+                .await
+                .expect("list_namespaces")
+        ),
+        ["other", "user-a"]
+    );
+}
+
+pub async fn an_erased_namespace_takes_no_run_and_is_dropped_once_empty<S: JournalStore>(
+    store: &S,
+) {
+    start(store, run_ref(1)).await;
+    let cpu = UsageDelta {
+        tenant: acme(),
+        namespace: alice(),
+        day: Day::of(T0),
+        cpu: Duration::from_secs(2),
+    };
+    store
+        .record_usage(&[cpu], later(T0, 1))
+        .await
+        .expect("record_usage");
+    assert_eq!(
+        store
+            .delete_namespace(&acme(), &alice(), later(T0, 2))
+            .await
+            .expect("delete_namespace"),
+        DeleteNamespace::Started
+    );
+    assert_eq!(
+        store
+            .delete_namespace(&acme(), &namespace("nobody"), T0)
+            .await
+            .expect("delete_namespace"),
+        DeleteNamespace::NotFound
+    );
+    assert_eq!(
+        create_in(store, 2, &alice(), b"s", later(T0, 3)).await,
+        CreateRun::NamespaceDeleting
+    );
+    assert_eq!(
+        store
+            .put_namespace(&acme(), &alice(), Some(&Quotas::default()), later(T0, 3))
+            .await
+            .expect("put_namespace"),
+        NamespaceWrite::Deleting
+    );
+    assert_eq!(
+        store
+            .namespaces_to_erase(10)
+            .await
+            .expect("namespaces_to_erase"),
+        [(acme(), alice())]
+    );
+    assert_eq!(
+        store
+            .drop_namespace(&acme(), &alice())
+            .await
+            .expect("drop_namespace"),
+        DropNamespace::RunsLeft
+    );
+    let mut of_alice = RunFilter::new(acme());
+    of_alice.namespace = Some(alice());
+    let runs = store.list_runs(&of_alice).await.expect("list_runs");
+    assert_eq!(runs.len(), 1);
+    for run in runs {
+        store
+            .delete_run(&run.run, later(T0, 4))
+            .await
+            .expect("delete_run");
+    }
+    assert_eq!(
+        store
+            .drop_namespace(&acme(), &alice())
+            .await
+            .expect("drop_namespace"),
+        DropNamespace::Dropped
+    );
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &alice())
+            .await
+            .expect("get_namespace"),
+        None
+    );
+    assert!(
+        store
+            .namespaces_to_erase(10)
+            .await
+            .expect("namespaces_to_erase")
+            .is_empty()
+    );
+    let january = Month::of(T0);
+    assert_eq!(
+        store
+            .namespace_usage(&acme(), &UsageOf::Namespace(alice()), january)
+            .await
+            .expect("namespace_usage")
+            .cpu,
+        Duration::ZERO
+    );
+    let kept = store
+        .namespace_usage(&acme(), &UsageOf::Tenant, january)
+        .await
+        .expect("namespace_usage");
+    assert_eq!(
+        (kept.cpu, kept.runs_started),
+        (Duration::from_secs(2), 1),
+        "the tenant keeps what the namespace consumed"
+    );
+    assert!(
+        created(&create_in(store, 3, &alice(), b"s", later(T0, 5)).await),
+        "the name can be used again"
+    );
+}
+
+pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalStore>(store: &S) {
+    // `start_with_tasks` creates its runs in alice; bob's run is created by hand.
+    start_with_tasks(store, run_ref(1), vec![host_task(1, "ask_user")]).await;
+    store
+        .create_run(new_run_of(run_ref(2), &bob(), b"script", T0), None)
+        .await
+        .expect("create_run");
+    let lease = lease_of(store, &run_ref(2), T0).await;
+    let consumed = inbox_ids(store, &lease).await;
+    let mut activation = Activation::new(vec![run_started_entry()], consumed, RunStatus::Active);
+    activation.tool_calls.push(host_task(1, "ask_user"));
+    commit(store, &lease, activation, T0).await;
+    store.release(&lease).await.expect("release");
+
+    let mut of_bob = RunFilter::new(acme());
+    of_bob.namespace = Some(bob());
+    let listed: Vec<RunRef> = store
+        .list_runs(&of_bob)
+        .await
+        .expect("list_runs")
+        .into_iter()
+        .map(|record| record.run)
+        .collect();
+    assert_eq!(listed, [run_ref(2)]);
+
+    let host = TaskFilter::Host {
+        tenant: acme(),
+        namespace: Some(bob()),
+        toolset: None,
+        tools: BTreeSet::new(),
+    };
+    let claimed = claim(store, "h", &host, T0, 10).await;
+    assert_eq!(
+        claimed
+            .iter()
+            .map(|task| task.task.task.run.clone())
+            .collect::<Vec<_>>(),
+        [run_ref(2)],
+        "a worker of one namespace claims its tasks only"
+    );
+    let expired = ParkReason {
+        kind: ParkKind::CredentialsExpired,
+        message: "401".into(),
+    };
+    store
+        .park_tool_task(&claimed[0].token, expired.clone())
+        .await
+        .expect("park");
+    let all = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(all.len(), 1, "alice's task");
+    store
+        .park_tool_task(&all[0].token, expired)
+        .await
+        .expect("park");
+    let scope = ParkedScope::Namespace {
+        tenant: acme(),
+        namespace: bob(),
+        toolset: toolset_digest(),
+    };
+    let at = later(T0, 10);
+    assert_eq!(
+        store.resume_parked(&scope, at).await.expect("resume"),
+        1,
+        "bob's call only"
+    );
+    assert_eq!(
+        store.tool_tasks(&run_ref(2)).await.expect("tool_tasks")[0].state,
+        TaskState::Ready {
+            next_attempt_at: at
+        }
+    );
+    assert!(matches!(
+        store.tool_tasks(&run_ref(1)).await.expect("tool_tasks")[0].state,
+        TaskState::Parked(_)
+    ));
 }

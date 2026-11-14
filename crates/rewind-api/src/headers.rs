@@ -7,12 +7,25 @@ use std::fmt;
 use crate::Error;
 
 /// `Authorization: Bearer <token>` on every request to `/v1`, except over the embedded server's
-/// socket: an API key `rewind_sk_…`, or a member's access token from `/auth`. None to
-/// `POST /hooks/{token}`.
+/// socket: an API key `rewind_sk_…`, a member's access token from `/auth`, or an end user's
+/// token, opaque (`rewind_nt_…`) or a JWT the customer signed with a key whose `kid` starts with
+/// `rk_`. None to `POST /hooks/{token}`.
 pub const AUTHORIZATION: &str = "Authorization";
 
 /// The prefix of every API key.
 pub const API_KEY_PREFIX: &str = "rewind_sk_";
+
+/// The prefix of every end user's opaque token.
+pub const TOKEN_PREFIX: &str = "rewind_nt_";
+
+/// The prefix of the `kid` of every key a customer signs its end users' tokens with.
+pub const TOKEN_KEY_PREFIX: &str = "rk_";
+
+/// The namespace a key's or a member's request acts for (`archi/06-storage-and-scale.md`,
+/// "Namespaces"): required by `POST /v1/runs`, `POST /v1/check` and `POST /v1/test`; on a read,
+/// it narrows the answer to that namespace. A token's namespace is its own: the header may
+/// repeat it, and naming another is `forbidden`.
+pub const NAMESPACE: &str = "Rewind-Namespace";
 
 /// On `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}`
 /// (`archi/06-storage-and-scale.md`, "Idempotency of the API").
