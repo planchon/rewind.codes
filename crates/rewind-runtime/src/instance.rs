@@ -106,6 +106,13 @@ impl Instance {
         self.isolate.memory_usage()
     }
 
+    /// The CPU time of the isolate's thread in the calls into the script since the last take:
+    /// loading the modules and `main(input)` after [`Instance::load`] and [`Instance::start`],
+    /// one delivery after [`Instance::deliver`]; whether they succeeded or not.
+    pub(crate) fn take_cpu_time(&mut self) -> std::time::Duration {
+        self.isolate.take_cpu_time()
+    }
+
     /// Calls a hook with one string argument, drains microtasks, then evaluates the script's
     /// outcome (`idle`), all under the CPU budget.
     fn run(

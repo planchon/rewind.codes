@@ -358,7 +358,7 @@ where
             script: script.digest(),
             ..started.clone()
         };
-        let mut batch = Batch::for_run(run, &self.config.limits);
+        let mut batch = Batch::for_check(run, &self.config.limits);
         let followed = self
             .follow_parent(
                 &mut batch,
@@ -476,6 +476,9 @@ where
         heartbeat.beat().await?;
         let (mut instance, mut point) = match self.executor.start(start).await {
             Ok((instance, emitted)) => {
+                // The fork's script runs for the first time: its calls execute, though they
+                // follow the parent's history.
+                batch.count_cpu(self, instance.cpu_time());
                 let followed = follow(&mut cursor, &emitted, at, &mut inherited);
                 batch
                     .respond(recorded_at, trigger, emitted, Grace::No)
@@ -544,7 +547,9 @@ where
             let delivery = payloads::delivery(&self.payloads(), tenant, &completion).await?;
             heartbeat.beat().await?;
             let trigger = Event::Completion(completion);
-            match instance.deliver(delivery, recorded_at).await {
+            let delivered = instance.deliver(delivery, recorded_at).await;
+            batch.count_cpu(self, instance.cpu_time());
+            match delivered {
                 Ok(emitted) => {
                     let followed = follow(&mut cursor, &emitted, at, &mut inherited);
                     batch

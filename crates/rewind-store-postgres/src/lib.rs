@@ -4,20 +4,24 @@
 //! [`PostgresStore`] implements four ports of `rewind-engine` on one database:
 //!
 //! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, payload rows
-//!   and references, retention;
-//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles. The writes of a
-//!   tenant's grants and roles take a transaction-scoped advisory lock on the tenant: the kept
-//!   role's last holder and a role in use are decided against concurrent writers;
+//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, namespaces
+//!   with their quotas, use and alerts, payload rows and references, retention. The starts of a
+//!   tenant and the writes of its use take a transaction-scoped advisory lock on the tenant: two
+//!   starts never take the same last place of a quota;
+//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
+//!   tokens and token keys. The writes of a tenant's grants and roles take a transaction-scoped
+//!   advisory lock on the tenant: the kept role's last holder and a role in use are decided
+//!   against concurrent writers;
 //! - `ReadModel`: the projections behind the dashboard's searches, statistics and failure
 //!   groups: run summaries with their labels, waits, search text and quarantine, tool calls with
 //!   their tasks' states;
-//! - `SecretStore`: credentials per toolset and per run, encrypted with a data key per tenant,
-//!   itself encrypted by the deployment's [`MasterKey`].
+//! - `SecretStore`: credentials per toolset, per namespace and toolset, and per run, encrypted
+//!   with a data key per tenant, itself encrypted by the deployment's [`MasterKey`].
 //!
 //! Many workers, schedulers and projectors share one database. Each port method is one short
 //! transaction at `READ COMMITTED`, and the rows they compete for are taken with
-//! `FOR UPDATE SKIP LOCKED` (runnable runs, due tool tasks, feed items, quarantined runs) or
+//! `FOR UPDATE SKIP LOCKED` (runnable runs, due tool tasks, feed items, quota alerts,
+//! quarantined runs) or
 //! locked in a fixed order: a run's row first, then the rows it owns, payload rows by digest.
 //! A deadlock or a serialization failure, should one happen anyway, is retried.
 //!
@@ -31,16 +35,8 @@
 mod access;
 mod codec;
 
-/// The refusal of what this store does not keep of namespaces: quotas other than the tenant's
-/// active runs, use, alerts, namespace records, end users' tokens and token keys, credentials
-/// per namespace, and the namespace filters of tasks and of the read model
-/// (`archi/09-roadmap.md`, "Workstreams").
-pub(crate) fn namespaces_not_kept(what: &str) -> rewind_engine::ports::StoreError {
-    rewind_engine::ports::StoreError::Backend(format!(
-        "{what}: the Postgres store does not keep this part of namespaces"
-    ))
-}
 mod journal;
+mod namespaces;
 mod read_model;
 mod schema;
 mod secrets;

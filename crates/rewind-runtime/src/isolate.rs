@@ -65,6 +65,8 @@ pub(crate) struct Isolate {
     heap_exceeded: Rc<Cell<bool>>,
     /// The isolate was terminated: it cannot run JavaScript any more.
     dead: bool,
+    /// The CPU time of the calls ended since [`Isolate::take_cpu_time`] was last called.
+    cpu: Duration,
 }
 
 impl Isolate {
@@ -129,6 +131,7 @@ impl Isolate {
             limits,
             heap_exceeded,
             dead: false,
+            cpu: Duration::ZERO,
         };
         let (hooks, init) = {
             let runtime = &mut isolate.runtime;
@@ -146,6 +149,12 @@ impl Isolate {
         &mut self.runtime
     }
 
+    /// The CPU time of the calls into JavaScript that ended since the last take, failed calls
+    /// included, as the watchdog measured it.
+    pub(crate) fn take_cpu_time(&mut self) -> Duration {
+        std::mem::take(&mut self.cpu)
+    }
+
     /// Starts the CPU budget of one call into JavaScript.
     pub(crate) fn begin(&mut self) -> Result<(), ExecutorError> {
         if self.dead {
@@ -160,7 +169,9 @@ impl Isolate {
     /// Ends the CPU budget of a call: a terminated execution is a limit exceeded, and the
     /// isolate is then unusable.
     pub(crate) fn end(&mut self) -> Result<(), ExecutorError> {
-        let timed_out = self.watchdog.disarm();
+        let disarmed = self.watchdog.disarm();
+        self.cpu = self.cpu.saturating_add(disarmed.cpu);
+        let timed_out = disarmed.fired;
         if self.heap_exceeded.get() {
             self.dead = true;
             return Err(ExecutorError::LimitExceeded(ops::heap_exceeded(

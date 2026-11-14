@@ -15,9 +15,9 @@ use rewind_core::{
     Toolset,
 };
 use rewind_engine::ports::{
-    Clock, Credentials, Delivery, Dispatched, JournalStore, ParkKind, ParkReason, RunRef, Secret,
-    ServerCredentials, Subscription, TaskFilter, TaskRef, TaskState, Tenant, TenantId, TenantScope,
-    ToolCall, ToolDispatcher, VirtualTime, WebhookEventKind,
+    Clock, Credentials, Delivery, Dispatched, JournalStore, NamespaceName, ParkKind, ParkReason,
+    RunRef, Secret, ServerCredentials, Subscription, TaskFilter, TaskRef, TaskState, Tenant,
+    TenantId, TenantScope, ToolCall, ToolDispatcher, VirtualTime, WebhookEventKind,
 };
 use rewind_engine::{
     Backoff, DriveOptions, Engine, EngineConfig, EngineError, HostClaim, HostFailure, StartError,
@@ -579,6 +579,61 @@ async fn renewed_toolset_credentials_resume_the_runs_of_the_toolset() {
     assert_eq!(
         engine
             .set_toolset_credentials(&TenantId::local(), Toolset::empty().digest(), &bearer("x"))
+            .await,
+        Err(EngineError::ToolsetNotFound(Toolset::empty().digest()))
+    );
+}
+
+#[tokio::test]
+async fn renewed_namespace_credentials_resume_the_runs_of_the_namespace_only() {
+    let dispatcher = expiring();
+    let engine = engine(caller(), dispatcher.clone());
+    let tools = toolset(|_| {});
+    let in_namespace = |name: &str| {
+        let mut request = calling(ISSUE, tools.clone());
+        request.namespace = NamespaceName::new(name).unwrap();
+        request
+    };
+    let alice = engine.start_run(in_namespace("alice")).await.unwrap().run;
+    let bob = engine.start_run(in_namespace("bob")).await.unwrap().run;
+    drive(&engine).await;
+    assert!(matches!(
+        task_state(&engine, &alice).await,
+        TaskState::Parked(_)
+    ));
+
+    // Alice's credentials for the toolset: her call goes on, Bob's stays parked.
+    assert_eq!(
+        engine
+            .set_namespace_credentials(
+                &TenantId::local(),
+                &NamespaceName::new("alice").unwrap(),
+                tools.digest(),
+                &bearer("renewed"),
+            )
+            .await
+            .unwrap(),
+        1
+    );
+    drive(&engine).await;
+    assert_eq!(output(&engine, &alice).await["result"]["attempt"], json!(2));
+    assert!(!status(&engine, &bob).await.is_terminal());
+    assert!(matches!(
+        task_state(&engine, &bob).await,
+        TaskState::Parked(_)
+    ));
+    assert_eq!(
+        authorization(dispatcher.credentials().last().unwrap()).as_deref(),
+        Some("Bearer renewed")
+    );
+    assert_eq!(
+        engine
+            .set_namespace_credentials(
+                &TenantId::local(),
+                &NamespaceName::new("alice").unwrap(),
+                Toolset::empty().digest(),
+                &bearer("x"),
+            )
             .await,
         Err(EngineError::ToolsetNotFound(Toolset::empty().digest()))
     );

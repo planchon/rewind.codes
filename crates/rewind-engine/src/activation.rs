@@ -127,8 +127,9 @@ where
     }
 
     /// The engine's adapters, to wire another engine on the same store: a worker restarted with
-    /// a new configuration, such as a new build. The instance cache, and what this engine knows
-    /// of the calls it is dispatching, are dropped.
+    /// a new configuration, such as a new build. The instance cache, what this engine knows of
+    /// the calls it is dispatching, and the CPU time it has not written
+    /// ([`flush_usage`](Self::flush_usage)) are dropped.
     pub fn into_adapters(self) -> Adapters<J, B, X, D, C, E, S, W> {
         Adapters {
             journal: self.journal,
@@ -328,7 +329,13 @@ where
         }
 
         let last_recorded_at = state.updated_at().unwrap_or(Timestamp(0));
-        let mut batch = Batch::new(run, state, last_recorded_at, &self.config.limits);
+        let mut batch = Batch::new(
+            run,
+            Some(record.namespace.clone()),
+            state,
+            last_recorded_at,
+            &self.config.limits,
+        );
         for item in inbox {
             batch.consumed.push(item.id);
             if batch.state.is_terminal() {
@@ -369,6 +376,7 @@ where
                     heartbeat.beat().await?;
                     match self.executor.start(start).await {
                         Ok((started, emitted)) => {
+                            batch.count_cpu(self, started.cpu_time());
                             instance = Some(started);
                             batch.respond(recorded_at, trigger, emitted, Grace::No)
                         }
@@ -446,7 +454,9 @@ where
         };
         let trigger = Event::Completion(completion);
         heartbeat.beat().await?;
-        match instance.deliver(delivery, recorded_at).await {
+        let delivered = instance.deliver(delivery, recorded_at).await;
+        batch.count_cpu(self, instance.cpu_time());
+        match delivered {
             Ok(emitted) => batch.respond(recorded_at, trigger, emitted, grace),
             Err(err) => batch.abort(recorded_at, trigger, abort_reason(err)),
         }
@@ -626,6 +636,9 @@ pub(crate) fn abort_reason(err: ExecutorError) -> AbortReason {
 pub(crate) struct Batch<'l> {
     pub(crate) run_id: rewind_core::RunId,
     pub(crate) tenant: crate::ports::TenantId,
+    /// The namespace whose `cpu_per_month` the calls into the script count toward; `None` when
+    /// they run nothing of a run's, as a fork's compatibility check.
+    namespace: Option<crate::ports::NamespaceName>,
     pub(crate) state: RunState,
     last_recorded_at: Timestamp,
     entries: Vec<HistoryEntry>,
@@ -638,10 +651,17 @@ pub(crate) struct Batch<'l> {
 }
 
 impl<'l> Batch<'l> {
-    fn new(run: &RunRef, state: RunState, last_recorded_at: Timestamp, limits: &'l Limits) -> Self {
+    fn new(
+        run: &RunRef,
+        namespace: Option<crate::ports::NamespaceName>,
+        state: RunState,
+        last_recorded_at: Timestamp,
+        limits: &'l Limits,
+    ) -> Self {
         Self {
             run_id: run.id,
             tenant: run.tenant.clone(),
+            namespace,
             state,
             last_recorded_at,
             entries: Vec::new(),
@@ -652,9 +672,31 @@ impl<'l> Batch<'l> {
         }
     }
 
-    /// An empty batch for a run whose history is empty.
-    pub(crate) fn for_run(run: &RunRef, limits: &'l Limits) -> Self {
-        Self::new(run, RunState::new(), Timestamp(0), limits)
+    /// An empty batch for a run whose history is empty, whose calls into the script count
+    /// toward no namespace: a fork's compatibility check.
+    pub(crate) fn for_check(run: &RunRef, limits: &'l Limits) -> Self {
+        Self::new(run, None, RunState::new(), Timestamp(0), limits)
+    }
+
+    /// Counts the CPU time of a call into the script that executed, toward the namespace of
+    /// the run: never a call of a replay (`archi/06-storage-and-scale.md`, "Quotas").
+    pub(crate) fn count_cpu<J, B, X, D, C, E, S, W>(
+        &self,
+        engine: &Engine<J, B, X, D, C, E, S, W>,
+        cpu: Duration,
+    ) where
+        J: JournalStore,
+        B: BlobStore,
+        X: ScriptExecutor,
+        D: ToolDispatcher,
+        C: Clock,
+        E: Entropy,
+        S: SecretStore,
+        W: WebhookSender,
+    {
+        if let Some(namespace) = &self.namespace {
+            engine.count_cpu(&self.tenant, namespace, cpu);
+        }
     }
 
     /// `max(now, last recorded_at)`: monotonic per run.

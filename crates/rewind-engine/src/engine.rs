@@ -22,6 +22,7 @@ use crate::ports::{
     TenantId, TenantScope, ToolDeclarations, ToolDispatcher, Trigger, TypeChecker, WebhookSender,
 };
 use crate::ports::{NamespaceName, QuotaExceeded, Tenant, limits as namespace_limits};
+use crate::quotas::CpuMeter;
 use crate::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use crate::tasks::{Backoff, ToolTasks};
 use crate::telemetry::TelemetryConfig;
@@ -84,7 +85,8 @@ pub struct EngineConfig {
     pub payloads: PayloadTiers,
     /// How often an activation renews its lease, about 10 s: the lease outlives a worker that
     /// renews it, and a dead worker frees the run at most `lease_duration` after its last
-    /// renewal.
+    /// renewal. The worker role writes the CPU time it counted with the same period
+    /// ([`Engine::flush_usage`]).
     pub lease_renewal: Duration,
     /// Run telemetry: sampling, and the labels exported as span attributes.
     pub telemetry: TelemetryConfig,
@@ -150,6 +152,8 @@ pub struct Engine<J, B, X: ScriptExecutor, D, C, E, S, W> {
     pub(crate) draws: AtomicU64,
     /// The instances of sticky execution, kept between activations.
     pub(crate) instances: Mutex<InstanceCache<X::Instance>>,
+    /// The CPU time counted and not yet written to the store.
+    pub(crate) cpu: CpuMeter,
 }
 
 /// A request to start a run.
@@ -378,6 +382,7 @@ where
             instances: Mutex::new(InstanceCache::new(config.cache)),
             config,
             draws: AtomicU64::new(0),
+            cpu: CpuMeter::default(),
         }
     }
 

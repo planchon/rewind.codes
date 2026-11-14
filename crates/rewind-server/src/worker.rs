@@ -1,7 +1,9 @@
 //! The worker role (`archi/06-storage-and-scale.md`, "Leases, fencing, workers"): activations
 //! with the sticky cache and the lease heartbeat, the dispatch of tool calls with their claims'
 //! heartbeats, the scheduler (timers, deadlines, deferred tasks), the projector, the retention
-//! jobs, and, once at start, the retry of the quarantined runs of this build's epochs.
+//! jobs with the erasure of deleted namespaces, the writing of the CPU time counted per
+//! namespace and the sending of quota alerts ("Quotas"), and, once at start, the retry of the
+//! quarantined runs of this build's epochs.
 //!
 //! In real time each runs in its own loop, woken by changes and by a short poll. In virtual time
 //! one driver does everything that is ready, then moves the clock to the next timer, tool call
@@ -13,11 +15,12 @@ use std::time::Duration;
 use rewind_core::Timestamp;
 use rewind_engine::ActivationOutcome;
 use rewind_engine::ports::{FeedConsumer, JournalStore, VirtualTime};
+use rewind_engine::quotas::QuotaAlerts;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
 use crate::app::App;
-use crate::deliveries::Outbox;
+use crate::deliveries::{LEASE_MARGIN, Outbox, Waiting};
 use crate::wake::{POLL, wait};
 
 /// How often the claims of the calls in flight are renewed.
@@ -34,6 +37,8 @@ pub(crate) fn spawn(app: &Arc<App>, activations: usize, dispatches: usize) -> Ve
         tokio::spawn(projector(app.clone())),
         tokio::spawn(webhooks(app.clone())),
         tokio::spawn(housekeeping(app.clone())),
+        tokio::spawn(usage(app.clone())),
+        tokio::spawn(quota_alerts(app.clone())),
     ];
     if app.engine.clock().is_virtual() {
         tasks.push(tokio::spawn(virtual_driver(app.clone())));
@@ -278,14 +283,75 @@ async fn housekeeping(app: Arc<App>) {
                     + done.deleted
                     + done.payloads_deleted
                     + done.purged_from_read_model
+                    + done.erased_runs
+                    + done.cancelled_runs
+                    + done.erased_namespaces
                     > 0
                 {
                     tracing::info!(?done, "retention jobs");
+                }
+                if done.cancelled_runs > 0 {
+                    app.wake.bump();
                 }
             }
             Err(error) => tracing::error!(%error, "the retention jobs failed"),
         }
         let _ = tokio::time::timeout(HOUSEKEEPING, stop.changed()).await;
+    }
+}
+
+/// Writes the CPU time this worker counted per namespace to the store, every lease renewal
+/// period (about 10 s), and once more when the server stops: a worker that dies loses at most
+/// that much counting (`archi/06-storage-and-scale.md`, "Quotas").
+async fn usage(app: Arc<App>) {
+    let mut stop = app.stop.subscribe();
+    let mut ticks = tokio::time::interval(app.engine.config().lease_renewal);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let stopping = tokio::select! {
+            _ = ticks.tick() => false,
+            _ = stop.wait_for(|stop| *stop) => true,
+        };
+        match app.engine.flush_usage().await {
+            Ok(alerts) if !alerts.is_empty() => app.wake.bump(),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "the CPU time counted was not written: it is written with the next");
+            }
+        }
+        if stopping {
+            return;
+        }
+    }
+}
+
+/// Sends the quota alerts the store recorded to the tenants' subscriptions (`quota.alert`), and
+/// acknowledges them once their deliveries ended. An alert whose deliveries are cut by a stop is
+/// sent again once its claim expires, with the same id.
+async fn quota_alerts(app: Arc<App>) {
+    let mut changes = app.wake.subscribe();
+    let mut stop = app.stop.subscribe();
+    let webhooks = Waiting(app.deliveries.clone());
+    let sender = QuotaAlerts {
+        journal: &app.store,
+        webhooks: &webhooks,
+        owner: &app.settings.projector.owner,
+        lease_duration: app.deliveries.window().saturating_add(LEASE_MARGIN),
+        batch: app.settings.projector.batch,
+    };
+    while !app.stopping() {
+        let sent = tokio::select! {
+            sent = sender.send(app.now()) => sent,
+            _ = stop.wait_for(|stop| *stop) => return,
+        };
+        match sent {
+            Ok(0) => wait(&mut changes, POLL * 4, None).await,
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(%error, "the quota alerts cannot be sent");
+                tokio::time::sleep(BACKOFF).await;
+            }
+        }
     }
 }
 

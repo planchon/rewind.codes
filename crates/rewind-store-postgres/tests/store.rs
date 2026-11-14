@@ -1,5 +1,6 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
-//! migrations, the keys of version 1 becoming keys and grants, servers starting together, what a
+//! migrations, the keys of version 1 becoming keys and grants, the runs of version 2 moving to the
+//! namespace `migrated`, servers starting together, what a
 //! call dropped half-way leaves, secrets at rest, the byte order of tenants, claims that read
 //! several pages of due tasks, owners demoting each other at once, projectors applying the same
 //! runs at once, and the percentiles of Postgres.
@@ -85,6 +86,7 @@ async fn the_database_behind_the_store() {
     check!(a_newer_schema_is_refused);
     check!(a_changed_migration_is_refused);
     check!(keys_of_version_1_become_keys_and_grants);
+    check!(runs_of_version_2_belong_to_the_namespace_migrated);
     check!(servers_starting_together_migrate_once);
     check!(runs_survive_a_restart);
     check!(a_call_dropped_half_way_writes_nothing);
@@ -95,6 +97,7 @@ async fn the_database_behind_the_store() {
     check!(concurrent_claims_keep_to_a_servers_limit);
     check!(concurrent_claims_keep_to_a_tools_limit);
     check!(owners_demoting_each_other_at_once_leave_one_owner);
+    check!(concurrent_starts_never_take_the_same_last_place);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
 }
@@ -140,6 +143,151 @@ async fn a_changed_migration_is_refused(postgres: &Postgres) {
 /// Only migration 1: a database as a build of schema version 1 left it.
 #[derive(Debug)]
 struct Version1;
+
+/// Migrations 1 and 2: a database as a build of schema version 2 left it, before namespaces.
+#[derive(Debug)]
+struct Version2;
+
+impl<'s> sqlx::migrate::MigrationSource<'s> for Version2 {
+    fn resolve(
+        self,
+    ) -> futures_util::future::BoxFuture<
+        's,
+        Result<Vec<sqlx::migrate::Migration>, sqlx::error::BoxDynError>,
+    > {
+        Box::pin(async {
+            let migration = |version, description: &str, sql: &str| {
+                sqlx::migrate::Migration::new(
+                    version,
+                    description.to_owned().into(),
+                    sqlx::migrate::MigrationType::Simple,
+                    sql.to_owned().into(),
+                    false,
+                )
+            };
+            Ok(vec![
+                migration(1, "schema", include_str!("../migrations/0001_schema.sql")),
+                migration(2, "access", include_str!("../migrations/0002_access.sql")),
+            ])
+        })
+    }
+}
+
+/// The runs of a server of schema version 2 belong to the namespace `migrated` once the store is
+/// upgraded, with their script counts and their runs per day; idempotency keys become unique per
+/// namespace.
+async fn runs_of_version_2_belong_to_the_namespace_migrated(postgres: &Postgres) {
+    use rewind_engine::ports::{Day, Month, NamespaceName, UsageOf};
+
+    let database = postgres.create_database();
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("connect");
+    sqlx::migrate::Migrator::new(Version2)
+        .await
+        .expect("migrations 1 and 2")
+        .run(&pool)
+        .await
+        .expect("apply migrations 1 and 2");
+    let at = |seconds: u64| Timestamp(T0.0 + seconds * 1_000);
+    let millis = |at: Timestamp| i64::try_from(at.0).expect("in range");
+    let runs = [
+        (1u128, "acme", b"a".as_slice(), Some("k"), T0),
+        (2, "acme", b"a".as_slice(), None, at(1)),
+        (3, "acme", b"b".as_slice(), None, at(86_400)),
+        (4, "beta", b"a".as_slice(), None, at(2)),
+    ];
+    for (n, tenant, script, key, created_at) in runs {
+        sqlx::query(
+            "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
+             idempotency_key, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, 'completed', 1, $5, '{}'::jsonb, $6, $7, $7)",
+        )
+        .bind(tenant)
+        .bind(RunId::from_u128(n).as_uuid())
+        .bind(Digest::of(script).as_bytes().to_vec())
+        .bind(Digest::of(b"toolset").as_bytes().to_vec())
+        .bind(millis(at(86_400 * 30)))
+        .bind(key)
+        .bind(millis(created_at))
+        .execute(&pool)
+        .await
+        .expect("a run of version 2");
+    }
+    pool.close().await;
+
+    let store = postgres.connect(&database).await;
+    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+    let acme = TenantId::new("acme").expect("tenant");
+    let migrated = NamespaceName::migrated();
+    let first = RunRef::new(acme.clone(), RunId::from_u128(1));
+    assert_eq!(
+        store
+            .get_run(&first)
+            .await
+            .expect("get_run")
+            .expect("run")
+            .namespace,
+        migrated
+    );
+    let namespace = store
+        .get_namespace(&acme, &migrated)
+        .await
+        .expect("get_namespace")
+        .expect("the namespace of the runs before namespaces");
+    assert_eq!(
+        (namespace.created_at, namespace.last_active_at),
+        (T0, at(86_400))
+    );
+    assert!(
+        store
+            .namespace_has_script(&acme, &migrated, Digest::of(b"b"))
+            .await
+            .expect("namespace_has_script")
+    );
+    let month = Month::of(T0);
+    let usage = store
+        .namespace_usage(&acme, &UsageOf::Namespace(migrated.clone()), month)
+        .await
+        .expect("namespace_usage");
+    assert_eq!((usage.runs_started, usage.scripts), (3, 2));
+    assert_eq!(
+        usage
+            .days
+            .iter()
+            .map(|(day, used)| (*day, used.runs_started))
+            .collect::<Vec<_>>(),
+        [(Day::of(T0), 2), (Day::of(at(86_400)), 1)]
+    );
+    assert_eq!(
+        store
+            .namespace_usage(&acme, &UsageOf::Tenant, month)
+            .await
+            .expect("namespace_usage")
+            .runs_started,
+        3
+    );
+
+    // Idempotency keys are unique per namespace now: `k` is free in another one.
+    let in_namespace = |n: u128, namespace: NamespaceName| NewRun {
+        run: RunRef::new(acme.clone(), RunId::from_u128(n)),
+        namespace,
+        ..new_run(first.clone())
+    };
+    let again = store
+        .create_run(in_namespace(5, migrated.clone()), Some("k".into()))
+        .await
+        .expect("create_run");
+    assert!(matches!(again, CreateRun::Created(ref c) if !c.created && c.run == first));
+    let other = store
+        .create_run(
+            in_namespace(6, NamespaceName::new("alice").expect("valid")),
+            Some("k".into()),
+        )
+        .await
+        .expect("create_run");
+    assert!(matches!(other, CreateRun::Created(ref c) if c.created));
+}
 
 impl<'s> sqlx::migrate::MigrationSource<'s> for Version1 {
     fn resolve(
@@ -1046,4 +1194,71 @@ fn configurations_never_print_the_connection_string() {
     let config = Config::new("postgres://rewind:hunter2@db.internal/rewind");
     let printed = format!("{config:?}");
     assert!(!printed.contains("hunter2"), "{printed}");
+}
+
+/// Starts at once, in several namespaces of a tenant, on several connections: each namespace
+/// keeps to its active runs, the tenant to its ceiling, and each refusal says which.
+async fn concurrent_starts_never_take_the_same_last_place(postgres: &Postgres) {
+    use rewind_engine::ports::{NamespaceName, QuotaScope, Quotas};
+
+    let database = postgres.create_database();
+    let store = postgres.connect_with(&database, 8).await;
+    let tenant = TenantId::new("acme").expect("tenant");
+    let mut record = Tenant::new(tenant.clone());
+    record.namespace_defaults = Quotas {
+        active_runs: Some(2),
+        ..Quotas::default()
+    };
+    record.quotas = Quotas {
+        active_runs: Some(5),
+        ..Quotas::default()
+    };
+    store.put_tenant(&record).await.expect("put_tenant");
+    let outcomes = join_all((0..40u128).map(|n| {
+        let store = store.clone();
+        let tenant = tenant.clone();
+        async move {
+            let namespace = NamespaceName::new(format!("user-{}", n % 4)).expect("valid");
+            store
+                .create_run(
+                    NewRun {
+                        run: RunRef::new(
+                            tenant,
+                            RunId::from_u128(0x0193_0000_0000_7000_8000_0000_0002_0000 | n),
+                        ),
+                        namespace,
+                        ..new_run(run())
+                    },
+                    None,
+                )
+                .await
+                .expect("create_run")
+        }
+    }))
+    .await;
+    let created = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome, CreateRun::Created(c) if c.created))
+        .count();
+    assert_eq!(created, 5, "the tenant's ceiling");
+    for outcome in &outcomes {
+        if let CreateRun::QuotaExceeded(exceeded) = outcome {
+            match exceeded.scope {
+                QuotaScope::Namespace => assert_eq!((exceeded.limit, exceeded.used), (2, 2)),
+                QuotaScope::Tenant => assert_eq!((exceeded.limit, exceeded.used), (5, 5)),
+            }
+        }
+    }
+    let mut per_namespace = BTreeMap::new();
+    for record in store
+        .list_runs(&rewind_engine::ports::RunFilter::new(tenant.clone()))
+        .await
+        .expect("list_runs")
+    {
+        *per_namespace.entry(record.namespace).or_insert(0) += 1;
+    }
+    assert!(
+        per_namespace.values().all(|runs| *runs <= 2),
+        "{per_namespace:?}"
+    );
 }

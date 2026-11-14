@@ -4,14 +4,15 @@
 //! [`TursoStore`] implements four ports of `rewind-engine` on one database file, `journal.db`:
 //!
 //! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, payload rows
-//!   and references, retention;
-//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles;
+//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, namespaces
+//!   with their quotas, use and alerts, payload rows and references, retention;
+//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
+//!   tokens and token keys;
 //! - `ReadModel`: the projections behind the dashboard and the query language
 //!   (`run_summaries` with each run's snapshot, `run_labels`, `run_waits`, `run_texts`,
 //!   `tool_calls`), with the task states and quarantine recorded by whoever changes them
 //!   (`tool_calls.task_*`, `run_quarantine`);
-//! - `SecretStore`: credentials per toolset and per run, encrypted with a data key per tenant,
+//! - `SecretStore`: credentials per toolset, per namespace and toolset, and per run, encrypted with a data key per tenant,
 //!   itself encrypted by the deployment's [`MasterKey`].
 //!
 //! History and inbox rows hold the `rewind-format` v1 JSON of their event. The `meta` table holds
@@ -30,16 +31,8 @@
 
 mod access;
 mod codec;
-
-/// The refusal of what this store does not keep of namespaces: quotas other than the tenant's
-/// active runs, use, alerts, namespace records, end users' tokens and token keys
-/// (`archi/09-roadmap.md`, "Workstreams").
-pub(crate) fn namespaces_not_kept(what: &str) -> rewind_engine::ports::StoreError {
-    rewind_engine::ports::StoreError::Backend(format!(
-        "{what}: the embedded store does not keep this part of namespaces"
-    ))
-}
 mod journal;
+mod namespaces;
 mod read_model;
 mod schema;
 mod secrets;

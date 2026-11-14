@@ -6,6 +6,7 @@
 //! deliveries to the thread and awaits the replies.
 
 use std::sync::{Mutex, mpsc};
+use std::time::Duration;
 
 use rewind_core::{Epoch, Script, Timestamp, Toolset};
 use rewind_engine::ports::{
@@ -88,24 +89,28 @@ impl ScriptExecutor for V8Executor {
             .map_err(|err| {
                 ExecutorError::Internal(format!("cannot spawn the isolate thread: {err}"))
             })?;
-        let ran = emitted.await.map_err(|_| stopped())??;
+        let ran = emitted.await.map_err(|_| stopped())?;
+        let emitted = ran.emitted?;
         Ok((
             V8Instance {
                 requests: Mutex::new(requests),
                 memory: ran.memory,
+                cpu: ran.cpu,
             },
-            ran.emitted,
+            emitted,
         ))
     }
 }
 
-/// What a call into the isolate produced, and the memory the isolate holds after it.
+/// What a call into the isolate produced, the memory the isolate holds after it, and the CPU
+/// time the call used, whether it succeeded or not.
 struct Ran {
-    emitted: Vec<Emitted>,
+    emitted: Result<Vec<Emitted>, ExecutorError>,
     memory: u64,
+    cpu: Duration,
 }
 
-type Reply = oneshot::Sender<Result<Ran, ExecutorError>>;
+type Reply = oneshot::Sender<Ran>;
 
 struct Request {
     delivery: Delivery,
@@ -120,6 +125,8 @@ pub struct V8Instance {
     requests: Mutex<mpsc::Sender<Request>>,
     /// The memory the isolate held after its last call, measured on its thread.
     memory: u64,
+    /// The CPU time of its last call, measured on its thread.
+    cpu: Duration,
 }
 
 impl ScriptInstance for V8Instance {
@@ -138,9 +145,12 @@ impl ScriptInstance for V8Instance {
                 reply,
             })
             .map_err(|_| stopped())?;
-        let ran = emitted.await.map_err(|_| stopped())??;
-        self.memory = ran.memory;
-        Ok(ran.emitted)
+        let ran = emitted.await.map_err(|_| stopped())?;
+        self.cpu = ran.cpu;
+        if ran.emitted.is_ok() {
+            self.memory = ran.memory;
+        }
+        ran.emitted
     }
 
     /// The isolate's heap statistics after its last call: its heap's total size, plus what V8
@@ -148,6 +158,12 @@ impl ScriptInstance for V8Instance {
     /// memory bound.
     fn memory_usage(&self) -> u64 {
         self.memory
+    }
+
+    /// The CPU time of the isolate's thread in the last call, as the watchdog measured it:
+    /// loading the modules and `main(input)` after a start, one delivery after `deliver`.
+    fn cpu_time(&self) -> Duration {
+        self.cpu
     }
 }
 
@@ -172,7 +188,11 @@ fn run_isolate(
     {
         Ok(runtime) => runtime,
         Err(err) => {
-            let _ = started.send(Err(ExecutorError::Internal(err.to_string())));
+            let _ = started.send(Ran {
+                emitted: Err(ExecutorError::Internal(err.to_string())),
+                memory: 0,
+                cpu: Duration::ZERO,
+            });
             return;
         }
     };
@@ -180,7 +200,11 @@ fn run_isolate(
     let mut isolate = match runtime.block_on(Instance::load(&start, glue, limits)) {
         Ok(isolate) => isolate,
         Err(err) => {
-            let _ = started.send(Err(err));
+            let _ = started.send(Ran {
+                emitted: Err(err),
+                memory: 0,
+                cpu: Duration::ZERO,
+            });
             return;
         }
     };
@@ -199,13 +223,17 @@ fn run_isolate(
     }
 }
 
-/// A call's result, with the memory the isolate holds after it.
-fn measured(
-    isolate: &mut Instance,
-    result: Result<Vec<Emitted>, ExecutorError>,
-) -> Result<Ran, ExecutorError> {
-    result.map(|emitted| Ran {
-        emitted,
-        memory: isolate.memory_usage(),
-    })
+/// A call's result, with the memory the isolate holds after it and the CPU time it used.
+fn measured(isolate: &mut Instance, result: Result<Vec<Emitted>, ExecutorError>) -> Ran {
+    let cpu = isolate.take_cpu_time();
+    let memory = if result.is_ok() {
+        isolate.memory_usage()
+    } else {
+        0
+    };
+    Ran {
+        emitted: result,
+        memory,
+        cpu,
+    }
 }

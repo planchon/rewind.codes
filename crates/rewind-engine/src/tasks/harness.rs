@@ -82,10 +82,11 @@ where
         Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)
     }
 
-    /// Sets or renews an end user's credentials for a toolset, used by the runs of its namespace
-    /// with this toolset and without credentials of their own, over the toolset's. The calls
-    /// parked by `credentials.expired` in those runs are ready again, and sent with the same
-    /// idempotency key. Returns how many.
+    /// Sets or renews an end user's credentials for a toolset: those of the namespace, used by
+    /// every run of the namespace with this toolset and without credentials of its own, before
+    /// the toolset's (`archi/04-tools.md`, "Credentials"). The calls parked by
+    /// `credentials.expired` in those runs are ready again, and sent with the same idempotency
+    /// key. Returns how many.
     pub async fn set_namespace_credentials(
         &self,
         tenant: &TenantId,

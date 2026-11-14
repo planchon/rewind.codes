@@ -19,19 +19,16 @@ use rewind_engine::ports::{
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind,
-    QuotaScope, Quotas, Usage, UsageDelta, UsageOf,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use turso::{Connection, Row, Value};
-
-use crate::namespaces_not_kept;
 
 use crate::codec::{self, decode_labels, encode_labels};
 use crate::sql::{
     self, Columns, boolean, digest, int, limit, ms, opt_text, opt_ts, placeholders, run_id,
     scope_clause, tenant, text, transaction, ts,
 };
-use crate::{Error, TursoStore};
+use crate::{Error, TursoStore, namespaces};
 
 impl From<Error> for StoreError {
     fn from(err: Error) -> Self {
@@ -489,23 +486,6 @@ async fn set_task_state(
     Ok(())
 }
 
-fn tenant_from_row(row: &Row) -> Result<Tenant, Error> {
-    Ok(Tenant {
-        id: row.tenant(0)?,
-        quotas: Quotas {
-            active_runs: row.opt_u32(1)?,
-            ..Quotas::default()
-        },
-        namespace_defaults: Quotas::default(),
-        retention: Retention {
-            journal: row.duration(2)?,
-            archive: row.duration(3)?,
-            read_model: row.duration(4)?,
-            payload_grace: row.duration(5)?,
-        },
-    })
-}
-
 fn feed_consumer(name: &str) -> Result<FeedConsumer, Error> {
     FeedConsumer::ALL
         .into_iter()
@@ -682,8 +662,12 @@ impl JournalStore for TursoStore {
             if let Some(key) = &idempotency_key {
                 let existing = sql::query_row(
                     connection,
-                    "SELECT id FROM runs WHERE tenant = ? AND idempotency_key = ?",
-                    vec![tenant(tenant_id), text(key.as_str())],
+                    "SELECT id FROM runs WHERE tenant = ? AND namespace = ? AND idempotency_key = ?",
+                    vec![
+                        tenant(tenant_id),
+                        text(run.namespace.as_str()),
+                        text(key.as_str()),
+                    ],
                 )
                 .await?;
                 if let Some(existing) = existing {
@@ -705,38 +689,10 @@ impl JournalStore for TursoStore {
                     run.run.id
                 )));
             }
-            let quota = sql::query_row(
-                connection,
-                "SELECT active_run_quota FROM tenants WHERE id = ?",
-                vec![tenant(tenant_id)],
-            )
-            .await?
-            .map(|row| row.opt_u32(0))
-            .transpose()?
-            .flatten();
-            if let Some(quota) = quota {
-                let active = sql::query_row(
-                    connection,
-                    concat!(
-                        "SELECT COUNT(*) FROM runs WHERE tenant = ? AND status NOT IN ",
-                        terminal!()
-                    ),
-                    vec![tenant(tenant_id)],
-                )
-                .await?
-                .map(|row| row.u64(0))
-                .transpose()?
-                .unwrap_or(0);
-                if active >= u64::from(quota) {
-                    return Ok(CreateRun::QuotaExceeded(QuotaExceeded {
-                        quota: QuotaKind::ActiveRuns,
-                        scope: QuotaScope::Tenant,
-                        limit: u64::from(quota),
-                        used: active,
-                        resets_at: None,
-                    }));
-                }
-            }
+            let admitted = match namespaces::admit_run(connection, &run).await? {
+                Ok(admitted) => admitted,
+                Err(refused) => return Ok(refused),
+            };
             let trace = run.metadata.trace_context.as_ref();
             sql::execute(
                 connection,
@@ -768,6 +724,7 @@ impl JournalStore for TursoStore {
             .await?;
             let started = Trigger::RunStarted(run.started.clone());
             push_inbox(connection, run.run.id, &started, run.created_at).await?;
+            namespaces::count_run(connection, &run, admitted).await?;
             Ok(CreateRun::Created(Created {
                 run: run.run.clone(),
                 created: true,
@@ -2371,15 +2328,17 @@ impl JournalStore for TursoStore {
         let connection = self.connection().await?;
         let connection = &*connection;
         transaction(connection, async {
-            let exists = sql::query_row(
+            let Some(kept) = sql::query_row(
                 connection,
-                "SELECT 1 FROM runs WHERE id = ? AND tenant = ?",
+                "SELECT namespace, script FROM runs WHERE id = ? AND tenant = ?",
                 vec![run_id(run.id), tenant(&run.tenant)],
             )
-            .await?;
-            if exists.is_none() {
+            .await?
+            else {
                 return Ok(false);
-            }
+            };
+            namespaces::uncount_run(connection, &run.tenant, &kept.text(0)?, &kept.text(1)?)
+                .await?;
             let referenced = sql::query(
                 connection,
                 "SELECT digest FROM payload_refs WHERE tenant = ? AND run_id = ?",
@@ -2425,180 +2384,177 @@ impl JournalStore for TursoStore {
     // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
-        let kept = Quotas {
-            active_runs: record.quotas.active_runs,
-            ..Quotas::default()
-        };
-        if record.quotas != kept || record.namespace_defaults != Quotas::default() {
-            return Err(namespaces_not_kept(
-                "a tenant's ceiling other than its active runs, or its namespaces' defaults",
-            ));
-        }
         let connection = self.connection().await?;
-        sql::execute(
-            &connection,
-            "INSERT OR REPLACE INTO tenants (id, active_run_quota, journal_retention_ms, \
-             archive_retention_ms, read_model_retention_ms, payload_grace_ms) \
-             VALUES (?, ?, ?, ?, ?, ?)",
-            vec![
-                tenant(&record.id),
-                record
-                    .quotas
-                    .active_runs
-                    .map_or(Value::Null, |quota| int(u64::from(quota))),
-                ms(record.retention.journal),
-                ms(record.retention.archive),
-                ms(record.retention.read_model),
-                ms(record.retention.payload_grace),
-            ],
-        )
-        .await?;
-        Ok(())
+        Ok(namespaces::put_tenant(&connection, record).await?)
     }
 
     async fn get_tenant(&self, id: &TenantId) -> Result<Option<Tenant>, StoreError> {
         let connection = self.connection().await?;
-        let row = sql::query_row(
-            &connection,
-            "SELECT id, active_run_quota, journal_retention_ms, archive_retention_ms, \
-             read_model_retention_ms, payload_grace_ms FROM tenants WHERE id = ?",
-            vec![tenant(id)],
-        )
-        .await?;
-        Ok(row.map(|row| tenant_from_row(&row)).transpose()?)
+        Ok(namespaces::get_tenant(&connection, id).await?)
     }
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
         let connection = self.connection().await?;
-        let rows = sql::query(
-            &connection,
-            "SELECT id, active_run_quota, journal_retention_ms, archive_retention_ms, \
-             read_model_retention_ms, payload_grace_ms FROM tenants ORDER BY id",
-            Vec::new(),
-        )
-        .await?;
-        Ok(rows
-            .iter()
-            .map(tenant_from_row)
-            .collect::<Result<_, Error>>()?)
+        Ok(namespaces::list_tenants(&connection).await?)
     }
 
     // ---------------------------------------------------------------------------------------
-    // Namespaces, their use and their alerts: not kept by this store (see
-    // `namespaces_not_kept`).
+    // Namespaces, their use and their alerts (`crate::namespaces`)
 
     async fn put_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _exceptions: Option<&Quotas>,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        exceptions: Option<&Quotas>,
+        now: Timestamp,
     ) -> Result<NamespaceWrite, StoreError> {
-        Err(namespaces_not_kept("put_namespace"))
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::put_namespace(connection, tenant_id, name, exceptions, now).await?)
+        })
+        .await
     }
 
     async fn get_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
     ) -> Result<Option<Namespace>, StoreError> {
-        // This store keeps no namespace record (`put_namespace` and `delete_namespace` are
-        // refused): no namespace has exceptions or is being erased, and the tenant's defaults
-        // apply to every one.
-        Ok(None)
+        let connection = self.connection().await?;
+        Ok(namespaces::get_namespace(&connection, tenant_id, name).await?)
     }
 
     async fn list_namespaces(
         &self,
-        _filter: &NamespaceFilter,
+        filter: &NamespaceFilter,
     ) -> Result<Vec<NamespaceUsage>, StoreError> {
-        Err(namespaces_not_kept("list_namespaces"))
+        let connection = self.connection().await?;
+        Ok(namespaces::list_namespaces(&connection, filter).await?)
     }
 
     async fn namespace_usage(
         &self,
-        _tenant: &TenantId,
-        _of: &UsageOf,
-        _month: Month,
+        tenant_id: &TenantId,
+        of: &UsageOf,
+        month: Month,
     ) -> Result<Usage, StoreError> {
-        Err(namespaces_not_kept("namespace_usage"))
+        let connection = self.connection().await?;
+        Ok(namespaces::namespace_usage(&connection, tenant_id, of, month).await?)
     }
 
     async fn namespace_has_script(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _script: Digest,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        script: Digest,
     ) -> Result<bool, StoreError> {
-        Err(namespaces_not_kept("namespace_has_script"))
+        let connection = self.connection().await?;
+        Ok(namespaces::namespace_has_script(&connection, tenant_id, name, script).await?)
     }
 
     async fn revoke_namespace_tokens(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
     ) -> Result<bool, StoreError> {
-        Err(namespaces_not_kept("revoke_namespace_tokens"))
+        let connection = self.connection().await?;
+        Ok(namespaces::revoke_namespace_tokens(&connection, tenant_id, name, now).await?)
     }
 
     async fn delete_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
     ) -> Result<DeleteNamespace, StoreError> {
-        Err(namespaces_not_kept("delete_namespace"))
+        let connection = self.connection().await?;
+        Ok(namespaces::delete_namespace(&connection, tenant_id, name, now).await?)
     }
 
     async fn namespaces_to_erase(
         &self,
-        _limit: usize,
+        max: usize,
     ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
-        Err(namespaces_not_kept("namespaces_to_erase"))
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        Ok(namespaces::namespaces_to_erase(&connection, max).await?)
     }
 
     async fn drop_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
     ) -> Result<DropNamespace, StoreError> {
-        Err(namespaces_not_kept("drop_namespace"))
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::drop_namespace(connection, tenant_id, name).await?)
+        })
+        .await
     }
 
     async fn record_usage(
         &self,
-        _deltas: &[UsageDelta],
-        _now: Timestamp,
+        deltas: &[UsageDelta],
+        now: Timestamp,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("record_usage"))
+        if deltas.is_empty() {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::record_usage(connection, deltas, now).await?)
+        })
+        .await
     }
 
     async fn quota_alerts(
         &self,
-        _tenant: &TenantId,
-        _namespace: Option<&NamespaceName>,
-        _month: Month,
+        tenant_id: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("quota_alerts"))
+        let connection = self.connection().await?;
+        Ok(namespaces::quota_alerts(&connection, tenant_id, namespace, month).await?)
     }
 
     async fn claim_quota_alerts(
         &self,
-        _owner: &str,
-        _now: Timestamp,
-        _lease_duration: Duration,
-        _limit: usize,
+        owner: &str,
+        now: Timestamp,
+        lease_duration: Duration,
+        max: usize,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("claim_quota_alerts"))
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::claim_quota_alerts(connection, owner, now, lease_duration, max).await?)
+        })
+        .await
     }
 
     async fn ack_quota_alerts(
         &self,
-        _keys: &[QuotaAlertKey],
-        _now: Timestamp,
+        keys: &[QuotaAlertKey],
+        now: Timestamp,
     ) -> Result<(), StoreError> {
-        Err(namespaces_not_kept("ack_quota_alerts"))
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::ack_quota_alerts(connection, keys, now).await?)
+        })
+        .await
     }
 
     // ---------------------------------------------------------------------------------------
