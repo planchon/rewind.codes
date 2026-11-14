@@ -1,6 +1,6 @@
 //! The conformance suite of `AccessStore`: API keys, roles and the role in use, one grant per
-//! principal, the kept role's last holder, claims of an invitation's grant, default roles, and
-//! tenant isolation.
+//! principal, the kept role's last holder, claims of an invitation's grant, default roles,
+//! end users' tokens and token keys, and tenant isolation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,8 +8,8 @@ use rewind_core::{Digest, Timestamp};
 
 use super::{T0, check, tenant};
 use crate::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role,
-    RoleDeletion, StoreError, TenantId,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
+    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
 };
 
 /// The role every kept-role check keeps, as the server does.
@@ -57,6 +57,16 @@ pub async fn run_all<S: AccessStore>(new_store: impl Fn() -> S) {
     );
     check!("access", new_store(), default_roles_are_set_per_tenant);
     check!("access", new_store(), tenants_never_see_each_other);
+    check!(
+        "access",
+        new_store(),
+        tokens_are_found_by_hash_and_revoked_per_namespace
+    );
+    check!(
+        "access",
+        new_store(),
+        token_keys_are_found_by_kid_and_deleted_per_tenant
+    );
 }
 
 fn acme() -> TenantId {
@@ -691,5 +701,200 @@ pub async fn tenants_never_see_each_other<S: AccessStore>(store: &S) {
             .await
             .expect("get_role")
             .is_some()
+    );
+}
+
+fn token(secret: &str, tenant: TenantId, namespace: &str, expires_at: Timestamp) -> Token {
+    Token {
+        hash: Digest::of(secret.as_bytes()),
+        tenant,
+        namespace: NamespaceName::new(namespace).expect("the suites use valid namespace names"),
+        permissions: BTreeSet::from(["runs:read".to_owned(), "runs:start".to_owned()]),
+        labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
+        expires_at,
+        created_by: Principal::Key(Digest::of(b"rewind_sk_minter")),
+        created_at: at(0),
+        revoked_at: None,
+    }
+}
+
+pub async fn tokens_are_found_by_hash_and_revoked_per_namespace<S: AccessStore>(store: &S) {
+    let alice = NamespaceName::new("alice").expect("valid");
+    let first = token("rewind_nt_1", acme(), "alice", at(3_600));
+    let second = token("rewind_nt_2", acme(), "alice", at(60));
+    let bobs = token("rewind_nt_3", acme(), "bob", at(3_600));
+    let others = token("rewind_nt_4", tenant("other"), "alice", at(3_600));
+    for written in [&first, &second, &bobs, &others] {
+        store.put_token(written).await.expect("put_token");
+    }
+    assert!(
+        matches!(store.put_token(&first).await, Err(StoreError::Conflict(_))),
+        "a hash is stored once"
+    );
+    assert_eq!(
+        store.find_token(first.hash).await.expect("find_token"),
+        Some(first.clone())
+    );
+    assert_eq!(
+        store
+            .find_token(Digest::of(b"unknown"))
+            .await
+            .expect("find_token"),
+        None
+    );
+    assert_eq!(
+        store
+            .count_tokens(&acme(), &alice, at(30))
+            .await
+            .expect("count_tokens"),
+        2
+    );
+    assert_eq!(
+        store
+            .count_tokens(&acme(), &alice, at(60))
+            .await
+            .expect("count_tokens"),
+        1,
+        "a token expired at its expiry is not live"
+    );
+    assert!(
+        !store
+            .revoke_token(&tenant("other"), first.hash, at(10))
+            .await
+            .expect("revoke_token"),
+        "another tenant's token is not revoked"
+    );
+    assert!(
+        store
+            .revoke_token(&acme(), first.hash, at(10))
+            .await
+            .expect("revoke_token")
+    );
+    assert!(
+        !store
+            .revoke_token(&acme(), first.hash, at(11))
+            .await
+            .expect("revoke_token"),
+        "a token is revoked once"
+    );
+    let revoked = store
+        .find_token(first.hash)
+        .await
+        .expect("find_token")
+        .expect("a revoked token is still found");
+    assert_eq!(revoked.revoked_at, Some(at(10)));
+    assert!(!revoked.is_live(at(20)));
+    assert_eq!(
+        store
+            .revoke_tokens(&acme(), &alice, at(20))
+            .await
+            .expect("revoke_tokens"),
+        1,
+        "the namespace's tokens not yet revoked, expired or not"
+    );
+    assert_eq!(
+        store
+            .find_token(second.hash)
+            .await
+            .expect("find_token")
+            .and_then(|token| token.revoked_at),
+        Some(at(20))
+    );
+    assert_eq!(
+        store
+            .count_tokens(&acme(), &alice, at(30))
+            .await
+            .expect("count_tokens"),
+        0
+    );
+    for untouched in [&bobs, &others] {
+        assert_eq!(
+            store
+                .find_token(untouched.hash)
+                .await
+                .expect("find_token")
+                .and_then(|token| token.revoked_at),
+            None,
+            "other namespaces and tenants keep their tokens"
+        );
+    }
+}
+
+fn token_key(kid: &str, tenant: TenantId, created_at: Timestamp) -> TokenKey {
+    TokenKey {
+        kid: kid.to_owned(),
+        tenant,
+        name: format!("key {kid}"),
+        jwk: format!(r#"{{"kty":"OKP","crv":"Ed25519","x":"{kid}"}}"#),
+        permissions: BTreeSet::from(["runs:read".to_owned()]),
+        created_by: user("ada"),
+        created_at,
+    }
+}
+
+pub async fn token_keys_are_found_by_kid_and_deleted_per_tenant<S: AccessStore>(store: &S) {
+    let late = token_key("rk_b", acme(), at(2));
+    let early = token_key("rk_c", acme(), at(1));
+    let same_time = token_key("rk_a", acme(), at(2));
+    let others = token_key("rk_d", tenant("other"), at(0));
+    for written in [&late, &early, &same_time, &others] {
+        store.put_token_key(written).await.expect("put_token_key");
+    }
+    assert!(
+        matches!(
+            store.put_token_key(&late).await,
+            Err(StoreError::Conflict(_))
+        ),
+        "a kid is stored once"
+    );
+    assert_eq!(
+        store.find_token_key("rk_d").await.expect("find_token_key"),
+        Some(others.clone()),
+        "a kid is found in any tenant"
+    );
+    assert_eq!(
+        store.find_token_key("rk_x").await.expect("find_token_key"),
+        None
+    );
+    assert_eq!(
+        store
+            .list_token_keys(&acme())
+            .await
+            .expect("list_token_keys"),
+        [early.clone(), same_time.clone(), late.clone()],
+        "by creation, then kid"
+    );
+    assert!(
+        !store
+            .delete_token_key(&acme(), "rk_d")
+            .await
+            .expect("delete_token_key"),
+        "another tenant's key is not deleted"
+    );
+    assert!(
+        store
+            .delete_token_key(&acme(), "rk_b")
+            .await
+            .expect("delete_token_key")
+    );
+    assert!(
+        !store
+            .delete_token_key(&acme(), "rk_b")
+            .await
+            .expect("delete_token_key")
+    );
+    assert_eq!(
+        store
+            .list_token_keys(&acme())
+            .await
+            .expect("list_token_keys"),
+        [early, same_time]
+    );
+    assert_eq!(
+        store
+            .list_token_keys(&tenant("other"))
+            .await
+            .expect("list_token_keys"),
+        [others]
     );
 }

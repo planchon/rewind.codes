@@ -19,6 +19,11 @@
 //! - `roles.permissions` holds a role's permissions as a JSON array of strings, sorted, and
 //!   `grants.principal` and `grants.granted_by` a principal's text (`user:…`, `key:…`,
 //!   `invitation:…`), whose order is the order of principals.
+//! - a tenant's ceiling and its namespaces' defaults, and a namespace's exceptions, are a column
+//!   per quota (`*_ms` for the durations; the ceiling's `active_runs` is `active_run_quota`);
+//!   `usage` and `quota_alerts` hold the tenant's own rows under the namespace `*`, a day as days
+//!   since the Unix epoch, a period as `2026-11` and a threshold as its percent; the permissions
+//!   of `tokens` and `token_keys` are JSON arrays, as a role's.
 //!
 //! The read model's tables, written only through `ReadModel`:
 //!
@@ -394,11 +399,175 @@ FROM api_keys_v1;
 DROP TABLE api_keys_v1;
 "#;
 
-/// Namespaces (`archi/06-storage-and-scale.md`, "Namespaces"): the end user a run belongs to. The
-/// runs that existed before namespaces belong to `migrated`.
+/// Namespaces (`archi/06-storage-and-scale.md`, "Namespaces", "Quotas"): the end user a run
+/// belongs to, with idempotency keys unique per namespace (`runs` is rebuilt for its new key);
+/// the tenant's ceiling and its namespaces' defaults, a column per quota; namespaces with their
+/// exceptions, their use per day (`*` the tenant's own rows), their alerts and the runs kept per
+/// script; end users' tokens and the keys that sign them.
+///
+/// The runs that existed before namespaces belong to `migrated`, which is created in each tenant
+/// that has runs, with its script counts and the runs started per day, its own and its tenant's.
 const V3: &str = r#"
-ALTER TABLE runs ADD COLUMN namespace TEXT NOT NULL DEFAULT 'migrated';
+CREATE TABLE runs_v3 (
+    id TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    script TEXT NOT NULL,
+    toolset TEXT NOT NULL,
+    status TEXT NOT NULL,
+    epoch INTEGER NOT NULL,
+    history_len INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    expiry_enqueued INTEGER NOT NULL,
+    quarantine_kind TEXT,
+    quarantine_reason TEXT,
+    quarantine_since INTEGER,
+    quarantine_retried_by TEXT,
+    failures INTEGER NOT NULL,
+    attempts INTEGER NOT NULL,
+    lease_owner TEXT,
+    lease_until INTEGER,
+    fence INTEGER NOT NULL,
+    inbox_head INTEGER,
+    runnable_at INTEGER,
+    sticky_worker TEXT,
+    labels TEXT NOT NULL,
+    traceparent TEXT,
+    tracestate TEXT,
+    parent TEXT,
+    parent_at INTEGER,
+    idempotency_key TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    archive_document TEXT,
+    archived_at INTEGER,
+    UNIQUE (tenant, namespace, idempotency_key)
+) STRICT;
+INSERT INTO runs_v3 (namespace,
+    id, tenant, script, toolset, status, epoch, history_len, expires_at, expiry_enqueued,
+    quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, failures,
+    attempts, lease_owner, lease_until, fence, inbox_head, runnable_at, sticky_worker, labels,
+    traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at,
+    ended_at, archive_document, archived_at)
+SELECT 'migrated',
+    id, tenant, script, toolset, status, epoch, history_len, expires_at, expiry_enqueued,
+    quarantine_kind, quarantine_reason, quarantine_since, quarantine_retried_by, failures,
+    attempts, lease_owner, lease_until, fence, inbox_head, runnable_at, sticky_worker, labels,
+    traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at,
+    ended_at, archive_document, archived_at
+FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_v3 RENAME TO runs;
+CREATE INDEX runs_by_tenant ON runs (tenant, created_at, id);
+CREATE INDEX runs_by_namespace ON runs (tenant, namespace, status);
+CREATE INDEX runs_by_deadline ON runs (expires_at, id);
+CREATE INDEX runs_by_end ON runs (ended_at, tenant, id);
+CREATE INDEX runs_by_archive ON runs (archived_at, tenant, id);
+CREATE INDEX runs_runnable ON runs (inbox_head);
+CREATE INDEX runs_runnable_by_tenant ON runs (tenant, inbox_head);
+CREATE INDEX runs_runnable_by_sticky_worker ON runs (sticky_worker, inbox_head);
+
 ALTER TABLE run_summaries ADD COLUMN namespace TEXT NOT NULL DEFAULT 'migrated';
+
+ALTER TABLE tenants ADD COLUMN cpu_per_month_ms INTEGER;
+ALTER TABLE tenants ADD COLUMN runs_per_month INTEGER;
+ALTER TABLE tenants ADD COLUMN scripts INTEGER;
+ALTER TABLE tenants ADD COLUMN max_ttl_ms INTEGER;
+ALTER TABLE tenants ADD COLUMN max_script_lines INTEGER;
+ALTER TABLE tenants ADD COLUMN default_cpu_per_month_ms INTEGER;
+ALTER TABLE tenants ADD COLUMN default_active_runs INTEGER;
+ALTER TABLE tenants ADD COLUMN default_runs_per_month INTEGER;
+ALTER TABLE tenants ADD COLUMN default_scripts INTEGER;
+ALTER TABLE tenants ADD COLUMN default_max_ttl_ms INTEGER;
+ALTER TABLE tenants ADD COLUMN default_max_script_lines INTEGER;
+
+CREATE TABLE namespaces (
+    tenant TEXT NOT NULL,
+    name TEXT NOT NULL,
+    cpu_per_month_ms INTEGER,
+    active_runs INTEGER,
+    runs_per_month INTEGER,
+    scripts INTEGER,
+    max_ttl_ms INTEGER,
+    max_script_lines INTEGER,
+    tokens_revoked_before INTEGER,
+    created_at INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    deleting_since INTEGER,
+    PRIMARY KEY (tenant, name)
+) STRICT;
+CREATE INDEX namespaces_deleting ON namespaces (deleting_since, tenant, name);
+
+CREATE TABLE usage (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    day INTEGER NOT NULL,
+    cpu_ms INTEGER NOT NULL,
+    runs_started INTEGER NOT NULL,
+    PRIMARY KEY (tenant, namespace, day)
+) STRICT;
+
+CREATE TABLE quota_alerts (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    quota TEXT NOT NULL,
+    period TEXT NOT NULL,
+    threshold INTEGER NOT NULL,
+    used INTEGER NOT NULL,
+    quota_limit INTEGER NOT NULL,
+    raised_at INTEGER NOT NULL,
+    lease_owner TEXT,
+    lease_until INTEGER,
+    sent_at INTEGER,
+    PRIMARY KEY (tenant, namespace, quota, period, threshold)
+) STRICT;
+CREATE INDEX quota_alerts_unsent ON quota_alerts (sent_at, raised_at);
+CREATE INDEX quota_alerts_by_period ON quota_alerts (tenant, period);
+
+CREATE TABLE namespace_scripts (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    runs INTEGER NOT NULL,
+    first_run_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, namespace, digest)
+) STRICT;
+
+CREATE TABLE tokens (
+    hash TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    revoked_at INTEGER
+) STRICT;
+CREATE INDEX tokens_by_namespace ON tokens (tenant, namespace);
+
+CREATE TABLE token_keys (
+    kid TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    name TEXT NOT NULL,
+    jwk TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX token_keys_by_tenant ON token_keys (tenant, created_at, kid);
+
+INSERT INTO namespaces (tenant, name, created_at, last_active_at)
+SELECT tenant, 'migrated', MIN(created_at), MAX(created_at) FROM runs GROUP BY tenant;
+INSERT INTO namespace_scripts (tenant, namespace, digest, runs, first_run_at)
+SELECT tenant, 'migrated', script, COUNT(*), MIN(created_at) FROM runs GROUP BY tenant, script;
+INSERT INTO usage (tenant, namespace, day, cpu_ms, runs_started)
+SELECT tenant, 'migrated', created_at / 86400000, 0, COUNT(*) FROM runs
+GROUP BY tenant, created_at / 86400000;
+INSERT INTO usage (tenant, namespace, day, cpu_ms, runs_started)
+SELECT tenant, '*', created_at / 86400000, 0, COUNT(*) FROM runs
+GROUP BY tenant, created_at / 86400000;
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
@@ -634,5 +803,139 @@ mod tests {
                 Digest::of(b"rewind_sk_agent")
             ]
         );
+    }
+
+    /// A run as version 2 kept it: before namespaces.
+    async fn run_of_version_2(
+        connection: &turso::Connection,
+        n: u128,
+        tenant: &str,
+        script: &[u8],
+        key: Option<&str>,
+        created_at: Timestamp,
+    ) {
+        sql::execute(
+            connection,
+            "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
+             expires_at, expiry_enqueued, failures, attempts, fence, labels, idempotency_key, \
+             created_at, updated_at) \
+             VALUES (?, ?, ?, ?, 'completed', 1, 0, ?, 0, 0, 0, 0, '{}', ?, ?, ?)",
+            vec![
+                text(rewind_core::RunId::from_u128(n).to_string()),
+                text(tenant),
+                digest(Digest::of(script)),
+                digest(Digest::of(b"toolset")),
+                ts(at(86_400 * 30)),
+                crate::sql::opt_text(key),
+                ts(created_at),
+                ts(created_at),
+            ],
+        )
+        .await
+        .expect("a run of version 2");
+    }
+
+    #[tokio::test]
+    async fn runs_of_version_2_belong_to_the_namespace_migrated() {
+        use rewind_engine::ports::{
+            CreateRun, Day, JournalStore, Month, NamespaceName, NewRun, RunMetadata, RunRef,
+            UsageOf,
+        };
+
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        {
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("open the file");
+            let connection = database.connect().expect("connect");
+            migrate_to(&connection, 2).await.expect("version 2");
+            run_of_version_2(&connection, 1, "acme", b"a", Some("k"), T0).await;
+            run_of_version_2(&connection, 2, "acme", b"a", None, at(1)).await;
+            run_of_version_2(&connection, 3, "acme", b"b", None, at(86_400)).await;
+            run_of_version_2(&connection, 4, "beta", b"a", None, at(2)).await;
+        }
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("migrate to the current version");
+        let acme = tenant_id("acme");
+        let migrated = NamespaceName::migrated();
+        let run = RunRef::new(acme.clone(), rewind_core::RunId::from_u128(1));
+        assert_eq!(
+            store
+                .get_run(&run)
+                .await
+                .expect("get_run")
+                .expect("run")
+                .namespace,
+            migrated
+        );
+        let namespace = store
+            .get_namespace(&acme, &migrated)
+            .await
+            .expect("get_namespace")
+            .expect("the namespace of the runs before namespaces");
+        assert_eq!(
+            (namespace.created_at, namespace.last_active_at),
+            (T0, at(86_400))
+        );
+        assert!(
+            store
+                .namespace_has_script(&acme, &migrated, Digest::of(b"b"))
+                .await
+                .expect("namespace_has_script")
+        );
+        let month = Month::of(T0);
+        let usage = store
+            .namespace_usage(&acme, &UsageOf::Namespace(migrated.clone()), month)
+            .await
+            .expect("namespace_usage");
+        assert_eq!((usage.runs_started, usage.scripts), (3, 2));
+        assert_eq!(
+            usage
+                .days
+                .iter()
+                .map(|(day, used)| (*day, used.runs_started))
+                .collect::<Vec<_>>(),
+            [(Day::of(T0), 2), (Day::of(at(86_400)), 1)]
+        );
+        let tenant = store
+            .namespace_usage(&acme, &UsageOf::Tenant, month)
+            .await
+            .expect("namespace_usage");
+        assert_eq!(tenant.runs_started, 3);
+
+        // Idempotency keys are unique per namespace now: `k` is free in another one.
+        let started = rewind_core::RunStarted {
+            script: Digest::of(b"a"),
+            toolset: Digest::of(b"toolset"),
+            input: serde_json::json!(null).into(),
+            seed: rewind_core::Seed::from_bytes([0; 32]),
+            epoch: rewind_core::Epoch(1),
+            expires_at: at(86_400 * 30),
+            mode: rewind_core::RunMode::Live,
+        };
+        let new_run = |n: u128, namespace: NamespaceName| NewRun {
+            run: RunRef::new(acme.clone(), rewind_core::RunId::from_u128(n)),
+            namespace,
+            started: started.clone(),
+            metadata: RunMetadata::default(),
+            created_at: at(3),
+        };
+        let again = store
+            .create_run(new_run(5, migrated.clone()), Some("k".into()))
+            .await
+            .expect("create_run");
+        assert!(matches!(again, CreateRun::Created(ref c) if !c.created && c.run == run));
+        let other = store
+            .create_run(
+                new_run(6, NamespaceName::new("alice").expect("valid")),
+                Some("k".into()),
+            )
+            .await
+            .expect("create_run");
+        assert!(matches!(other, CreateRun::Created(ref c) if c.created));
     }
 }
