@@ -94,17 +94,32 @@ impl TestServer {
         role: BuiltInRole,
         labels: &[(&str, &str)],
     ) -> Client {
+        self.key_with(tenant, role.as_str(), labels).await
+    }
+
+    /// A key of `tenant` with `role`, built in or the tenant's, made by the operator.
+    pub(crate) async fn key_with(
+        &self,
+        tenant: &str,
+        role: &str,
+        labels: &[(&str, &str)],
+    ) -> Client {
         let key = self
             .admin
             .create_api_key(&CreateApiKey {
                 tenant: Some(tenant.into()),
-                name: "test".into(),
-                role: role.as_str().into(),
+                name: format!("a {role} key of the tests"),
+                role: role.into(),
                 allowed_labels: labels.iter().copied().collect::<Labels>(),
             })
             .await
             .unwrap();
-        Client::remote(&self.url, key.key.as_deref()).unwrap()
+        self.client(key.key.as_deref())
+    }
+
+    /// A client of this server with `key`.
+    pub(crate) fn client(&self, key: Option<&str>) -> Client {
+        Client::remote(&self.url, key).unwrap()
     }
 
     pub(crate) async fn stop(mut self) {

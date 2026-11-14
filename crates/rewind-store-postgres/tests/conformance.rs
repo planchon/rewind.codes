@@ -1,5 +1,5 @@
-//! The production store passes the conformance suites of `JournalStore`, `ReadModel` and
-//! `SecretStore` against Postgres in Docker, each check on a new database. The journal's suite
+//! The production store passes the conformance suites of `JournalStore`, `AccessStore`,
+//! `ReadModel` and `SecretStore` against Postgres in Docker, each check on a new database. The journal's suite
 //! passes again once `history` and `inbox` are partitioned by run, as the scaling path of
 //! `archi/06-storage-and-scale.md` will partition them.
 
@@ -23,6 +23,7 @@ async fn the_store_conforms_on_postgres() {
         return;
     };
     conformance::journal::run_all(stores(&postgres)).await;
+    conformance::access::run_all(stores(&postgres)).await;
     conformance::read_model::run_all(stores(&postgres)).await;
     conformance::secrets::run_all(stores(&postgres)).await;
 }

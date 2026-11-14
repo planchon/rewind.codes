@@ -85,13 +85,13 @@ The six were approved in November 2026, access and identity on the 14th.
 | Domain and format | `rewind-core`, `rewind-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
 | Engine | `rewind-engine` | Nothing beyond what `rewind-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
 | Runtime (V8) | `rewind-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
-| Stores | `rewind-store-turso`, `rewind-store-postgres` | `AccessStore` (keys moved out of `JournalStore`, roles, grants, default roles), migration 2 on Postgres | Engine ports, stored format v1, access and identity |
+| Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing | Engine ports, stored format v1, access and identity |
 | Identity | `rewind-workos` | Everything: `IdentityProvider` on WorkOS | Access and identity |
 | Blobs | `rewind-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `rewind-codegen`, `rewind-mcp` | `rewind-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `rewind-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `rewind-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `rewind-otel` | Nothing beyond what `rewind-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `rewind-server`, `rewind-api` | `/auth`, access tokens, grants and permissions on every endpoint, the organization, member, invitation, role and key endpoints, the wiring of WorkOS | Engine ports, HTTP API `/v1`, access and identity |
+| Server | `rewind-server`, `rewind-api` | `/auth`, access tokens, the organization, member, invitation and role endpoints, the wiring of WorkOS | Engine ports, HTTP API `/v1`, access and identity |
 | CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
 | Dashboard | `dashboard` | Sign-in, onboarding, the organization picker, the waitlist, the Organization views; the views following the caller's permissions | HTTP API `/v1`, access and identity |

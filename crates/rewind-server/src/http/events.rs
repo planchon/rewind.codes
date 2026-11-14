@@ -10,13 +10,14 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
+use rewind_api::access::Permission;
 use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::LAST_EVENT_ID;
 use rewind_engine::ports::{JournalStore, RunRef};
 use tokio::sync::watch;
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::Query;
 use crate::wake::{Busy, POLL, wait};
@@ -29,7 +30,7 @@ pub(super) async fn stream(
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let resumed = headers
         .get(LAST_EVENT_ID)

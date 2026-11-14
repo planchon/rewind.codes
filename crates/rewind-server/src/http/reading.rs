@@ -8,6 +8,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
+use rewind_api::access::Permission;
 use rewind_api::common::{RunStatus, Timestamp, timestamp};
 use rewind_api::reading::{Latency, PayloadQuery, ToolStats, ToolStatsFilter, ToolStatsPage};
 use rewind_api::scripts::{RunCounts, Script, ScriptFilter, ScriptPage, ScriptSummary};
@@ -15,7 +16,7 @@ use rewind_core::{Digest, canonical_json};
 use rewind_engine::ports::{JournalStore, ReadModel};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::Query;
 use crate::http::refuse_nul_in_filter;
@@ -81,7 +82,7 @@ pub(super) async fn scripts(
     caller: Caller,
     Query(query): Query<ScriptFilter>,
 ) -> Result<Json<ScriptPage>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let Some(filter) = filter(&caller, query.digest.as_deref(), &query.labels, query.tool)? else {
         return Ok(Json(ScriptPage {
@@ -145,7 +146,7 @@ pub(super) async fn script(
     caller: Caller,
     Path(digest): Path<String>,
 ) -> Result<Json<Script>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let missing = || ApiError::not_found(format!("no script {digest} for this tenant"));
     let parsed = Digest::from_hex(&digest).map_err(|_| missing())?;
     let stored = app
@@ -191,7 +192,7 @@ pub(super) async fn tool_stats(
     caller: Caller,
     Query(query): Query<ToolStatsFilter>,
 ) -> Result<Json<ToolStatsPage>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     if caller.scoped() {
         return Err(ApiError::forbidden(
             "tool statistics span every run of the tenant: a key limited to labels cannot read \
@@ -264,7 +265,7 @@ pub(super) async fn payload(
     Path(digest): Path<String>,
     Query(query): Query<PayloadQuery>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let missing = || ApiError::not_found(format!("no payload {digest} for this tenant"));
     let parsed = Digest::from_hex(&digest).map_err(|_| missing())?;
     match &query.run {

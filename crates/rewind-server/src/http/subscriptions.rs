@@ -7,6 +7,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use rewind_api::access::Permission;
 use rewind_api::common::Labels;
 use rewind_api::webhooks::{
     CreateSubscription, Subscription as ApiSubscription, SubscriptionList, WebhookEventType,
@@ -18,7 +19,7 @@ use rewind_engine::ports::{Entropy, JournalStore, Secret, Subscription};
 use rewind_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::Body;
 
@@ -32,7 +33,7 @@ pub(super) async fn create(
     caller: Caller,
     Body(request): Body<CreateSubscription>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::SubscriptionsWrite)?;
     // The request is validated before the URL's address is resolved: a malformed request
     // is refused without any network access.
     refuse_nul("the url", &request.url)?;
@@ -66,7 +67,7 @@ pub(super) async fn list(
     State(app): State<Arc<App>>,
     caller: Caller,
 ) -> Result<Json<SubscriptionList>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::SubscriptionsRead)?;
     let subscriptions = app
         .store
         .subscriptions(&caller.tenant)
@@ -84,7 +85,7 @@ pub(super) async fn delete(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::SubscriptionsWrite)?;
     let missing = || ApiError::not_found(format!("no subscription {id}"));
     let visible = app
         .store

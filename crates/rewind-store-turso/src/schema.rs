@@ -15,7 +15,10 @@
 //! - `data_keys` holds each tenant's data key, encrypted by the master key, apart from
 //!   `tenants`: a tenant without settings (the embedded `local`) still has secrets;
 //! - `tool_calls.result_shape` holds the shape of a result whose value was projected, which
-//!   `observed_shapes` merges per tool.
+//!   `observed_shapes` merges per tool;
+//! - `roles.permissions` holds a role's permissions as a JSON array of strings, sorted, and
+//!   `grants.principal` and `grants.granted_by` a principal's text (`user:…`, `key:…`,
+//!   `invitation:…`), whose order is the order of principals.
 //!
 //! The read model's tables, written only through `ReadModel`:
 //!
@@ -40,13 +43,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -335,8 +338,69 @@ CREATE TABLE tool_calls (
 CREATE INDEX tool_calls_by_tool ON tool_calls (tool);
 "#;
 
+/// Access (`AccessStore`): API keys gain a name and their creator, and what a key may do moves
+/// to its grant, held by the principal `key:<hash>`. Each key of version 1 gets a grant of its
+/// role (`admin`, the operator's before roles became data, becomes `operator`) with its allowed
+/// labels, granted when the key was created, and the name `unnamed <role> key`.
+const V2: &str = r#"
+CREATE TABLE roles (
+    tenant TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    permissions TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, name)
+) STRICT;
+
+CREATE TABLE grants (
+    tenant TEXT NOT NULL,
+    principal TEXT NOT NULL,
+    role TEXT NOT NULL,
+    allowed_labels TEXT NOT NULL,
+    granted_by TEXT,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY (tenant, principal)
+) STRICT;
+CREATE INDEX grants_by_role ON grants (tenant, role);
+
+CREATE TABLE access_settings (
+    tenant TEXT PRIMARY KEY,
+    default_role TEXT NOT NULL
+) STRICT;
+
+INSERT INTO grants (tenant, principal, role, allowed_labels, granted_by, granted_at)
+SELECT tenant, 'key:' || hash, CASE role WHEN 'admin' THEN 'operator' ELSE role END,
+       allowed_labels, NULL, created_at
+FROM api_keys;
+
+ALTER TABLE api_keys RENAME TO api_keys_v1;
+
+CREATE TABLE api_keys (
+    hash TEXT PRIMARY KEY,
+    tenant TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_by TEXT,
+    created_at INTEGER NOT NULL,
+    revoked_at INTEGER
+) STRICT;
+CREATE INDEX api_keys_by_tenant ON api_keys (tenant, created_at, hash);
+
+INSERT INTO api_keys (hash, tenant, name, created_by, created_at, revoked_at)
+SELECT hash, tenant, 'unnamed ' || CASE role WHEN 'admin' THEN 'operator' ELSE role END || ' key',
+       NULL, created_at, revoked_at
+FROM api_keys_v1;
+
+DROP TABLE api_keys_v1;
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
+    migrate_to(connection, SCHEMA_VERSION).await
+}
+
+/// Brings the database's schema to `target`, at most [`SCHEMA_VERSION`], or refuses a newer one.
+async fn migrate_to(connection: &Connection, target: u32) -> Result<(), Error> {
     sql::execute(
         connection,
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
@@ -350,7 +414,8 @@ pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
             supported: SCHEMA_VERSION,
         });
     }
-    for (from, migration) in MIGRATIONS.iter().enumerate().skip(found as usize) {
+    let migrations = MIGRATIONS.iter().take(target as usize);
+    for (from, migration) in migrations.enumerate().skip(found as usize) {
         let to = (from + 1).to_string();
         sql::transaction(connection, async {
             connection.execute_batch(migration).await?;
@@ -414,4 +479,153 @@ pub(crate) fn check_setting_name(name: &str) -> Result<(), Error> {
         return Err(Error::ReservedSetting(name.to_owned()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rewind_core::{Digest, Timestamp};
+    use rewind_engine::ports::{AccessStore, ApiKey, Grant, Principal, TenantId};
+
+    use super::*;
+    use crate::codec::encode_labels;
+    use crate::sql::{digest, opt_ts, ts};
+    use crate::{MasterKey, TursoStore};
+
+    const T0: Timestamp = Timestamp(1_767_225_600_000);
+
+    fn at(seconds: u64) -> Timestamp {
+        Timestamp(T0.0 + seconds * 1_000)
+    }
+
+    fn tenant_id(id: &str) -> TenantId {
+        TenantId::new(id).expect("tenant")
+    }
+
+    /// A key as version 1 kept it: its role and allowed labels on the key itself.
+    struct KeyOfVersion1 {
+        secret: &'static str,
+        tenant: &'static str,
+        role: &'static str,
+        labels: &'static [(&'static str, &'static str)],
+        created_at: Timestamp,
+        revoked_at: Option<Timestamp>,
+    }
+
+    fn labels(labels: &[(&str, &str)]) -> BTreeMap<String, String> {
+        labels
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn keys_of_version_1_become_keys_and_grants() {
+        let keys = [
+            KeyOfVersion1 {
+                secret: "rewind_sk_admin",
+                tenant: "acme",
+                role: "admin",
+                labels: &[],
+                created_at: T0,
+                revoked_at: None,
+            },
+            KeyOfVersion1 {
+                secret: "rewind_sk_agent",
+                tenant: "acme",
+                role: "harness",
+                labels: &[("conversation", "c-1")],
+                created_at: at(1),
+                revoked_at: None,
+            },
+            KeyOfVersion1 {
+                secret: "rewind_sk_gone",
+                tenant: "beta",
+                role: "reader",
+                labels: &[],
+                created_at: at(2),
+                revoked_at: Some(at(3)),
+            },
+        ];
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        {
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("open the file");
+            let connection = database.connect().expect("connect");
+            migrate_to(&connection, 1).await.expect("version 1");
+            for key in &keys {
+                sql::execute(
+                    &connection,
+                    "INSERT INTO api_keys (hash, tenant, role, allowed_labels, created_at, \
+                     revoked_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    vec![
+                        digest(Digest::of(key.secret.as_bytes())),
+                        text(key.tenant),
+                        text(key.role),
+                        text(encode_labels(&labels(key.labels))),
+                        ts(key.created_at),
+                        opt_ts(key.revoked_at),
+                    ],
+                )
+                .await
+                .expect("a key of version 1");
+            }
+        }
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("migrate to the current version");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        for (key, role) in keys.iter().zip(["operator", "harness", "reader"]) {
+            let hash = Digest::of(key.secret.as_bytes());
+            let tenant = tenant_id(key.tenant);
+            assert_eq!(
+                store.find_key(hash).await.expect("find_key"),
+                Some(ApiKey {
+                    hash,
+                    tenant: tenant.clone(),
+                    name: format!("unnamed {role} key"),
+                    created_by: None,
+                    created_at: key.created_at,
+                    revoked_at: key.revoked_at,
+                }),
+                "{}",
+                key.secret
+            );
+            assert_eq!(
+                store
+                    .grant(&tenant, &Principal::Key(hash))
+                    .await
+                    .expect("grant"),
+                Some(Grant {
+                    tenant,
+                    principal: Principal::Key(hash),
+                    role: role.to_owned(),
+                    allowed_labels: labels(key.labels),
+                    granted_by: None,
+                    granted_at: key.created_at,
+                }),
+                "{}",
+                key.secret
+            );
+        }
+        let acme: Vec<Digest> = store
+            .list_keys(&tenant_id("acme"))
+            .await
+            .expect("list_keys")
+            .into_iter()
+            .map(|key| key.hash)
+            .collect();
+        assert_eq!(
+            acme,
+            [
+                Digest::of(b"rewind_sk_admin"),
+                Digest::of(b"rewind_sk_agent")
+            ]
+        );
+    }
 }

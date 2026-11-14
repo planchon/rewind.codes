@@ -3,10 +3,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use rewind_core::{Digest, Timestamp};
 
-use crate::ports::access::ApiKey;
 use crate::ports::{
-    AccessStore, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role, RoleDeletion,
-    StoreError, TenantId,
+    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, Principal, Role,
+    RoleDeletion, StoreError, TenantId,
 };
 
 /// `AccessStore` in memory, for engine and server tests. It passes the conformance suite: the

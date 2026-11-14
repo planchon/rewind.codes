@@ -9,7 +9,7 @@ use rewind_core::{
 
 use crate::adapters::random_token;
 use crate::ports::{
-    AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
+    AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
@@ -33,7 +33,6 @@ struct State {
     runs: BTreeMap<RunId, Run>,
     idempotency_keys: HashMap<(TenantId, String), RunId>,
     tenants: BTreeMap<TenantId, Tenant>,
-    api_keys: HashMap<Digest, ApiKey>,
     subscriptions: BTreeMap<(TenantId, String), Subscription>,
     payloads: BTreeMap<(TenantId, Digest), StoredPayload>,
     /// Token → (run, signal name).
@@ -1516,34 +1515,6 @@ impl JournalStore for MemoryJournal {
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
         Ok(self.lock()?.tenants.values().cloned().collect())
-    }
-
-    async fn put_api_key(&self, key: &ApiKey) -> Result<(), StoreError> {
-        let mut state = self.lock()?;
-        if state.api_keys.contains_key(&key.hash) {
-            return Err(StoreError::Conflict(format!(
-                "an API key with hash {} already exists",
-                key.hash.short()
-            )));
-        }
-        state.api_keys.insert(key.hash, key.clone());
-        Ok(())
-    }
-
-    async fn find_api_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
-        Ok(self.lock()?.api_keys.get(&hash).cloned())
-    }
-
-    async fn revoke_api_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        let mut state = self.lock()?;
-        let Some(key) = state.api_keys.get_mut(&hash) else {
-            return Ok(false);
-        };
-        if key.revoked_at.is_some() {
-            return Ok(false);
-        }
-        key.revoked_at = Some(now);
-        Ok(true)
     }
 
     async fn claim_feed(

@@ -1,11 +1,14 @@
 //! The production store of Rewind on Postgres (`archi/06-storage-and-scale.md`, "Backends";
 //! `archi/07-code-architecture.md`, "Ports").
 //!
-//! [`PostgresStore`] implements three ports of `rewind-engine` on one database:
+//! [`PostgresStore`] implements four ports of `rewind-engine` on one database:
 //!
 //! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants and API keys,
-//!   payload rows and references, retention;
+//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, payload rows
+//!   and references, retention;
+//! - `AccessStore`: API keys, the tenants' own roles, grants and default roles. The writes of a
+//!   tenant's grants and roles take a transaction-scoped advisory lock on the tenant: the kept
+//!   role's last holder and a role in use are decided against concurrent writers;
 //! - `ReadModel`: the projections behind the dashboard's searches, statistics and failure
 //!   groups: run summaries with their labels, waits, search text and quarantine, tool calls with
 //!   their tasks' states;
@@ -25,6 +28,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod codec;
 mod journal;
 mod read_model;
@@ -129,8 +133,8 @@ impl std::fmt::Debug for Config {
     }
 }
 
-/// The store of a production deployment: `JournalStore`, `ReadModel` and `SecretStore` on one
-/// Postgres database. Cloning it is cheap, and the clones share its pool of connections.
+/// The store of a production deployment: `JournalStore`, `AccessStore`, `ReadModel` and
+/// `SecretStore` on one Postgres database. Cloning it is cheap, and the clones share its pool of connections.
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,

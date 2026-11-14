@@ -10,6 +10,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use rewind_api::ProblemType;
+use rewind_api::access::Permission;
 use rewind_api::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, Task, TaskBatch, TaskQuery,
 };
@@ -18,7 +19,7 @@ use rewind_engine::ports::{JournalStore, TaskPhase, TaskProgress, TaskToken};
 use rewind_engine::{HostClaim, HostFailure, HostTask};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, OptionalBody, Query};
 use crate::http::refuse_nul_in_filter;
@@ -42,7 +43,7 @@ pub(super) async fn claim(
     caller: Caller,
     Query(query): Query<TaskQuery>,
 ) -> Result<Json<TaskBatch>, ApiError> {
-    caller.allow(Access::Tasks)?;
+    caller.require(Permission::TasksWork)?;
     if caller.scoped() {
         return Err(ApiError::forbidden(
             "a key limited to labels cannot claim host-tool tasks: use a worker key of the tenant",
@@ -112,7 +113,7 @@ pub(super) async fn heartbeat(
     caller: Caller,
     Path(token): Path<String>,
 ) -> Result<Json<HeartbeatAck>, ApiError> {
-    caller.allow(Access::Tasks)?;
+    caller.require(Permission::TasksWork)?;
     let token = TaskToken(token);
     let until = app.engine.heartbeat_task(&caller.tenant, &token).await?;
     // A deferred task's deadline may be far: the worker sends heartbeats it does not need.
@@ -129,7 +130,7 @@ pub(super) async fn defer(
     Path(token): Path<String>,
     OptionalBody(request): OptionalBody<DeferTask>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Tasks)?;
+    caller.require(Permission::TasksWork)?;
     let token = TaskToken(token);
     app.engine
         .defer_task(
@@ -151,7 +152,7 @@ pub(super) async fn complete(
     Path(token): Path<String>,
     Body(request): Body<CompleteTask>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Tasks)?;
+    caller.require(Permission::TasksWork)?;
     check_payload_size(&app, &request.result)?;
     app.engine
         .complete_task(&caller.tenant, &TaskToken(token), request.result)
@@ -167,7 +168,7 @@ pub(super) async fn fail(
     Path(token): Path<String>,
     Body(request): Body<FailTask>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Tasks)?;
+    caller.require(Permission::TasksWork)?;
     check_failure_size(&request.message, request.data.as_ref())?;
     let failure = HostFailure {
         message: request.message,
@@ -187,7 +188,7 @@ pub(super) async fn approve(
     caller: Caller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::TasksApprove)?;
     let task = task(&app, &caller, &id).await?;
     app.engine.approve_task(&task).await?;
     app.record_tasks(&task.run).await;
@@ -202,7 +203,7 @@ pub(super) async fn reject(
     Path(id): Path<String>,
     OptionalBody(request): OptionalBody<RejectTask>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::TasksApprove)?;
     if let Some(message) = &request.message {
         check_failure_size(message, None)?;
     }

@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use axum::Json;
 use axum::extract::State;
+use rewind_api::access::Permission;
 use rewind_api::common::{AbortReason, RunStatus, ScriptError};
 use rewind_api::scripts::{CheckRequest, CheckResult, Severity, TestRequest, TestResult};
 use rewind_core::Script;
@@ -17,7 +18,7 @@ use rewind_engine::ports::{ScriptExecutor, TypeChecker};
 use rewind_runtime::{MockError, SandboxLimits, TsMocks};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::{ApiError, diagnostic, invalid_script_diagnostic};
 use crate::extract::Body;
 use crate::http::toolsets;
@@ -28,7 +29,7 @@ pub(super) async fn check(
     caller: Caller,
     Body(request): Body<CheckRequest>,
 ) -> Result<Json<CheckResult>, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsStart)?;
     let stored = match &request.toolset {
         Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
         None => app.default_toolset(&caller.tenant).await?,
@@ -62,7 +63,7 @@ pub(super) async fn test(
     caller: Caller,
     Body(request): Body<TestRequest>,
 ) -> Result<Json<TestResult>, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::RunsStart)?;
     if !app.settings.worker() {
         return Err(ApiError::unavailable(
             "POST /v1/test runs the script, and this server has only the api role: send it to a \

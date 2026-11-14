@@ -1,7 +1,8 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
-//! migrations, servers starting together, what a call dropped half-way leaves, secrets at rest,
-//! the byte order of tenants, claims that read several pages of due tasks, projectors applying
-//! the same runs at once, and the percentiles of Postgres.
+//! migrations, the keys of version 1 becoming keys and grants, servers starting together, what a
+//! call dropped half-way leaves, secrets at rest, the byte order of tenants, claims that read
+//! several pages of due tasks, owners demoting each other at once, projectors applying the same
+//! runs at once, and the percentiles of Postgres.
 //!
 //! The checks share one Postgres container, each on a new database.
 
@@ -16,11 +17,11 @@ use rewind_core::{
     RunStarted, RunStatus, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use rewind_engine::ports::{
-    AcquireRunnable, Activation, CreateRun, Credentials, JournalStore, NewRun, NewToolTask,
-    Predicate, ProjectedRun, QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder,
-    RunQuery, RunRef, RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore,
-    ServerCredentials, TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait,
-    WaitKind,
+    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Credentials, Grant, GrantDeletion,
+    GrantWrite, JournalStore, NewRun, NewToolTask, Predicate, Principal, ProjectedRun,
+    QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery, RunRef,
+    RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials,
+    TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait, WaitKind,
 };
 use rewind_store_postgres::{Config, Error, MasterKey, PostgresStore, SCHEMA_VERSION};
 use serde_json::json;
@@ -82,6 +83,7 @@ async fn the_database_behind_the_store() {
     check!(a_new_database_gets_the_current_schema);
     check!(a_newer_schema_is_refused);
     check!(a_changed_migration_is_refused);
+    check!(keys_of_version_1_become_keys_and_grants);
     check!(servers_starting_together_migrate_once);
     check!(runs_survive_a_restart);
     check!(a_call_dropped_half_way_writes_nothing);
@@ -91,6 +93,7 @@ async fn the_database_behind_the_store() {
     check!(a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next);
     check!(concurrent_claims_keep_to_a_servers_limit);
     check!(concurrent_claims_keep_to_a_tools_limit);
+    check!(owners_demoting_each_other_at_once_leave_one_owner);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
 }
@@ -131,6 +134,150 @@ async fn a_changed_migration_is_refused(postgres: &Postgres) {
     );
     let refused = connect(postgres, &database, key()).await.map(|_| ());
     assert!(matches!(refused, Err(Error::Migration(_))), "{refused:?}");
+}
+
+/// Only migration 1: a database as a build of schema version 1 left it.
+#[derive(Debug)]
+struct Version1;
+
+impl<'s> sqlx::migrate::MigrationSource<'s> for Version1 {
+    fn resolve(
+        self,
+    ) -> futures_util::future::BoxFuture<
+        's,
+        Result<Vec<sqlx::migrate::Migration>, sqlx::error::BoxDynError>,
+    > {
+        Box::pin(async {
+            Ok(vec![sqlx::migrate::Migration::new(
+                1,
+                "schema".into(),
+                sqlx::migrate::MigrationType::Simple,
+                include_str!("../migrations/0001_schema.sql").into(),
+                false,
+            )])
+        })
+    }
+}
+
+/// A key as version 1 kept it: its role and allowed labels on the key itself.
+struct KeyOfVersion1 {
+    secret: &'static str,
+    tenant: &'static str,
+    role: &'static str,
+    labels: &'static str,
+    created_at: Timestamp,
+    revoked_at: Option<Timestamp>,
+}
+
+/// Keys of a server running schema version 1 (in production, the operator's key among them)
+/// keep working once the store is upgraded: each becomes a key with a name and a grant of its
+/// role, `admin` becoming `operator`.
+async fn keys_of_version_1_become_keys_and_grants(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("connect");
+    sqlx::migrate::Migrator::new(Version1)
+        .await
+        .expect("migration 1")
+        .run(&pool)
+        .await
+        .expect("apply migration 1");
+    let at = |seconds: u64| Timestamp(T0.0 + seconds * 1_000);
+    let keys = [
+        KeyOfVersion1 {
+            secret: "rewind_sk_admin",
+            tenant: "acme",
+            role: "admin",
+            labels: "{}",
+            created_at: T0,
+            revoked_at: None,
+        },
+        KeyOfVersion1 {
+            secret: "rewind_sk_agent",
+            tenant: "acme",
+            role: "harness",
+            labels: "{\"conversation\":\"c-1\"}",
+            created_at: at(1),
+            revoked_at: None,
+        },
+        KeyOfVersion1 {
+            secret: "rewind_sk_gone",
+            tenant: "beta",
+            role: "reader",
+            labels: "{}",
+            created_at: at(2),
+            revoked_at: Some(at(3)),
+        },
+    ];
+    let millis = |at: Timestamp| i64::try_from(at.0).expect("in range");
+    for key in &keys {
+        sqlx::query(
+            "INSERT INTO api_keys (hash, tenant, role, allowed_labels, created_at, revoked_at) \
+             VALUES ($1, $2, $3, $4::jsonb, $5, $6)",
+        )
+        .bind(Digest::of(key.secret.as_bytes()).as_bytes().to_vec())
+        .bind(key.tenant)
+        .bind(key.role)
+        .bind(key.labels)
+        .bind(millis(key.created_at))
+        .bind(key.revoked_at.map(millis))
+        .execute(&pool)
+        .await
+        .expect("a key of version 1");
+    }
+    pool.close().await;
+
+    let store = postgres.connect(&database).await;
+    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+    for (key, role) in keys.iter().zip(["operator", "harness", "reader"]) {
+        let hash = Digest::of(key.secret.as_bytes());
+        let tenant = TenantId::new(key.tenant).expect("tenant");
+        assert_eq!(
+            store.find_key(hash).await.expect("find_key"),
+            Some(ApiKey {
+                hash,
+                tenant: tenant.clone(),
+                name: format!("unnamed {role} key"),
+                created_by: None,
+                created_at: key.created_at,
+                revoked_at: key.revoked_at,
+            }),
+            "{}",
+            key.secret
+        );
+        let labels: BTreeMap<String, String> = serde_json::from_str(key.labels).expect("labels");
+        assert_eq!(
+            store
+                .grant(&tenant, &Principal::Key(hash))
+                .await
+                .expect("grant"),
+            Some(Grant {
+                tenant,
+                principal: Principal::Key(hash),
+                role: role.to_owned(),
+                allowed_labels: labels,
+                granted_by: None,
+                granted_at: key.created_at,
+            }),
+            "{}",
+            key.secret
+        );
+    }
+    let acme: Vec<Digest> = store
+        .list_keys(&TenantId::new("acme").expect("tenant"))
+        .await
+        .expect("list_keys")
+        .into_iter()
+        .map(|key| key.hash)
+        .collect();
+    assert_eq!(
+        acme,
+        [
+            Digest::of(b"rewind_sk_admin"),
+            Digest::of(b"rewind_sk_agent")
+        ]
+    );
 }
 
 async fn servers_starting_together_migrate_once(postgres: &Postgres) {
@@ -696,6 +843,81 @@ fn reorder<T: Clone>(items: &[T], order: usize) -> Vec<T> {
 /// quarantines at once, in their own orders. Every run keeps the snapshot of its whole history
 /// and nothing of the shorter ones, the furthest state of its task, its latest quarantine, and
 /// one row of labels and of search text.
+fn member_grant(tenant: &TenantId, user: &str, role: &str) -> Grant {
+    Grant {
+        tenant: tenant.clone(),
+        principal: Principal::User(user.to_owned()),
+        role: role.to_owned(),
+        allowed_labels: BTreeMap::new(),
+        granted_by: None,
+        granted_at: T0,
+    }
+}
+
+async fn owners<S: AccessStore>(store: &S, tenant: &TenantId) -> Vec<Principal> {
+    store
+        .list_grants(tenant)
+        .await
+        .expect("list_grants")
+        .into_iter()
+        .filter(|grant| grant.role == "owner")
+        .map(|grant| grant.principal)
+        .collect()
+}
+
+/// Two owners demoting, then removing, each other at once, through two servers: the kept role's
+/// check and its write are atomic across connections, so one write passes and the other finds
+/// its target the last owner. The organization keeps exactly one owner.
+async fn owners_demoting_each_other_at_once_leave_one_owner(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let first = postgres.connect_with(&database, 4).await;
+    let second = postgres.connect_with(&database, 4).await;
+    for round in 0..25 {
+        let tenant = TenantId::new(format!("org-{round}")).expect("tenant");
+        for user in ["user_ada", "user_bob"] {
+            let written = first
+                .put_grant(&member_grant(&tenant, user, "owner"), Some("owner"))
+                .await
+                .expect("put_grant");
+            assert_eq!(written, GrantWrite::Written);
+        }
+        let ada_demotes_bob = member_grant(&tenant, "user_bob", "reader");
+        let bob_demotes_ada = member_grant(&tenant, "user_ada", "reader");
+        let (one, other) = tokio::join!(
+            first.put_grant(&ada_demotes_bob, Some("owner")),
+            second.put_grant(&bob_demotes_ada, Some("owner")),
+        );
+        let mut outcomes = [one.expect("put_grant"), other.expect("put_grant")];
+        outcomes.sort_by_key(|outcome| *outcome == GrantWrite::LastHolder);
+        assert_eq!(
+            outcomes,
+            [GrantWrite::Written, GrantWrite::LastHolder],
+            "round {round}"
+        );
+        let left = owners(&first, &tenant).await;
+        assert_eq!(left.len(), 1, "round {round}: {left:?}");
+
+        // A second owner again, then each removes the other.
+        let carol = member_grant(&tenant, "user_carol", "owner");
+        first
+            .put_grant(&carol, Some("owner"))
+            .await
+            .expect("put_grant");
+        let (one, other) = tokio::join!(
+            first.delete_grant(&tenant, &left[0], Some("owner")),
+            second.delete_grant(&tenant, &carol.principal, Some("owner")),
+        );
+        let mut outcomes = [one.expect("delete_grant"), other.expect("delete_grant")];
+        outcomes.sort_by_key(|outcome| *outcome == GrantDeletion::LastHolder);
+        assert_eq!(
+            outcomes,
+            [GrantDeletion::Deleted, GrantDeletion::LastHolder],
+            "round {round}"
+        );
+        assert_eq!(owners(&first, &tenant).await.len(), 1, "round {round}");
+    }
+}
+
 async fn projectors_applying_together_keep_the_longest_snapshot(postgres: &Postgres) {
     let database = postgres.create_database();
     let stores = join_all((0..3).map(|_| postgres.connect_with(&database, 4))).await;
