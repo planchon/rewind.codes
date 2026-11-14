@@ -26,7 +26,7 @@ function expectedOutput(): string {
 describe.skipIf(url === undefined || apiKey === undefined)("against a live server", () => {
   it("run_script answers at most 256 KiB of output, and get_run pages through the rest", async () => {
     const rewind = new Rewind({ url: url ?? "", apiKey: apiKey ?? "" });
-    const tools = rewind.agentTools({ labels: { suite: "sdk-live" }, wait: "60s" });
+    const tools = rewind.namespace("sdk-live").agentTools({ labels: { suite: "sdk-live" }, wait: "60s" });
     const result = await tools.handle("run_script", { code: LARGE_OUTPUT }, { toolCallId: `live-${Date.now()}` });
     expect(result.isError, result.content).toBe(false);
     expect(result.run?.status).toBe("completed");

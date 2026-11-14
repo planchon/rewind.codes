@@ -341,6 +341,105 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/namespaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the namespaces
+         * @description The end users of the organization, each with the limits that apply, its exceptions and
+         *     its use of a month, by CPU, runs, scripts or name. Requires `namespaces:read`.
+         */
+        get: operations["listNamespaces"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a namespace
+         * @description Its limits and exceptions, its use day by day over a month, its alerts and its tokens in
+         *     use. Requires `namespaces:read`.
+         */
+        get: operations["getNamespace"];
+        /**
+         * Create a namespace, or set its exceptions
+         * @description Replaces the namespace's exceptions to the default limits; a quota absent from them
+         *     follows the default. Requires `namespaces:write`.
+         */
+        put: operations["putNamespace"];
+        post?: never;
+        /**
+         * Erase a namespace
+         * @description An end user who leaves: revokes the namespace's tokens, cancels its active runs, then
+         *     erases in the background its runs, credentials and use. Requires `namespaces:write`.
+         */
+        delete: operations["deleteNamespace"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{name}/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint an end user's token
+         * @description An opaque token of the namespace, with permissions among those a token may hold and the
+         *     caller holds, optional labels and a life (1 hour by default, 30 days at most). Creates
+         *     the namespace if needed. Requires `tokens:write`.
+         */
+        post: operations["createToken"];
+        /**
+         * Revoke the namespace's tokens
+         * @description Its opaque tokens, and the signed tokens issued before now. Requires `tokens:write`.
+         */
+        delete: operations["revokeNamespaceTokens"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{name}/toolsets/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set or renew an end user's credentials for a toolset
+         * @description A call of a run of the namespace uses the run's credentials if it has some, else these,
+         *     else the toolset's. Requires `credentials:write`.
+         */
+        put: operations["setNamespaceCredentials"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organization": {
         parameters: {
             query?: never;
@@ -488,6 +587,99 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/organization/namespace-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the default limits
+         * @description The limits of every namespace without an exception, and the organization's ceiling
+         *     with its use of the month. Requires `namespaces:read`.
+         */
+        get: operations["getNamespaceDefaults"];
+        /**
+         * Set the default limits
+         * @description Requires `namespaces:write`.
+         */
+        put: operations["putNamespaceDefaults"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/quota-alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the quota alerts
+         * @description The alerts of a month, of one namespace or of the whole organization, newest first.
+         *     Requires `namespaces:read`.
+         */
+        get: operations["listQuotaAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/token-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the token keys
+         * @description The public keys the organization signs its end users' tokens with. Requires
+         *     `tokens:write`.
+         */
+        get: operations["listTokenKeys"];
+        put?: never;
+        /**
+         * Register a token key
+         * @description A public key (a JWK: Ed25519, P-256 or RSA) and the permissions its tokens may carry,
+         *     among those a token may hold and the caller holds. Answers its `kid`. Requires
+         *     `tokens:write`.
+         */
+        post: operations["createTokenKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/token-keys/{kid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a token key
+         * @description Every token it signed is refused from the next request. Requires `tokens:write`.
+         */
+        delete: operations["deleteTokenKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organizations": {
         parameters: {
             query?: never;
@@ -504,6 +696,26 @@ export interface paths {
          *     `POST /auth/session`.
          */
         post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organizations/{tenant}/quotas": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set an organization's ceiling
+         * @description The limits of its totals across namespaces: the customer's offer. The operator only.
+         */
+        put: operations["putCeiling"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1136,6 +1348,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an end user's token
+         * @description Requires `tokens:write`.
+         */
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tools/stats": {
         parameters: {
             query?: never;
@@ -1272,6 +1504,26 @@ export interface webhooks {
          * @description Sent to every subscription to `credentials.expired` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
          */
         post: operations["webhook_credentials_expired"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "quota.alert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The lifecycle event `quota.alert`
+         * @description Sent to every subscription to `quota.alert` whose labels the run carries. Signed following Standard Webhooks: verify `webhook-signature` with the subscription's secret before trusting the body, and deduplicate on `webhook-id`. A delivery that does not get a 2xx answer is retried.
+         */
+        post: operations["webhook_quota_alert"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1593,6 +1845,32 @@ export interface components {
             /** @description An HTTPS URL of the harness. */
             url: string;
         };
+        /** @description `POST /v1/namespaces/{name}/tokens`: an end user's opaque token. */
+        CreateToken: {
+            /** @description The runs the token reaches carry all of these labels, and the runs it starts get them. */
+            labels?: components["schemas"]["Labels"];
+            /**
+             * @description Among [`Permission::TOKEN`], each held by the caller; [`Permission::TOKEN_DEFAULT`]
+             *     when absent.
+             */
+            permissions?: components["schemas"]["Permission"][] | null;
+            ttl?: components["schemas"]["Duration"] | null;
+        };
+        /** @description `POST /v1/organization/token-keys`: a public key the customer signs end users' tokens with. */
+        CreateTokenKey: {
+            /**
+             * @description The public key as a JWK (RFC 7517): `OKP` with `crv` `Ed25519`, `EC` with `crv` `P-256`,
+             *     or `RSA` of at least 2048 bits. A private part is refused.
+             */
+            jwk: Record<string, unknown>;
+            /** @description What the key is for. */
+            name: string;
+            /**
+             * @description The permissions its tokens may carry, among [`Permission::TOKEN`] and held by the caller;
+             *     all of those the caller holds when absent.
+             */
+            permissions?: components["schemas"]["Permission"][] | null;
+        };
         /**
          * @description `POST /v1/toolsets`: MCP servers, host tools and the `http` tool, with a policy per tool.
          *     Registering connects to the MCP servers, lists their tools and pins their schemas. The
@@ -1659,6 +1937,7 @@ export interface components {
             labels: components["schemas"]["Labels"];
             /** @description What the server answered. */
             message: string;
+            namespace: components["schemas"]["NamespaceName"];
             runId: string;
             /** Format: int32 */
             seq: number;
@@ -1667,6 +1946,17 @@ export interface components {
             taskId: string;
             tool: string;
             toolset: string;
+        };
+        /** @description One UTC day of use. */
+        DayUsage: {
+            cpu: components["schemas"]["Duration"];
+            /**
+             * Format: date
+             * @description The day, `2026-11-14`.
+             */
+            day: string;
+            /** Format: int64 */
+            runsStarted: number;
         };
         /** @enum {string} */
         DeclarationFormat: "dts" | "prompt";
@@ -2202,6 +2492,76 @@ export interface components {
         };
         /** @enum {string} */
         MembershipStatus: "active" | "pending" | "inactive";
+        /** @description A namespace with its limits and its use of a month. */
+        Namespace: {
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description Set while the namespace is being erased: it takes no run and no token.
+             */
+            deletingSince?: string | null;
+            /** @description The namespace's exceptions to the defaults. */
+            exceptions: components["schemas"]["Quotas"];
+            /**
+             * Format: date-time
+             * @description The last run created in it, or the last CPU time counted for it.
+             */
+            lastActiveAt: string;
+            /** @description The limits that apply: per quota, the namespace's exception, else the tenant's default. */
+            limits: components["schemas"]["Quotas"];
+            name: components["schemas"]["NamespaceName"];
+            /** @description Its use of the month listed. */
+            usage: components["schemas"]["QuotaUsage"];
+        };
+        /**
+         * @description `GET /v1/organization/namespace-defaults`: the limits of every namespace without an
+         *     exception, and the tenant's ceiling with its use of the month.
+         */
+        NamespaceDefaults: {
+            /** @description Set by the operator: the customer's offer, on its totals across namespaces. */
+            ceiling: components["schemas"]["Quotas"];
+            defaults: components["schemas"]["Quotas"];
+            /** @description The month, `2026-11`. */
+            month: string;
+            /** @description The tenant's use of the month, across its namespaces. */
+            usage: components["schemas"]["QuotaUsage"];
+        };
+        /** @description `GET /v1/namespaces/{name}`: one namespace, its use day by day, its alerts and its tokens. */
+        NamespaceDetail: {
+            /** @description The alerts of the month. */
+            alerts: components["schemas"]["QuotaAlert"][];
+            /** @description The days of the month with some use, oldest first. */
+            days: components["schemas"]["DayUsage"][];
+            /** @description The month, `2026-11`. */
+            month: string;
+            namespace: components["schemas"]["Namespace"];
+            /**
+             * Format: int64
+             * @description Opaque tokens of the namespace neither revoked nor expired.
+             */
+            tokens: number;
+            /**
+             * Format: date-time
+             * @description Signed tokens issued before this are refused.
+             */
+            tokensRevokedBefore?: string | null;
+        };
+        /** @description `GET /v1/namespaces`: a page of namespaces. */
+        NamespaceList: {
+            /** @description The month whose use is listed, `2026-11`. */
+            month: string;
+            namespaces: components["schemas"]["Namespace"][];
+            /** @description The cursor of the next page, absent on the last one. */
+            next?: string | null;
+        };
+        /**
+         * @description A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,
+         *     `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: it stands for the tenant in
+         *     the store's usage and alerts.
+         * @example user_2fQ81
+         */
+        NamespaceName: string;
         /**
          * @description After an interruption (the dispatcher or the worker died mid-call).
          * @enum {string}
@@ -2256,7 +2616,7 @@ export interface components {
          * @description A kind of action. Every endpoint requires one; a role is a set of them.
          * @enum {string}
          */
-        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "credentials:write" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write";
+        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "credentials:write" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
         /** @description A permission of the catalog, with what it lets the caller do. */
         PermissionInfo: {
             description: string;
@@ -2276,6 +2636,20 @@ export interface components {
             /** @enum {string} */
             kind: "user";
             user: components["schemas"]["User"];
+        } | {
+            /** Format: date-time */
+            expires_at: string;
+            /** @description For an opaque token: its id (`DELETE /v1/tokens/{id}`). */
+            id?: string | null;
+            jti?: string | null;
+            /** @description For a signed token: the key that signed it, and its `jti` if it has one. */
+            kid?: string | null;
+            /** @enum {string} */
+            kind: "token";
+            labels?: components["schemas"]["Labels"];
+            namespace: components["schemas"]["NamespaceName"];
+            /** @description `opaque` (`rewind_nt_…`) or `signed` (a JWT the customer signed). */
+            token: components["schemas"]["TokenKind"];
         };
         /**
          * @description An error answered by the API, as `application/problem+json` (RFC 9457).
@@ -2286,7 +2660,7 @@ export interface components {
          *       "type": "urn:rewind:problem:run-ended"
          *     }
          */
-        Problem: {
+        Problem: (components["schemas"]["QuotaReached"] | null) & {
             /** @description What went wrong in this request, and what to do instead. Written for a model. */
             detail: string;
             /** @description With `invalid-script`: why the script was refused, with locations in `script.ts`. */
@@ -2303,6 +2677,21 @@ export interface components {
             title: string;
             /** @description Identifies the kind of problem: `urn:rewind:problem:<slug>`. */
             type: string;
+        };
+        /** @description `PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling. */
+        PutCeiling: {
+            ceiling: components["schemas"]["Quotas"];
+        };
+        /**
+         * @description `PUT /v1/namespaces/{name}`: creates the namespace, or replaces its exceptions. A quota
+         *     absent from `exceptions` follows the tenant's default.
+         */
+        PutNamespace: {
+            exceptions?: components["schemas"]["Quotas"];
+        };
+        /** @description `PUT /v1/organization/namespace-defaults`: replaces the defaults. */
+        PutNamespaceDefaults: {
+            defaults: components["schemas"]["Quotas"];
         };
         /**
          * @description `PUT /v1/roles/{name}`: creates or changes a role of the organization. Writing a role needs
@@ -2327,10 +2716,140 @@ export interface components {
             /** Format: int32 */
             start: number;
         };
+        /** @description A limit crossed: sent once as the webhook `quota.alert`, and listed by the API. */
+        QuotaAlert: {
+            /**
+             * Format: int64
+             * @description The limit, in the same unit.
+             */
+            limit: number;
+            namespace?: components["schemas"]["NamespaceName"] | null;
+            /** @description The calendar month, `2026-11`. */
+            period: string;
+            quota: components["schemas"]["QuotaKind"];
+            /** Format: date-time */
+            raisedAt: string;
+            /**
+             * Format: date-time
+             * @description When it was delivered to the tenant's subscriptions.
+             */
+            sentAt?: string | null;
+            /**
+             * Format: int32
+             * @description 80 or 100: the share of the limit crossed; for `active_runs`, 100 at the first refusal
+             *     of the month.
+             */
+            threshold: number;
+            /**
+             * Format: int64
+             * @description The use when the alert was raised: milliseconds for `cpu_per_month`, a count otherwise.
+             */
+            used: number;
+        };
+        /** @description `GET /v1/organization/quota-alerts`: the alerts of a month, newest first. */
+        QuotaAlertList: {
+            alerts: components["schemas"]["QuotaAlert"][];
+            month: string;
+        };
+        /**
+         * @description A quota, as `quota-exceeded` and `quota.alert` name it.
+         * @enum {string}
+         */
+        QuotaKind: "cpu_per_month" | "active_runs" | "runs_per_month" | "scripts" | "max_ttl" | "max_script_lines";
+        /**
+         * @description The quota a `quota-exceeded` problem reached. A monthly quota's answer also carries
+         *     `Retry-After`.
+         */
+        QuotaReached: {
+            /**
+             * Format: int64
+             * @description The limit: a count for `active_runs`, `runs_per_month` and `scripts`.
+             */
+            limit: number;
+            quota: components["schemas"]["QuotaKind"];
+            /**
+             * Format: date-time
+             * @description When a monthly quota frees: the first instant of the next month (UTC). Absent for
+             *     `active_runs` and `scripts`, which free when runs end or are erased.
+             */
+            resetsAt?: string | null;
+            scope: components["schemas"]["QuotaScope"];
+            /** Format: int64 */
+            used: number;
+        };
+        /**
+         * @description Which limit a quota belongs to: the namespace's (its exception, else the default), or the
+         *     tenant's ceiling.
+         * @enum {string}
+         */
+        QuotaScope: "namespace" | "organization";
+        /** @description What a namespace, or the tenant, used in a calendar month. */
+        QuotaUsage: {
+            /**
+             * Format: int64
+             * @description Runs active now.
+             */
+            activeRuns: number;
+            /** @description CPU time of the month, replays excluded. */
+            cpu: components["schemas"]["Duration"];
+            /**
+             * Format: int64
+             * @description Runs created in the month, forks included.
+             */
+            runsStarted: number;
+            /**
+             * Format: int64
+             * @description Distinct scripts with at least one run kept.
+             */
+            scripts: number;
+        };
+        /**
+         * @description Limits, each optional: an absent one does not limit. The same shape serves a tenant's
+         *     defaults for every namespace, a namespace's exceptions, the limits that apply to a
+         *     namespace, and the tenant's ceiling, which bounds its totals.
+         */
+        Quotas: {
+            /**
+             * Format: int32
+             * @description Runs active at once. Starting or forking one more is refused (429).
+             */
+            activeRuns?: number | null;
+            cpuPerMonth?: components["schemas"]["Duration"] | null;
+            /**
+             * Format: int32
+             * @description The most lines a script may have (422 `invalid-script` above it).
+             */
+            maxScriptLines?: number | null;
+            maxTtl?: components["schemas"]["Duration"] | null;
+            /**
+             * Format: int64
+             * @description Runs created in a calendar month, forks included (429 above it).
+             */
+            runsPerMonth?: number | null;
+            /**
+             * Format: int64
+             * @description Distinct scripts with at least one run kept in the namespace (429 for a new one above
+             *     it).
+             */
+            scripts?: number | null;
+        };
         /** @description `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message. */
         RejectTask: {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
             message?: string | null;
+        };
+        /** @description `DELETE /v1/namespaces/{name}/tokens`. */
+        RevokedTokens: {
+            /**
+             * Format: int64
+             * @description Opaque tokens revoked.
+             */
+            revoked: number;
+            /**
+             * Format: date-time
+             * @description Signed tokens issued before this are refused.
+             */
+            revokedBefore: string;
         };
         /** @description A role: one of the four built-in roles, or the organization's own. */
         Role: {
@@ -2395,6 +2914,8 @@ export interface components {
             /** @description The last log lines of the script (`console.*`), oldest first, at most 20. */
             logs?: components["schemas"]["LogLine"][];
             mode: components["schemas"]["RunMode"];
+            /** @description The end user the run belongs to. A fork has its parent's. */
+            namespace: components["schemas"]["NamespaceName"];
             output?: components["schemas"]["Payload"] | null;
             parent?: components["schemas"]["ForkParent"] | null;
             quarantine?: components["schemas"]["Quarantine"] | null;
@@ -2513,6 +3034,7 @@ export interface components {
             labels: components["schemas"]["Labels"];
             /** Format: date-time */
             lastActivityAt: string;
+            namespace: components["schemas"]["NamespaceName"];
             parent?: string | null;
             quarantined: boolean;
             script: string;
@@ -2688,6 +3210,27 @@ export interface components {
             name: string;
             runId: string;
         };
+        /** @description The claims of a token the customer signs. Its header names the key: `kid` `rk_…`. */
+        SignedTokenClaims: {
+            /** @description [`TOKEN_AUDIENCE`]. */
+            aud: string;
+            /**
+             * Format: int64
+             * @description Expires at, in seconds since the Unix epoch, at most 30 days after `iat`.
+             */
+            exp: number;
+            /**
+             * Format: int64
+             * @description Issued at, in seconds since the Unix epoch.
+             */
+            iat: number;
+            jti?: string | null;
+            labels?: components["schemas"]["Labels"];
+            /** @description Among those the key may give; [`Permission::TOKEN_DEFAULT`] when absent. */
+            permissions?: components["schemas"]["Permission"][] | null;
+            /** @description The namespace. */
+            sub: components["schemas"]["NamespaceName"];
+        };
         /**
          * @description `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
          *     script that cannot run is refused (`invalid-script`) before any run exists.
@@ -2798,6 +3341,8 @@ export interface components {
             idempotencyKey: string;
             /** @description The run's labels. */
             labels: components["schemas"]["Labels"];
+            /** @description The namespace of the run: the end user the handler acts for. */
+            namespace: components["schemas"]["NamespaceName"];
             runId: string;
             /** Format: int32 */
             seq: number;
@@ -2870,6 +3415,46 @@ export interface components {
             /** @description The LLM trace of the run (as `GET /v1/runs/{id}/trace?format=llm`). */
             trace: string;
         };
+        /** @description An end user's opaque token. */
+        Token: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            expiresAt: string;
+            /** @description The SHA-256 of the secret, in hexadecimal (`DELETE /v1/tokens/{id}`). */
+            id: string;
+            labels?: components["schemas"]["Labels"];
+            namespace: components["schemas"]["NamespaceName"];
+            permissions: components["schemas"]["Permission"][];
+            /** @description `rewind_nt_…`: only in the answer of `POST /v1/namespaces/{name}/tokens`. */
+            token?: string | null;
+        };
+        /**
+         * @description The algorithm of a token key, from its JWK: Ed25519 (`OKP`), P-256 (`EC`) or RSA.
+         * @enum {string}
+         */
+        TokenAlgorithm: "EdDSA" | "ES256" | "RS256";
+        /** @description A registered token key. */
+        TokenKey: {
+            algorithm: components["schemas"]["TokenAlgorithm"];
+            /** Format: date-time */
+            createdAt: string;
+            createdBy?: string | null;
+            jwk: Record<string, unknown>;
+            /** @description `rk_…`: the `kid` of the tokens it signs. */
+            kid: string;
+            name: string;
+            permissions: components["schemas"]["Permission"][];
+        };
+        /** @description `GET /v1/organization/token-keys`. */
+        TokenKeyList: {
+            keys: components["schemas"]["TokenKey"][];
+        };
+        /**
+         * @description The form of an end user's token.
+         * @enum {string}
+         */
+        TokenKind: "opaque" | "signed";
         /** @description A pinned tool. */
         Tool: {
             description: string;
@@ -2933,6 +3518,7 @@ export interface components {
              *     the model.
              */
             message: string;
+            namespace: components["schemas"]["NamespaceName"];
             runId: string;
             /** Format: int32 */
             seq: number;
@@ -3140,12 +3726,18 @@ export interface components {
             timestamp: string;
             /** @enum {string} */
             type: "credentials.expired";
+        } | {
+            data: components["schemas"]["QuotaAlert"];
+            /** Format: date-time */
+            timestamp: string;
+            /** @enum {string} */
+            type: "quota.alert";
         };
         /**
          * @description The kinds of lifecycle events.
          * @enum {string}
          */
-        WebhookEventType: "run.completed" | "run.failed" | "run.cancelled" | "run.aborted" | "run.suspended" | "run.quarantined" | "tool.schema_changed" | "credentials.expired";
+        WebhookEventType: "run.completed" | "run.failed" | "run.cancelled" | "run.aborted" | "run.suspended" | "run.quarantined" | "tool.schema_changed" | "credentials.expired" | "quota.alert";
     };
     responses: never;
     parameters: never;
@@ -4079,7 +4671,10 @@ export interface operations {
     checkScript: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4296,6 +4891,561 @@ export interface operations {
             };
             /** @description The identity provider is unavailable (`identity-unavailable`). */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listNamespaces: {
+        parameters: {
+            query?: {
+                /** @description Names starting with this. */
+                prefix?: string;
+                /**
+                 * @description Only the namespaces that used at least this share of one of their limits this month:
+                 *     `0.8` for 80 %.
+                 */
+                above?: number;
+                order?: "cpu" | "runs" | "scripts" | "name";
+                /** @description The calendar month whose use is listed, `2026-11`; the current one by default. */
+                month?: string;
+                /** @description The `next` cursor of the previous page. */
+                after?: string;
+                /** @description 50 by default, 500 at most. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of namespaces. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getNamespace: {
+        parameters: {
+            query?: {
+                /** @description The calendar month, `2026-11`; the current one by default. */
+                month?: string;
+            };
+            header?: never;
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The namespace. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceDetail"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such namespace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putNamespace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace: 1 to 128 letters, digits, -, _, ., : and @. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutNamespace"];
+            };
+        };
+        responses: {
+            /** @description Created or changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceDetail"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The namespace is being erased (`namespace-deleting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteNamespace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The erasure started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such namespace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateToken"];
+            };
+        };
+        responses: {
+            /** @description Minted; the answer holds the token, once. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Token"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The namespace is being erased (`namespace-deleting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeNamespaceTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevokedTokens"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such namespace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setNamespaceCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The namespace. */
+                name: string;
+                /** @description The toolset's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Credentials"];
+            };
+        };
+        responses: {
+            /** @description Stored. Calls parked by `credentials.expired` are ready again. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such toolset. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4980,6 +6130,422 @@ export interface operations {
             };
         };
     };
+    getNamespaceDefaults: {
+        parameters: {
+            query?: {
+                /** @description The calendar month, `2026-11`; the current one by default. */
+                month?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The defaults and the ceiling. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceDefaults"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putNamespaceDefaults: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutNamespaceDefaults"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceDefaults"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listQuotaAlerts: {
+        parameters: {
+            query?: {
+                /** @description The calendar month, `2026-11`; the current one by default. */
+                month?: string;
+                /** @description One namespace's alerts; every alert of the tenant without it. */
+                namespace?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The alerts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaAlertList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listTokenKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenKeyList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createTokenKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTokenKey"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenKey"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteTokenKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The key's `kid`. */
+                kid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such key. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     createOrganization: {
         parameters: {
             query?: never;
@@ -5040,6 +6606,85 @@ export interface operations {
             };
             /** @description The identity provider is unavailable (`identity-unavailable`). */
             502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putCeiling: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant (the organization's id). */
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutCeiling"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such tenant. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5538,9 +7183,11 @@ export interface operations {
     startRun: {
         parameters: {
             query?: never;
-            header?: {
-                /** @description A request repeated with the same key returns the run the first one started (200). */
+            header: {
+                /** @description A request repeated with the same key in the namespace returns the run the first one started (200). */
                 "Idempotency-Key"?: string | null;
+                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace": string;
             };
             path?: never;
             cookie?: never;
@@ -5605,6 +7252,15 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
+            /** @description The namespace is being erased (`namespace-deleting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
             /** @description The input is too large (`payload-too-large`). */
             413: {
                 headers: {
@@ -5623,7 +7279,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The tenant already has its maximum of active runs (`quota-exceeded`). */
+            /** @description The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`). */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -7929,7 +9585,10 @@ export interface operations {
     testScript: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The namespace (the end user) the run acts for. Required with a key or a member's token; with an end user's token, its own namespace or nothing. */
+                "Rewind-Namespace": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7986,6 +9645,81 @@ export interface operations {
             };
             /** @description The script was refused at start (`invalid-script`). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The token's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such token. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8564,6 +10298,35 @@ export interface operations {
         };
     };
     webhook_credentials_expired: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The delivery's id; a retried delivery keeps it. */
+                "webhook-id": string;
+                /** @description When the delivery was signed, in seconds since the Unix epoch. */
+                "webhook-timestamp": string;
+                /** @description `v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{body}>`, space-separated while a secret is rotated. */
+                "webhook-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookEvent"];
+            };
+        };
+        responses: {
+            /** @description Received. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhook_quota_alert: {
         parameters: {
             query?: never;
             header: {

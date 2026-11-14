@@ -84,6 +84,32 @@ describe("webhook verification", () => {
     expect(() => verifyWebhook(body, { "webhook-id": "msg_1" }, secret)).toThrow(/Missing required headers/);
   });
 
+  it("returns a quota alert, about a namespace or about the tenant's ceiling", () => {
+    const at = now();
+    for (const namespace of ["alice", null]) {
+      const alert = JSON.stringify({
+        type: "quota.alert",
+        timestamp: "2026-11-14T09:00:00Z",
+        data: {
+          namespace,
+          quota: "runs_per_month",
+          threshold: 80,
+          used: 800,
+          limit: 1_000,
+          period: "2026-11",
+          raisedAt: "2026-11-14T09:00:00Z",
+        },
+      });
+      const id = "quota.alert:alice:runs_per_month:2026-11:80";
+      const event = verifyWebhook(alert, headers(id, at, sign(id, at, alert)), secret);
+      expect(event.type).toBe("quota.alert");
+      if (event.type === "quota.alert") {
+        expect(event.data.namespace).toBe(namespace);
+        expect(event.data.threshold).toBe(80);
+      }
+    }
+  });
+
   it("refuses a malformed secret", () => {
     expect(() => verifyWebhook(body, {}, "whsec_not base64!")).toThrow(RewindError);
   });
