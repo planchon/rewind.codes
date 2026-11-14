@@ -32,20 +32,18 @@ use rewind_engine::ports::{
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind,
-    QuotaScope, Quotas, Usage, UsageDelta, UsageOf,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
 
-use crate::namespaces_not_kept;
 use uuid::Uuid;
 
 use crate::codec::{self, decode_labels, encode_labels};
 use crate::sql::{
     Columns, Failure, bytes, int, limit, ms, opt_ts, retrying, scope_clause, tenant, ts, uuid,
 };
-use crate::{Error, PostgresStore};
+use crate::{Error, PostgresStore, namespaces};
 
 type Fail = Failure<StoreError>;
 
@@ -239,23 +237,6 @@ fn task_from_row(row: &PgRow) -> Result<TaskRow, Error> {
         server_concurrency: row.opt_u32(21)?,
         mcp_server: row.opt_text(22)?,
         due_at: row.opt_i64(24)?,
-    })
-}
-
-fn tenant_from_row(row: &PgRow) -> Result<Tenant, Error> {
-    Ok(Tenant {
-        id: row.tenant(0)?,
-        quotas: Quotas {
-            active_runs: row.opt_u32(1)?,
-            ..Quotas::default()
-        },
-        namespace_defaults: Quotas::default(),
-        retention: Retention {
-            journal: row.duration(2)?,
-            archive: row.duration(3)?,
-            read_model: row.duration(4)?,
-            payload_grace: row.duration(5)?,
-        },
     })
 }
 
@@ -554,13 +535,9 @@ impl PostgresStore {
     ) -> Result<CreateRun, Fail> {
         let mut tx = self.pool.begin().await?;
         let tenant_id = &run.run.tenant;
-        // Locking the tenant's settings serializes the starts of a tenant that has some: two
-        // starts never both see the last free slot of its quota.
-        let quota: Option<Option<i64>> =
-            sqlx::query_scalar("SELECT active_run_quota FROM tenants WHERE id = $1 FOR UPDATE")
-                .bind(tenant(tenant_id))
-                .fetch_optional(&mut *tx)
-                .await?;
+        // The tenant's lock serializes its starts: two starts never both see the last free
+        // place of a quota, of the namespace or of the tenant.
+        namespaces::lock_tenant(&mut tx, tenant_id).await?;
         let existing = |id: Uuid| {
             CreateRun::Created(Created {
                 run: RunRef::new(tenant_id.clone(), RunId::from_uuid(id)),
@@ -569,9 +546,10 @@ impl PostgresStore {
         };
         if let Some(key) = idempotency_key {
             let found: Option<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM runs WHERE tenant = $1 AND idempotency_key = $2",
+                "SELECT id FROM runs WHERE tenant = $1 AND namespace = $2 AND idempotency_key = $3",
             )
             .bind(tenant(tenant_id))
+            .bind(run.namespace.as_str())
             .bind(key)
             .fetch_optional(&mut *tx)
             .await?;
@@ -579,24 +557,14 @@ impl PostgresStore {
                 return Ok(existing(id));
             }
         }
-        if let Some(quota) = quota.flatten() {
-            let active: i64 = sqlx::query_scalar(concat!(
-                "SELECT count(*) FROM runs WHERE tenant = $1 AND status NOT IN ",
-                terminal!()
-            ))
-            .bind(tenant(tenant_id))
-            .fetch_one(&mut *tx)
-            .await?;
-            if active >= quota {
-                return Ok(CreateRun::QuotaExceeded(QuotaExceeded {
-                    quota: QuotaKind::ActiveRuns,
-                    scope: QuotaScope::Tenant,
-                    limit: u64::try_from(quota).unwrap_or_default(),
-                    used: u64::try_from(active).unwrap_or_default(),
-                    resets_at: None,
-                }));
+        let admitted = match namespaces::admit_run(&mut tx, run).await? {
+            Ok(admitted) => admitted,
+            Err(refused) => {
+                // The namespace created and the alert of a refusal are kept.
+                tx.commit().await?;
+                return Ok(refused);
             }
-        }
+        };
         let trace = run.metadata.trace_context.as_ref();
         let parent = run.metadata.parent;
         // A run id already used, in any tenant, violates `runs`' keys: a conflict.
@@ -606,7 +574,7 @@ impl PostgresStore {
              namespace) \
              VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13, \
              $14) \
-             ON CONFLICT (tenant, idempotency_key) DO NOTHING RETURNING id",
+             ON CONFLICT (tenant, namespace, idempotency_key) DO NOTHING RETURNING id",
         )
         .bind(tenant(tenant_id))
         .bind(uuid(run.run.id))
@@ -627,9 +595,10 @@ impl PostgresStore {
         if inserted.is_none() {
             // A concurrent start with the same key committed first.
             let id: Uuid = sqlx::query_scalar(
-                "SELECT id FROM runs WHERE tenant = $1 AND idempotency_key = $2",
+                "SELECT id FROM runs WHERE tenant = $1 AND namespace = $2 AND idempotency_key = $3",
             )
             .bind(tenant(tenant_id))
+            .bind(run.namespace.as_str())
             .bind(idempotency_key)
             .fetch_one(&mut *tx)
             .await?;
@@ -637,6 +606,7 @@ impl PostgresStore {
         }
         let started = Trigger::RunStarted(run.started.clone());
         push_inbox(&mut tx, &[(run.run.id, started)], run.created_at).await?;
+        namespaces::count_run(&mut tx, run, admitted).await?;
         tx.commit().await?;
         Ok(CreateRun::Created(Created {
             run: run.run.clone(),
@@ -1681,6 +1651,12 @@ impl PostgresStore {
             return Ok(false);
         }
         let id = uuid(run.id);
+        let (namespace, script): (String, Vec<u8>) =
+            sqlx::query_as("SELECT namespace, script FROM runs WHERE id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        namespaces::uncount_run(&mut tx, &run.tenant, &namespace, &script).await?;
         let mut referenced: Vec<Vec<u8>> = sqlx::query_scalar(
             "DELETE FROM payload_refs WHERE tenant = $1 AND run_id = $2 RETURNING digest",
         )
@@ -2955,179 +2931,176 @@ impl JournalStore for PostgresStore {
     // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
-        let kept = Quotas {
-            active_runs: record.quotas.active_runs,
-            ..Quotas::default()
-        };
-        if record.quotas != kept || record.namespace_defaults != Quotas::default() {
-            return Err(namespaces_not_kept(
-                "a tenant's ceiling other than its active runs, or its namespaces' defaults",
-            ));
-        }
-        sqlx::query(
-            "INSERT INTO tenants (id, active_run_quota, journal_retention_ms, \
-                 archive_retention_ms, read_model_retention_ms, payload_grace_ms) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (id) DO UPDATE SET active_run_quota = EXCLUDED.active_run_quota, \
-                 journal_retention_ms = EXCLUDED.journal_retention_ms, \
-                 archive_retention_ms = EXCLUDED.archive_retention_ms, \
-                 read_model_retention_ms = EXCLUDED.read_model_retention_ms, \
-                 payload_grace_ms = EXCLUDED.payload_grace_ms",
-        )
-        .bind(tenant(&record.id))
-        .bind(record.quotas.active_runs.map(i64::from))
-        .bind(ms(record.retention.journal))
-        .bind(ms(record.retention.archive))
-        .bind(ms(record.retention.read_model))
-        .bind(ms(record.retention.payload_grace))
-        .execute(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        Ok(())
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::put_tenant(&mut conn, record).await?)
     }
 
     async fn get_tenant(&self, id: &TenantId) -> Result<Option<Tenant>, StoreError> {
-        let row = sqlx::query(
-            "SELECT id, active_run_quota, journal_retention_ms, archive_retention_ms, \
-             read_model_retention_ms, payload_grace_ms FROM tenants WHERE id = $1",
-        )
-        .bind(tenant(id))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        Ok(row.map(|row| tenant_from_row(&row)).transpose()?)
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::get_tenant(&mut conn, id).await?)
     }
 
     async fn list_tenants(&self) -> Result<Vec<Tenant>, StoreError> {
-        let rows = sqlx::query(
-            "SELECT id, active_run_quota, journal_retention_ms, archive_retention_ms, \
-             read_model_retention_ms, payload_grace_ms FROM tenants ORDER BY id",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        Ok(rows
-            .iter()
-            .map(tenant_from_row)
-            .collect::<Result<_, Error>>()?)
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::list_tenants(&mut conn).await?)
     }
 
     // ---------------------------------------------------------------------------------------
-    // Namespaces, their use and their alerts: not kept by this store (see
-    // `namespaces_not_kept`).
+    // Namespaces, their use and their alerts (`crate::namespaces`)
 
     async fn put_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _exceptions: Option<&Quotas>,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        exceptions: Option<&Quotas>,
+        now: Timestamp,
     ) -> Result<NamespaceWrite, StoreError> {
-        Err(namespaces_not_kept("put_namespace"))
+        Ok(retrying(|| async {
+            let mut tx = self.pool.begin().await?;
+            let written =
+                namespaces::put_namespace(&mut tx, tenant_id, name, exceptions, now).await?;
+            tx.commit().await?;
+            Ok::<_, Fail>(written)
+        })
+        .await?)
     }
 
     async fn get_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
     ) -> Result<Option<Namespace>, StoreError> {
-        // This store keeps no namespace record (`put_namespace` and `delete_namespace` are
-        // refused): no namespace has exceptions or is being erased, and the tenant's defaults
-        // apply to every one.
-        Ok(None)
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::get_namespace(&mut conn, tenant_id, name).await?)
     }
 
     async fn list_namespaces(
         &self,
-        _filter: &NamespaceFilter,
+        filter: &NamespaceFilter,
     ) -> Result<Vec<NamespaceUsage>, StoreError> {
-        Err(namespaces_not_kept("list_namespaces"))
+        if nothing(filter.limit) {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::list_namespaces(&mut conn, filter).await?)
     }
 
     async fn namespace_usage(
         &self,
-        _tenant: &TenantId,
-        _of: &UsageOf,
-        _month: Month,
+        tenant_id: &TenantId,
+        of: &UsageOf,
+        month: Month,
     ) -> Result<Usage, StoreError> {
-        Err(namespaces_not_kept("namespace_usage"))
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::namespace_usage(&mut conn, tenant_id, of, month).await?)
     }
 
     async fn namespace_has_script(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _script: Digest,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        script: Digest,
     ) -> Result<bool, StoreError> {
-        Err(namespaces_not_kept("namespace_has_script"))
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::namespace_has_script(&mut conn, tenant_id, name, script).await?)
     }
 
     async fn revoke_namespace_tokens(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
     ) -> Result<bool, StoreError> {
-        Err(namespaces_not_kept("revoke_namespace_tokens"))
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::revoke_namespace_tokens(&mut conn, tenant_id, name, now).await?)
     }
 
     async fn delete_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
-        _now: Timestamp,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        now: Timestamp,
     ) -> Result<DeleteNamespace, StoreError> {
-        Err(namespaces_not_kept("delete_namespace"))
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::delete_namespace(&mut conn, tenant_id, name, now).await?)
     }
 
     async fn namespaces_to_erase(
         &self,
-        _limit: usize,
+        max: usize,
     ) -> Result<Vec<(TenantId, NamespaceName)>, StoreError> {
-        Err(namespaces_not_kept("namespaces_to_erase"))
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::namespaces_to_erase(&mut conn, max).await?)
     }
 
     async fn drop_namespace(
         &self,
-        _tenant: &TenantId,
-        _name: &NamespaceName,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
     ) -> Result<DropNamespace, StoreError> {
-        Err(namespaces_not_kept("drop_namespace"))
+        Ok(retrying(|| async {
+            let mut tx = self.pool.begin().await?;
+            let dropped = namespaces::drop_namespace(&mut tx, tenant_id, name).await?;
+            tx.commit().await?;
+            Ok::<_, Fail>(dropped)
+        })
+        .await?)
     }
 
     async fn record_usage(
         &self,
-        _deltas: &[UsageDelta],
-        _now: Timestamp,
+        deltas: &[UsageDelta],
+        now: Timestamp,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("record_usage"))
+        if deltas.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(retrying(|| async {
+            let mut tx = self.pool.begin().await?;
+            let raised = namespaces::record_usage(&mut tx, deltas, now).await?;
+            tx.commit().await?;
+            Ok::<_, Fail>(raised)
+        })
+        .await?)
     }
 
     async fn quota_alerts(
         &self,
-        _tenant: &TenantId,
-        _namespace: Option<&NamespaceName>,
-        _month: Month,
+        tenant_id: &TenantId,
+        namespace: Option<&NamespaceName>,
+        month: Month,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("quota_alerts"))
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::quota_alerts(&mut conn, tenant_id, namespace, month).await?)
     }
 
     async fn claim_quota_alerts(
         &self,
-        _owner: &str,
-        _now: Timestamp,
-        _lease_duration: Duration,
-        _limit: usize,
+        owner: &str,
+        now: Timestamp,
+        lease_duration: Duration,
+        max: usize,
     ) -> Result<Vec<QuotaAlert>, StoreError> {
-        Err(namespaces_not_kept("claim_quota_alerts"))
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::claim_quota_alerts(&mut conn, owner, now, lease_duration, max).await?)
     }
 
     async fn ack_quota_alerts(
         &self,
-        _keys: &[QuotaAlertKey],
-        _now: Timestamp,
+        keys: &[QuotaAlertKey],
+        now: Timestamp,
     ) -> Result<(), StoreError> {
-        Err(namespaces_not_kept("ack_quota_alerts"))
+        if keys.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::ack_quota_alerts(&mut conn, keys, now).await?)
     }
 
     // ---------------------------------------------------------------------------------------
