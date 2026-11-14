@@ -1,7 +1,11 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { server } from "./server";
+
+// Before any view, the app asks how to sign in, then who calls: on a busy machine the first
+// render of a test can take more than the default second.
+configure({ asyncUtilTimeout: 3_000 });
 
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 afterEach(() => {
@@ -13,6 +17,8 @@ afterEach(() => {
   } catch {
     // Storage may be unavailable.
   }
+  // An invitation link's query, from a test that opened one.
+  window.history.replaceState(null, "", "/");
 });
 afterAll(() => server.close());
 

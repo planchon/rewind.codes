@@ -49,6 +49,31 @@ export type FailureGroupPage = Schemas["FailureGroupPage"];
 export type QuerySpan = Schemas["QuerySpan"];
 export type RunSort = NonNullable<ListRunsQuery["sort"]>;
 
+// Sign-in (`/auth`), the organization and access.
+export type AuthConfig = Schemas["AuthConfig"];
+export type AuthState = Schemas["AuthState"];
+export type Authenticated = Extract<AuthState, { status: "authenticated" }>;
+export type SignInMethod = Schemas["SignInMethod"];
+export type User = Schemas["User"];
+export type Organization = Schemas["Organization"];
+export type OrganizationSettings = Schemas["OrganizationSettings"];
+export type Identity = Schemas["Identity"];
+export type Principal = Schemas["Principal"];
+export type Grant = Schemas["Grant"];
+export type Permission = Schemas["Permission"];
+export type PermissionInfo = Schemas["PermissionInfo"];
+export type Role = Schemas["Role"];
+export type PutRole = Schemas["PutRole"];
+export type Member = Schemas["Member"];
+export type MembershipStatus = Schemas["MembershipStatus"];
+export type Invitation = Schemas["Invitation"];
+export type InvitationState = Schemas["InvitationState"];
+export type CreateInvitation = Schemas["CreateInvitation"];
+export type SetGrant = Schemas["SetGrant"];
+export type ApiKey = Schemas["ApiKey"];
+export type CreateApiKey = Schemas["CreateApiKey"];
+export type UpdateOrganization = Schemas["UpdateOrganization"];
+
 export type ListRunsQuery = NonNullable<paths["/v1/runs"]["get"]["parameters"]["query"]>;
 export type ListScriptsQuery = NonNullable<paths["/v1/scripts"]["get"]["parameters"]["query"]>;
 export type ToolStatsQuery = NonNullable<paths["/v1/tools/stats"]["get"]["parameters"]["query"]>;
