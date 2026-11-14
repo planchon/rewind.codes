@@ -8,19 +8,41 @@
 //! | expiry | an archive past its retention (1 year) is deleted with its run |
 //! | payload cleanup | a payload no run has referenced for its grace (24 h) is deleted, blob then row |
 //! | read model | runs that ended before its retention (90 days) leave the read model |
+//! | erasure | a namespace marked for erasure (`DELETE /v1/namespaces/{name}`) has its active runs cancelled, then its runs erased, then its credentials, use, alerts and itself |
 //!
 //! `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-//! rows, its credentials and its payload references.
+//! rows, its credentials, its payload references and its count in its namespace's scripts.
+//!
+//! Erasing a namespace (`archi/06-storage-and-scale.md`, "Retention and deletion"):
+//!
+//! ```text
+//! for (tenant, namespace) in namespaces_to_erase:        # marked: it takes no run any more
+//!     for each run of the namespace:
+//!         ended or quarantined → erased as DELETE /v1/runs/{id} erases it
+//!         active               → cancel_requested, once (an ordinary cancellation, its grace
+//!                                included): erased by a later round, once it has ended
+//!     no run left → its credentials, then drop_namespace: its use, alerts and script counts
+//! ```
+//!
+//! The tenant's own use (`*`) keeps what the namespace consumed.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use rewind_core::{Digest, JournalDocument, Timestamp};
+use rewind_core::{CancelReason, Completion, Digest, JournalDocument, Timestamp};
 
 use crate::ports::{
-    BlobError, BlobStore, JournalStore, ReadModel, ReadModelError, Retention, RunRef, SecretError,
-    SecretOwner, SecretStore, StoreError, TenantScope,
+    BlobError, BlobStore, DropNamespace, Enqueued, JournalStore, NamespaceName, ReadModel,
+    ReadModelError, Retention, RunCursor, RunFilter, RunRef, SecretError, SecretOwner, SecretStore,
+    StoreError, TenantId, TenantScope,
 };
+
+/// The idempotency key of the cancellation an erasure sends to an active run: one per run,
+/// whatever the rounds.
+pub const ERASURE_CANCELLATION_KEY: &str = "rewind:namespace-erasure";
+
+/// The message of that cancellation, which the script sees.
+const ERASURE_CANCELLATION: &str = "its namespace is being erased";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RetentionError {
@@ -43,6 +65,22 @@ pub struct Retained {
     pub deleted: usize,
     pub payloads_deleted: usize,
     pub purged_from_read_model: usize,
+    /// Runs of namespaces being erased: erased, and cancelled.
+    pub erased_runs: usize,
+    pub cancelled_runs: usize,
+    /// Namespaces erased.
+    pub erased_namespaces: usize,
+}
+
+/// What one round of [`Housekeeper::erase_namespaces`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Erased {
+    /// Runs erased.
+    pub runs: usize,
+    /// Active runs a cancellation was sent to.
+    pub cancelled: usize,
+    /// Namespaces erased, with their use, alerts and credentials.
+    pub namespaces: usize,
 }
 
 /// The retention jobs. They borrow the adapters they need; the archive is written in the stored
@@ -72,12 +110,95 @@ where
         now: Timestamp,
         encode: impl Fn(&JournalDocument) -> String,
     ) -> Result<Retained, RetentionError> {
+        let erased = self.erase_namespaces(now).await?;
         Ok(Retained {
             archived: self.archive(now, encode).await?,
             deleted: self.delete_expired(now).await?,
             payloads_deleted: self.clean_payloads(now).await?,
             purged_from_read_model: self.purge_read_model(now).await?,
+            erased_runs: erased.runs,
+            cancelled_runs: erased.cancelled,
+            erased_namespaces: erased.namespaces,
         })
+    }
+
+    /// Goes on erasing the namespaces marked for erasure, up to `batch` of them: cancels their
+    /// active runs, erases their other runs, and once a namespace has no run left, erases its
+    /// credentials, then its use, alerts and script counts with it. A run cancelled here is
+    /// erased by a later round, once it has ended.
+    pub async fn erase_namespaces(&self, now: Timestamp) -> Result<Erased, RetentionError> {
+        let mut erased = Erased::default();
+        for (tenant, namespace) in self.journal.namespaces_to_erase(self.batch).await? {
+            let left = self
+                .erase_runs(&tenant, &namespace, now, &mut erased)
+                .await?;
+            if left > 0 {
+                continue;
+            }
+            self.secrets.delete_namespace(&tenant, &namespace).await?;
+            match self.journal.drop_namespace(&tenant, &namespace).await? {
+                DropNamespace::Dropped => {
+                    erased.namespaces += 1;
+                    tracing::info!(%tenant, %namespace, "namespace erased");
+                }
+                // A run was created while it was being marked: a later round erases it.
+                DropNamespace::RunsLeft | DropNamespace::NotFound => {}
+            }
+        }
+        Ok(erased)
+    }
+
+    /// Erases the runs of a namespace being erased that have ended or are quarantined, and
+    /// cancels the others. Returns how many runs are left.
+    async fn erase_runs(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        now: Timestamp,
+        erased: &mut Erased,
+    ) -> Result<usize, RetentionError> {
+        let mut left = 0;
+        let mut after: Option<RunCursor> = None;
+        loop {
+            let filter = RunFilter {
+                namespace: Some(namespace.clone()),
+                after,
+                limit: Some(self.batch.max(1)),
+                ..RunFilter::new(tenant.clone())
+            };
+            let page = self.journal.list_runs(&filter).await?;
+            let Some(last) = page.last() else {
+                return Ok(left);
+            };
+            after = Some(RunCursor::from(last));
+            for record in &page {
+                // A quarantined run takes no cancellation until it is released: the erasure of
+                // its end user does not wait for that.
+                if record.status.is_terminal() || record.quarantine.is_some() {
+                    if self.delete_run(&record.run, now).await? {
+                        erased.runs += 1;
+                    }
+                    continue;
+                }
+                let cancel = Completion::CancelRequested {
+                    reason: CancelReason::Requested(Some(ERASURE_CANCELLATION.to_owned())),
+                };
+                let key = Some(ERASURE_CANCELLATION_KEY.to_owned());
+                match self.journal.enqueue(&record.run, cancel, key, now).await {
+                    Ok(Enqueued::Accepted) => {
+                        left += 1;
+                        erased.cancelled += 1;
+                        tracing::info!(run = %record.run, "run cancelled: its namespace is being erased");
+                    }
+                    // Cancelled by an earlier round, or ended since it was listed: erased by a
+                    // later round.
+                    Ok(Enqueued::Duplicate | Enqueued::RunEnded) => left += 1,
+                    // Erased since it was listed.
+                    Err(StoreError::RunNotFound(_)) => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
     }
 
     /// Archives the finished runs past their journal retention: each journal document goes to

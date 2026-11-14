@@ -5,6 +5,7 @@
 //! | --- | --- |
 //! | Projected from the feed: `run.completed`, `run.failed`, `run.cancelled`, `run.aborted`, `run.suspended` | [`Outbox`]: claims feed items for longer than their deliveries can last, sends each item's deliveries at once, acknowledges the item when they end |
 //! | Reported by the engine: `run.quarantined`, `tool.schema_changed`, `credentials.expired` | [`Background`], the engine's `WebhookSender`: it queues the delivery and returns, so that no activation and no tool call waits for a receiver |
+//! | Recorded by the store: `quota.alert` | The engine's `QuotaAlerts`, through [`Waiting`]: claims alerts for longer than their deliveries can last, sends them at once, acknowledges them when they end |
 //!
 //! A delivery waits for one of its subscription's [`PER_SUBSCRIPTION`] slots, then is sent with
 //! the sender's retries, cut at its deadline: the end of its window, twice the sender's retry
@@ -33,9 +34,9 @@ use crate::wiring::webhooks::{HttpWebhooks, Render};
 /// Deliveries in flight to one subscription at once.
 pub(crate) const PER_SUBSCRIPTION: usize = 4;
 
-/// What a feed item's claim lasts beyond the window of its deliveries: reading the run,
-/// rendering the events, acknowledging.
-const LEASE_MARGIN: Duration = Duration::from_secs(30);
+/// What a feed item's or a quota alert's claim lasts beyond the window of its deliveries:
+/// reading the run, rendering the events, acknowledging.
+pub(crate) const LEASE_MARGIN: Duration = Duration::from_secs(30);
 
 /// Feed items an outbox holds at once.
 const HELD: usize = 256;
@@ -188,6 +189,22 @@ impl<R: Render + 'static> WebhookSender for Background<R> {
     ) -> Result<(), WebhookError> {
         self.0.spawn(subscription.clone(), event.clone());
         Ok(())
+    }
+}
+
+/// A `WebhookSender` that waits for the delivery, sent within its window: the sender of quota
+/// alerts, which acknowledges an alert once its deliveries ended.
+#[derive(Debug)]
+pub(crate) struct Waiting<R>(pub(crate) Arc<Deliveries<R>>);
+
+impl<R: Render + 'static> WebhookSender for Waiting<R> {
+    async fn send(
+        &self,
+        subscription: &Subscription,
+        event: &WebhookEvent,
+    ) -> Result<(), WebhookError> {
+        let deadline = Instant::now() + self.0.window();
+        self.0.send(subscription, event, deadline).await
     }
 }
 

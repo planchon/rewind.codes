@@ -12,7 +12,9 @@
 //!   service state (task states, quarantine) the read model keeps.
 //! - [`failures`]: the signatures and fingerprints that group failed, cancelled and aborted runs.
 //! - [`metrics`]: what the engine measures, through the `tracing` facade.
-//! - [`retention`]: archives, deletion, payload cleanup.
+//! - [`retention`]: archives, deletion, payload cleanup, the erasure of deleted namespaces.
+//! - [`quotas`]: the CPU time a worker counts per namespace and writes about every 10 s, and the
+//!   sending of quota alerts.
 //! - [`mock`]: mock mode: cassettes, mocks, and scenarios run in virtual time.
 //! - [`trace`]: the LLM trace of a run.
 //! - [`adapters`]: in-memory storage, access, read model, secrets, telemetry and webhooks; a
@@ -42,6 +44,7 @@ pub mod mock;
 mod payloads;
 pub mod ports;
 pub mod projector;
+pub mod quotas;
 pub mod replay;
 pub mod retention;
 mod tasks;

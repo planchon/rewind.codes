@@ -9,6 +9,9 @@
 //! faster than wall-clock time: the watchdog first waits for the whole budget, then for what is
 //! left of it at the last reading. A script that is never descheduled is interrupted about once,
 //! at the end of its budget.
+//!
+//! The watchdog also reports the CPU time each call used, from the same clock: the engine counts
+//! it toward the namespace's `cpu_per_month` (`archi/06-storage-and-scale.md`, "Quotas").
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -48,6 +51,8 @@ struct State {
     requested: bool,
     fired: bool,
     shutdown: bool,
+    /// The thread's CPU time when the current call started, until it is disarmed.
+    started: Option<Duration>,
 }
 
 #[derive(Clone, Copy)]
@@ -92,9 +97,18 @@ extern "C" fn on_interrupt(_isolate: UnsafeRawIsolatePtr, _data: *mut c_void) {
     });
 }
 
+/// What a call into the script did to its budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Disarmed {
+    /// The watchdog terminated the execution: the budget ran out.
+    pub(crate) fired: bool,
+    /// The CPU time of the thread from [`Watchdog::arm`] to [`Watchdog::disarm`].
+    pub(crate) cpu: Duration,
+}
+
 /// One watchdog thread per isolate, created on the isolate's thread. [`Watchdog::arm`] before
 /// calling into the script, [`Watchdog::disarm`] after: it tells whether the budget ran out
-/// meanwhile.
+/// meanwhile, and the CPU time the call used.
 pub(crate) struct Watchdog {
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
@@ -130,15 +144,24 @@ impl Watchdog {
             used: Duration::ZERO,
         });
         state.fired = false;
+        state.started = Some(start);
         self.shared.wake.notify_one();
     }
 
-    /// Returns whether the watchdog terminated the execution since it was armed.
-    pub(crate) fn disarm(&self) -> bool {
+    /// Ends the budget of a call. Returns whether the watchdog terminated the execution since it
+    /// was armed, and the CPU time the thread used since. Called on the isolate's thread.
+    pub(crate) fn disarm(&self) -> Disarmed {
+        let now = thread_cpu_time();
         let mut state = self.shared.lock();
         state.armed = None;
         self.shared.wake.notify_one();
-        state.fired
+        Disarmed {
+            fired: state.fired,
+            cpu: state
+                .started
+                .take()
+                .map_or(Duration::ZERO, |start| now.saturating_sub(start)),
+        }
     }
 }
 
@@ -221,16 +244,26 @@ mod tests {
         runtime
             .execute_script("work", "let x = 0; for (let i = 0; i < 1e5; i++) x += i; x")
             .unwrap();
-        assert!(!watchdog.disarm());
+        let within = watchdog.disarm();
+        assert!(!within.fired);
+        assert!(within.cpu < Duration::from_millis(100), "{:?}", within.cpu);
 
         // An endless loop is stopped once it has used its budget.
         watchdog.arm(Duration::from_millis(100));
         let start = thread_cpu_time();
         assert!(runtime.execute_script("loop", "for (;;) {}").is_err());
         let used = thread_cpu_time() - start;
-        assert!(watchdog.disarm());
+        let stopped = watchdog.disarm();
+        assert!(stopped.fired);
         assert!(used >= Duration::from_millis(100), "{used:?}");
         assert!(used < Duration::from_secs(2), "{used:?}");
+        // The call's CPU time, as the watchdog reports it, is the thread's.
+        assert!(
+            stopped.cpu >= Duration::from_millis(100),
+            "{:?}",
+            stopped.cpu
+        );
+        assert!(stopped.cpu >= used, "{:?} < {used:?}", stopped.cpu);
     }
 
     /// The clock is the thread's CPU time: sleeping does not move it, working does.

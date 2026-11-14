@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::time::Duration;
 
 use rewind_core::{
     Annotation, CancelReason, Command, Epoch, Event, JsonValue, RunId, Script, Seed, Seq,
@@ -123,6 +124,17 @@ pub trait ScriptInstance: Send {
     /// reports 0, and the cache is then bounded by its number of instances only.
     fn memory_usage(&self) -> u64 {
         0
+    }
+
+    /// The CPU time of the instance's last call into the script: loading the script and
+    /// `main(input)` once [`ScriptExecutor::start`] returned it, then its last delivery, whether
+    /// the call succeeded or not. It is the CPU time of the thread the script runs on, the clock
+    /// of the CPU budget (`archi/03-execution.md`, "Resource limits"). The engine counts the
+    /// calls that execute toward the namespace's `cpu_per_month`, and leaves out those of a
+    /// replay (`archi/06-storage-and-scale.md`, "Quotas"). An executor that does not measure it
+    /// reports zero.
+    fn cpu_time(&self) -> Duration {
+        Duration::ZERO
     }
 }
 

@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rewind_core::{
     Annotation, Callsite, Command, Epoch, JsonValue, Payload, RunId, Script, ScriptError, Seq,
@@ -23,6 +24,10 @@ use rewind_engine::{Adapters, Engine, EngineConfig, StartRun};
 pub const T0: Timestamp = Timestamp(1_767_225_600_000);
 pub const HOUR: u64 = 3_600_000;
 pub const DAY: u64 = 24 * HOUR;
+
+/// The CPU time a call into a fake script reports, unless its program says otherwise
+/// ([`FakeRun::spend`]).
+pub const CALL_CPU: Duration = Duration::from_millis(2);
 
 pub type TestEngine = Engine<
     MemoryJournal,
@@ -114,9 +119,16 @@ pub struct FakeRun {
     emitted: Vec<Emitted>,
     refused: Option<ExecutorError>,
     hung: bool,
+    /// The CPU time this call reports.
+    cpu: Duration,
 }
 
 impl FakeRun {
+    /// Makes this call report `cpu` of CPU time, instead of [`CALL_CPU`].
+    pub fn spend(&mut self, cpu: Duration) {
+        self.cpu = cpu;
+    }
+
     /// Makes the start of this instance fail with `error`, as an executor would.
     pub fn refuse(&mut self, error: ExecutorError) {
         self.refused = Some(error);
@@ -233,6 +245,8 @@ impl FakeExecutor {
 pub struct FakeInstance {
     program: Arc<dyn Program>,
     run: FakeRun,
+    /// The CPU time of the last call.
+    cpu: Duration,
 }
 
 impl ScriptExecutor for FakeExecutor {
@@ -282,6 +296,7 @@ impl ScriptExecutor for FakeExecutor {
             emitted: Vec::new(),
             refused: None,
             hung: false,
+            cpu: CALL_CPU,
         };
         program.start(&mut run);
         if run.hung {
@@ -291,7 +306,8 @@ impl ScriptExecutor for FakeExecutor {
             return Err(error);
         }
         let emitted = std::mem::take(&mut run.emitted);
-        Ok((FakeInstance { program, run }, emitted))
+        let cpu = run.cpu;
+        Ok((FakeInstance { program, run, cpu }, emitted))
     }
 }
 
@@ -302,11 +318,17 @@ impl ScriptInstance for FakeInstance {
         now: Timestamp,
     ) -> Result<Vec<Emitted>, ExecutorError> {
         self.run.now = now;
+        self.run.cpu = CALL_CPU;
         self.program.deliver(&mut self.run, &delivery);
         if self.run.hung {
             std::future::pending::<()>().await;
         }
+        self.cpu = self.run.cpu;
         Ok(std::mem::take(&mut self.run.emitted))
+    }
+
+    fn cpu_time(&self) -> Duration {
+        self.cpu
     }
 }
 

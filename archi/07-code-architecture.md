@@ -312,9 +312,12 @@ Contracts, all covered by the conformance suite:
   canonical JSON, so the key is the payload's digest) and the journal documents of archived
   runs. `put` refuses bytes that do not hash to the digest; a second `put` changes nothing.
   `get` checks the digest of what it reads. `delete` serves cleanup.
-- **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, and `memory_usage`
-  (the memory an instance holds, which bounds the instance cache). The executor knows nothing
-  about the instance cache, which lives in the engine.
+- **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, `memory_usage`
+  (the memory an instance holds, which bounds the instance cache), and `cpu_time` (the CPU time
+  of the instance's last call into the script, failed or not: loading the script and
+  `main(input)` after `start`, one delivery after `deliver`). The executor knows nothing about
+  the instance cache nor about replay, which live in the engine: the engine decides which calls
+  count toward a namespace's `cpuPerMonth` ([quotas](06-storage-and-scale.md#quotas)).
 - **`ToolDispatcher`**: `dispatch(call, credentials) -> Dispatched`. The call carries the run,
   the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, whether
   the harness approved a schema change (then the call is sent without checking the schema
@@ -443,6 +446,7 @@ for item in journal.take_inbox(lease):
     recorded_at ← max(clock.now(), last recorded_at)
     if run is terminal: drop item (completion for an ended run)
     emitted ← instance.deliver(item, recorded_at)     # payloads loaded from where they live
+    cpu[(tenant, namespace, day)] += instance.cpu_time()   # calls that execute, never a replay's
     entries += [item] + emitted
 move payloads > 1 KiB out of the entries: to the payloads rows, or to the BlobStore above 64 KiB
 effects ← tool tasks, timers, cancelled timers derived from the new commands
@@ -450,7 +454,14 @@ journal.commit_activation(lease, Activation { entries, consumed, payloads, effec
 cache[run] ← instance                                  # sticky execution
 ```
 
-The lease is renewed about every 10 s while this runs. The activation itself is a `tracing` span
+The lease is renewed about every 10 s while this runs. With the same period, a loop of the worker
+writes the CPU time it counted to the store (`record_usage`, whole milliseconds; the rest stays
+counted), and another sends the quota alerts the store recorded (`claim_quota_alerts`, `quota.alert`
+to the subscriptions that take it, `ack_quota_alerts`). The retention jobs go on erasing the
+namespaces marked for erasure: their active runs get one ordinary cancellation, their ended and
+quarantined runs are erased as `DELETE /v1/runs/{id}` erases them, and a namespace with no run
+left loses its credentials, then its use, alerts and script counts (`drop_namespace`). The
+activation itself is a `tracing` span
 (service telemetry), with the run's trace id, span id `H(run, fence)` and parent, the run span
 `H(run, "run")`, recorded as fields.
 Nothing about the script is emitted during replay.

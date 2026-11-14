@@ -242,6 +242,18 @@ Taken while freezing the contracts:
 | A namespace's credentials are stored under the owner `namespace:<name>/toolset:<digest>`; a name holds no `/`, so erasing a namespace deletes the owners with its prefix | A table of their own | The stores keep one `secrets` table and its encryption. |
 | The CLI takes `--namespace` (and `REWIND_NAMESPACE`) as a global option | A flag of each command | Every command that touches runs needs it. |
 
+Taken while building the engine, the runtime and the stores:
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| `ScriptInstance::cpu_time()` reports the CPU time of the instance's last call into the script, failed or not (loading the script and `main(input)` after `start`, one delivery after `deliver`), zero for an executor that does not measure it; the V8 executor takes it from the watchdog's clock (`CLOCK_THREAD_CPUTIME_ID`, armed to disarmed) | CPU time in what `start` and `deliver` return | The one port change, shaped as `memory_usage`; a call stopped by its CPU budget still reports what it used, which a value returned with the emitted events could not. |
+| The engine, not the runtime, tells replay from execution: the calls of a replay are never counted; the calls that deliver an activation's new triggers are, and so are a fork's first calls, which follow its parent's history | The runtime flagging its calls; a fork's calls counted as a replay | The runtime only executes, replay lives in the engine; a fork's script runs for the first time, which is no cost of the instance cache. A fork's compatibility check runs no run and counts nothing. |
+| A start that fails counts no CPU time | Carrying CPU time in `ExecutorError` | No instance remains to report it; the run ends at once, and that one call is bounded by the CPU budget (5 s). |
+| The worker writes whole milliseconds and keeps the rest counted; a write that fails puts its deltas back | Rounding each call | `usage` counts milliseconds, and most calls take less than one. |
+| The worker writes its CPU time from a loop of its own, every lease renewal period (10 s), and once when it stops | Writing from an activation's lease heartbeat | An idle worker still writes what its last activations counted; one write per worker and period whatever the activations. |
+| The worker role sends quota alerts from a loop of its own: a batch claimed for its deliveries' window and a margin, sent at once, each delivery awaited; an alert is acknowledged once its deliveries ended, sent or given up | Queuing them with the engine's background sender | At least once, as lifecycle events: an alert whose deliveries a stop cut is sent again with the same id. |
+| Erasing a namespace sends each active run one cancellation (idempotency key `rewind:namespace-erasure`, message "its namespace is being erased"), and erases its ended runs; a quarantined run is erased without waiting; once no run is left, the namespace's credentials go, then `drop_namespace`. The retention round (every 5 minutes) does it, through all of a namespace's runs | Waiting for quarantined runs; erasing active runs at once | The end user's runs end through the normal path, the customer receives their `run.cancelled`; a quarantined run takes no cancellation until it is released, and an erasure must not wait for an operator. |
+
 ## Architecture (approved for 0.1)
 
 | Decision | Why |
