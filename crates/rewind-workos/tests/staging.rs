@@ -2,8 +2,8 @@
 //! and says so, otherwise.
 //!
 //! A code by email through the API, organizations and memberships, a refresh onto an
-//! organization, the choice of an organization, invitations with and without an organization,
-//! the waitlist and signing out. Addresses are `@example.net` only: WorkOS's demo organization
+//! organization, the choice of an organization, invitations with and without an organization
+//! (one accepted by a code with its token), the waitlist and signing out. Addresses are `@example.net` only: WorkOS's demo organization
 //! holds `example.com`, which it leaves alone. Everything the test creates is removed at the
 //! end, even when it fails: users, organizations (with their memberships and invitations) and
 //! waitlist entries; an invitation without an organization, which WorkOS cannot delete, is
@@ -476,6 +476,63 @@ async fn scenario(staging: Arc<Staging>) {
             .any(|membership| membership.user.id == bob)
     );
     refused(identity.revoke_invitation(&invitation.id).await);
+
+    // An invitation accepted by signing in with its token and a code, as the dashboard does:
+    // sending the code accepts nothing (WorkOS would, were the token sent then); the code does.
+    let dora_email = format!("rewind-test-dora-{tag}@example.net");
+    let to_dora = identity
+        .invite(Some(&acme), &dora_email, Some(&ada))
+        .await
+        .unwrap();
+    staging.record(|created| created.invitations.push(to_dora.id.0.clone()));
+    let dora = staging
+        .user_by_email(&dora_email)
+        .await
+        .expect("an invitation creates its user");
+    let token = staging
+        .sdk
+        .user_management()
+        .get_invitation(&to_dora.id.0)
+        .await
+        .expect("the invitation")
+        .token
+        .expose()
+        .to_owned();
+    identity
+        .send_magic_code(&dora_email, Some(&token))
+        .await
+        .unwrap();
+    assert_eq!(
+        identity
+            .invitation(&to_dora.id)
+            .await
+            .unwrap()
+            .map(|of| of.state),
+        Some(InvitationState::Pending),
+        "sending the code accepts nothing"
+    );
+    let code = staging.magic_code(&dora_email).await;
+    let joined = session(
+        identity
+            .authenticate_magic_code(&dora_email, &code, Some(&token), &browser)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(joined.user.id, dora);
+    assert_eq!(joined.organization, Some(acme.clone()));
+    let accepted = identity.invitation(&to_dora.id).await.unwrap().unwrap();
+    assert_eq!(accepted.state, InvitationState::Accepted);
+    assert_eq!(accepted.accepted_user, Some(dora.clone()));
+    // Spent, its token is refused.
+    let code = staging.magic_code(&dora_email).await;
+    assert_eq!(
+        refused(
+            identity
+                .authenticate_magic_code(&dora_email, &code, Some(&token), &browser)
+                .await
+        ),
+        "invitation_invalid"
+    );
 
     // An invitation to the deployment, as the operator's approval sends.
     let carol_email = format!("rewind-test-carol-{tag}@example.net");

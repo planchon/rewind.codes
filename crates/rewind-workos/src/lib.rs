@@ -3,7 +3,8 @@
 //!
 //! - Sign-in through AuthKit's API on Rewind's own pages: GitHub (an authorization URL, then the
 //!   code of its redirect) and a 6-digit code sent by email (Magic Auth). Each sign-in passes
-//!   the browser's IP address and user agent, and the invitation's token when there is one. The
+//!   the browser's IP address and user agent, and the invitation's token when there is one
+//!   (with the code, never when the code is sent: WorkOS would accept the invitation then). The
 //!   steps WorkOS asks for (an organization to choose, an email to verify) and a sign-up refused
 //!   because sign-ups are closed ([`SIGN_UP_CLOSED`]) are answers, not errors. The module
 //!   `errors` keeps every code of WorkOS the adapter reads.
@@ -316,14 +317,18 @@ impl IdentityProvider for WorkOs {
         .await
     }
 
+    /// The invitation's token is not sent here, only with the code
+    /// ([`Self::authenticate_magic_code`]): WorkOS accepts an invitation as soon as a Magic Auth
+    /// is created with its token, before anyone has proved the email is theirs, and then refuses
+    /// the authentication that carries it (`invitation_invalid`, measured on Staging).
     async fn send_magic_code(
         &self,
         email: &str,
-        invitation_token: Option<&str>,
+        _invitation_token: Option<&str>,
     ) -> Result<(), IdentityError> {
         let body = workos::CreateMagicCodeAndReturn {
             email: email.trim().to_owned(),
-            invitation_token: secret(invitation_token),
+            invitation_token: None,
             ip_address: None,
             user_agent: None,
             radar_auth_attempt_id: None,
@@ -340,8 +345,7 @@ impl IdentityProvider for WorkOs {
             // The same answer whether the email has an account or not: the closed sign-up is
             // answered when the code is checked.
             Err(error) if errors::is_sign_up_closed(&error) => Ok(()),
-            // An unknown invitation token is refused, as at the other steps of a sign-in.
-            Err(error) => Err(refusal(error, &[invitation_token.unwrap_or_default()])),
+            Err(error) => Err(refusal(error, &[])),
         }
     }
 
