@@ -22,8 +22,11 @@ rewind-runtime = { path = "crates/rewind-runtime" }
 rewind-server = { path = "crates/rewind-server" }
 rewind-store-postgres = { path = "crates/rewind-store-postgres" }
 rewind-store-turso = { path = "crates/rewind-store-turso" }
+rewind-workos = { path = "crates/rewind-workos" }
 rewind-cli = { path = "crates/rewind-cli" }
 
+# The RSA keys rewind-workos's tests sign access tokens with: the crypto `workos` already builds.
+aws-lc-rs = "1"
 axum = "0.8"
 base64 = "0.23"
 chacha20 = "0.10"
@@ -54,6 +57,9 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 # messages reach scripts, so a new version is a change of the determinism epoch. No default
 # features: a schema never loads a remote or local `$ref`.
 jsonschema = { version = "=0.61.1", default-features = false }
+# WorkOS's access tokens (RS256, checked against its JWKS) in rewind-workos. Pinned exactly as
+# `workos` pins it, so that one version is built.
+jsonwebtoken = { version = "=10.3.0", default-features = false, features = ["aws_lc_rs"] }
 # Test harness of rewind-mcp's integration tests, whose binary is also the stdio fixture server.
 libtest-mimic = "0.8"
 # The S3 backend of rewind-blob, without the local-file backend (rewind-blob writes its own files).
@@ -90,6 +96,11 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 url = "2"
 utoipa = { version = "6", features = ["jiff_0_2"] }
 winnow = "1"
+# The fake WorkOS of rewind-workos's tests, over HTTP.
+wiremock = "0.6"
+# The official WorkOS SDK, in rewind-workos. It brings reqwest 0.12 beside the workspace's 0.13
+# (archi/08-decisions.md).
+workos = "3.7"
 # rewind-check's build script downloads tsgo from the npm registry (HTTPS with rustls).
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `rewind-core` must use uuid without any feature (archi/07-code-architecture.md, "Dependency rules").
