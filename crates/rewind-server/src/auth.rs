@@ -1,12 +1,18 @@
 //! Authentication and access (`archi/06-storage-and-scale.md`, "Tenancy, identity and access").
 //!
-//! Every request to `/v1` carries an API key as a Bearer token, `rewind_sk_…`. The access store
-//! keeps the SHA-256 of keys, never a key. A key belongs to a tenant, which scopes everything it
-//! sees; what it may do is its grant, held by the principal `key:<hash>`: a role, and optionally
-//! allowed labels. A built-in role's permissions and the operator's are fixed
-//! (`rewind_api::access`); a role of the tenant is read from the store; any other role gives
-//! none, as does a principal without a grant. Every request reads the grant and the role: a
-//! change applies from the next request.
+//! Every request to `/v1` carries a Bearer token, and nothing else authenticates it:
+//!
+//! - An API key, `rewind_sk_…`. The access store keeps the SHA-256 of keys, never a key. A key
+//!   belongs to a tenant, which scopes everything it sees; its principal is `key:<hash>`.
+//! - On a server with a sign-in (WorkOS, the api role), a member's access token, checked by the
+//!   identity provider ([`Member`]). Its organization is the tenant, whose record is created
+//!   when missing; its principal is `user:<id>`. A token without organization reaches only the
+//!   onboarding endpoints, which take [`Who`]: every other one answers 403.
+//!
+//! What a principal may do is its grant: a role, and optionally allowed labels. A built-in
+//! role's permissions and the operator's are fixed (`rewind_api::access`); a role of the tenant
+//! is read from the store; any other role gives none, as does a principal without a grant.
+//! Every request reads the grant and the role: a change applies from the next request.
 //!
 //! Every endpoint requires one permission of the catalog ([`Caller::require`]), answering 403 with
 //! the missing permission. A grant limited to labels sees only the runs carrying all of them, and
@@ -28,7 +34,10 @@ use rewind_api::ProblemType;
 use rewind_api::access::{OPERATOR, Permission, fixed_permissions};
 use rewind_api::headers::API_KEY_PREFIX;
 use rewind_core::{Digest, Timestamp};
-use rewind_engine::ports::{AccessStore, Principal, StoreError, TenantId};
+use rewind_engine::ports::{
+    AccessStore, IdentityError, IdentityProvider, OrganizationId, Principal, SessionId, StoreError,
+    TenantId, UserId,
+};
 
 use crate::app::App;
 use crate::error::ApiError;
@@ -176,6 +185,16 @@ impl Caller {
         !self.labels.is_empty()
     }
 
+    /// What the caller may use, in the catalog's order: its role's permissions, without the
+    /// administration when its grant is limited to labels.
+    pub(crate) fn effective_permissions(&self) -> Vec<Permission> {
+        Permission::ALL
+            .into_iter()
+            .filter(|permission| self.permissions.contains(permission))
+            .filter(|permission| !(self.scoped() && ADMINISTRATION.contains(permission)))
+            .collect()
+    }
+
     /// The labels of something the caller creates (a run, a subscription): `labels`, with the
     /// grant's allowed labels added. A label that contradicts the grant's is refused.
     pub(crate) fn within(
@@ -228,15 +247,83 @@ pub(crate) fn listed(permissions: &[Permission]) -> String {
         .join(", ")
 }
 
+/// A member signed in on the dashboard: what their access token says, checked by the identity
+/// provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Member {
+    pub(crate) user: UserId,
+    pub(crate) session: SessionId,
+    /// The token's organization, the tenant; `None` reaches only the onboarding endpoints.
+    pub(crate) organization: Option<OrganizationId>,
+    /// When the token expires: an event stream it opened is closed then.
+    pub(crate) expires_at: Timestamp,
+}
+
+/// The onboarding endpoints' caller: a key or the socket's operator (`caller` only), a member of
+/// an organization (both), or a member without organization (`member` only).
+#[derive(Debug, Clone)]
+pub(crate) struct Who {
+    pub(crate) caller: Option<Caller>,
+    pub(crate) member: Option<Member>,
+}
+
+/// The expiry of the caller's access token; `None` for a key and over the socket.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TokenExpiry(pub(crate) Option<Timestamp>);
+
+/// What a member without organization is told everywhere but the onboarding endpoints.
+fn no_organization() -> ApiError {
+    ApiError::forbidden(
+        "this access token has no organization, so it reaches only GET /v1/whoami, POST \
+         /v1/organizations, GET /v1/invitations and POST /v1/invitations/{id}/accept: create an \
+         organization or accept an invitation, then choose it with POST /auth/session and its \
+         organizationId, which gives an access token for it",
+    )
+}
+
+fn unauthenticated() -> ApiError {
+    ApiError::new(ProblemType::Unauthorized, "no API key nor access token")
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Caller {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
-        parts
-            .extensions
-            .get::<Caller>()
-            .cloned()
-            .ok_or_else(|| ApiError::new(ProblemType::Unauthorized, "no API key"))
+        if let Some(caller) = parts.extensions.get::<Caller>() {
+            return Ok(caller.clone());
+        }
+        if parts.extensions.get::<Member>().is_some() {
+            return Err(no_organization());
+        }
+        Err(unauthenticated())
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for Who {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
+        let who = Who {
+            caller: parts.extensions.get::<Caller>().cloned(),
+            member: parts.extensions.get::<Member>().cloned(),
+        };
+        if who.caller.is_none() && who.member.is_none() {
+            return Err(unauthenticated());
+        }
+        Ok(who)
+    }
+}
+
+impl<S: Send + Sync> FromRequestParts<S> for TokenExpiry {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
+        Ok(TokenExpiry(
+            parts
+                .extensions
+                .get::<Member>()
+                .map(|member| member.expires_at),
+        ))
     }
 }
 
@@ -258,44 +345,96 @@ pub(crate) fn new_key() -> Result<String, ApiError> {
     Ok(format!("{API_KEY_PREFIX}{key}"))
 }
 
-/// The middleware of the TCP listener: reads the Bearer key and puts its [`Caller`] in the
-/// request's extensions, or answers 401.
+/// The middleware of the TCP listener: reads the Bearer token and puts its [`Caller`] (in a
+/// tenant) and its [`Member`] (an access token) in the request's extensions, or answers 401.
 pub(crate) async fn authenticate(
     State(app): State<Arc<App>>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    match caller(&app, request.headers()).await {
-        Ok(caller) => {
-            request.extensions_mut().insert(caller);
+    match credentials(&app, request.headers()).await {
+        Ok((caller, member)) => {
+            if let Some(caller) = caller {
+                request.extensions_mut().insert(caller);
+            }
+            if let Some(member) = member {
+                request.extensions_mut().insert(member);
+            }
             next.run(request).await
         }
         Err(error) => error.into_response(),
     }
 }
 
-async fn caller(app: &App, headers: &axum::http::HeaderMap) -> Result<Caller, ApiError> {
+async fn credentials(
+    app: &App,
+    headers: &axum::http::HeaderMap,
+) -> Result<(Option<Caller>, Option<Member>), ApiError> {
     let unauthorized = |detail: &str| ApiError::new(ProblemType::Unauthorized, detail);
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized(
-            "no API key: send it as `Authorization: Bearer rewind_sk_…`",
+            "no token: send an API key as `Authorization: Bearer rewind_sk_…`, or a member's \
+             access token from POST /auth/session",
         ));
     };
     // The scheme is case-insensitive (RFC 9110, section 11.1).
-    let key = value
+    let token = value
         .to_str()
         .ok()
         .and_then(|value| value.split_once(' '))
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-        .map(|(_, key)| key.trim())
-        .filter(|key| key.starts_with(API_KEY_PREFIX))
-        .ok_or_else(|| unauthorized("the Authorization header must be `Bearer rewind_sk_…`"))?;
-    let stored = app.store.find_key(key_hash(key)).await?;
-    let Some(stored) = stored.filter(|stored| stored.revoked_at.is_none()) else {
-        return Err(unauthorized("this API key is unknown or revoked"));
+        .map(|(_, token)| token.trim())
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| {
+            unauthorized(
+                "the Authorization header must be `Bearer <token>`: an API key rewind_sk_… or a \
+                 member's access token",
+            )
+        })?;
+    if token.starts_with(API_KEY_PREFIX) {
+        let stored = app.store.find_key(key_hash(token)).await?;
+        let Some(stored) = stored.filter(|stored| stored.revoked_at.is_none()) else {
+            return Err(unauthorized("this API key is unknown or revoked"));
+        };
+        let principal = stored.principal();
+        return Ok((
+            Some(Caller::of(&app.store, stored.tenant, principal).await?),
+            None,
+        ));
+    }
+    // A worker, and a server without WorkOS, accept only keys.
+    let Some(sign_in) = &app.sign_in else {
+        return Err(unauthorized(
+            "this server accepts only API keys (`Authorization: Bearer rewind_sk_…`): it has no \
+             sign-in, so no access token is valid here",
+        ));
     };
-    let principal = stored.principal();
-    Ok(Caller::of(&app.store, stored.tenant, principal).await?)
+    let claims =
+        sign_in
+            .identity
+            .verify_access_token(token)
+            .await
+            .map_err(|error| match error {
+                IdentityError::Unavailable(_) => ApiError::from(error),
+                _ => unauthorized(
+                    "the access token is invalid or expired: POST /auth/session gives a valid one",
+                ),
+            })?;
+    let member = Member {
+        user: claims.user,
+        session: claims.session,
+        organization: claims.organization,
+        expires_at: claims.expires_at,
+    };
+    let Some(organization) = &member.organization else {
+        return Ok((None, Some(member)));
+    };
+    let tenant = organization.tenant().map_err(|_| {
+        unauthorized("the access token's organization is not a valid tenant id: sign in again")
+    })?;
+    app.ensure_tenant(&tenant).await?;
+    let caller = Caller::of(&app.store, tenant, Principal::from(&member.user)).await?;
+    Ok((Some(caller), Some(member)))
 }
 
 #[cfg(test)]
@@ -419,6 +558,21 @@ mod tests {
         let scoped = caller(&store, &scoped).await;
         assert!(scoped.require(Permission::RunsStart).is_ok());
         assert!(scoped.require(Permission::MembersRead).is_ok());
+        let effective = scoped.effective_permissions();
+        assert_eq!(
+            effective.len(),
+            Permission::ALL.len() - ADMINISTRATION.len()
+        );
+        assert!(
+            ADMINISTRATION
+                .iter()
+                .all(|admin| !effective.contains(admin))
+        );
+        assert_eq!(
+            Caller::local().effective_permissions(),
+            Permission::ALL,
+            "without labels, the role's permissions"
+        );
         for permission in ADMINISTRATION {
             let refused = detail(scoped.require(permission));
             assert!(

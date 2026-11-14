@@ -4371,6 +4371,7 @@ dependencies = [
  "rewind-runtime",
  "rewind-store-postgres",
  "rewind-store-turso",
+ "rewind-workos",
  "rmcp",
  "serde",
  "serde_html_form",

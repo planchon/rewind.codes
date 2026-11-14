@@ -1,7 +1,7 @@
 //! The state every request and every loop shares: the engine wired with this server's
 //! adapters, and what the HTTP API needs beside it.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,11 +11,12 @@ use rewind_engine::Engine;
 use rewind_engine::adapters::SystemEntropy;
 use rewind_engine::ports::{
     Clock, JournalStore, Predicate, ReadModel, Retention, RunOrder, RunQuery, RunRecord, RunRef,
-    StoredToolset, TaskProgress, TenantId, ToolDeclarations, ToolTask, WaitingFor,
+    StoredToolset, TaskProgress, Tenant, TenantId, ToolDeclarations, ToolTask, WaitingFor,
 };
 use rewind_engine::projector::{Projector, ProjectorConfig};
 use rewind_engine::retention::Housekeeper;
 use rewind_runtime::V8Executor;
+use rewind_workos::CookieSeal;
 use tokio::sync::watch;
 
 use crate::auth::Caller;
@@ -26,6 +27,7 @@ use crate::wake::{Activity, POLL, Wake, wait};
 use crate::wiring::blobs::Blobs;
 use crate::wiring::checker::Checker;
 use crate::wiring::clock::ServerClock;
+use crate::wiring::identity::Identity;
 use crate::wiring::store::Store;
 use crate::wiring::telemetry::Exporter;
 use crate::wiring::tools::{Dispatcher, Tools};
@@ -76,8 +78,21 @@ pub(crate) struct App {
     pub(crate) activity: Activity,
     /// Set to stop the server.
     pub(crate) stop: watch::Sender<bool>,
+    /// The dashboard's sign-in: `None` without WorkOS, and on a worker alone.
+    pub(crate) sign_in: Option<SignIn>,
     /// Script headlines, by tenant and digest: a script never changes.
     headlines: Mutex<HashMap<(TenantId, Digest), String>>,
+    /// Tenants known to have their record: a tenant is never deleted.
+    tenants: Mutex<HashSet<TenantId>>,
+}
+
+/// The dashboard's sign-in (`archi/07-code-architecture.md`, "Sign-in (`/auth`)"): the identity
+/// provider, the seal of the cookies, and where the provider sends the browser back.
+#[derive(Debug)]
+pub(crate) struct SignIn {
+    pub(crate) identity: Identity,
+    pub(crate) seal: CookieSeal,
+    pub(crate) redirect_uri: String,
 }
 
 impl std::fmt::Debug for App {
@@ -99,6 +114,7 @@ impl App {
         exporter: Exporter,
         deliveries: Arc<Deliveries<ServerRender>>,
         settings: Settings,
+        sign_in: Option<SignIn>,
     ) -> Self {
         Self {
             engine,
@@ -112,8 +128,51 @@ impl App {
             wake: Wake::new(),
             activity: Activity::new(),
             stop: watch::Sender::new(false),
+            sign_in,
             headlines: Mutex::new(HashMap::new()),
+            tenants: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// The sign-in, or 404 on a server without WorkOS: organizations, members and invitations
+    /// are WorkOS's.
+    pub(crate) fn sign_in(&self) -> Result<&SignIn, ApiError> {
+        self.sign_in.as_ref().ok_or_else(|| {
+            ApiError::not_found(
+                "this server has no sign-in (WorkOS is not configured): it has no organizations, \
+                 members or invitations, and accepts only API keys, whose rights come from \
+                 their grants",
+            )
+        })
+    }
+
+    /// Creates the tenant's record, with the deployment's quota and retention, when it has
+    /// none: at its first key, at its organization's creation, at a member's first request.
+    pub(crate) async fn ensure_tenant(&self, tenant: &TenantId) -> Result<(), ApiError> {
+        let known = |tenants: &HashSet<TenantId>| tenants.contains(tenant);
+        if self.tenants.lock().is_ok_and(|tenants| known(&tenants)) {
+            return Ok(());
+        }
+        if self.store.get_tenant(tenant).await?.is_none() {
+            self.store
+                .put_tenant(&Tenant {
+                    id: tenant.clone(),
+                    quotas: rewind_engine::ports::Quotas {
+                        active_runs: self.settings.run_quota,
+                        ..Default::default()
+                    },
+                    namespace_defaults: rewind_engine::ports::Quotas::default(),
+                    retention: self.settings.retention,
+                })
+                .await?;
+        }
+        if let Ok(mut tenants) = self.tenants.lock() {
+            if tenants.len() > 100_000 {
+                tenants.clear();
+            }
+            tenants.insert(tenant.clone());
+        }
+        Ok(())
     }
 
     pub(crate) fn views(&self) -> Views<'_> {

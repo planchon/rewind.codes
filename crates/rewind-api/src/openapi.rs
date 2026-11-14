@@ -1439,14 +1439,17 @@ mod operations {
     ///
     /// Checks `state`, exchanges the code, keeps the outcome in the session cookie, and
     /// redirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.
+    /// When the sign-in did not go through, the redirect names why with a code
+    /// (`state_mismatch`, `provider_error`, `sign_in_failed`), and the session cookie is left
+    /// as it was.
     #[utoipa::path(
         get, path = "/auth/callback", tag = "auth", operation_id = "authCallback",
         security(()),
         params(Callback),
         responses(
-            (status = 302, description = "To the dashboard, `/#/`, whatever the outcome.", headers(
-                ("Location" = String, description = "`/#/`."),
-                ("Set-Cookie" = String, description = "`rewind_session`; `rewind_oauth` cleared."),
+            (status = 302, description = "To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through.", headers(
+                ("Location" = String, description = "`/#/`, or `/?auth_error=<code>#/`."),
+                ("Set-Cookie" = String, description = "`rewind_session` when signed in or at a step; `rewind_oauth` cleared."),
             )),
         )
     )]
@@ -1553,6 +1556,7 @@ mod operations {
             (status = 204, description = "Signed out.", headers(
                 ("Set-Cookie" = String, description = "`rewind_session`, cleared."),
             )),
+            (status = 502, description = "The identity provider could not revoke the session (`identity-unavailable`): the cookie is cleared anyway, and the session expires at the provider on its own.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn sign_out() {}

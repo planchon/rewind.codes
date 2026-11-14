@@ -1,4 +1,4 @@
-//! Administration: API keys, who calls, the catalog of permissions, the server itself.
+//! Administration: API keys, the catalog of permissions, the server itself.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -7,14 +7,11 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use rewind_api::access::{
-    ApiKey, ApiKeyList, CreateApiKey, Grant, OPERATOR, Permission, PermissionList,
-};
+use rewind_api::access::{ApiKey, ApiKeyList, CreateApiKey, OPERATOR, Permission, PermissionList};
 use rewind_api::admin::ServerInfo;
 use rewind_api::common::{Labels, timestamp};
-use rewind_api::organization::{Identity, Principal as CallerPrincipal};
 use rewind_core::Digest;
-use rewind_engine::ports::{self, AccessStore, JournalStore, Principal, Tenant, TenantId};
+use rewind_engine::ports::{self, AccessStore, Principal, TenantId};
 use rewind_engine::text::{refuse_nul, refuse_nul_in_labels};
 
 use crate::app::App;
@@ -115,7 +112,7 @@ pub(super) async fn create_key(
             listed(&lacking)
         )));
     }
-    ensure_tenant(&app, &tenant).await?;
+    app.ensure_tenant(&tenant).await?;
     let secret = new_key()?;
     let hash = key_hash(&secret);
     let now = app.now();
@@ -145,25 +142,6 @@ pub(super) async fn create_key(
     }
     let view = key_view(&key, Some(&grant), Some(secret));
     Ok((StatusCode::CREATED, Json(view)).into_response())
-}
-
-/// A tenant gets its record, with the deployment's quota and retention, when its first key is
-/// created.
-pub(crate) async fn ensure_tenant(app: &App, tenant: &TenantId) -> Result<(), ApiError> {
-    if app.store.get_tenant(tenant).await?.is_none() {
-        app.store
-            .put_tenant(&Tenant {
-                id: tenant.clone(),
-                quotas: rewind_engine::ports::Quotas {
-                    active_runs: app.settings.run_quota,
-                    ..Default::default()
-                },
-                namespace_defaults: rewind_engine::ports::Quotas::default(),
-                retention: app.settings.retention,
-            })
-            .await?;
-    }
-    Ok(())
 }
 
 /// `DELETE /v1/api-keys/{id}`: revokes a key of the caller's tenant (the operator's: of any
@@ -216,34 +194,6 @@ pub(super) async fn revoke_key(
         .delete_grant(&key.tenant, &principal, None)
         .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-/// `GET /v1/whoami`: any caller.
-pub(super) async fn whoami(caller: Caller) -> Json<Identity> {
-    let principal = match &caller.principal {
-        Some(Principal::Key(hash)) => Some(CallerPrincipal::Key { id: hash.to_hex() }),
-        _ => None,
-    };
-    let operator = caller.operator();
-    let permissions = Permission::ALL
-        .into_iter()
-        .filter(|permission| caller.permissions.contains(permission))
-        .collect();
-    let grant = caller.role.map(|role| Grant {
-        role,
-        allowed_labels: Labels::from(caller.labels),
-        granted_by: caller.granted_by.as_ref().map(ToString::to_string),
-        granted_at: caller.granted_at.map(timestamp),
-    });
-    Json(Identity {
-        tenant: Some(caller.tenant.as_str().to_owned()),
-        principal,
-        grant,
-        permissions,
-        operator,
-        organization: None,
-        organizations: Vec::new(),
-    })
 }
 
 /// `GET /v1/permissions`: the catalog, to any caller.
