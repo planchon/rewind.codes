@@ -11,12 +11,13 @@
 use utoipa::openapi::path::{HttpMethod, OperationBuilder, ParameterBuilder, ParameterIn};
 use utoipa::openapi::request_body::RequestBodyBuilder;
 use utoipa::openapi::response::{ResponseBuilder, ResponsesBuilder};
-use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+use utoipa::openapi::security::{ApiKey, ApiKeyValue, HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::openapi::{
     ContentBuilder, OpenApi as Document, PathItem, PathsBuilder, Ref, RefOr, Required,
 };
 use utoipa::{Modify, OpenApi};
 
+use crate::auth::SESSION_COOKIE;
 use crate::events::StreamEvent;
 use crate::problem::{self, Problem};
 use crate::webhooks::{
@@ -29,11 +30,16 @@ use crate::webhooks::{
     info(
         title = "Rewind API",
         description = "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, \
-            webhooks, reading and administration. Every request carries an API key as a Bearer \
-            token (`rewind_sk_…`), except over the embedded server's unix socket and to the inbound \
-            webhook URL. Errors are `application/problem+json`, with a `detail` written for a \
-            model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and \
-            durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds."
+            webhooks, reading, the organization, access and the server; and `/auth`, the \
+            dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
+            (`rewind_sk_…`) or a member's access token from `/auth`, except over the embedded \
+            server's unix socket and to the inbound webhook URL. What the caller may do is its \
+            grant's: every operation requires one permission of the catalog \
+            (`GET /v1/permissions`), and answers 403 without it. `/auth` is for a browser: it \
+            reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are \
+            `application/problem+json`, with a `detail` written for a model. Fields are \
+            camelCase, enumerated values snake_case, times RFC 3339, and durations a number and \
+            a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds."
     ),
     servers((url = "/", description = "The server that serves this document.")),
     paths(
@@ -75,15 +81,41 @@ use crate::webhooks::{
         operations::delete_subscription,
         operations::get_tool_stats,
         operations::get_payload,
+        operations::whoami,
+        operations::create_organization,
+        operations::update_organization,
+        operations::list_my_invitations,
+        operations::accept_invitation,
+        operations::list_members,
+        operations::set_member_grant,
+        operations::remove_member,
+        operations::list_invitations,
+        operations::create_invitation,
+        operations::resend_invitation,
+        operations::revoke_invitation,
+        operations::list_permissions,
+        operations::list_roles,
+        operations::put_role,
+        operations::delete_role,
+        operations::list_api_keys,
         operations::create_api_key,
         operations::revoke_api_key,
-        operations::whoami,
         operations::get_server,
         operations::stop_server,
+        operations::get_auth_config,
+        operations::sign_in_with_github,
+        operations::auth_callback,
+        operations::send_magic_code,
+        operations::verify_magic_code,
+        operations::verify_email,
+        operations::select_organization,
+        operations::get_session,
+        operations::join_waitlist,
+        operations::sign_out,
     ),
     components(schemas(Problem, StreamEvent, WebhookEvent, WebhookEventType)),
     modifiers(&Conventions),
-    security(("apiKey" = [])),
+    security(("bearer" = [])),
     tags(
         (name = "toolsets", description = "Register and pin toolsets; their declarations and credentials."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
@@ -91,7 +123,10 @@ use crate::webhooks::{
         (name = "tasks", description = "Host-tool tasks: long-polled by the harness's SDK worker, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
         (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
-        (name = "administration", description = "API keys, and the server itself."),
+        (name = "organization", description = "Who calls; the organizations, their members and invitations."),
+        (name = "access", description = "The catalog of permissions, the roles and the API keys."),
+        (name = "server", description = "The server itself."),
+        (name = "auth", description = "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist."),
     )
 )]
 pub struct ApiDoc;
@@ -141,11 +176,12 @@ const COMMON_ERRORS: [(&str, &str); 5] = [
     ("400", "The request is malformed (`invalid-request`)."),
     (
         "401",
-        "No API key, or an unknown or revoked one (`unauthorized`).",
+        "No token, or an unknown, revoked or expired one (`unauthorized`).",
     ),
     (
         "403",
-        "The key's role or allowed labels do not cover this request (`forbidden`).",
+        "The caller's grant does not hold the permission this operation needs, which the \
+         message names, or its allowed labels do not cover the request (`forbidden`).",
     ),
     ("500", "A fault of the platform (`internal`)."),
     (
@@ -160,28 +196,40 @@ impl Modify for Conventions {
         openapi.info.license = None;
         let components = openapi.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
-            "apiKey",
+            "bearer",
             SecurityScheme::Http(
                 HttpBuilder::new()
                     .scheme(HttpAuthScheme::Bearer)
-                    .bearer_format("rewind_sk_…")
                     .description(Some(
-                        "An API key of the tenant. The embedded server's unix socket takes none.",
+                        "An API key of the tenant (`rewind_sk_…`), or a member's access token \
+                         from `/auth`. The embedded server's unix socket takes none.",
                     ))
                     .build(),
             ),
         );
+        components.add_security_scheme(
+            "session",
+            SecurityScheme::ApiKey(ApiKey::Cookie(ApiKeyValue::with_description(
+                SESSION_COOKIE,
+                "The dashboard's session, sealed by the server: only `/auth` reads it.",
+            ))),
+        );
 
-        for item in openapi.paths.paths.values_mut() {
+        for (path, item) in &mut openapi.paths.paths {
+            let sign_in = path.starts_with("/auth/");
             for operation in operations_mut(item) {
                 let unauthenticated = operation
                     .security
                     .as_ref()
                     .is_some_and(|requirements| requirements.iter().all(is_empty_requirement));
                 for (status, description) in COMMON_ERRORS {
-                    if unauthenticated && matches!(status, "401" | "403") {
-                        continue;
-                    }
+                    let description = match status {
+                        "401" | "403" if unauthenticated => continue,
+                        // `/auth` needs a session, never a permission.
+                        "403" if sign_in => continue,
+                        "401" if sign_in => "No session, or one that expired (`unauthorized`).",
+                        _ => description,
+                    };
                     operation
                         .responses
                         .responses
@@ -293,8 +341,19 @@ fn webhooks_paths() -> PathsBuilder {
 /// The operations, declared for `utoipa`. Their bodies are empty: the server implements them.
 #[allow(dead_code)]
 mod operations {
-    use crate::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
+    use crate::access::{
+        ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
+    };
+    use crate::admin::ServerInfo;
+    use crate::auth::{
+        AuthConfig, AuthState, Callback, EmailVerification, GithubSignIn, MagicAuthRequest,
+        MagicAuthVerification, OrganizationSelection, SessionRequest, WaitlistRequest,
+    };
     use crate::events::{Entry, EventsQuery, StreamEvent};
+    use crate::organization::{
+        CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
+        Organization, OrganizationSettings, UpdateOrganization,
+    };
     use crate::problem::Problem;
     use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
     use crate::runs::{
@@ -831,19 +890,256 @@ mod operations {
     pub(super) fn get_payload() {}
 
     // ---------------------------------------------------------------------------------------
-    // Administration
+    // Organization
+
+    /// Who calls
+    ///
+    /// The tenant, the principal (an API key, or a member with their email, name and picture),
+    /// the grant, and the permissions it holds; for a member, the organization of the session
+    /// and every organization of the user. Over the embedded server's socket: the operator of
+    /// the tenant `local`. Any caller, even a member without organization.
+    #[utoipa::path(
+        get, path = "/v1/whoami", tag = "organization", operation_id = "whoami",
+        responses(
+            (status = 200, description = "Who calls.", body = Identity),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn whoami() {}
+
+    /// Create an organization
+    ///
+    /// For a member, even without organization: the organization in the identity provider with
+    /// the caller as a member, then its tenant and the caller's `owner` grant. Switch to it with
+    /// `POST /auth/session`.
+    #[utoipa::path(
+        post, path = "/v1/organizations", tag = "organization", operation_id = "createOrganization",
+        request_body = CreateOrganization,
+        responses(
+            (status = 201, description = "Created; the caller is its owner.", body = Organization),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn create_organization() {}
+
+    /// Change the organization
+    ///
+    /// Its name and its default role. Requires `organization:write`.
+    #[utoipa::path(
+        patch, path = "/v1/organization", tag = "organization", operation_id = "updateOrganization",
+        request_body = UpdateOrganization,
+        responses(
+            (status = 200, description = "The organization as it now is.", body = OrganizationSettings),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn update_organization() {}
+
+    /// The invitations sent to the caller
+    ///
+    /// The pending invitations to the caller's email, with their organizations. For a member,
+    /// even without organization.
+    #[utoipa::path(
+        get, path = "/v1/invitations", tag = "organization", operation_id = "listMyInvitations",
+        responses(
+            (status = 200, description = "The pending invitations.", body = InvitationList),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_my_invitations() {}
+
+    /// Accept an invitation
+    ///
+    /// Joins the invitation's organization; its pending grant becomes the caller's. Switch to
+    /// the organization with `POST /auth/session`. For a member, even without organization.
+    #[utoipa::path(
+        post, path = "/v1/invitations/{id}/accept", tag = "organization", operation_id = "acceptInvitation",
+        params(("id" = String, Path, description = "The invitation's id.")),
+        responses(
+            (status = 200, description = "Accepted.", body = Invitation),
+            (status = 404, description = "No pending invitation with this id for the caller.", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn accept_invitation() {}
+
+    /// List the members
+    ///
+    /// The organization's memberships, each with its grant. Requires `members:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/members", tag = "organization", operation_id = "listMembers",
+        responses(
+            (status = 200, description = "Every member.", body = MemberList),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_members() {}
+
+    /// Set a member's grant
+    ///
+    /// Their role and allowed labels. Requires `members:manage`, and every permission of the
+    /// role given and of the member's current role.
+    #[utoipa::path(
+        put, path = "/v1/organization/members/{user}/grant", tag = "organization", operation_id = "setMemberGrant",
+        params(("user" = String, Path, description = "The member's user id.")),
+        request_body = SetGrant,
+        responses(
+            (status = 200, description = "The member's grant.", body = Grant),
+            (status = 404, description = "No such member, or no such role.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The organization would have no owner (`last-owner`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn set_member_grant() {}
+
+    /// Remove a member
+    ///
+    /// Deletes the member's grant, then their membership. Requires `members:manage`, and every
+    /// permission of the member's role.
+    #[utoipa::path(
+        delete, path = "/v1/organization/members/{user}", tag = "organization", operation_id = "removeMember",
+        params(("user" = String, Path, description = "The member's user id.")),
+        responses(
+            (status = 204, description = "Removed."),
+            (status = 404, description = "No such member.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The organization would have no owner (`last-owner`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn remove_member() {}
+
+    /// List the organization's invitations
+    ///
+    /// Each with its pending grant. Requires `members:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/invitations", tag = "organization", operation_id = "listInvitations",
+        responses(
+            (status = 200, description = "Every invitation of the organization.", body = InvitationList),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_invitations() {}
+
+    /// Invite someone
+    ///
+    /// The invitation by email, and its pending grant, which the invitee gets on accepting it.
+    /// Requires `members:invite`, and every permission of the role given.
+    #[utoipa::path(
+        post, path = "/v1/organization/invitations", tag = "organization", operation_id = "createInvitation",
+        request_body = CreateInvitation,
+        responses(
+            (status = 201, description = "Sent.", body = Invitation),
+            (status = 404, description = "No such role.", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn create_invitation() {}
+
+    /// Send an invitation again
+    ///
+    /// Requires `members:invite`.
+    #[utoipa::path(
+        post, path = "/v1/organization/invitations/{id}/resend", tag = "organization", operation_id = "resendInvitation",
+        params(("id" = String, Path, description = "The invitation's id.")),
+        responses(
+            (status = 200, description = "Sent again, with a new expiry.", body = Invitation),
+            (status = 404, description = "No such invitation, or one already accepted or revoked.", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn resend_invitation() {}
+
+    /// Revoke an invitation
+    ///
+    /// And delete its pending grant. Requires `members:invite`.
+    #[utoipa::path(
+        delete, path = "/v1/organization/invitations/{id}", tag = "organization", operation_id = "revokeInvitation",
+        params(("id" = String, Path, description = "The invitation's id.")),
+        responses(
+            (status = 204, description = "Revoked."),
+            (status = 404, description = "No such pending invitation.", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn revoke_invitation() {}
+
+    // ---------------------------------------------------------------------------------------
+    // Access
+
+    /// The catalog of permissions
+    ///
+    /// Every permission, with what it lets the caller do. Any caller.
+    #[utoipa::path(
+        get, path = "/v1/permissions", tag = "access", operation_id = "listPermissions",
+        responses((status = 200, description = "The catalog.", body = PermissionList))
+    )]
+    pub(super) fn list_permissions() {}
+
+    /// List the roles
+    ///
+    /// The built-in roles, then the organization's own, with their permissions. Requires
+    /// `roles:read`.
+    #[utoipa::path(
+        get, path = "/v1/roles", tag = "access", operation_id = "listRoles",
+        responses((status = 200, description = "Every role of the organization.", body = RoleList))
+    )]
+    pub(super) fn list_roles() {}
+
+    /// Create or change a role
+    ///
+    /// A role of the organization: its name is 1 to 64 lowercase letters, digits, `-` and `_`,
+    /// and never a built-in name or `operator`. A change applies at once to every principal
+    /// holding the role. Requires `roles:write`, and every permission the role gives.
+    #[utoipa::path(
+        put, path = "/v1/roles/{name}", tag = "access", operation_id = "putRole",
+        params(("name" = String, Path, description = "The role's name.")),
+        request_body = PutRole,
+        responses(
+            (status = 201, description = "Created.", body = Role),
+            (status = 200, description = "Changed.", body = Role),
+        )
+    )]
+    pub(super) fn put_role() {}
+
+    /// Delete a role
+    ///
+    /// Only a role no grant points to. Requires `roles:write`.
+    #[utoipa::path(
+        delete, path = "/v1/roles/{name}", tag = "access", operation_id = "deleteRole",
+        params(("name" = String, Path, description = "The role's name.")),
+        responses(
+            (status = 204, description = "Deleted."),
+            (status = 404, description = "No such role of the organization.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "A grant points to the role (`role-in-use`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn delete_role() {}
+
+    /// List the API keys
+    ///
+    /// The tenant's keys, without their secret, each with its role and allowed labels.
+    /// Requires `api_keys:read`.
+    #[utoipa::path(
+        get, path = "/v1/api-keys", tag = "access", operation_id = "listApiKeys",
+        responses((status = 200, description = "Every key of the tenant, revoked ones included.", body = ApiKeyList))
+    )]
+    pub(super) fn list_api_keys() {}
 
     /// Create an API key
+    ///
+    /// With a name, a role and allowed labels. The operator may name another tenant. Requires
+    /// `api_keys:write`, and every permission of the role given.
     #[utoipa::path(
-        post, path = "/v1/api-keys", tag = "administration", operation_id = "createApiKey",
+        post, path = "/v1/api-keys", tag = "access", operation_id = "createApiKey",
         request_body = CreateApiKey,
         responses((status = 201, description = "Created; the answer holds the key, once.", body = ApiKey))
     )]
     pub(super) fn create_api_key() {}
 
     /// Revoke an API key
+    ///
+    /// Requires `api_keys:write`.
     #[utoipa::path(
-        delete, path = "/v1/api-keys/{id}", tag = "administration", operation_id = "revokeApiKey",
+        delete, path = "/v1/api-keys/{id}", tag = "access", operation_id = "revokeApiKey",
         params(("id" = String, Path, description = "The key's id.")),
         responses(
             (status = 204, description = "Revoked."),
@@ -852,19 +1148,14 @@ mod operations {
     )]
     pub(super) fn revoke_api_key() {}
 
-    /// Who the API key is
-    ///
-    /// Its tenant, role and allowed labels. Over the embedded server's socket: the tenant
-    /// `local`, role `admin`.
-    #[utoipa::path(
-        get, path = "/v1/whoami", tag = "administration", operation_id = "whoami",
-        responses((status = 200, description = "The key's identity.", body = Identity))
-    )]
-    pub(super) fn whoami() {}
+    // ---------------------------------------------------------------------------------------
+    // Server
 
     /// What this server is
+    ///
+    /// Any caller.
     #[utoipa::path(
-        get, path = "/v1/server", tag = "administration", operation_id = "getServer",
+        get, path = "/v1/server", tag = "server", operation_id = "getServer",
         responses((status = 200, description = "The server's version, epochs and roles.", body = ServerInfo))
     )]
     pub(super) fn get_server() {}
@@ -872,12 +1163,168 @@ mod operations {
     /// Stop the embedded server
     ///
     /// Only the embedded server stops this way, once its calls in flight are committed: the
-    /// CLI uses it to replace a server of another version. Other servers answer 403.
+    /// CLI uses it to replace a server of another version. Other servers answer 403. Only the
+    /// operator.
     #[utoipa::path(
-        post, path = "/v1/server/stop", tag = "administration", operation_id = "stopServer",
+        post, path = "/v1/server/stop", tag = "server", operation_id = "stopServer",
         responses((status = 202, description = "Stopping."))
     )]
     pub(super) fn stop_server() {}
+
+    // ---------------------------------------------------------------------------------------
+    // Sign-in
+
+    /// How to sign in
+    ///
+    /// The sign-in methods, and whether sign-ups go through the waitlist.
+    #[utoipa::path(
+        get, path = "/auth/config", tag = "auth", operation_id = "getAuthConfig",
+        security(()),
+        responses(
+            (status = 200, description = "The sign-in methods.", body = AuthConfig),
+            (status = 404, description = "This server has no sign-in: use an API key.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_auth_config() {}
+
+    /// Sign in with GitHub
+    ///
+    /// Redirects to the identity provider, with a random `state` and the page's invitation
+    /// token kept in the cookie `rewind_oauth` for 5 minutes.
+    #[utoipa::path(
+        get, path = "/auth/github", tag = "auth", operation_id = "signInWithGithub",
+        security(()),
+        params(GithubSignIn),
+        responses(
+            (status = 302, description = "To the identity provider.", headers(
+                ("Location" = String, description = "The provider's authorization URL."),
+                ("Set-Cookie" = String, description = "`rewind_oauth`."),
+            )),
+        )
+    )]
+    pub(super) fn sign_in_with_github() {}
+
+    /// The identity provider's redirect
+    ///
+    /// Checks `state`, exchanges the code, keeps the outcome in the session cookie, and
+    /// redirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.
+    #[utoipa::path(
+        get, path = "/auth/callback", tag = "auth", operation_id = "authCallback",
+        security(()),
+        params(Callback),
+        responses(
+            (status = 302, description = "To the dashboard, `/#/`, whatever the outcome.", headers(
+                ("Location" = String, description = "`/#/`."),
+                ("Set-Cookie" = String, description = "`rewind_session`; `rewind_oauth` cleared."),
+            )),
+        )
+    )]
+    pub(super) fn auth_callback() {}
+
+    /// Send a code by email
+    ///
+    /// A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the
+    /// email has an account or not.
+    #[utoipa::path(
+        post, path = "/auth/magic-auth", tag = "auth", operation_id = "sendMagicCode",
+        security(()),
+        request_body = MagicAuthRequest,
+        responses(
+            (status = 202, description = "Sent."),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn send_magic_code() {}
+
+    /// Sign in with the code
+    #[utoipa::path(
+        post, path = "/auth/magic-auth/verify", tag = "auth", operation_id = "verifyMagicCode",
+        security(()),
+        request_body = MagicAuthVerification,
+        responses(
+            (status = 200, description = "Where the sign-in stands; the session is in the cookie.", body = AuthState, headers(
+                ("Set-Cookie" = String, description = "`rewind_session`."),
+            )),
+            (status = 400, description = "The code is wrong or expired, or the invitation unknown (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn verify_magic_code() {}
+
+    /// Verify the email
+    ///
+    /// The code sent after `email_verification_required`.
+    #[utoipa::path(
+        post, path = "/auth/email-verification", tag = "auth", operation_id = "verifyEmail",
+        security(("session" = [])),
+        request_body = EmailVerification,
+        responses(
+            (status = 200, description = "Where the sign-in stands.", body = AuthState),
+            (status = 400, description = "The code is wrong or expired (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn verify_email() {}
+
+    /// Choose an organization
+    ///
+    /// After `organization_selection_required`.
+    #[utoipa::path(
+        post, path = "/auth/organization", tag = "auth", operation_id = "selectOrganization",
+        security(("session" = [])),
+        request_body = OrganizationSelection,
+        responses(
+            (status = 200, description = "Where the sign-in stands.", body = AuthState),
+            (status = 403, description = "The user is not a member of this organization (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn select_organization() {}
+
+    /// The session
+    ///
+    /// A valid access token, refreshed when less than a minute is left; with `organizationId`,
+    /// for that organization. A member's first session in an organization writes their grant:
+    /// the pending grant of the invitation they accepted, else the organization's default role.
+    #[utoipa::path(
+        post, path = "/auth/session", tag = "auth", operation_id = "getSession",
+        security(("session" = [])),
+        request_body = SessionRequest,
+        responses(
+            (status = 200, description = "Where the sign-in stands.", body = AuthState),
+            (status = 403, description = "The user is not a member of this organization (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_session() {}
+
+    /// Join the waitlist
+    ///
+    /// Sign-ups are closed: the operator's approval sends an invitation.
+    #[utoipa::path(
+        post, path = "/auth/waitlist", tag = "auth", operation_id = "joinWaitlist",
+        security(()),
+        request_body = WaitlistRequest,
+        responses(
+            (status = 202, description = "On the waitlist."),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn join_waitlist() {}
+
+    /// Sign out
+    ///
+    /// Revokes the session in the identity provider and clears the cookie.
+    #[utoipa::path(
+        post, path = "/auth/logout", tag = "auth", operation_id = "signOut",
+        security(("session" = [])),
+        responses(
+            (status = 204, description = "Signed out.", headers(
+                ("Set-Cookie" = String, description = "`rewind_session`, cleared."),
+            )),
+        )
+    )]
+    pub(super) fn sign_out() {}
 }
 
 #[cfg(test)]

@@ -1,18 +1,20 @@
-//! Authentication and scopes (`archi/06-storage-and-scale.md`, "Tenancy and authentication").
+//! Authentication and access (`archi/06-storage-and-scale.md`, "Tenancy, identity and access").
 //!
 //! Every request to `/v1` carries an API key as a Bearer token, `rewind_sk_…`. The store keeps
 //! the SHA-256 of keys, never a key. A key has a tenant, which scopes everything it sees, a
-//! role, which says which endpoints it may call, and optionally allowed labels: it then only
-//! sees the runs carrying them.
+//! role, whose permissions (`rewind_api::access`) say which endpoints it may call, and
+//! optionally allowed labels: it then only sees the runs carrying them.
 //!
 //! | Role | May call |
 //! | --- | --- |
-//! | `admin` | everything, and the API keys of every tenant |
-//! | `harness` | everything of its tenant but the API keys |
+//! | `operator` | everything, and the API keys of every tenant |
+//! | `owner`, `harness` | everything of its tenant but the API keys |
 //! | `worker` | the host-tool task endpoints |
 //! | `reader` | the `GET` endpoints of its tenant |
 //!
-//! The embedded server's socket takes no key: its one tenant is `local`, with the `admin` role.
+//! A key stored with the role `admin`, the operator's before roles became data, is the
+//! operator's. The embedded server's socket takes no key: its one tenant is `local`, with the
+//! role `operator`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,7 +25,7 @@ use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
-use rewind_api::admin::Role;
+use rewind_api::access::{OPERATOR, Permission, fixed_permissions};
 use rewind_api::headers::API_KEY_PREFIX;
 use rewind_core::Digest;
 use rewind_engine::ports::{JournalStore, TenantId};
@@ -31,11 +33,15 @@ use rewind_engine::ports::{JournalStore, TenantId};
 use crate::app::App;
 use crate::error::ApiError;
 
+/// The role the operator's key had before roles became data.
+const FORMER_OPERATOR: &str = "admin";
+
 /// Who calls: the key's tenant, role and allowed labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Caller {
     pub(crate) tenant: TenantId,
-    pub(crate) role: Role,
+    /// A built-in role, or `operator`. Any other role gives no permission.
+    pub(crate) role: String,
     /// Not empty: the caller only sees the runs carrying all of these labels.
     pub(crate) labels: BTreeMap<String, String>,
     /// The key's id, the hex of its hash; `None` over the embedded server's socket.
@@ -45,13 +51,15 @@ pub(crate) struct Caller {
 /// What an endpoint requires.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Access {
-    /// Reading the tenant's data: `admin`, `harness`, `reader`.
+    /// Reading the tenant's data: `runs:read`, which `reader`, `harness`, `owner` and the
+    /// operator hold.
     Read,
-    /// Changing the tenant's data: `admin`, `harness`.
+    /// Changing the tenant's data: `runs:start`, which `harness`, `owner` and the operator hold.
     Write,
-    /// The host-tool task endpoints: `admin`, `harness`, `worker`.
+    /// The host-tool task endpoints: `tasks:work`, which `worker`, `harness`, `owner` and the
+    /// operator hold.
     Tasks,
-    /// API keys: `admin`.
+    /// API keys: the operator.
     Admin,
 }
 
@@ -60,32 +68,43 @@ impl Caller {
     pub(crate) fn local() -> Self {
         Self {
             tenant: TenantId::local(),
-            role: Role::Admin,
+            role: OPERATOR.to_owned(),
             labels: BTreeMap::new(),
             key_id: None,
         }
     }
 
+    /// Whether the caller is the deployment's operator.
+    pub(crate) fn operator(&self) -> bool {
+        self.role == OPERATOR
+    }
+
+    /// The permissions of the caller's role, in the catalog's order.
+    pub(crate) fn permissions(&self) -> &'static [Permission] {
+        fixed_permissions(&self.role).unwrap_or(&[])
+    }
+
     /// Refuses the request (403) unless the role allows it.
     pub(crate) fn allow(&self, access: Access) -> Result<(), ApiError> {
+        let holds = |permission| self.permissions().contains(&permission);
         let allowed = match access {
-            Access::Read => matches!(self.role, Role::Admin | Role::Harness | Role::Reader),
-            Access::Write => matches!(self.role, Role::Admin | Role::Harness),
-            Access::Tasks => matches!(self.role, Role::Admin | Role::Harness | Role::Worker),
-            Access::Admin => self.role == Role::Admin,
+            Access::Read => holds(Permission::RunsRead),
+            Access::Write => holds(Permission::RunsStart),
+            Access::Tasks => holds(Permission::TasksWork),
+            Access::Admin => self.operator(),
         };
         if allowed {
             return Ok(());
         }
         let needs = match access {
-            Access::Read => "a key with the role reader, harness or admin",
-            Access::Write => "a key with the role harness or admin",
-            Access::Tasks => "a key with the role worker, harness or admin",
-            Access::Admin => "a key with the role admin",
+            Access::Read => "a key with the role reader, harness, owner or operator",
+            Access::Write => "a key with the role harness, owner or operator",
+            Access::Tasks => "a key with the role worker, harness, owner or operator",
+            Access::Admin => "the operator's key",
         };
         Err(ApiError::forbidden(format!(
             "this key has the role {}: this request needs {needs}",
-            self.role.as_str()
+            self.role
         )))
     }
 
@@ -191,9 +210,10 @@ async fn caller(app: &App, headers: &axum::http::HeaderMap) -> Result<Caller, Ap
     let Some(stored) = stored.filter(|stored| stored.revoked_at.is_none()) else {
         return Err(unauthorized("this API key is unknown or revoked"));
     };
-    let role = Role::parse(&stored.role).ok_or_else(|| {
-        ApiError::internal(format!("the key {} has an unknown role", hash.short()))
-    })?;
+    let role = match stored.role.as_str() {
+        FORMER_OPERATOR => OPERATOR.to_owned(),
+        _ => stored.role,
+    };
     Ok(Caller {
         tenant: stored.tenant,
         role,
@@ -217,19 +237,31 @@ mod tests {
     #[test]
     fn roles_allow_their_endpoints() {
         let reader = Caller {
-            role: Role::Reader,
+            role: "reader".into(),
             ..Caller::local()
         };
         assert!(reader.allow(Access::Read).is_ok());
         assert!(reader.allow(Access::Write).is_err());
         assert!(reader.allow(Access::Tasks).is_err());
         let worker = Caller {
-            role: Role::Worker,
+            role: "worker".into(),
             ..Caller::local()
         };
         assert!(worker.allow(Access::Tasks).is_ok());
         assert!(worker.allow(Access::Read).is_err());
+        let harness = Caller {
+            role: "harness".into(),
+            ..Caller::local()
+        };
+        assert!(harness.allow(Access::Write).is_ok());
+        assert!(harness.allow(Access::Tasks).is_ok());
+        assert!(harness.allow(Access::Admin).is_err());
         assert!(Caller::local().allow(Access::Admin).is_ok());
+        let unknown = Caller {
+            role: "gone".into(),
+            ..Caller::local()
+        };
+        assert!(unknown.allow(Access::Read).is_err(), "no permission");
     }
 
     #[test]

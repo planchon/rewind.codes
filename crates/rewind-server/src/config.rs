@@ -114,8 +114,8 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_MASTER_KEY", hide_env_values = true)]
     pub master_key: Option<String>,
 
-    /// An API key (`rewind_sk_…`) with the role `admin`, registered at start: the first key, from
-    /// which the others are made with `POST /v1/api-keys`.
+    /// An API key (`rewind_sk_…`) with the role `operator`, registered at start: the first key,
+    /// from which the others are made with `POST /v1/api-keys`.
     #[arg(long, env = "REWIND_ADMIN_KEY", hide_env_values = true)]
     pub admin_key: Option<String>,
 

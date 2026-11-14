@@ -52,7 +52,7 @@ struct RunArgs {
     #[arg(long, env = "REWIND_URL", default_value = "http://localhost:8080")]
     url: String,
 
-    /// An API key with the role `admin`: the load makes its own keys with it.
+    /// An API key with the role `operator`: the load makes its own keys with it.
     #[arg(long, env = "REWIND_ADMIN_KEY", hide_env_values = true)]
     admin_key: String,
 

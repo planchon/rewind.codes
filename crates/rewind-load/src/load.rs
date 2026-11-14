@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rewind_api::Client;
-use rewind_api::admin::{CreateApiKey, Role};
+use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::reading::ToolStatsFilter;
@@ -136,8 +136,8 @@ pub(crate) async fn run(
     interrupt: CancellationToken,
 ) -> Result<Report, Error> {
     wait_until_ready(admin).await?;
-    let harness = key(admin, base_url, &settings.tenant, Role::Harness).await?;
-    let worker = key(admin, base_url, &settings.tenant, Role::Worker).await?;
+    let harness = key(admin, base_url, &settings.tenant, BuiltInRole::Harness).await?;
+    let worker = key(admin, base_url, &settings.tenant, BuiltInRole::Worker).await?;
     let toolset = harness
         .create_toolset(&toolset(&settings.mcp_url))
         .await
@@ -280,13 +280,18 @@ async fn wait_until_ready(admin: &Client) -> Result<(), Error> {
     }
 }
 
-async fn key(admin: &Client, base_url: &str, tenant: &str, role: Role) -> Result<Client, Error> {
+async fn key(
+    admin: &Client,
+    base_url: &str,
+    tenant: &str,
+    role: BuiltInRole,
+) -> Result<Client, Error> {
     let key = admin
         .create_api_key(&CreateApiKey {
-            tenant: tenant.to_owned(),
-            role,
+            tenant: Some(tenant.to_owned()),
+            name: "rewind-load".into(),
+            role: role.as_str().to_owned(),
             allowed_labels: Labels::new(),
-            name: Some("rewind-load".into()),
         })
         .await?;
     Ok(Client::remote(base_url, key.key.as_deref())?)

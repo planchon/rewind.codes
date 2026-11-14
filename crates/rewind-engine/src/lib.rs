@@ -15,11 +15,11 @@
 //! - [`retention`]: archives, deletion, payload cleanup.
 //! - [`mock`]: mock mode: cassettes, mocks, and scenarios run in virtual time.
 //! - [`trace`]: the LLM trace of a run.
-//! - [`adapters`]: in-memory storage, read model, secrets, telemetry and webhooks; static tool
-//!   responses and type-checking; system and virtual time; system and seeded entropy. With a
-//!   virtual clock they make mock mode and the test harness.
-//! - `conformance` (feature): the five suites every adapter of `JournalStore`, `BlobStore`,
-//!   `ReadModel`, `SecretStore` and `SpanExporter` must pass.
+//! - [`adapters`]: in-memory storage, access, read model, secrets, telemetry and webhooks; a
+//!   fake identity provider; static tool responses and type-checking; system and virtual time;
+//!   system and seeded entropy. With a virtual clock they make mock mode and the test harness.
+//! - `conformance` (feature): the suites every adapter of `JournalStore`, `AccessStore`,
+//!   `BlobStore`, `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
 //!
 //! The engine is deterministic given its ports. Service telemetry (spans, logs and measurements)
 //! goes through the `tracing` facade; what a script did is recorded in the journal, never

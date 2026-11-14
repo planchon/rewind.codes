@@ -397,7 +397,10 @@ describe("the client", () => {
       .on(
         "POST",
         "/v1/api-keys",
-        json({ id: "k1", key: "rewind_sk_new", role: "worker", tenant: "t", allowedLabels: {}, createdAt: "t" }, 201),
+        json(
+          { id: "k1", key: "rewind_sk_new", name: "w", role: "worker", tenant: "t", allowedLabels: {}, createdAt: "t" },
+          201,
+        ),
       )
       .on("DELETE", "/v1/api-keys/{id}", noContent)
       .on("GET", "/v1/tools/stats", json({ since: "a", until: "b", tools: [] }))
@@ -405,7 +408,7 @@ describe("the client", () => {
     expect((await rewind.subscriptions.create({ url: "https://h", events: ["run.completed"] })).secret).toBe("whsec_x");
     expect(await rewind.subscriptions.list()).toHaveLength(1);
     await rewind.subscriptions.delete("s1");
-    expect((await rewind.apiKeys.create({ role: "worker", tenant: "t" })).key).toBe("rewind_sk_new");
+    expect((await rewind.apiKeys.create({ name: "w", role: "worker", tenant: "t" })).key).toBe("rewind_sk_new");
     await rewind.apiKeys.revoke("k1");
     await rewind.tools.stats({ tool: "github.list_issues", since: "2026-11-11T00:00:00Z" });
     expect(server.calls("GET", "/v1/tools/stats")[0]?.query.get("tool")).toBe("github.list_issues");

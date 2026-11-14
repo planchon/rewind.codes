@@ -8,7 +8,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use clap::Parser;
 use rewind_api::Client;
-use rewind_api::admin::{CreateApiKey, Role};
+use rewind_api::access::{BuiltInRole, CreateApiKey};
 use rewind_api::common::Labels;
 use rewind_server::{Running, ServerArgs};
 
@@ -84,18 +84,23 @@ impl TestServer {
     }
 
     /// A key of the tenant `acme` with this role.
-    pub(crate) async fn key(&self, role: Role, labels: &[(&str, &str)]) -> Client {
+    pub(crate) async fn key(&self, role: BuiltInRole, labels: &[(&str, &str)]) -> Client {
         self.key_of("acme", role, labels).await
     }
 
-    pub(crate) async fn key_of(&self, tenant: &str, role: Role, labels: &[(&str, &str)]) -> Client {
+    pub(crate) async fn key_of(
+        &self,
+        tenant: &str,
+        role: BuiltInRole,
+        labels: &[(&str, &str)],
+    ) -> Client {
         let key = self
             .admin
             .create_api_key(&CreateApiKey {
-                tenant: tenant.into(),
-                role,
+                tenant: Some(tenant.into()),
+                name: "test".into(),
+                role: role.as_str().into(),
                 allowed_labels: labels.iter().copied().collect::<Labels>(),
-                name: Some("test".into()),
             })
             .await
             .unwrap();
@@ -142,8 +147,8 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
     use rewind_api::tasks::{CompleteTask, DeferTask, FailTask, RejectTask, TaskQuery};
     use serde_json::json;
 
-    let harness = server.key(Role::Harness, &[]).await;
-    let worker = server.key(Role::Worker, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let worker = server.key(BuiltInRole::Worker, &[]).await;
     let answer = |error: rewind_api::Error| {
         let problem = error
             .problem()

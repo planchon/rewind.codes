@@ -6,8 +6,10 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use rewind_api::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
+use rewind_api::access::{ApiKey, CreateApiKey, Grant, fixed_permissions};
+use rewind_api::admin::ServerInfo;
 use rewind_api::common::{Labels, timestamp};
+use rewind_api::organization::{Identity, Principal};
 use rewind_core::Digest;
 use rewind_engine::ports::{JournalStore, Tenant, TenantId};
 use rewind_engine::text::refuse_nul_in_labels;
@@ -17,16 +19,26 @@ use crate::auth::{Access, Caller, key_hash, new_key};
 use crate::error::ApiError;
 use crate::extract::Body;
 
-/// `POST /v1/api-keys`: a key for a tenant, created with its first key. The key itself is only
-/// in this answer.
+/// `POST /v1/api-keys`: a key for a tenant, the caller's unless it names another, created with
+/// its first key. The key itself is only in this answer.
 pub(super) async fn create_key(
     State(app): State<Arc<App>>,
     caller: Caller,
     Body(request): Body<CreateApiKey>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Admin)?;
-    let tenant =
-        TenantId::new(request.tenant).map_err(|error| ApiError::invalid(error.to_string()))?;
+    let tenant = match request.tenant {
+        Some(tenant) => {
+            TenantId::new(tenant).map_err(|error| ApiError::invalid(error.to_string()))?
+        }
+        None => caller.tenant.clone(),
+    };
+    if fixed_permissions(&request.role).is_none() {
+        return Err(ApiError::invalid(format!(
+            "role: unknown role {:?}: expected owner, harness, worker, reader or operator",
+            request.role
+        )));
+    }
     refuse_nul_in_labels(&request.allowed_labels.0)?;
     ensure_tenant(&app, &tenant).await?;
     let key = new_key()?;
@@ -36,7 +48,7 @@ pub(super) async fn create_key(
         .put_api_key(&rewind_engine::ports::ApiKey {
             hash,
             tenant: tenant.clone(),
-            role: request.role.as_str().to_owned(),
+            role: request.role.clone(),
             allowed_labels: request.allowed_labels.0.clone(),
             created_at,
             revoked_at: None,
@@ -45,10 +57,12 @@ pub(super) async fn create_key(
     let key = ApiKey {
         id: hash.to_hex(),
         tenant: tenant.as_str().to_owned(),
+        name: request.name,
         role: request.role,
         allowed_labels: request.allowed_labels,
-        name: request.name,
+        created_by: caller.key_id.as_ref().map(|id| format!("key:{id}")),
         created_at: timestamp(created_at),
+        revoked_at: None,
         key: Some(key),
     };
     Ok((StatusCode::CREATED, Json(key)).into_response())
@@ -87,10 +101,18 @@ pub(super) async fn revoke_key(
 /// `GET /v1/whoami`.
 pub(super) async fn whoami(caller: Caller) -> Json<Identity> {
     Json(Identity {
-        tenant: caller.tenant.as_str().to_owned(),
-        role: caller.role,
-        allowed_labels: Labels::from(caller.labels),
-        key_id: caller.key_id,
+        tenant: Some(caller.tenant.as_str().to_owned()),
+        principal: caller.key_id.clone().map(|id| Principal::Key { id }),
+        permissions: caller.permissions().to_vec(),
+        operator: caller.operator(),
+        grant: Some(Grant {
+            role: caller.role,
+            allowed_labels: Labels::from(caller.labels),
+            granted_by: None,
+            granted_at: None,
+        }),
+        organization: None,
+        organizations: Vec::new(),
     })
 }
 

@@ -4,6 +4,208 @@
  */
 
 export interface paths {
+    "/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The identity provider's redirect
+         * @description Checks `state`, exchanges the code, keeps the outcome in the session cookie, and
+         *     redirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.
+         */
+        get: operations["authCallback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How to sign in
+         * @description The sign-in methods, and whether sign-ups go through the waitlist.
+         */
+        get: operations["getAuthConfig"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/email-verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify the email
+         * @description The code sent after `email_verification_required`.
+         */
+        post: operations["verifyEmail"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/github": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sign in with GitHub
+         * @description Redirects to the identity provider, with a random `state` and the page's invitation
+         *     token kept in the cookie `rewind_oauth` for 5 minutes.
+         */
+        get: operations["signInWithGithub"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign out
+         * @description Revokes the session in the identity provider and clears the cookie.
+         */
+        post: operations["signOut"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/magic-auth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a code by email
+         * @description A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the
+         *     email has an account or not.
+         */
+        post: operations["sendMagicCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/magic-auth/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign in with the code */
+        post: operations["verifyMagicCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/organization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Choose an organization
+         * @description After `organization_selection_required`.
+         */
+        post: operations["selectOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * The session
+         * @description A valid access token, refreshed when less than a minute is left; with `organizationId`,
+         *     for that organization. A member's first session in an organization writes their grant:
+         *     the pending grant of the invitation they accepted, else the organization's default role.
+         */
+        post: operations["getSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Join the waitlist
+         * @description Sign-ups are closed: the operator's approval sends an invitation.
+         */
+        post: operations["joinWaitlist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/hooks/{token}": {
         parameters: {
             query?: never;
@@ -34,9 +236,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List the API keys
+         * @description The tenant's keys, without their secret, each with its role and allowed labels.
+         *     Requires `api_keys:read`.
+         */
+        get: operations["listApiKeys"];
         put?: never;
-        /** Create an API key */
+        /**
+         * Create an API key
+         * @description With a name, a role and allowed labels. The operator may name another tenant. Requires
+         *     `api_keys:write`, and every permission of the role given.
+         */
         post: operations["createApiKey"];
         delete?: never;
         options?: never;
@@ -54,7 +265,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Revoke an API key */
+        /**
+         * Revoke an API key
+         * @description Requires `api_keys:write`.
+         */
         delete: operations["revokeApiKey"];
         options?: never;
         head?: never;
@@ -82,6 +296,217 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The invitations sent to the caller
+         * @description The pending invitations to the caller's email, with their organizations. For a member,
+         *     even without organization.
+         */
+        get: operations["listMyInvitations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/invitations/{id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept an invitation
+         * @description Joins the invitation's organization; its pending grant becomes the caller's. Switch to
+         *     the organization with `POST /auth/session`. For a member, even without organization.
+         */
+        post: operations["acceptInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change the organization
+         * @description Its name and its default role. Requires `organization:write`.
+         */
+        patch: operations["updateOrganization"];
+        trace?: never;
+    };
+    "/v1/organization/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the organization's invitations
+         * @description Each with its pending grant. Requires `members:read`.
+         */
+        get: operations["listInvitations"];
+        put?: never;
+        /**
+         * Invite someone
+         * @description The invitation by email, and its pending grant, which the invitee gets on accepting it.
+         *     Requires `members:invite`, and every permission of the role given.
+         */
+        post: operations["createInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/invitations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke an invitation
+         * @description And delete its pending grant. Requires `members:invite`.
+         */
+        delete: operations["revokeInvitation"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/invitations/{id}/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send an invitation again
+         * @description Requires `members:invite`.
+         */
+        post: operations["resendInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the members
+         * @description The organization's memberships, each with its grant. Requires `members:read`.
+         */
+        get: operations["listMembers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/members/{user}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove a member
+         * @description Deletes the member's grant, then their membership. Requires `members:manage`, and every
+         *     permission of the member's role.
+         */
+        delete: operations["removeMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/members/{user}/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set a member's grant
+         * @description Their role and allowed labels. Requires `members:manage`, and every permission of the
+         *     role given and of the member's current role.
+         */
+        put: operations["setMemberGrant"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create an organization
+         * @description For a member, even without organization: the organization in the identity provider with
+         *     the caller as a member, then its tenant and the caller's `owner` grant. Switch to it with
+         *     `POST /auth/session`.
+         */
+        post: operations["createOrganization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/payloads/{digest}": {
         parameters: {
             query?: never;
@@ -94,6 +519,73 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The catalog of permissions
+         * @description Every permission, with what it lets the caller do. Any caller.
+         */
+        get: operations["listPermissions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the roles
+         * @description The built-in roles, then the organization's own, with their permissions. Requires
+         *     `roles:read`.
+         */
+        get: operations["listRoles"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/roles/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Create or change a role
+         * @description A role of the organization: its name is 1 to 64 lowercase letters, digits, `-` and `_`,
+         *     and never a built-in name or `operator`. A change applies at once to every principal
+         *     holding the role. Requires `roles:write`, and every permission the role gives.
+         */
+        put: operations["putRole"];
+        post?: never;
+        /**
+         * Delete a role
+         * @description Only a role no grant points to. Requires `roles:write`.
+         */
+        delete: operations["deleteRole"];
         options?: never;
         head?: never;
         patch?: never;
@@ -417,7 +909,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** What this server is */
+        /**
+         * What this server is
+         * @description Any caller.
+         */
         get: operations["getServer"];
         put?: never;
         post?: never;
@@ -439,7 +934,8 @@ export interface paths {
         /**
          * Stop the embedded server
          * @description Only the embedded server stops this way, once its calls in flight are committed: the
-         *     CLI uses it to replace a server of another version. Other servers answer 403.
+         *     CLI uses it to replace a server of another version. Other servers answer 403. Only the
+         *     operator.
          */
         post: operations["stopServer"];
         delete?: never;
@@ -742,9 +1238,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Who the API key is
-         * @description Its tenant, role and allowed labels. Over the embedded server's socket: the tenant
-         *     `local`, role `admin`.
+         * Who calls
+         * @description The tenant, the principal (an API key, or a member with their email, name and picture),
+         *     the grant, and the permissions it holds; for a member, the organization of the session
+         *     and every organization of the user. Over the embedded server's socket: the operator of
+         *     the tenant `local`. Any caller, even a member without organization.
          */
         get: operations["whoami"];
         put?: never;
@@ -927,20 +1425,74 @@ export interface components {
             kind: components["schemas"]["AbortKind"];
             message: string;
         };
+        /** @description An API key, without its secret but in the answer to its creation. */
         ApiKey: {
+            /** @description The allowed labels of the key's grant. */
             allowedLabels: components["schemas"]["Labels"];
             /** Format: date-time */
             createdAt: string;
-            /** @description For `DELETE /v1/api-keys/{id}`. Not a secret. */
+            /**
+             * @description The principal who created it: `user:<id>` or `key:<id>`. Absent for the operator's key
+             *     given at start.
+             */
+            createdBy?: string | null;
+            /** @description For `DELETE /v1/api-keys/{id}`: the hex of the key's SHA-256. Not a secret. */
             id: string;
             /**
              * @description The key, `rewind_sk_…`, to send as `Authorization: Bearer rewind_sk_…`. Only in the answer
              *     to `POST /v1/api-keys`.
              */
             key?: string | null;
-            name?: string | null;
-            role: components["schemas"]["Role"];
+            name: string;
+            /** Format: date-time */
+            revokedAt?: string | null;
+            /** @description The role of the key's grant. */
+            role: string;
             tenant: string;
+        };
+        /** @description `GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first. */
+        ApiKeyList: {
+            keys: components["schemas"]["ApiKey"][];
+        };
+        /** @description `GET /auth/config`: how to sign in on this server. */
+        AuthConfig: {
+            methods: components["schemas"]["SignInMethod"][];
+            /**
+             * @description Sign-ups are closed: someone without an account nor an invitation joins the waitlist
+             *     (`POST /auth/waitlist`).
+             */
+            waitlist: boolean;
+        };
+        /** @description Where a sign-in stands. */
+        AuthState: {
+            accessToken: string;
+            /**
+             * Format: date-time
+             * @description Ask `POST /auth/session` again before then: it refreshes a token with less than a
+             *     minute left.
+             */
+            expiresAt: string;
+            /**
+             * @description The organization of the session, the tenant `/v1` acts in. Absent without one:
+             *     create one, or accept an invitation.
+             */
+            organizationId?: string | null;
+            /** @enum {string} */
+            status: "authenticated";
+            user: components["schemas"]["User"];
+        } | {
+            organizations: components["schemas"]["Organization"][];
+            /** @enum {string} */
+            status: "organization_selection_required";
+            user: components["schemas"]["User"];
+        } | {
+            email: string;
+            /** @enum {string} */
+            status: "email_verification_required";
+        } | {
+            email?: string | null;
+            /** @enum {string} */
+            status: "sign_up_closed";
         };
         /** @description How many times a tool call was sent. */
         CallAttempts: {
@@ -994,8 +1546,8 @@ export interface components {
             result: unknown;
         };
         /**
-         * @description `POST /v1/api-keys`: a key `rewind_sk_…` for a tenant. Keys are stored hashed: the key itself
-         *     is only in this answer.
+         * @description `POST /v1/api-keys`: a key `rewind_sk_…`, with its grant. Keys are stored hashed: the key
+         *     itself is only in the answer. Creating a key needs every permission of its role.
          */
         CreateApiKey: {
             /**
@@ -1003,11 +1555,28 @@ export interface components {
              *     conversation's runs.
              */
             allowedLabels?: components["schemas"]["Labels"];
-            /** @description What the key is for, for the operator. */
-            name?: string | null;
-            role: components["schemas"]["Role"];
-            /** @description Created with its first key. */
-            tenant: string;
+            /** @description What the key is for. */
+            name: string;
+            /** @description A built-in role, a role of the tenant, or `operator` (only from the operator). */
+            role: string;
+            /**
+             * @description Another tenant than the caller's: only the operator names one, and the tenant is
+             *     created with its first key.
+             */
+            tenant?: string | null;
+        };
+        /**
+         * @description `POST /v1/organization/invitations`: invites an email with a role and allowed labels.
+         *     Inviting needs every permission of the role given.
+         */
+        CreateInvitation: {
+            allowedLabels?: components["schemas"]["Labels"];
+            email: string;
+            role: string;
+        };
+        /** @description `POST /v1/organizations`: a new organization, whose creator is its `owner`. */
+        CreateOrganization: {
+            name: string;
         };
         /** @description `POST /v1/subscriptions`: send these lifecycle events to `url`. */
         CreateSubscription: {
@@ -1161,6 +1730,13 @@ export interface components {
             p95: number;
             /** Format: int64 */
             p99: number;
+        };
+        /**
+         * @description `POST /auth/email-verification`: the code sent to verify the email, after
+         *     `email_verification_required`.
+         */
+        EmailVerification: {
+            code: string;
         };
         /** @description One journal entry. */
         Entry: {
@@ -1420,6 +1996,26 @@ export interface components {
             ttl?: components["schemas"]["Duration"] | null;
             wait?: components["schemas"]["Duration"] | null;
         };
+        /** @description What a principal holds in a tenant: a role, and optionally allowed labels. */
+        Grant: {
+            /** @description The principal only sees the runs carrying all these labels, and cannot administer. */
+            allowedLabels?: components["schemas"]["Labels"];
+            /**
+             * Format: date-time
+             * @description Absent for the operator.
+             */
+            grantedAt?: string | null;
+            /**
+             * @description The principal who gave it: `user:<id>` or `key:<id>`. Absent for the grants the server
+             *     gives (an organization's creator, a member's default role, the operator).
+             */
+            grantedBy?: string | null;
+            /**
+             * @description A built-in role, an organization's own, or `operator`. A grant whose role no longer
+             *     exists gives no permission.
+             */
+            role: string;
+        };
         /** @description `POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task. */
         HeartbeatAck: {
             /**
@@ -1453,17 +2049,46 @@ export interface components {
             policy?: components["schemas"]["ToolPolicy"] | null;
         };
         /**
-         * @description `GET /v1/whoami`: who the API key is. Over the embedded server's socket, which takes no
-         *     key: the tenant `local`, with the role `admin`.
+         * @description `GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which
+         *     takes no token: the operator of the tenant `local`.
          */
         Identity: {
-            /** @description The key only sees runs carrying all these labels. */
-            allowedLabels: components["schemas"]["Labels"];
-            /** @description The key's id (`DELETE /v1/api-keys/{id}`); absent without a key. */
-            keyId?: string | null;
-            role: components["schemas"]["Role"];
-            tenant: string;
+            grant?: components["schemas"]["Grant"] | null;
+            /** @description The deployment's operator: every permission in its tenant, and the keys of every tenant. */
+            operator: boolean;
+            organization?: components["schemas"]["OrganizationSettings"] | null;
+            /** @description For a member: every organization they belong to. */
+            organizations?: components["schemas"]["Organization"][];
+            /** @description What the grant's role allows, in the catalog's order. */
+            permissions: components["schemas"]["Permission"][];
+            principal?: components["schemas"]["Principal"] | null;
+            /**
+             * @description The tenant the caller acts in. Absent for a member signed in without an organization,
+             *     who reaches only the onboarding endpoints.
+             */
+            tenant?: string | null;
         };
+        /** @description An invitation sent by email, with the grant its invitee gets on accepting it. */
+        Invitation: {
+            /** Format: date-time */
+            createdAt: string;
+            email: string;
+            /** Format: date-time */
+            expiresAt: string;
+            grant?: components["schemas"]["Grant"] | null;
+            /** @description `invitation_01J…`. */
+            id: string;
+            /** @description The id of the member who invited. */
+            inviter?: string | null;
+            organization?: components["schemas"]["Organization"] | null;
+            state: components["schemas"]["InvitationState"];
+        };
+        /** @description `GET /v1/invitations` (sent to the caller) and `GET /v1/organization/invitations`. */
+        InvitationList: {
+            invitations: components["schemas"]["Invitation"][];
+        };
+        /** @enum {string} */
+        InvitationState: "pending" | "accepted" | "expired" | "revoked";
         LabelFacet: {
             key: string;
             /**
@@ -1516,6 +2141,18 @@ export interface components {
             level: components["schemas"]["LogLevel"];
             message: string;
         };
+        /** @description `POST /auth/magic-auth`: sends a 6-digit code to the email. */
+        MagicAuthRequest: {
+            email: string;
+            /** @description The token of the invitation the page was opened with. */
+            invitationToken?: string | null;
+        };
+        /** @description `POST /auth/magic-auth/verify`: the code received by email. */
+        MagicAuthVerification: {
+            code: string;
+            email: string;
+            invitationToken?: string | null;
+        };
         /**
          * @description An MCP server: exactly one of `url` (streamable HTTP) and `command` (stdio).
          *
@@ -1550,11 +2187,43 @@ export interface components {
         };
         /** @enum {string} */
         McpTransport: "http" | "stdio";
+        /** @description A member of the organization, with their grant. */
+        Member: {
+            grant?: components["schemas"]["Grant"] | null;
+            status: components["schemas"]["MembershipStatus"];
+            user: components["schemas"]["User"];
+        };
+        /** @description `GET /v1/organization/members`. */
+        MemberList: {
+            members: components["schemas"]["Member"][];
+        };
+        /** @enum {string} */
+        MembershipStatus: "active" | "pending" | "inactive";
         /**
          * @description After an interruption (the dispatcher or the worker died mid-call).
          * @enum {string}
          */
         OnInterruption: "retry" | "at_most_once";
+        /** @description An organization: a tenant, with the same id. */
+        Organization: {
+            /** @description `org_01J…`, also the tenant's id. */
+            id: string;
+            name: string;
+        };
+        /**
+         * @description `POST /auth/organization`: the organization chosen, after
+         *     `organization_selection_required`.
+         */
+        OrganizationSelection: {
+            organizationId: string;
+        };
+        /** @description The organization of the caller's session, with its settings. */
+        OrganizationSettings: {
+            /** @description The role a member gets at their first session, without an invitation's grant. */
+            defaultRole: string;
+            id: string;
+            name: string;
+        };
         /**
          * @description Why a task is parked.
          * @enum {string}
@@ -1579,6 +2248,31 @@ export interface components {
              *     (`PAYLOAD_VALUE_LIMIT`, 256 KiB): read it with `GET /v1/payloads/{digest}`.
              */
             value?: unknown;
+        };
+        /**
+         * @description A kind of action. Every endpoint requires one; a role is a set of them.
+         * @enum {string}
+         */
+        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "credentials:write" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write";
+        /** @description A permission of the catalog, with what it lets the caller do. */
+        PermissionInfo: {
+            description: string;
+            permission: components["schemas"]["Permission"];
+        };
+        /** @description `GET /v1/permissions`: the catalog. */
+        PermissionList: {
+            permissions: components["schemas"]["PermissionInfo"][];
+        };
+        /** @description Who calls. */
+        Principal: {
+            /** @description The key's id (`DELETE /v1/api-keys/{id}`). */
+            id: string;
+            /** @enum {string} */
+            kind: "key";
+        } | {
+            /** @enum {string} */
+            kind: "user";
+            user: components["schemas"]["User"];
         };
         /**
          * @description An error answered by the API, as `application/problem+json` (RFC 9457).
@@ -1607,6 +2301,14 @@ export interface components {
             /** @description Identifies the kind of problem: `urn:rewind:problem:<slug>`. */
             type: string;
         };
+        /**
+         * @description `PUT /v1/roles/{name}`: creates or changes a role of the organization. Writing a role needs
+         *     every permission it gives. A change applies at once to every principal holding the role.
+         */
+        PutRole: {
+            description?: string;
+            permissions: components["schemas"]["Permission"][];
+        };
         /** @description Why a run is quarantined (`archi/03-execution.md`, "Non-determinism and quarantine"). */
         Quarantine: {
             cause: components["schemas"]["QuarantineCause"];
@@ -1627,11 +2329,28 @@ export interface components {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
             message?: string | null;
         };
-        /**
-         * @description What a key may call. The key's tenant scopes everything it sees.
-         * @enum {string}
-         */
-        Role: "admin" | "harness" | "worker" | "reader";
+        /** @description A role: one of the four built-in roles, or the organization's own. */
+        Role: {
+            /** @description A built-in role, which never changes. */
+            builtIn: boolean;
+            /**
+             * Format: date-time
+             * @description Absent for a built-in role.
+             */
+            createdAt?: string | null;
+            description: string;
+            name: string;
+            permissions: components["schemas"]["Permission"][];
+            /**
+             * Format: date-time
+             * @description Absent for a built-in role.
+             */
+            updatedAt?: string | null;
+        };
+        /** @description `GET /v1/roles`: the built-in roles, then the organization's own, by name. */
+        RoleList: {
+            roles: components["schemas"]["Role"][];
+        };
         /**
          * @description Who calls the tool (`archi/04-tools.md`, "Routes").
          * @enum {string}
@@ -1937,8 +2656,28 @@ export interface components {
             tools: number;
             transport: components["schemas"]["McpTransport"];
         };
+        /**
+         * @description `POST /auth/session`: the current state; with `organizationId`, a switch to that
+         *     organization.
+         */
+        SessionRequest: {
+            organizationId?: string | null;
+        };
+        /**
+         * @description `PUT /v1/organization/members/{user}/grant`: the member's role and allowed labels. Giving a
+         *     role needs every permission of it, and of the member's current role.
+         */
+        SetGrant: {
+            allowedLabels?: components["schemas"]["Labels"];
+            role: string;
+        };
         /** @enum {string} */
         Severity: "error" | "warning";
+        /**
+         * @description The ways to sign in.
+         * @enum {string}
+         */
+        SignInMethod: "github" | "magic_auth";
         /** @description `POST /v1/runs/{id}/signals/{name}`: the signal was put in the run's mailbox. */
         SignalAccepted: {
             /** @description The `Idempotency-Key` was already used for this run: nothing was added. */
@@ -2268,6 +3007,21 @@ export interface components {
         };
         /** @enum {string} */
         TraceFormat: "llm";
+        /** @description `PATCH /v1/organization`: what is given changes. */
+        UpdateOrganization: {
+            /** @description A built-in role or a role of the organization. */
+            defaultRole?: string | null;
+            name?: string | null;
+        };
+        /** @description A person, as the identity provider knows them. */
+        User: {
+            email: string;
+            firstName?: string | null;
+            /** @description `user_01J…`. */
+            id: string;
+            lastName?: string | null;
+            pictureUrl?: string | null;
+        };
         WaitCounts: {
             /** Format: int64 */
             approval: number;
@@ -2326,6 +3080,10 @@ export interface components {
              * @description When the wait gives up and returns `undefined`, if it has a timeout.
              */
             timeoutAt?: string | null;
+        };
+        /** @description `POST /auth/waitlist`. */
+        WaitlistRequest: {
+            email: string;
         };
         /**
          * @description The body of an outbound webhook: `{ "type", "timestamp", "data" }`, as Standard Webhooks
@@ -2394,6 +3152,629 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    authCallback: {
+        parameters: {
+            query?: {
+                code?: string;
+                /** @description Must match the one kept in the cookie `rewind_oauth`. */
+                state?: string;
+                /** @description The provider's error, when the sign-in did not go through. */
+                error?: string;
+                error_description?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the dashboard, `/#/`, whatever the outcome. */
+            302: {
+                headers: {
+                    /** @description `/#/`. */
+                    Location?: string;
+                    /** @description `rewind_session`; `rewind_oauth` cleared. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getAuthConfig: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The sign-in methods. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthConfig"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server has no sign-in: use an API key. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    verifyEmail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailVerification"];
+            };
+        };
+        responses: {
+            /** @description Where the sign-in stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description The code is wrong or expired (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No session, or one that expired (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    signInWithGithub: {
+        parameters: {
+            query?: {
+                /** @description The token of the invitation the page was opened with: signing in accepts it. */
+                invitationToken?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the identity provider. */
+            302: {
+                headers: {
+                    /** @description The provider's authorization URL. */
+                    Location?: string;
+                    /** @description `rewind_oauth`. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    signOut: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out. */
+            204: {
+                headers: {
+                    /** @description `rewind_session`, cleared. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No session, or one that expired (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    sendMagicCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagicAuthRequest"];
+            };
+        };
+        responses: {
+            /** @description Sent. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    verifyMagicCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MagicAuthVerification"];
+            };
+        };
+        responses: {
+            /** @description Where the sign-in stands; the session is in the cookie. */
+            200: {
+                headers: {
+                    /** @description `rewind_session`. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description The code is wrong or expired, or the invitation unknown (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    selectOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationSelection"];
+            };
+        };
+        responses: {
+            /** @description Where the sign-in stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No session, or one that expired (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The user is not a member of this organization (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Where the sign-in stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No session, or one that expired (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The user is not a member of this organization (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    joinWaitlist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WaitlistRequest"];
+            };
+        };
+        responses: {
+            /** @description On the waitlist. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     postHook: {
         parameters: {
             query?: never;
@@ -2474,6 +3855,71 @@ export interface operations {
             };
         };
     };
+    listApiKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every key of the tenant, revoked ones included. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     createApiKey: {
         parameters: {
             query?: never;
@@ -2505,7 +3951,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2514,7 +3960,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -2571,7 +4017,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2580,7 +4026,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -2649,7 +4095,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2658,7 +4104,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -2678,6 +4124,910 @@ export interface operations {
             };
             /** @description A fault of the platform (`internal`). */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listMyInvitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pending invitations. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    acceptInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invitation's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitation"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No pending invitation with this id for the caller. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateOrganization"];
+            };
+        };
+        responses: {
+            /** @description The organization as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationSettings"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listInvitations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every invitation of the organization. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvitationList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvitation"];
+            };
+        };
+        responses: {
+            /** @description Sent. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitation"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such role. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invitation's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such pending invitation. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    resendInvitation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The invitation's id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sent again, with a new expiry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitation"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such invitation, or one already accepted or revoked. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every member. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The member's user id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such member. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization would have no owner (`last-owner`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    setMemberGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The member's user id. */
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetGrant"];
+            };
+        };
+        responses: {
+            /** @description The member's grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Grant"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such member, or no such role. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The organization would have no owner (`last-owner`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createOrganization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOrganization"];
+            };
+        };
+        responses: {
+            /** @description Created; the caller is its owner. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2732,7 +5082,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2752,6 +5102,301 @@ export interface operations {
             };
             /** @description No such payload for this tenant, or not in the journal of the run given. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listPermissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listRoles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every role of the organization. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutRole"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Role"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Role"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteRole: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The role's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such role of the organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A grant points to the role (`role-in-use`). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -2840,7 +5485,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2849,7 +5494,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -2921,7 +5566,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -2930,7 +5575,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3036,7 +5681,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3045,7 +5690,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3115,7 +5760,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3124,7 +5769,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3186,7 +5831,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3195,7 +5840,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3261,7 +5906,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3270,7 +5915,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3343,7 +5988,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3352,7 +5997,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3431,7 +6076,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3440,7 +6085,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3519,7 +6164,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3528,7 +6173,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3610,7 +6255,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3619,7 +6264,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3703,7 +6348,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3712,7 +6357,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3798,7 +6443,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3807,7 +6452,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3887,7 +6532,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3896,7 +6541,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -3964,7 +6609,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -3973,7 +6618,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4060,7 +6705,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4069,7 +6714,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4158,7 +6803,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4167,7 +6812,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4243,7 +6888,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4252,7 +6897,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4311,7 +6956,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4320,7 +6965,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4385,7 +7030,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4394,7 +7039,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4448,7 +7093,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4457,7 +7102,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4513,7 +7158,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4522,7 +7167,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4582,7 +7227,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4591,7 +7236,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4648,7 +7293,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4657,7 +7302,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4734,7 +7379,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4743,7 +7388,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4800,7 +7445,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4809,7 +7454,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4889,7 +7534,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4898,7 +7543,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -4977,7 +7622,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -4986,7 +7631,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5066,7 +7711,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5075,7 +7720,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5145,7 +7790,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5154,7 +7799,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5222,7 +7867,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5231,7 +7876,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5300,7 +7945,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5309,7 +7954,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5392,7 +8037,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5401,7 +8046,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5457,7 +8102,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5466,7 +8111,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5535,7 +8180,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5544,7 +8189,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5623,7 +8268,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5632,7 +8277,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5703,7 +8348,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5712,7 +8357,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5785,7 +8430,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5794,7 +8439,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5841,7 +8486,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The key's identity. */
+            /** @description Who calls. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -5859,7 +8504,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -5868,7 +8513,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -5879,6 +8524,15 @@ export interface operations {
             };
             /** @description A fault of the platform (`internal`). */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -7,15 +7,17 @@
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
 //!   table: [`toolsets`], [`scripts`], [`runs`] (with [`events`], the journal entries and the
-//!   event stream), [`tasks`], [`webhooks`], [`reading`] and [`admin`];
+//!   event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`], [`access`] (with the
+//!   catalog of permissions and the built-in roles) and [`admin`] (the server); and the
+//!   dashboard's sign-in, [`auth`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
 //! - the query language of the run lists ([`query`]);
-//! - the headers ([`headers`]): the API key, `Idempotency-Key`, the webhook signature;
+//! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, the webhook signature;
 //! - the paths ([`routes`]);
 //! - the OpenAPI 3.1 document generated from the DTOs ([`openapi`]), committed at
 //!   `api/openapi.json`, from which the TypeScript SDK and the dashboard generate their types;
-//! - a thin async [`Client`] for every endpoint, over HTTP(S) with an API key, or over the
-//!   embedded server's unix socket without one.
+//! - a thin async [`Client`] for every endpoint of `/v1`, over HTTP(S) with a Bearer token, or
+//!   over the embedded server's unix socket without one.
 //!
 //! JSON conventions: fields are camelCase, enumerated values are snake_case (as in the
 //! journal), times are RFC 3339 strings, durations are written as scripts write them
@@ -27,13 +29,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access;
 pub mod admin;
+pub mod auth;
 mod client;
 pub mod common;
 mod error;
 pub mod events;
 pub mod headers;
 pub mod openapi;
+pub mod organization;
 pub mod problem;
 pub mod query;
 pub mod reading;

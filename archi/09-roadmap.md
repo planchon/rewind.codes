@@ -34,7 +34,9 @@ findings fixed. On November 12, 2026: `cargo fmt --check`, `cargo clippy --works
 `cargo test --workspace` (795 tests, Postgres, MinIO and a Collector in Docker) pass, the
 SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the seven criteria of
 [0.1 is done when](#01-is-done-when). Not yet done: the evals with real models (they need
-API keys), a run of the CI workflow on GitHub, and the gVisor profile on a Linux host.
+API keys), a run of the CI workflow on GitHub, the gVisor profile on a Linux host, and accounts,
+organizations and access ([06](06-storage-and-scale.md#tenancy-identity-and-access)), designed on
+November 14, 2026 and being built (see [Workstreams](#workstreams)).
 
 | Crate | State |
 | --- | --- |
@@ -71,9 +73,10 @@ API keys), a run of the CI workflow on GitHub, and the gVisor profile on a Linux
 | Pinned toolset (schemas, policies, declarations) | [04](04-tools.md#toolsets-and-code-generation) | `rewind-codegen` | The runtime (`rewind:tools`), the checker, the dispatcher, the SDK, the model's prompt |
 | HTTP API `/v1` (OpenAPI) | [07](07-code-architecture.md#http-api-v1) | `rewind-api` (DTOs, OpenAPI document, Rust client), `rewind-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
 | Sandbox lib (`rewind.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `rewind-runtime` (the globals that exist) | `rewind-check`, the prompt |
+| Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
-The five were approved in November 2026.
+The six were approved in November 2026, access and identity on the 14th.
 
 ## Workstreams
 
@@ -82,17 +85,18 @@ The five were approved in November 2026.
 | Domain and format | `rewind-core`, `rewind-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
 | Engine | `rewind-engine` | Nothing beyond what `rewind-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
 | Runtime (V8) | `rewind-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
-| Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing: both pass every conformance suite | Engine ports, stored format v1 |
+| Stores | `rewind-store-turso`, `rewind-store-postgres` | `AccessStore` (keys moved out of `JournalStore`, roles, grants, default roles), migration 2 on Postgres | Engine ports, stored format v1, access and identity |
+| Identity | `rewind-workos` | Everything: `IdentityProvider` on WorkOS | Access and identity |
 | Blobs | `rewind-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `rewind-codegen`, `rewind-mcp` | `rewind-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `rewind-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `rewind-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `rewind-otel` | Nothing beyond what `rewind-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `rewind-server`, `rewind-api` | Nothing | Engine ports, HTTP API `/v1` |
+| Server | `rewind-server`, `rewind-api` | `/auth`, access tokens, grants and permissions on every endpoint, the organization, member, invitation, role and key endpoints, the wiring of WorkOS | Engine ports, HTTP API `/v1`, access and identity |
 | CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
-| Dashboard | `dashboard` | Nothing | HTTP API `/v1` |
+| Dashboard | `dashboard` | Sign-in, onboarding, the organization picker, the waitlist, the Organization views; the views following the caller's permissions | HTTP API `/v1`, access and identity |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
-| Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Nothing | Engine ports, HTTP API `/v1` |
+| Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | WorkOS's variables on Railway, `/auth` rewritten by Vercel and the edge | Engine ports, HTTP API `/v1`, access and identity |
 
 ## Designs settled (November 2026)
 
@@ -108,7 +112,9 @@ specified.
 - **Tool task lifecycle**: host tools that last days, the `approval` policy, tool
   concurrency, toolset change during a run ([04](04-tools.md#tool-task-lifecycle)).
 - **Credentials** resolved at dispatch ([04](04-tools.md#credentials)).
-- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-and-authentication)).
+- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
+- **Accounts, organizations and access**: WorkOS for identity only, Rewind's permissions, roles and
+  grants, sign-in on the dashboard's pages ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
 - **Egress of the `http` tool** ([04](04-tools.md#the-http-tool-and-egress)), and of MCP
   servers ([04](04-tools.md#where-mcp-servers-may-be)).
 - **Retention and deletion** (was question 11)
@@ -147,6 +153,9 @@ specified.
 - An operator finds any run by label, tool or error in the dashboard, and sees its code next
   to its trace. They step through a run, see the runs that wait and what for, and the
   failures grouped by cause.
+- Someone signs in to the dashboard with a code by email, creates an organization, invites a
+  member with a role, and creates an API key; each endpoint refuses a caller without its
+  permission.
 
 ### Acceptance status (November 2026)
 

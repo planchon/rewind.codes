@@ -121,9 +121,10 @@ async fn one_server_holds_the_directory_until_it_is_asked_to_stop() {
     assert_eq!(mode, 0o600);
     let me = get(&server.socket, "/v1/whoami").await;
     assert_eq!(
-        (me["tenant"].as_str(), me["role"].as_str()),
-        (Some("local"), Some("admin"))
+        (me["tenant"].as_str(), me["grant"]["role"].as_str()),
+        (Some("local"), Some("operator"))
     );
+    assert_eq!(me["operator"], true);
 
     let mut second = start(&dir, &[]);
     let status = exited(&mut second.child, Duration::from_secs(60)).await;

@@ -12,7 +12,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rewind_api::admin::Role;
+use rewind_api::access::BuiltInRole;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
 use rewind_api::tasks::{CompleteTask, TaskQuery};
@@ -177,7 +177,7 @@ async fn an_api_server_and_two_workers_share_one_postgres() {
     .await;
     let info = api.admin.server_info().await.unwrap();
     assert_eq!(info.roles, [rewind_api::admin::ServerRole::Api]);
-    let harness = api.key(Role::Harness, &[]).await;
+    let harness = api.key(BuiltInRole::Harness, &[]).await;
 
     let mut runs = Vec::new();
     for n in 0..6 {

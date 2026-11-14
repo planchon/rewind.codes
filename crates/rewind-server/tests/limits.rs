@@ -19,7 +19,7 @@ mod support;
 use std::time::Duration;
 
 use rewind_api::Client;
-use rewind_api::admin::Role;
+use rewind_api::access::BuiltInRole;
 use rewind_api::common::{AbortKind, RunStatus};
 use rewind_api::runs::{JournalExport, Run, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
@@ -88,7 +88,7 @@ fn problem(error: rewind_api::Error) -> Problem {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cpu_time_is_bounded_per_call_into_the_script() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     // In `main(input)`, and in the delivery of a timer: each call has its own 5 s.
     let in_main = harness
         .start_run(
@@ -129,7 +129,7 @@ export default async function main() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_heap_is_bounded_per_instance() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness
         .start_run(
             &start(
@@ -154,7 +154,7 @@ async fn the_heap_is_bounded_per_instance() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commands_are_bounded_per_activation() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness
         .start_run(
             &start(
@@ -181,7 +181,7 @@ export default async function main() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_history_is_capped_at_50000_entries() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     // Batches of 9,000 timers (below the commands' bound): 18,000 entries each.
     let run = harness
         .start_run(
@@ -219,8 +219,8 @@ export default async function main() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn payloads_are_bounded_to_8_mib() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
-    let worker = server.key(Role::Worker, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let worker = server.key(BuiltInRole::Worker, &[]).await;
     let too_large = Value::String("x".repeat(MAX_PAYLOAD));
 
     // The API refuses a payload it is given: input, signal, a host tool's result.
@@ -334,7 +334,7 @@ export default async function main() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ttls_are_bounded_by_the_deployment() {
     let server = TestServer::start(&["--default-ttl", "1h", "--max-ttl", "1d"]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let script = r#"import { signal } from "rewind";
 export default async function main() { await signal("never"); }"#;
 

@@ -28,16 +28,25 @@
         "type": "object"
       },
       "ApiKey": {
+        "description": "An API key, without its secret but in the answer to its creation.",
         "properties": {
           "allowedLabels": {
-            "$ref": "#/components/schemas/Labels"
+            "$ref": "#/components/schemas/Labels",
+            "description": "The allowed labels of the key's grant."
           },
           "createdAt": {
             "format": "date-time",
             "type": "string"
           },
+          "createdBy": {
+            "description": "The principal who created it: `user:<id>` or `key:<id>`. Absent for the operator's key\ngiven at start.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "id": {
-            "description": "For `DELETE /v1/api-keys/{id}`. Not a secret.",
+            "description": "For `DELETE /v1/api-keys/{id}`: the hex of the key's SHA-256. Not a secret.",
             "type": "string"
           },
           "key": {
@@ -48,13 +57,18 @@
             ]
           },
           "name": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
             "type": [
               "string",
               "null"
             ]
           },
           "role": {
-            "$ref": "#/components/schemas/Role"
+            "description": "The role of the key's grant.",
+            "type": "string"
           },
           "tenant": {
             "type": "string"
@@ -63,11 +77,154 @@
         "required": [
           "id",
           "tenant",
+          "name",
           "role",
           "allowedLabels",
           "createdAt"
         ],
         "type": "object"
+      },
+      "ApiKeyList": {
+        "description": "`GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first.",
+        "properties": {
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/ApiKey"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object"
+      },
+      "AuthConfig": {
+        "description": "`GET /auth/config`: how to sign in on this server.",
+        "properties": {
+          "methods": {
+            "items": {
+              "$ref": "#/components/schemas/SignInMethod"
+            },
+            "type": "array"
+          },
+          "waitlist": {
+            "description": "Sign-ups are closed: someone without an account nor an invitation joins the waitlist\n(`POST /auth/waitlist`).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "methods",
+          "waitlist"
+        ],
+        "type": "object"
+      },
+      "AuthState": {
+        "description": "Where a sign-in stands.",
+        "oneOf": [
+          {
+            "description": "Signed in: send the access token to `/v1` as a Bearer token, and keep it in memory only.",
+            "properties": {
+              "accessToken": {
+                "type": "string"
+              },
+              "expiresAt": {
+                "description": "Ask `POST /auth/session` again before then: it refreshes a token with less than a\nminute left.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "organizationId": {
+                "description": "The organization of the session, the tenant `/v1` acts in. Absent without one:\ncreate one, or accept an invitation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "authenticated"
+                ],
+                "type": "string"
+              },
+              "user": {
+                "$ref": "#/components/schemas/User"
+              }
+            },
+            "required": [
+              "accessToken",
+              "expiresAt",
+              "user",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "The user belongs to several organizations: choose one with `POST /auth/organization`.",
+            "properties": {
+              "organizations": {
+                "items": {
+                  "$ref": "#/components/schemas/Organization"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": [
+                  "organization_selection_required"
+                ],
+                "type": "string"
+              },
+              "user": {
+                "$ref": "#/components/schemas/User"
+              }
+            },
+            "required": [
+              "user",
+              "organizations",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A code was sent to the email: give it to `POST /auth/email-verification`.",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "email_verification_required"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "Sign-ups are closed and this person has no account nor invitation: they may join the\nwaitlist.",
+            "properties": {
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "sign_up_closed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "CallAttempts": {
         "description": "How many times a tool call was sent.",
@@ -197,30 +354,64 @@
       },
       "CreateApiKey": {
         "additionalProperties": false,
-        "description": "`POST /v1/api-keys`: a key `rewind_sk_…` for a tenant. Keys are stored hashed: the key itself\nis only in this answer.",
+        "description": "`POST /v1/api-keys`: a key `rewind_sk_…`, with its grant. Keys are stored hashed: the key\nitself is only in the answer. Creating a key needs every permission of its role.",
         "properties": {
           "allowedLabels": {
             "$ref": "#/components/schemas/Labels",
             "description": "The key only sees runs carrying all these labels: an agent's tools see only their own\nconversation's runs."
           },
           "name": {
-            "description": "What the key is for, for the operator.",
+            "description": "What the key is for.",
+            "type": "string"
+          },
+          "role": {
+            "description": "A built-in role, a role of the tenant, or `operator` (only from the operator).",
+            "type": "string"
+          },
+          "tenant": {
+            "description": "Another tenant than the caller's: only the operator names one, and the tenant is\ncreated with its first key.",
             "type": [
               "string",
               "null"
             ]
+          }
+        },
+        "required": [
+          "name",
+          "role"
+        ],
+        "type": "object"
+      },
+      "CreateInvitation": {
+        "additionalProperties": false,
+        "description": "`POST /v1/organization/invitations`: invites an email with a role and allowed labels.\nInviting needs every permission of the role given.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "email": {
+            "type": "string"
           },
           "role": {
-            "$ref": "#/components/schemas/Role"
-          },
-          "tenant": {
-            "description": "Created with its first key.",
             "type": "string"
           }
         },
         "required": [
-          "tenant",
+          "email",
           "role"
+        ],
+        "type": "object"
+      },
+      "CreateOrganization": {
+        "additionalProperties": false,
+        "description": "`POST /v1/organizations`: a new organization, whose creator is its `owner`.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -557,6 +748,19 @@
           "p95",
           "p99",
           "max"
+        ],
+        "type": "object"
+      },
+      "EmailVerification": {
+        "additionalProperties": false,
+        "description": "`POST /auth/email-verification`: the code sent to verify the email, after\n`email_verification_required`.",
+        "properties": {
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
         ],
         "type": "object"
       },
@@ -1409,6 +1613,38 @@
         ],
         "type": "object"
       },
+      "Grant": {
+        "description": "What a principal holds in a tenant: a role, and optionally allowed labels.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The principal only sees the runs carrying all these labels, and cannot administer."
+          },
+          "grantedAt": {
+            "description": "Absent for the operator.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grantedBy": {
+            "description": "The principal who gave it: `user:<id>` or `key:<id>`. Absent for the grants the server\ngives (an organization's creator, a member's default role, the operator).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "A built-in role, an organization's own, or `operator`. A grant whose role no longer\nexists gives no permission.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
       "HeartbeatAck": {
         "description": "`POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task.",
         "properties": {
@@ -1493,32 +1729,156 @@
         "type": "object"
       },
       "Identity": {
-        "description": "`GET /v1/whoami`: who the API key is. Over the embedded server's socket, which takes no\nkey: the tenant `local`, with the role `admin`.",
+        "description": "`GET /v1/whoami`: who calls, and what they may do. Over the embedded server's socket, which\ntakes no token: the operator of the tenant `local`.",
         "properties": {
-          "allowedLabels": {
-            "$ref": "#/components/schemas/Labels",
-            "description": "The key only sees runs carrying all these labels."
+          "grant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Grant",
+                "description": "The caller's grant in the tenant. Absent for a member without one, who gets 403 on the\ntenant's data."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "keyId": {
-            "description": "The key's id (`DELETE /v1/api-keys/{id}`); absent without a key.",
+          "operator": {
+            "description": "The deployment's operator: every permission in its tenant, and the keys of every tenant.",
+            "type": "boolean"
+          },
+          "organization": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OrganizationSettings",
+                "description": "For a member: the organization of the session."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "organizations": {
+            "description": "For a member: every organization they belong to.",
+            "items": {
+              "$ref": "#/components/schemas/Organization"
+            },
+            "type": "array"
+          },
+          "permissions": {
+            "description": "What the grant's role allows, in the catalog's order.",
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": "array"
+          },
+          "principal": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Principal",
+                "description": "Absent over the embedded server's socket."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tenant": {
+            "description": "The tenant the caller acts in. Absent for a member signed in without an organization,\nwho reaches only the onboarding endpoints.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "permissions",
+          "operator"
+        ],
+        "type": "object"
+      },
+      "Invitation": {
+        "description": "An invitation sent by email, with the grant its invitee gets on accepting it.",
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "grant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Grant",
+                "description": "The pending grant, which becomes the invitee's when they accept."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "description": "`invitation_01J…`.",
+            "type": "string"
+          },
+          "inviter": {
+            "description": "The id of the member who invited.",
             "type": [
               "string",
               "null"
             ]
           },
-          "role": {
-            "$ref": "#/components/schemas/Role"
+          "organization": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Organization",
+                "description": "The organization it invites to."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "tenant": {
-            "type": "string"
+          "state": {
+            "$ref": "#/components/schemas/InvitationState"
           }
         },
         "required": [
-          "tenant",
-          "role",
-          "allowedLabels"
+          "id",
+          "email",
+          "state",
+          "expiresAt",
+          "createdAt"
         ],
         "type": "object"
+      },
+      "InvitationList": {
+        "description": "`GET /v1/invitations` (sent to the caller) and `GET /v1/organization/invitations`.",
+        "properties": {
+          "invitations": {
+            "items": {
+              "$ref": "#/components/schemas/Invitation"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "invitations"
+        ],
+        "type": "object"
+      },
+      "InvitationState": {
+        "enum": [
+          "pending",
+          "accepted",
+          "expired",
+          "revoked"
+        ],
+        "type": "string"
       },
       "LabelFacet": {
         "properties": {
@@ -1669,6 +2029,49 @@
         ],
         "type": "object"
       },
+      "MagicAuthRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/magic-auth`: sends a 6-digit code to the email.",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "invitationToken": {
+            "description": "The token of the invitation the page was opened with.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
+      },
+      "MagicAuthVerification": {
+        "additionalProperties": false,
+        "description": "`POST /auth/magic-auth/verify`: the code received by email.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "invitationToken": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "email",
+          "code"
+        ],
+        "type": "object"
+      },
       "McpServer": {
         "additionalProperties": false,
         "description": "An MCP server: exactly one of `url` (streamable HTTP) and `command` (stdio).\n\nA server of a deployment refuses `command` unless its configuration allows it: a stdio\nserver is a process started by Rewind. The embedded server accepts it.",
@@ -1730,6 +2133,56 @@
         ],
         "type": "string"
       },
+      "Member": {
+        "description": "A member of the organization, with their grant.",
+        "properties": {
+          "grant": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Grant",
+                "description": "Absent for a member without a grant: one who has not had a session in the organization\nyet, or whose grant was removed."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "user",
+          "status"
+        ],
+        "type": "object"
+      },
+      "MemberList": {
+        "description": "`GET /v1/organization/members`.",
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/Member"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "members"
+        ],
+        "type": "object"
+      },
+      "MembershipStatus": {
+        "enum": [
+          "active",
+          "pending",
+          "inactive"
+        ],
+        "type": "string"
+      },
       "OnInterruption": {
         "description": "After an interruption (the dispatcher or the worker died mid-call).",
         "enum": [
@@ -1737,6 +2190,57 @@
           "at_most_once"
         ],
         "type": "string"
+      },
+      "Organization": {
+        "description": "An organization: a tenant, with the same id.",
+        "properties": {
+          "id": {
+            "description": "`org_01J…`, also the tenant's id.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "OrganizationSelection": {
+        "additionalProperties": false,
+        "description": "`POST /auth/organization`: the organization chosen, after\n`organization_selection_required`.",
+        "properties": {
+          "organizationId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "organizationId"
+        ],
+        "type": "object"
+      },
+      "OrganizationSettings": {
+        "description": "The organization of the caller's session, with its settings.",
+        "properties": {
+          "defaultRole": {
+            "description": "The role a member gets at their first session, without an invitation's grant.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "defaultRole"
+        ],
+        "type": "object"
       },
       "ParkedReason": {
         "description": "Why a task is parked.",
@@ -1773,6 +2277,107 @@
           "preview"
         ],
         "type": "object"
+      },
+      "Permission": {
+        "description": "A kind of action. Every endpoint requires one; a role is a set of them.",
+        "enum": [
+          "runs:read",
+          "runs:start",
+          "runs:control",
+          "runs:quarantine",
+          "runs:delete",
+          "toolsets:read",
+          "toolsets:write",
+          "credentials:write",
+          "tasks:work",
+          "tasks:approve",
+          "subscriptions:read",
+          "subscriptions:write",
+          "members:read",
+          "members:invite",
+          "members:manage",
+          "roles:read",
+          "roles:write",
+          "api_keys:read",
+          "api_keys:write",
+          "organization:write"
+        ],
+        "type": "string"
+      },
+      "PermissionInfo": {
+        "description": "A permission of the catalog, with what it lets the caller do.",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "permission": {
+            "$ref": "#/components/schemas/Permission"
+          }
+        },
+        "required": [
+          "permission",
+          "description"
+        ],
+        "type": "object"
+      },
+      "PermissionList": {
+        "description": "`GET /v1/permissions`: the catalog.",
+        "properties": {
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/PermissionInfo"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "type": "object"
+      },
+      "Principal": {
+        "description": "Who calls.",
+        "oneOf": [
+          {
+            "description": "An API key.",
+            "properties": {
+              "id": {
+                "description": "The key's id (`DELETE /v1/api-keys/{id}`).",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "key"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "description": "A member, signed in on the dashboard.",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "user"
+                ],
+                "type": "string"
+              },
+              "user": {
+                "$ref": "#/components/schemas/User"
+              }
+            },
+            "required": [
+              "user",
+              "kind"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Problem": {
         "description": "An error answered by the API, as `application/problem+json` (RFC 9457).",
@@ -1835,6 +2440,25 @@
         ],
         "type": "object"
       },
+      "PutRole": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/roles/{name}`: creates or changes a role of the organization. Writing a role needs\nevery permission it gives. A change applies at once to every principal holding the role.",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "type": "object"
+      },
       "Quarantine": {
         "description": "Why a run is quarantined (`archi/03-execution.md`, \"Non-determinism and quarantine\").",
         "properties": {
@@ -1894,14 +2518,63 @@
         "type": "object"
       },
       "Role": {
-        "description": "What a key may call. The key's tenant scopes everything it sees.",
-        "enum": [
-          "admin",
-          "harness",
-          "worker",
-          "reader"
+        "description": "A role: one of the four built-in roles, or the organization's own.",
+        "properties": {
+          "builtIn": {
+            "description": "A built-in role, which never changes.",
+            "type": "boolean"
+          },
+          "createdAt": {
+            "description": "Absent for a built-in role.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/Permission"
+            },
+            "type": "array"
+          },
+          "updatedAt": {
+            "description": "Absent for a built-in role.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "permissions",
+          "builtIn"
         ],
-        "type": "string"
+        "type": "object"
+      },
+      "RoleList": {
+        "description": "`GET /v1/roles`: the built-in roles, then the organization's own, by name.",
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles"
+        ],
+        "type": "object"
       },
       "Route": {
         "description": "Who calls the tool (`archi/04-tools.md`, \"Routes\").",
@@ -2752,10 +3425,47 @@
         ],
         "type": "object"
       },
+      "SessionRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/session`: the current state; with `organizationId`, a switch to that\norganization.",
+        "properties": {
+          "organizationId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SetGrant": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/organization/members/{user}/grant`: the member's role and allowed labels. Giving a\nrole needs every permission of it, and of the member's current role.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "role": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
       "Severity": {
         "enum": [
           "error",
           "warning"
+        ],
+        "type": "string"
+      },
+      "SignInMethod": {
+        "description": "The ways to sign in.",
+        "enum": [
+          "github",
+          "magic_auth"
         ],
         "type": "string"
       },
@@ -3632,6 +4342,61 @@
         ],
         "type": "string"
       },
+      "UpdateOrganization": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/organization`: what is given changes.",
+        "properties": {
+          "defaultRole": {
+            "description": "A built-in role or a role of the organization.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "User": {
+        "description": "A person, as the identity provider knows them.",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`user_01J…`.",
+            "type": "string"
+          },
+          "lastName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pictureUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "type": "object"
+      },
       "WaitCounts": {
         "properties": {
           "approval": {
@@ -3838,6 +4603,19 @@
             "type": "object"
           }
         ]
+      },
+      "WaitlistRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/waitlist`.",
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "type": "object"
       },
       "WebhookEvent": {
         "description": "The body of an outbound webhook: `{ \"type\", \"timestamp\", \"data\" }`, as Standard Webhooks\nrecommends. The delivery's id is the `webhook-id` header; a retried delivery keeps it.",
@@ -4052,21 +4830,829 @@
       }
     },
     "securitySchemes": {
-      "apiKey": {
-        "bearerFormat": "rewind_sk_…",
-        "description": "An API key of the tenant. The embedded server's unix socket takes none.",
+      "bearer": {
+        "description": "An API key of the tenant (`rewind_sk_…`), or a member's access token from `/auth`. The embedded server's unix socket takes none.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "session": {
+        "description": "The dashboard's session, sealed by the server: only `/auth` reads it.",
+        "in": "cookie",
+        "name": "rewind_session",
+        "type": "apiKey"
       }
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading and administration. Every request carries an API key as a Bearer token (`rewind_sk_…`), except over the embedded server's unix socket and to the inbound webhook URL. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds.",
+    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`) or a member's access token from `/auth`, except over the embedded server's unix socket and to the inbound webhook URL. What the caller may do is its grant's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/auth/callback": {
+      "get": {
+        "description": "Checks `state`, exchanges the code, keeps the outcome in the session cookie, and\nredirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.",
+        "operationId": "authCallback",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "code",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Must match the one kept in the cookie `rewind_oauth`.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The provider's error, when the sign-in did not go through.",
+            "in": "query",
+            "name": "error",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "error_description",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To the dashboard, `/#/`, whatever the outcome.",
+            "headers": {
+              "Location": {
+                "description": "`/#/`.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "description": "`rewind_session`; `rewind_oauth` cleared.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "The identity provider's redirect",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/config": {
+      "get": {
+        "description": "The sign-in methods, and whether sign-ups go through the waitlist.",
+        "operationId": "getAuthConfig",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthConfig"
+                }
+              }
+            },
+            "description": "The sign-in methods."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no sign-in: use an API key."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "How to sign in",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/email-verification": {
+      "post": {
+        "description": "The code sent after `email_verification_required`.",
+        "operationId": "verifyEmail",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailVerification"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            },
+            "description": "Where the sign-in stands."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The code is wrong or expired (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No session, or one that expired (`unauthorized`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Verify the email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/github": {
+      "get": {
+        "description": "Redirects to the identity provider, with a random `state` and the page's invitation\ntoken kept in the cookie `rewind_oauth` for 5 minutes.",
+        "operationId": "signInWithGithub",
+        "parameters": [
+          {
+            "description": "The token of the invitation the page was opened with: signing in accepts it.",
+            "in": "query",
+            "name": "invitationToken",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To the identity provider.",
+            "headers": {
+              "Location": {
+                "description": "The provider's authorization URL.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Set-Cookie": {
+                "description": "`rewind_oauth`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Sign in with GitHub",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "description": "Revokes the session in the identity provider and clears the cookie.",
+        "operationId": "signOut",
+        "responses": {
+          "204": {
+            "description": "Signed out.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "`rewind_session`, cleared.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No session, or one that expired (`unauthorized`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Sign out",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/magic-auth": {
+      "post": {
+        "description": "A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the\nemail has an account or not.",
+        "operationId": "sendMagicCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicAuthRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Sent."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Send a code by email",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/magic-auth/verify": {
+      "post": {
+        "operationId": "verifyMagicCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MagicAuthVerification"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            },
+            "description": "Where the sign-in stands; the session is in the cookie.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "`rewind_session`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The code is wrong or expired, or the invitation unknown (`invalid-request`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Sign in with the code",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/organization": {
+      "post": {
+        "description": "After `organization_selection_required`.",
+        "operationId": "selectOrganization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationSelection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            },
+            "description": "Where the sign-in stands."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No session, or one that expired (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The user is not a member of this organization (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Choose an organization",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/session": {
+      "post": {
+        "description": "A valid access token, refreshed when less than a minute is left; with `organizationId`,\nfor that organization. A member's first session in an organization writes their grant:\nthe pending grant of the invitation they accepted, else the organization's default role.",
+        "operationId": "getSession",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            },
+            "description": "Where the sign-in stands."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No session, or one that expired (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The user is not a member of this organization (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/waitlist": {
+      "post": {
+        "description": "Sign-ups are closed: the operator's approval sends an invitation.",
+        "operationId": "joinWaitlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WaitlistRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "On the waitlist."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Join the waitlist",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/hooks/{token}": {
       "post": {
         "description": "At the URL a script got from `webhook(name)`. A JSON body is the signal's payload; any\nother body becomes the payload as a string; an empty body is `null`. The first of\n`Idempotency-Key`, `webhook-id` and `X-GitHub-Delivery` present is the signal's\nidempotency key.",
@@ -4165,7 +5751,78 @@
       }
     },
     "/v1/api-keys": {
+      "get": {
+        "description": "The tenant's keys, without their secret, each with its role and allowed labels.\nRequires `api_keys:read`.",
+        "operationId": "listApiKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyList"
+                }
+              }
+            },
+            "description": "Every key of the tenant, revoked ones included."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the API keys",
+        "tags": [
+          "access"
+        ]
+      },
       "post": {
+        "description": "With a name, a role and allowed labels. The operator may name another tenant. Requires\n`api_keys:write`, and every permission of the role given.",
         "operationId": "createApiKey",
         "requestBody": {
           "content": {
@@ -4206,7 +5863,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4216,7 +5873,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -4241,12 +5898,13 @@
         },
         "summary": "Create an API key",
         "tags": [
-          "administration"
+          "access"
         ]
       }
     },
     "/v1/api-keys/{id}": {
       "delete": {
+        "description": "Requires `api_keys:write`.",
         "operationId": "revokeApiKey",
         "parameters": [
           {
@@ -4281,7 +5939,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4291,7 +5949,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -4326,7 +5984,7 @@
         },
         "summary": "Revoke an API key",
         "tags": [
-          "administration"
+          "access"
         ]
       }
     },
@@ -4373,7 +6031,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4383,7 +6041,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -4419,6 +6077,1057 @@
         "summary": "Type-check a script (`check_script`)",
         "tags": [
           "scripts"
+        ]
+      }
+    },
+    "/v1/invitations": {
+      "get": {
+        "description": "The pending invitations to the caller's email, with their organizations. For a member,\neven without organization.",
+        "operationId": "listMyInvitations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationList"
+                }
+              }
+            },
+            "description": "The pending invitations."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "The invitations sent to the caller",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/invitations/{id}/accept": {
+      "post": {
+        "description": "Joins the invitation's organization; its pending grant becomes the caller's. Switch to\nthe organization with `POST /auth/session`. For a member, even without organization.",
+        "operationId": "acceptInvitation",
+        "parameters": [
+          {
+            "description": "The invitation's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            },
+            "description": "Accepted."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No pending invitation with this id for the caller."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Accept an invitation",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization": {
+      "patch": {
+        "description": "Its name and its default role. Requires `organization:write`.",
+        "operationId": "updateOrganization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateOrganization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationSettings"
+                }
+              }
+            },
+            "description": "The organization as it now is."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Change the organization",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/invitations": {
+      "get": {
+        "description": "Each with its pending grant. Requires `members:read`.",
+        "operationId": "listInvitations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationList"
+                }
+              }
+            },
+            "description": "Every invitation of the organization."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the organization's invitations",
+        "tags": [
+          "organization"
+        ]
+      },
+      "post": {
+        "description": "The invitation by email, and its pending grant, which the invitee gets on accepting it.\nRequires `members:invite`, and every permission of the role given.",
+        "operationId": "createInvitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            },
+            "description": "Sent."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such role."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Invite someone",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/invitations/{id}": {
+      "delete": {
+        "description": "And delete its pending grant. Requires `members:invite`.",
+        "operationId": "revokeInvitation",
+        "parameters": [
+          {
+            "description": "The invitation's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such pending invitation."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Revoke an invitation",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/invitations/{id}/resend": {
+      "post": {
+        "description": "Requires `members:invite`.",
+        "operationId": "resendInvitation",
+        "parameters": [
+          {
+            "description": "The invitation's id.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Invitation"
+                }
+              }
+            },
+            "description": "Sent again, with a new expiry."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such invitation, or one already accepted or revoked."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Send an invitation again",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/members": {
+      "get": {
+        "description": "The organization's memberships, each with its grant. Requires `members:read`.",
+        "operationId": "listMembers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemberList"
+                }
+              }
+            },
+            "description": "Every member."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the members",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/members/{user}": {
+      "delete": {
+        "description": "Deletes the member's grant, then their membership. Requires `members:manage`, and every\npermission of the member's role.",
+        "operationId": "removeMember",
+        "parameters": [
+          {
+            "description": "The member's user id.",
+            "in": "path",
+            "name": "user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such member."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The organization would have no owner (`last-owner`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Remove a member",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organization/members/{user}/grant": {
+      "put": {
+        "description": "Their role and allowed labels. Requires `members:manage`, and every permission of the\nrole given and of the member's current role.",
+        "operationId": "setMemberGrant",
+        "parameters": [
+          {
+            "description": "The member's user id.",
+            "in": "path",
+            "name": "user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetGrant"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            },
+            "description": "The member's grant."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such member, or no such role."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The organization would have no owner (`last-owner`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Set a member's grant",
+        "tags": [
+          "organization"
+        ]
+      }
+    },
+    "/v1/organizations": {
+      "post": {
+        "description": "For a member, even without organization: the organization in the identity provider with\nthe caller as a member, then its tenant and the caller's `owner` grant. Switch to it with\n`POST /auth/session`.",
+        "operationId": "createOrganization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrganization"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            },
+            "description": "Created; the caller is its owner."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Create an organization",
+        "tags": [
+          "organization"
         ]
       }
     },
@@ -4472,7 +7181,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4518,6 +7227,347 @@
         "summary": "A payload's value",
         "tags": [
           "reading"
+        ]
+      }
+    },
+    "/v1/permissions": {
+      "get": {
+        "description": "Every permission, with what it lets the caller do. Any caller.",
+        "operationId": "listPermissions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionList"
+                }
+              }
+            },
+            "description": "The catalog."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "The catalog of permissions",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/roles": {
+      "get": {
+        "description": "The built-in roles, then the organization's own, with their permissions. Requires\n`roles:read`.",
+        "operationId": "listRoles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleList"
+                }
+              }
+            },
+            "description": "Every role of the organization."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the roles",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/v1/roles/{name}": {
+      "delete": {
+        "description": "Only a role no grant points to. Requires `roles:write`.",
+        "operationId": "deleteRole",
+        "parameters": [
+          {
+            "description": "The role's name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such role of the organization."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A grant points to the role (`role-in-use`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Delete a role",
+        "tags": [
+          "access"
+        ]
+      },
+      "put": {
+        "description": "A role of the organization: its name is 1 to 64 lowercase letters, digits, `-` and `_`,\nand never a built-in name or `operator`. A change applies at once to every principal\nholding the role. Requires `roles:write`, and every permission the role gives.",
+        "operationId": "putRole",
+        "parameters": [
+          {
+            "description": "The role's name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutRole"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Changed."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Created."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Create or change a role",
+        "tags": [
+          "access"
         ]
       }
     },
@@ -4693,7 +7743,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4703,7 +7753,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -4797,7 +7847,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4807,7 +7857,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -4960,7 +8010,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -4970,7 +8020,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -5083,7 +8133,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5093,7 +8143,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -5159,7 +8209,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5169,7 +8219,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5258,7 +8308,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5268,7 +8318,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5367,7 +8417,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5377,7 +8427,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5472,7 +8522,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5482,7 +8532,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5586,7 +8636,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5596,7 +8646,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5711,7 +8761,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5721,7 +8771,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5835,7 +8885,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5845,7 +8895,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -5948,7 +8998,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -5958,7 +9008,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6065,7 +9115,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6075,7 +9125,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6158,7 +9208,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6168,7 +9218,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6290,7 +9340,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6300,7 +9350,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6414,7 +9464,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6424,7 +9474,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6547,7 +9597,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6557,7 +9607,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -6629,7 +9679,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6639,7 +9689,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -6680,6 +9730,7 @@
     },
     "/v1/server": {
       "get": {
+        "description": "Any caller.",
         "operationId": "getServer",
         "responses": {
           "200": {
@@ -6710,7 +9761,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6720,7 +9771,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -6745,13 +9796,13 @@
         },
         "summary": "What this server is",
         "tags": [
-          "administration"
+          "server"
         ]
       }
     },
     "/v1/server/stop": {
       "post": {
-        "description": "Only the embedded server stops this way, once its calls in flight are committed: the\nCLI uses it to replace a server of another version. Other servers answer 403.",
+        "description": "Only the embedded server stops this way, once its calls in flight are committed: the\nCLI uses it to replace a server of another version. Other servers answer 403. Only the\noperator.",
         "operationId": "stopServer",
         "responses": {
           "202": {
@@ -6775,7 +9826,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6785,7 +9836,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -6810,7 +9861,7 @@
         },
         "summary": "Stop the embedded server",
         "tags": [
-          "administration"
+          "server"
         ]
       }
     },
@@ -6846,7 +9897,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6856,7 +9907,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -6926,7 +9977,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -6936,7 +9987,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -7001,7 +10052,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7011,7 +10062,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -7125,7 +10176,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7135,7 +10186,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -7201,7 +10252,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7211,7 +10262,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -7314,7 +10365,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7324,7 +10375,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -7419,7 +10470,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7429,7 +10480,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "410": {
             "content": {
@@ -7532,7 +10583,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7542,7 +10593,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "410": {
             "content": {
@@ -7627,7 +10678,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7637,7 +10688,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "410": {
             "content": {
@@ -7719,7 +10770,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7729,7 +10780,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "410": {
             "content": {
@@ -7811,7 +10862,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7821,7 +10872,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -7942,7 +10993,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -7952,7 +11003,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -8014,7 +11065,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8024,7 +11075,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -8104,7 +11155,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8114,7 +11165,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "422": {
             "content": {
@@ -8209,7 +11260,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8219,7 +11270,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -8314,7 +11365,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8324,7 +11375,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -8427,7 +11478,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8437,7 +11488,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "404": {
             "content": {
@@ -8478,7 +11529,7 @@
     },
     "/v1/whoami": {
       "get": {
-        "description": "Its tenant, role and allowed labels. Over the embedded server's socket: the tenant\n`local`, role `admin`.",
+        "description": "The tenant, the principal (an API key, or a member with their email, name and picture),\nthe grant, and the permissions it holds; for a member, the organization of the session\nand every organization of the user. Over the embedded server's socket: the operator of\nthe tenant `local`. Any caller, even a member without organization.",
         "operationId": "whoami",
         "responses": {
           "200": {
@@ -8489,7 +11540,7 @@
                 }
               }
             },
-            "description": "The key's identity."
+            "description": "Who calls."
           },
           "400": {
             "content": {
@@ -8509,7 +11560,7 @@
                 }
               }
             },
-            "description": "No API key, or an unknown or revoked one (`unauthorized`)."
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
           },
           "403": {
             "content": {
@@ -8519,7 +11570,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`)."
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
           },
           "500": {
             "content": {
@@ -8530,6 +11581,16 @@
               }
             },
             "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
           },
           "503": {
             "content": {
@@ -8542,16 +11603,16 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Who the API key is",
+        "summary": "Who calls",
         "tags": [
-          "administration"
+          "organization"
         ]
       }
     }
   },
   "security": [
     {
-      "apiKey": []
+      "bearer": []
     }
   ],
   "servers": [
@@ -8586,8 +11647,20 @@
       "name": "reading"
     },
     {
-      "description": "API keys, and the server itself.",
-      "name": "administration"
+      "description": "Who calls; the organizations, their members and invitations.",
+      "name": "organization"
+    },
+    {
+      "description": "The catalog of permissions, the roles and the API keys.",
+      "name": "access"
+    },
+    {
+      "description": "The server itself.",
+      "name": "server"
+    },
+    {
+      "description": "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist.",
+      "name": "auth"
     }
   ],
   "webhooks": {

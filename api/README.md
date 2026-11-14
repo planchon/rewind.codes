@@ -1,7 +1,8 @@
 # The HTTP API `/v1`
 
 `openapi.json` is the OpenAPI 3.1 document of the API that `rewind-server` serves
-([07](../archi/07-code-architecture.md#http-api-v1)). It is generated from the DTOs of
+([07](../archi/07-code-architecture.md#http-api-v1)), and of the dashboard's sign-in, `/auth`
+([07](../archi/07-code-architecture.md#sign-in-auth)). It is generated from the DTOs of
 `crates/rewind-api` with `utoipa`. Do not edit it by hand.
 
 ## Regenerate it
@@ -39,7 +40,9 @@ change of the API shows in its diff.
 
 | Topic | Rule |
 | --- | --- |
-| Authentication | `Authorization: Bearer rewind_sk_…` on every request; none over the embedded server's socket (`.rewind/server.sock`) or to `POST /hooks/{token}` |
+| Authentication | `Authorization: Bearer <token>` on every request to `/v1`: an API key `rewind_sk_…`, or a member's access token from `/auth`; none over the embedded server's socket (`.rewind/server.sock`) or to `POST /hooks/{token}` |
+| Access | Every operation requires one permission of the catalog (`GET /v1/permissions`), held through the caller's grant and role; a missing one is `forbidden`, with a message that names it |
+| Sign-in | `/auth` is the dashboard's, for a browser: it reads and writes the cookie `rewind_session`, which `/v1` never reads; a `POST` takes a JSON body only; the steps answer an `AuthState` tagged by `status` |
 | JSON | camelCase fields, snake_case enumerated values, RFC 3339 times, durations `"30s"`, `"1h30m"` or a number of milliseconds |
 | Idempotency | `Idempotency-Key` on `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}` |
 | Errors | `application/problem+json`: `type` is `urn:rewind:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics`, `invalid-query` adds `query` |
@@ -54,12 +57,14 @@ The problem types:
 | --- | --- | --- |
 | `invalid-request` | 400 | A missing or invalid field, header or parameter; a webhook URL the server does not send to |
 | `invalid-query` | 400 | A query (`q`) that cannot be read; `query` gives the position of the term at fault |
-| `unauthorized` | 401 | No API key, or an unknown or revoked one |
-| `forbidden` | 403 | The key's role or allowed labels do not cover the request |
-| `not-found` | 404 | No such run, toolset, script, task, payload, subscription or key |
+| `unauthorized` | 401 | No token, or an unknown, revoked or expired one; on `/auth`, no session |
+| `forbidden` | 403 | The caller's grant does not hold the permission the request needs (the message names it), or its allowed labels do not cover the request; a member without a grant in the organization |
+| `not-found` | 404 | No such run, toolset, script, task, payload, subscription, key, role, member or invitation |
 | `run-ended` | 409 | A signal or a cancellation to a run that has ended |
 | `not-quarantined` | 409 | Releasing or giving up a run that is not quarantined |
 | `task-not-waiting` | 409 | Approving or rejecting a task that does not wait for the harness |
+| `role-in-use` | 409 | Deleting a role that a grant still points to |
+| `last-owner` | 409 | Changing or removing a grant that would leave the organization without an `owner` |
 | `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or its claim was lost |
 | `payload-too-large` | 413 | A body or payload above the server's limits; a host-tool failure above 64 KiB |
 | `unsupported-media-type` | 415 | A body that is not JSON where JSON is expected |
@@ -68,4 +73,5 @@ The problem types:
 | `quota-exceeded` | 429 | The tenant has its maximum of active runs |
 | `internal` | 500 | A fault of the platform |
 | `toolset-unavailable` | 502 | An MCP server of the toolset cannot be reached |
+| `identity-unavailable` | 502 | The identity provider (WorkOS) cannot be reached, or answered with an error |
 | `unavailable` | 503 | The server cannot serve the request now |

@@ -1,14 +1,16 @@
 //! What the engine needs from the outside world (`archi/07-code-architecture.md`, "Ports").
 //!
 //! Every source of non-determinism and every I/O goes through one of these traits: storage,
-//! payload values, the script sandbox, tool calls, type-checking, projections, telemetry,
-//! secrets, webhooks, time, ids and seeds. Ports are shaped by the domain's invariants, not by
-//! tables. They return `impl Future + Send`, and the engine is generic over them (static
-//! dispatch): composition roots pick the concrete adapters.
+//! access, identity, payload values, the script sandbox, tool calls, type-checking,
+//! projections, telemetry, secrets, webhooks, time, ids and seeds. Ports are shaped by the
+//! domain's invariants, not by tables. They return `impl Future + Send`, and the engine is
+//! generic over them (static dispatch): composition roots pick the concrete adapters.
 //!
 //! | Port | Adapters |
 //! | --- | --- |
 //! | [`JournalStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
+//! | [`AccessStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
+//! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
 //! | [`ScriptExecutor`] / [`ScriptInstance`] | `rewind-runtime` (V8) |
 //! | [`ToolDispatcher`] | static responses (memory), mocks, `rewind-mcp` |
@@ -19,16 +21,20 @@
 //! | [`WebhookSender`] | memory, HTTP (`rewind-server`) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
-//! The ports with state ([`JournalStore`], [`BlobStore`], [`ReadModel`], [`SecretStore`]) and
-//! [`SpanExporter`] have a conformance suite in the module `conformance` (feature
-//! `conformance`) that every adapter passes: five suites. A span exporter has no read side: its
-//! suite reads the backend through a collector the adapter's test provides.
+//! The ports with state ([`JournalStore`], [`AccessStore`], [`BlobStore`], [`ReadModel`],
+//! [`SecretStore`]), [`SpanExporter`] and [`WebhookSender`] have a conformance suite in the
+//! module `conformance` (feature `conformance`) that every adapter passes. A span exporter and a
+//! webhook sender have no read side: their suites read the backend through a collector or a
+//! receiver the adapter's test provides. An identity provider's contract is not observable
+//! through the port alone: its adapters test it.
 
+pub mod access;
 mod blob;
 mod checker;
 mod clock;
 mod dispatcher;
 mod executor;
+pub mod identity;
 mod journal;
 mod read_model;
 mod secrets;
@@ -36,6 +42,10 @@ mod telemetry;
 mod tenancy;
 mod webhooks;
 
+pub use access::{
+    AccessStore, Grant, GrantClaim, GrantDeletion, GrantWrite, InvalidPrincipal, Principal, Role,
+    RoleDeletion,
+};
 pub use blob::{BlobError, BlobStore};
 pub use checker::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
@@ -45,6 +55,11 @@ pub use dispatcher::{Dispatched, ToolCall, ToolDispatcher};
 pub use executor::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,
+};
+pub use identity::{
+    AccessClaims, Authentication, Client, IdentityError, IdentityProvider, Invitation,
+    InvitationId, InvitationState, Membership, MembershipId, MembershipStatus, Organization,
+    OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
 pub use journal::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CreateRun, Created, Enqueued, ExpiredRuns,

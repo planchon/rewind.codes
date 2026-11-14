@@ -120,8 +120,8 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
-the lifecycle webhooks. An API key limited to these labels makes the scope hold for every
-tool that takes a `run_id` ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
+the lifecycle webhooks. An API key whose grant is limited to these labels makes the scope hold for every
+tool that takes a `run_id` ([access](06-storage-and-scale.md#tenancy-identity-and-access)).
 
 ### What `run_script` returns
 

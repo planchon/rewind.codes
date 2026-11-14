@@ -288,7 +288,7 @@ async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupErr
                 .put_api_key(&ApiKey {
                     hash,
                     tenant: config.admin_tenant.clone(),
-                    role: rewind_api::admin::Role::Admin.as_str().to_owned(),
+                    role: rewind_api::access::OPERATOR.to_owned(),
                     allowed_labels: std::collections::BTreeMap::new(),
                     created_at: app.now(),
                     revoked_at: None,
