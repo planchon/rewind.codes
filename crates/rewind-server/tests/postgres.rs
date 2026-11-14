@@ -1,7 +1,8 @@
 //! The API end to end on Postgres (Docker): a server with the api role only and two servers with
 //! the worker role only share one database and one blob directory. Runs started through the api
 //! server are activated by the workers; host-tool tasks are long-polled through the api server;
-//! quotas hold across them. Skipped, with a message, when Docker is absent, unless
+//! quotas hold across them; members sign in on the api server, which the workers refuse.
+//! Skipped, with a message, when Docker is absent, unless
 //! `REWIND_REQUIRE_DOCKER` is set (CI): they fail then.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -13,12 +14,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rewind_api::access::BuiltInRole;
-use rewind_api::common::RunStatus;
-use rewind_api::runs::StartRun;
+use rewind_api::common::{Labels, RunStatus};
+use rewind_api::organization::{CreateInvitation, CreateOrganization};
+use rewind_api::runs::{RunFilter, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
 use rewind_api::toolsets::{CreateToolset, HostTool};
+use rewind_engine::ports::InvitationId;
 use serde_json::json;
-use support::{TestServer, wait};
+use support::{Browser, TestServer, token, wait};
 
 /// A Postgres container, removed on drop.
 struct Postgres {
@@ -248,6 +251,103 @@ async fn an_api_server_and_two_workers_share_one_postgres() {
     api.stop().await;
     first.stop().await;
     second.stop().await;
+    drop(postgres);
+}
+
+/// Members on Postgres: an organization created, an invitee signed in with the invitation's
+/// token and its grant claimed, a member removed and cut at the next request; the worker, on
+/// the same database, refuses access tokens.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn members_sign_in_and_are_granted_on_postgres() {
+    let Some(postgres) = Postgres::start() else {
+        return;
+    };
+    let shared = tempfile::tempdir().unwrap();
+    let blobs = shared.path().join("blobs");
+    let (identity, _clock) = support::identity();
+    identity.set_sign_ups_closed(true);
+    identity.add_user("ada@example.net", true);
+    let api = TestServer::start_with(
+        tempfile::tempdir().unwrap(),
+        &postgres.url(),
+        &blobs,
+        &["--role", "api"],
+        Some(identity.clone()),
+    )
+    .await;
+    let worker = TestServer::start_with(
+        tempfile::tempdir().unwrap(),
+        &postgres.url(),
+        &blobs,
+        &["--role", "worker", "--worker-name", "worker-1"],
+        Some(identity.clone()),
+    )
+    .await;
+
+    let mut ada = Browser::new(&api.url);
+    let state = ada
+        .sign_in(&identity, "ada@example.net", None)
+        .await
+        .unwrap();
+    let acme = api
+        .client(Some(&token(&state).0))
+        .create_organization(&CreateOrganization {
+            name: "Acme".into(),
+        })
+        .await
+        .unwrap();
+    let owner = api.client(Some(&token(&ada.switch(&acme.id).await.unwrap()).0));
+    assert_eq!(owner.whoami().await.unwrap().grant.unwrap().role, "owner");
+    let invitation = owner
+        .invite(&CreateInvitation {
+            email: "grace@example.net".into(),
+            role: "harness".into(),
+            allowed_labels: Labels::new(),
+        })
+        .await
+        .unwrap();
+    let invitation_token = identity
+        .invitation_token(&InvitationId::new(&invitation.id))
+        .unwrap();
+    let mut grace = Browser::new(&api.url);
+    let state = grace
+        .sign_in(&identity, "grace@example.net", Some(&invitation_token))
+        .await
+        .unwrap();
+    let grace = api.client(Some(&token(&state).0));
+    assert_eq!(grace.whoami().await.unwrap().grant.unwrap().role, "harness");
+    grace.list_runs(&RunFilter::default()).await.unwrap();
+
+    let refused = worker.client(Some(&token(&state).0)).whoami().await;
+    assert_eq!(
+        refused.unwrap_err().problem().unwrap().status,
+        401,
+        "a worker accepts only API keys"
+    );
+
+    let grace_id = owner
+        .list_members()
+        .await
+        .unwrap()
+        .members
+        .into_iter()
+        .find(|member| member.user.email == "grace@example.net")
+        .unwrap()
+        .user
+        .id;
+    owner.remove_member(&grace_id).await.unwrap();
+    assert_eq!(
+        grace
+            .list_runs(&RunFilter::default())
+            .await
+            .unwrap_err()
+            .problem()
+            .unwrap()
+            .status,
+        403
+    );
+    api.stop().await;
+    worker.stop().await;
     drop(postgres);
 }
 

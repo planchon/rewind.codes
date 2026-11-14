@@ -1,11 +1,14 @@
 //! `rewind server`: the engine host of Rewind (`archi/07-code-architecture.md`, "Crates").
 //!
-//! - The HTTP API `/v1` of `rewind-api`, with axum: API keys hashed in the store, roles and label
-//!   scopes, tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
+//! - The HTTP API `/v1` of `rewind-api`, with axum: API keys hashed in the store and members'
+//!   access tokens, grants, roles and label scopes, organizations, members and invitations,
+//!   tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
 //!   of a run (server-sent events); host-tool tasks long-polled by the harness's worker; inbound
 //!   webhooks that become signals; outbound lifecycle webhooks signed following Standard
 //!   Webhooks, sent concurrently and bounded per subscription (`deliveries`), never to the
 //!   private network of a deployed server.
+//! - The dashboard's sign-in `/auth` on the api role, through WorkOS (`rewind-workos`), with its
+//!   sealed cookies; a member's first grant in an organization.
 //! - The worker role: activations with the sticky cache, tool dispatch, the scheduler of timers
 //!   and deadlines, the projector, the retention jobs (`worker`).
 //! - The embedded server of a `.rewind/` directory: its lock, its unix socket, its idle stop
@@ -24,6 +27,7 @@ mod deliveries;
 mod embedded;
 mod error;
 mod extract;
+mod grants;
 mod http;
 mod serve;
 mod views;
@@ -37,7 +41,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 pub use config::{ConfigError, OtlpArg, RoleArg, ServerArgs};
-pub use serve::{Running, StartupError, VERSION, start};
+pub use serve::{Running, StartupError, VERSION, start, start_with_identity};
 
 /// Exit codes of `rewind server`.
 pub mod exit {

@@ -3,12 +3,13 @@
 The hosted deployment of Rewind: the API and the workers on Railway, the sites on Vercel, all
 under `rewind.codes`. It is the reference deployment of
 [`deploy/`](../README.md) adapted to a platform with managed Postgres and S3, no network policy
-and no choice of container runtime. It has one user, its owner.
+and no choice of container runtime. Its users are the people the operator approves through
+WorkOS's waitlist: they sign in to the dashboard ([sign-in](#sign-in)).
 
 | Name | Where | What |
 | --- | --- | --- |
 | `rewind.codes` | Vercel, project `rewind-landing` ([`landing/`](../../landing)) | The landing, static. `www.rewind.codes` redirects to it |
-| `app.rewind.codes` | Vercel, project `rewind-dashboard` ([`dashboard/`](../../dashboard)) | The dashboard. `/v1/*` is rewritten to `api.rewind.codes`, so the app calls the API on its own origin |
+| `app.rewind.codes` | Vercel, project `rewind-dashboard` ([`dashboard/`](../../dashboard)) | The dashboard. `/v1/*` and `/auth/*` are rewritten to `api.rewind.codes`, so the app calls the API and signs in on its own origin: the sign-in's cookies are the app's |
 | `api.rewind.codes` | Railway, service `edge` | Caddy ([`edge/Caddyfile`](edge/Caddyfile)): `POST /v1/test` to the workers, everything else to the api |
 | (private) | Railway, service `api` | `rewind server --role api`: the HTTP API and keys. No V8 |
 | (private) | Railway, service `worker` | `rewind server --role worker`: activations, tool dispatch, scheduler, projector, retention |
@@ -61,27 +62,47 @@ set on each). A release build of the server takes Railway about 10 minutes.
 | `REWIND_S3_ENDPOINT`, `REWIND_S3_REGION` | api, worker | `${{payloads.ENDPOINT}}`, `${{payloads.REGION}}` |
 | `REWIND_S3_ACCESS_KEY_ID`, `REWIND_S3_SECRET_ACCESS_KEY` | api, worker | References to the bucket's credentials: a reset of the credentials follows |
 | `REWIND_MASTER_KEY` | api, worker | 32 random bytes in base64. Back it up with the database: without it every stored credential is lost |
-| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_TENANT` | api | The first admin key (`rewind_sk_…`), tenant `default`. Never on the worker: it runs code written by a model |
+| `REWIND_ADMIN_KEY`, `REWIND_ADMIN_TENANT` | api | The operator's key (`rewind_sk_…`), tenant `default`. Never on the worker: it runs code written by a model |
+| `WORKOS_CLIENT_ID`, `WORKOS_API_KEY` | api | The WorkOS environment's client (`client_…`) and secret key (`sk_…`). Never on the worker |
+| `WORKOS_COOKIE_PASSWORD` | api | 32 random bytes in hexadecimal (`openssl rand -hex 32`): the key of the sign-in's sealed cookies. Changing it signs everyone out |
+| `WORKOS_REDIRECT_URI` | api | `https://app.rewind.codes/auth/callback`, registered in WorkOS |
 | `REWIND_PUBLIC_URL` | api, worker | `https://api.rewind.codes`: `webhook()` URLs start with it |
 | `REWIND_WORKER_NAME` | api | `api`. The worker keeps the default, its host name and process id, unique per replica |
 | `REWIND_ACTIVATIONS`, `REWIND_DISPATCHES`, `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | worker | `4`, `64`, `500`, `384MiB`, for a 1 GB limit |
 | `REWIND_LOG` | api, worker | `info` |
 
-Read the admin key with `railway variable list --service api --kv | grep REWIND_ADMIN_KEY`. It opens
-the dashboard, and creates the other keys as in
-[`deploy/README.md`](../README.md#tenants-and-api-keys), against `https://api.rewind.codes`.
+Read the admin key with `railway variable list --service api --kv | grep REWIND_ADMIN_KEY`. It
+creates the keys of any tenant as in
+[`deploy/README.md`](../README.md#tenants-keys-and-roles), against `https://api.rewind.codes`.
+
+## Sign-in
+
+People sign in on `app.rewind.codes`, with GitHub or a code by email, through WorkOS: the four
+`WORKOS_*` are on the api only (all four or none; a worker accepts only API keys). Sign-ups go
+through WorkOS's waitlist: the operator approves people in WorkOS's dashboard, which sends them
+an invitation; a member then creates an organization, or joins one by an invitation of its
+members, and gets their rights from their grant in Rewind
+([`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md#tenancy-identity-and-access)).
+
+Vercel rewrites `/auth/*` to the API like `/v1/*`, and the edge sends both to the api. The
+browser's address does not reach the api: Vercel's rewrite and Railway's proxy stand between,
+and the edge's `X-Forwarded-For` holds a proxy's private address, which the api does not pass
+to WorkOS. WorkOS records the browser's user agent.
 
 ## The walls
 
-Railway runs ordinary containers on a shared private network, and Rewind has one user: the owner
-decided that it needs neither gVisor nor the egress gateway (13 November 2026). Of the walls of
+Railway runs ordinary containers on a shared private network. The owner decided that it needs
+neither gVisor nor the egress gateway (13 November 2026); the people the operator approves run
+code behind the walls that hold
+([08](../../archi/08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)). Of the walls of
 [`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md) ("Sandboxed workers"),
 V8 and the egress checks of the `http` tool and of MCP servers hold: private, unique-local
 (Railway's `fd…` addresses), carrier-grade NAT and metadata addresses are refused, so a script
-cannot reach `postgres.railway.internal`. The admin key stays off the worker.
+cannot reach `postgres.railway.internal`. The admin key and WorkOS's key stay off the worker.
 
 ## Vercel
 
 Each site is a Vercel project deployed from its directory (`vercel deploy --prod` in `landing/`
 or `dashboard/`, linked to the team `planchons-projects`). The dashboard's `vercel.json` builds
-it with pnpm and rewrites `/v1/*` to the API; the landing is static files with a few headers.
+it with pnpm and rewrites `/v1/*` and `/auth/*` to the API; the landing is static files with a
+few headers.

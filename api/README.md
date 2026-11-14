@@ -42,7 +42,7 @@ change of the API shows in its diff.
 | --- | --- |
 | Authentication | `Authorization: Bearer <token>` on every request to `/v1`: an API key `rewind_sk_…`, or a member's access token from `/auth`; none over the embedded server's socket (`.rewind/server.sock`) or to `POST /hooks/{token}` |
 | Access | Every operation requires one permission of the catalog (`GET /v1/permissions`), held through the caller's grant and role; a missing one is `forbidden`, with a message that names it |
-| Sign-in | `/auth` is the dashboard's, for a browser: it reads and writes the cookie `rewind_session`, which `/v1` never reads; a `POST` takes a JSON body only; the steps answer an `AuthState` tagged by `status` |
+| Sign-in | `/auth` is the dashboard's, for a browser: it reads and writes the cookie `rewind_session`, which `/v1` never reads; a `POST` takes a JSON body only (`Content-Type: application/json`, else `unsupported-media-type`); the steps answer an `AuthState` tagged by `status`; `GET /auth/callback` redirects to `/#/`, or to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`). A member's access token without organization reaches only `GET /v1/whoami`, `POST /v1/organizations`, `GET /v1/invitations` and `POST /v1/invitations/{id}/accept` (`forbidden` elsewhere) |
 | JSON | camelCase fields, snake_case enumerated values, RFC 3339 times, durations `"30s"`, `"1h30m"` or a number of milliseconds |
 | Idempotency | `Idempotency-Key` on `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}` |
 | Errors | `application/problem+json`: `type` is `urn:rewind:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics`, `invalid-query` adds `query` |

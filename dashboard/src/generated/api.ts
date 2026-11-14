@@ -15,6 +15,9 @@ export interface paths {
          * The identity provider's redirect
          * @description Checks `state`, exchanges the code, keeps the outcome in the session cookie, and
          *     redirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.
+         *     When the sign-in did not go through, the redirect names why with a code
+         *     (`state_mismatch`, `provider_error`, `sign_in_failed`), and the session cookie is left
+         *     as it was.
          */
         get: operations["authCallback"];
         put?: never;
@@ -3168,12 +3171,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description To the dashboard, `/#/`, whatever the outcome. */
+            /** @description To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through. */
             302: {
                 headers: {
-                    /** @description `/#/`. */
+                    /** @description `/#/`, or `/?auth_error=<code>#/`. */
                     Location?: string;
-                    /** @description `rewind_session`; `rewind_oauth` cleared. */
+                    /** @description `rewind_session` when signed in or at a step; `rewind_oauth` cleared. */
                     "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
@@ -3423,6 +3426,15 @@ export interface operations {
             };
             /** @description A fault of the platform (`internal`). */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider could not revoke the session (`identity-unavailable`): the cookie is cleared anyway, and the session expires at the provider on its own. */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
