@@ -31,7 +31,13 @@ export type ScriptPage = Schemas["ScriptPage"];
 export type ToolStats = Schemas["ToolStats"];
 export type ToolStatsPage = Schemas["ToolStatsPage"];
 export type ServerInfo = Schemas["ServerInfo"];
-export type Problem = Schemas["Problem"];
+export type QuotaReached = Schemas["QuotaReached"];
+/**
+ * An answer that is not a success. The document flattens an optional `QuotaReached` into it
+ * (`quota-exceeded` adds `quota`, `scope`, `limit`, `used`, `resetsAt`), which the generator turns
+ * into required fields: they are optional here, as on the wire.
+ */
+export type Problem = Omit<Schemas["Problem"], keyof QuotaReached> & Partial<QuotaReached>;
 export type Trace = Schemas["Trace"];
 export type Quarantine = Schemas["Quarantine"];
 export type RunWait = Schemas["RunWait"];
@@ -74,11 +80,34 @@ export type ApiKey = Schemas["ApiKey"];
 export type CreateApiKey = Schemas["CreateApiKey"];
 export type UpdateOrganization = Schemas["UpdateOrganization"];
 
+// Namespaces: the end users of the organization, their quotas, use and alerts.
+export type Namespace = Schemas["Namespace"];
+export type NamespaceList = Schemas["NamespaceList"];
+export type NamespaceDetail = Schemas["NamespaceDetail"];
+export type NamespaceDefaults = Schemas["NamespaceDefaults"];
+export type Quotas = Schemas["Quotas"];
+export type QuotaUsage = Schemas["QuotaUsage"];
+export type QuotaKind = Schemas["QuotaKind"];
+export type QuotaAlert = Schemas["QuotaAlert"];
+export type QuotaAlertList = Schemas["QuotaAlertList"];
+export type DayUsage = Schemas["DayUsage"];
+export type Duration = Schemas["Duration"];
+export type PutNamespace = Schemas["PutNamespace"];
+export type PutNamespaceDefaults = Schemas["PutNamespaceDefaults"];
+export type RevokedTokens = Schemas["RevokedTokens"];
+
 export type ListRunsQuery = NonNullable<paths["/v1/runs"]["get"]["parameters"]["query"]>;
 export type ListScriptsQuery = NonNullable<paths["/v1/scripts"]["get"]["parameters"]["query"]>;
 export type ToolStatsQuery = NonNullable<paths["/v1/tools/stats"]["get"]["parameters"]["query"]>;
 export type RunStatsQuery = NonNullable<paths["/v1/runs/stats"]["get"]["parameters"]["query"]>;
 export type FailuresQuery = NonNullable<paths["/v1/runs/failures"]["get"]["parameters"]["query"]>;
+export type ListNamespacesQuery = NonNullable<
+  paths["/v1/namespaces"]["get"]["parameters"]["query"]
+>;
+export type NamespaceOrder = NonNullable<ListNamespacesQuery["order"]>;
+export type QuotaAlertsQuery = NonNullable<
+  paths["/v1/organization/quota-alerts"]["get"]["parameters"]["query"]
+>;
 
 export const RUN_STATUSES: readonly RunStatus[] = [
   "pending",

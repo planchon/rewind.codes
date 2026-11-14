@@ -33,7 +33,8 @@ export const DESCRIPTIONS: Record<Permission, string> = {
   "runs:delete": "Erase a run, its payloads included.",
   "toolsets:read": "List toolsets, read their declarations and search their tools.",
   "toolsets:write": "Register a toolset.",
-  "credentials:write": "Set the credentials of a toolset or a run.",
+  "credentials:write":
+    "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or of a run.",
   "tasks:work": "Claim host-tool tasks, and heartbeat, defer, complete or fail them.",
   "tasks:approve": "Approve or reject a parked task.",
   "subscriptions:read": "List the lifecycle webhooks.",
@@ -46,6 +47,12 @@ export const DESCRIPTIONS: Record<Permission, string> = {
   "api_keys:read": "List the tenant's API keys.",
   "api_keys:write": "Create and revoke API keys.",
   "organization:write": "Rename the organization and set its default role.",
+  "namespaces:read":
+    "List the namespaces (the end users), their limits, use, alerts and tokens in use.",
+  "namespaces:write":
+    "Set the default limits of namespaces and a namespace's exceptions, and erase a namespace.",
+  "tokens:write":
+    "Mint and revoke end users' tokens, and register and delete the keys that sign them.",
 };
 
 const HARNESS: Permission[] = [
@@ -63,6 +70,9 @@ const HARNESS: Permission[] = [
   "subscriptions:write",
   "members:read",
   "roles:read",
+  "namespaces:read",
+  "namespaces:write",
+  "tokens:write",
 ];
 
 export const BUILT_IN: Role[] = [
@@ -89,7 +99,14 @@ export const BUILT_IN: Role[] = [
     name: "reader",
     builtIn: true,
     description: "Reading runs, toolsets, subscriptions, members and roles: a dashboard.",
-    permissions: ["runs:read", "toolsets:read", "subscriptions:read", "members:read", "roles:read"],
+    permissions: [
+      "runs:read",
+      "toolsets:read",
+      "subscriptions:read",
+      "members:read",
+      "roles:read",
+      "namespaces:read",
+    ],
   },
 ];
 

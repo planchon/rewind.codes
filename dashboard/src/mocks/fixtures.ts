@@ -19,6 +19,8 @@ export interface ScriptFixture {
 
 export interface RunFixture {
   id: string;
+  /** The end user the run acts for. */
+  namespace: string;
   script: ScriptFixture;
   toolset: string;
   labels: Labels;
@@ -310,6 +312,18 @@ export interface WorldOptions {
   log?: (line: string) => void;
 }
 
+/**
+ * The end user a run acts for, unless it names one: tests run in `local`, triage for alice,
+ * digests for chen, support for several.
+ */
+function namespaceOf(labels: Labels, n: number): string {
+  if (labels.env === "test") return "local";
+  if (labels.agent === "triage") return "alice";
+  if (labels.agent === "digest") return "chen";
+  const spread = ["bob", "bob", "bob", "alice", "dana", "erin", "user_2fQ81", "user_7Kd02"];
+  return spread[n % spread.length] ?? "bob";
+}
+
 export function createWorld(options: WorldOptions): World {
   const { now } = options;
   const runs: RunFixture[] = [];
@@ -332,6 +346,7 @@ export function createWorld(options: WorldOptions): World {
     });
     const fixture: RunFixture = {
       id: runId(start, n),
+      namespace: namespaceOf(labels, n),
       script: s,
       toolset,
       labels,
@@ -714,8 +729,9 @@ export function createWorld(options: WorldOptions): World {
       now - 4 * DAY - 7 * HOUR,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-77", user: "u-1203", env: "prod" },
+      { agent: "support", conversation: "c-77", env: "prod" },
       { email: "lee@example.org" },
+      { namespace: "bob" },
     );
     const j = r.journal;
     j.after(15)
@@ -752,9 +768,10 @@ export function createWorld(options: WorldOptions): World {
       now - 47 * MINUTE,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-81", user: "u-1288", env: "prod" },
+      { agent: "support", conversation: "c-81", env: "prod" },
       { email: "kim@example.org" },
       {
+        namespace: "bob",
         taskStates: { 2: { state: "approval" } },
       },
     );
@@ -772,8 +789,9 @@ export function createWorld(options: WorldOptions): World {
       now - 12 * MINUTE,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-85", user: "u-1301", env: "prod" },
+      { agent: "support", conversation: "c-85", env: "prod" },
       { email: "jo@example.org" },
+      { namespace: "dana" },
     );
     r.journal
       .after(15)
@@ -803,9 +821,10 @@ export function createWorld(options: WorldOptions): World {
       now - 2 * DAY - 3 * HOUR,
       ONBOARDING,
       TOOLSET_CRM,
-      { agent: "support", conversation: "c-63", user: "u-1101", env: "prod" },
+      { agent: "support", conversation: "c-63", env: "prod" },
       { email: "ana@example.org" },
       {
+        namespace: "erin",
         errorAt: { line: 7, column: 20 },
       },
     );

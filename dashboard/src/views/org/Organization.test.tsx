@@ -79,7 +79,7 @@ describe("the Organization view", () => {
     const { callsTo } = renderApp("/organization/roles", { world });
     await user.click(await screen.findByRole("button", { name: /new role/i }));
     const editor = screen.getByRole("form", { name: "New role" });
-    expect(within(editor).getAllByRole("checkbox")).toHaveLength(20);
+    expect(within(editor).getAllByRole("checkbox")).toHaveLength(23);
     expect(within(editor).getByText("Erase a run, its payloads included.")).toBeInTheDocument();
 
     const name = within(editor).getByLabelText("Name");
@@ -189,6 +189,7 @@ describe("the Organization view", () => {
       "members:read",
       "members:invite",
       "roles:read",
+      "namespaces:read",
     ]);
     renderApp("/organization/invitations", { world });
     const form = await screen.findByRole("form", { name: "Invite someone" });
