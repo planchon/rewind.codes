@@ -666,6 +666,6 @@ Its build is what `rewind-server` serves:
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys are shown to whoever holds their permissions |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
-| Resources | None from another origin: the fonts are in the build. No inline script |
+| Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 
 `dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.

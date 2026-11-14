@@ -2,6 +2,8 @@ import { LogOut, Monitor, Moon, Star, Sun, X } from "lucide-react";
 import { useRef } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 import { queryLink } from "../model/query";
+import { OrganizationSwitcher, UserMenu } from "./AccountMenus";
+import { useAccess } from "./access";
 import { useServer } from "./Gate";
 import { useSavedSearches } from "./searches";
 import { maskKey, useSession } from "./session";
@@ -63,28 +65,36 @@ export function Layout() {
   const link = (path: string) =>
     queryLink(path, carried, win && WINDOW_VIEWS.has(path) ? { window: win } : {});
   const server = useServer();
-  const { key, signOut } = useSession();
+  const access = useAccess();
+  const { key, signOut, phase } = useSession();
   const { theme, setTheme, zone, setZone } = useSettings();
   const ThemeIcon = THEME_ICON[theme];
   const epochs = server.epochs.join(", ");
+  const reads = access.can("runs:read");
+  const member = phase.kind === "member" ? phase.state.user : null;
 
   return (
     <div className="shell">
       <header className="topbar">
-        <Link to="/overview" className="brand" aria-label="Rewind dashboard">
+        <Link to="/" className="brand" aria-label="Rewind dashboard">
           <span className="brand-mark" aria-hidden="true">
             AP
           </span>
           <span className="brand-name">Rewind</span>
         </Link>
         <nav className="nav" aria-label="Views">
-          <NavLink to={link("/overview")}>Overview</NavLink>
-          <NavLink to={link("/runs")}>Runs</NavLink>
-          <NavLink to={link("/waiting")}>Waiting</NavLink>
-          <NavLink to={link("/failures")}>Failures</NavLink>
-          <NavLink to="/scripts">Scripts</NavLink>
-          <NavLink to="/tools">Tools</NavLink>
-          <SavedMenu />
+          {reads && (
+            <>
+              <NavLink to={link("/overview")}>Overview</NavLink>
+              <NavLink to={link("/runs")}>Runs</NavLink>
+              <NavLink to={link("/waiting")}>Waiting</NavLink>
+              <NavLink to={link("/failures")}>Failures</NavLink>
+              <NavLink to="/scripts">Scripts</NavLink>
+              {access.toolStats && <NavLink to="/tools">Tools</NavLink>}
+            </>
+          )}
+          {access.sections.length > 0 && <NavLink to="/organization">Organization</NavLink>}
+          {reads && <SavedMenu />}
         </nav>
         <div className="topbar-end">
           <span className="server-meta" title={`Roles: ${server.roles.join(", ")}`}>
@@ -110,7 +120,9 @@ export function Layout() {
           >
             <ThemeIcon size={15} />
           </button>
-          {key && (
+          {member && <OrganizationSwitcher />}
+          {member && <UserMenu user={member} />}
+          {phase.kind === "key" && key && (
             <span className="copyable" title="The API key in use">
               <span className="mono">{maskKey(key)}</span>
               <button
@@ -118,7 +130,7 @@ export function Layout() {
                 className="icon-btn"
                 aria-label="Sign out"
                 title="Sign out"
-                onClick={signOut}
+                onClick={() => void signOut()}
               >
                 <LogOut size={14} />
               </button>

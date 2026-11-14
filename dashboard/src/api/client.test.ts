@@ -9,7 +9,7 @@ const NOW = Date.parse("2026-11-12T10:00:00Z");
 const ORIGIN = window.location.origin;
 
 function api(key: string | null = null) {
-  return new Api({ baseUrl: ORIGIN, key: () => key });
+  return new Api({ baseUrl: ORIGIN, token: () => key });
 }
 
 describe("Api", () => {
@@ -99,6 +99,82 @@ describe("Api", () => {
       status: 404,
       detail: "No run x.",
     });
+  });
+
+  it("renews a refused token once, and sends the request again with the new one", async () => {
+    const seen: (string | null)[] = [];
+    server.use(
+      http.get("*/v1/whoami", ({ request }) => {
+        const auth = request.headers.get("Authorization");
+        seen.push(auth);
+        if (auth !== "Bearer fresh")
+          return HttpResponse.json(
+            { type: "urn:rewind:problem:unauthorized", title: "Unauthorized", status: 401 },
+            { status: 401 },
+          );
+        return HttpResponse.json({ operator: false, permissions: [] });
+      }),
+    );
+    let token = "stale";
+    let renewals = 0;
+    const client = new Api({
+      baseUrl: ORIGIN,
+      token: () => token,
+      renew: async () => {
+        renewals += 1;
+        token = "fresh";
+        return true;
+      },
+    });
+    expect(await client.whoami()).toEqual({ operator: false, permissions: [] });
+    expect(seen).toEqual(["Bearer stale", "Bearer fresh"]);
+    expect(renewals).toBe(1);
+
+    // A token refused even renewed: the 401 is the answer.
+    token = "revoked";
+    const refused = new Api({ baseUrl: ORIGIN, token: () => token, renew: async () => true });
+    const error = await refused.whoami().catch((e: unknown) => e);
+    expect((error as ApiError).status).toBe(401);
+  });
+
+  it("sends /auth requests as JSON, without the token", async () => {
+    let seen: { type: string | null; auth: string | null; body: unknown } | null = null;
+    server.use(
+      http.post("*/auth/session", async ({ request }) => {
+        seen = {
+          type: request.headers.get("Content-Type"),
+          auth: request.headers.get("Authorization"),
+          body: await request.json(),
+        };
+        return HttpResponse.json(
+          {
+            status: "authenticated",
+            accessToken: "at",
+            expiresAt: "2026-11-14T10:05:00Z",
+            user: { id: "user_1", email: "ada@example.net" },
+            organizationId: "org_1",
+          },
+          { headers: { Date: new Date(Date.now() + 60_000).toUTCString() } },
+        );
+      }),
+    );
+    const answer = await api("rewind_sk_test").session("org_1");
+    expect(seen).toEqual({
+      type: "application/json",
+      auth: null,
+      body: { organizationId: "org_1" },
+    });
+    expect(answer.state.status).toBe("authenticated");
+    // The server's clock is a minute ahead.
+    expect(answer.skewMs).toBeGreaterThan(55_000);
+    expect(answer.skewMs).toBeLessThan(61_000);
+  });
+
+  it("reads a server without sign-in as one that takes a key", async () => {
+    server.use(...createHandlers(createWorld({ now: NOW }), { now: () => NOW }));
+    expect(await api().authConfig()).toBeNull();
+    server.use(...createHandlers(createWorld({ now: NOW, workos: true }), { now: () => NOW }));
+    expect(await api().authConfig()).toEqual({ methods: ["github", "magic_auth"], waitlist: true });
   });
 
   it("downloads the journal document", async () => {

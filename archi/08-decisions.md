@@ -319,6 +319,25 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | The mocked API is a set of MSW handlers over fixtures: vitest runs them with `msw/node`, and `pnpm dev:mock` serves them from the Vite dev server | MSW's service worker | Nothing of the mock reaches the build. |
 | IBM Plex Sans and Mono are bundled from `@fontsource`, Latin only | Fonts from a CDN; system fonts | The dashboard loads nothing from another origin, and looks the same on every machine. |
 
+### Taken while building the dashboard's sign-in and organization views (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The dashboard asks `GET /auth/config` first: an answer means the sign-in pages, a 404 the key form | A build flag; trying `/v1` without credentials | One build serves both, the embedded server and `app.rewind.codes`; 07 gives the 404 that meaning. |
+| The client renews a refused access token itself: `/v1` answering 401 calls `POST /auth/session` once (concurrent refusals share it) and sends the request again; a second 401 goes back to the sign-in | Refreshing only on a timer; a refresh per refused request | A tab put to sleep misses its timer; one renewal for a burst of requests keeps the session's single refresh token in step. |
+| The refresh is asked a minute before `expiresAt`, measured on the server's clock (the answer's `Date` header), at least a second apart, and 10 s apart while the server keeps the same token | The browser's clock alone | A browser clock ahead by minutes would ask continuously; the server refreshes only within its last minute. |
+| An answer of `POST /auth/session` asked before a step of the member (a switch, a sign-out) is dropped when it arrives after it | Applying every answer | A refresh racing a switch would bring back the previous organization. |
+| A stream closed by the server before the run ends resumes after the shortest wait, with the current token | Growing the wait at each close | The server closes a stream at its token's expiry, every 5 minutes on a paused run: that is not a failure. |
+| The query cache is keyed by the member and the organization of the session (`user:<id>@<org>`), or by the key | Clearing the cache on a switch | It supersedes the cache per key with the same reason: nothing read in one organization is shown in another, not even while the other's answers are on their way. |
+| A switch of organization opens the new one's home page | Staying on the same address | A run or a script of the previous organization does not exist in the new one. |
+| The views gate on `GET /v1/whoami`'s permissions, less the administration ones when the grant is limited to labels; a 403 reads `whoami` again | Gating on the role's name; letting the server refuse | Roles are data; 06 refuses administration to such a grant whatever its role, and a grant changed meanwhile shows at once. |
+| The role pickers offer the roles whose permissions the caller holds; the role editor disables the permissions the caller lacks; a member or a role beyond the caller cannot be edited from the view | Offering everything and showing the 403 | "No one gives more than they hold" is known before asking; the server still decides. Without `roles:read`, the role's name is typed. |
+| Members, Invitations and Settings are shown in a member's session only; Roles and API keys also to a key | Showing them to a key with the permissions | `whoami` has no organization for a key, and those three are a WorkOS organization's. |
+| A destructive action asks once more inline (revoke, remove, delete) | `window.confirm`; a modal | The question stays next to the row it is about, and works in tests. |
+| A member's picture (`pictureUrl`, GitHub's avatar through WorkOS) is shown, asked for without a referrer, with initials when it does not load | Initials only | It is the person's own picture, given by the API; the rule "nothing from another origin" is the build's: scripts, styles and fonts. |
+| The mocked world has one browser's session, held in the world rather than a cookie, and the mock's access tokens are opaque strings | Cookies through MSW | Node's `fetch` keeps no cookies under vitest; one session is what a dev server's browser has. The rules the mock enforces are the server's (06). |
+| `pnpm dev:mock` signs in as with WorkOS by default; `REWIND_MOCK_KEY` asks for a key, `REWIND_MOCK_WORKOS=0` for nothing | The key form by default | The dashboard of 0.1 is reached through `app.rewind.codes`; the other two remain one variable away. |
+
 ### Taken while building the runtime (November 2026)
 
 | Decision | Alternative rejected | Why |

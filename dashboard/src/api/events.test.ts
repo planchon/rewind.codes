@@ -9,7 +9,7 @@ import { followRun } from "./events";
 import type { Entry, RunStatus, StreamEvent } from "./types";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
-const api = new Api({ baseUrl: window.location.origin, key: () => "rewind_sk_k" });
+const api = new Api({ baseUrl: window.location.origin, token: () => "rewind_sk_k" });
 
 function frame(event: StreamEvent): string {
   const id = event.type === "entry" ? `id: ${event.idx}\n` : "";
@@ -86,6 +86,46 @@ describe("followRun", () => {
     expect(froms).toEqual(["0", "2"]);
     expect(out.entries.map((e) => e.idx)).toEqual([0, 1, 2]);
     expect(out.ends).toEqual(["active"]);
+  });
+
+  it("resumes with a fresh token when the server closes the stream at the token's expiry", async () => {
+    const j = new JournalBuilder(NOW)
+      .started({ script: "s", toolset: "t" })
+      .call(1, "a.b", {}, 3)
+      .ok(1, 1);
+    const [e0, e1, e2] = j.entries;
+    const seen: { from: string; auth: string | null }[] = [];
+    let token = "at_1";
+    server.use(
+      http.get("*/v1/runs/:id/events", ({ request }) => {
+        seen.push({
+          from: new URL(request.url).searchParams.get("from") ?? "",
+          auth: request.headers.get("Authorization"),
+        });
+        if (seen.length === 1) {
+          // The session refreshed the token meanwhile; the server closes this stream when the
+          // token it was opened with expires.
+          token = "at_2";
+          return new HttpResponse(
+            frame({ type: "entry", ...(e0 as Entry) }) + frame({ type: "entry", ...(e1 as Entry) }),
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        }
+        return new HttpResponse(
+          frame({ type: "entry", ...(e2 as Entry) }) + frame({ type: "end", status: "completed" }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }),
+    );
+    const member = new Api({ baseUrl: window.location.origin, token: () => token });
+    const out = collect();
+    await followRun(member, "r1", out.handlers, new AbortController().signal, { backoffMs: [1] });
+    expect(seen).toEqual([
+      { from: "0", auth: "Bearer at_1" },
+      { from: "2", auth: "Bearer at_2" },
+    ]);
+    expect(out.entries.map((e) => e.idx)).toEqual([0, 1, 2]);
+    expect(out.ends).toEqual(["completed"]);
   });
 
   it("retries after a server error, and stops on an unknown run", async () => {
