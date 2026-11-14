@@ -848,26 +848,17 @@ impl IdentityProvider for MemoryIdentity {
         invitation: &InvitationId,
     ) -> Result<Invitation, IdentityError> {
         let now = self.clock.now();
-        let mut state = self.lock()?;
+        let state = self.lock()?;
         let current = state
             .invitation(invitation, now)
             .ok_or_else(|| not_found(format!("invitation {invitation}")))?;
-        if !matches!(
-            current.state,
-            InvitationState::Pending | InvitationState::Expired
-        ) {
+        if current.state != InvitationState::Pending {
             return Err(refused(
                 "invitation_not_pending",
-                format!("the invitation {invitation} was accepted or revoked"),
+                format!("the invitation {invitation} expired, or was accepted or revoked"),
             ));
         }
-        let stored = state
-            .invitations
-            .get_mut(invitation)
-            .ok_or_else(|| not_found(format!("invitation {invitation}")))?;
-        stored.invitation.state = InvitationState::Pending;
-        stored.invitation.expires_at = now.saturating_add(INVITATION_LIFETIME);
-        Ok(stored.invitation.clone())
+        Ok(current)
     }
 
     async fn revoke_invitation(
@@ -1094,10 +1085,18 @@ mod tests {
             InvitationState::Expired
         );
         assert!(identity.accept_invitation(&invitation.id).await.is_err());
-        let resent = identity.resend_invitation(&invitation.id).await.unwrap();
-        assert_eq!(resent.state, InvitationState::Pending);
-        let revoked = identity.revoke_invitation(&invitation.id).await.unwrap();
+        assert!(
+            identity.resend_invitation(&invitation.id).await.is_err(),
+            "an expired invitation is invited again, not resent"
+        );
+        let other = identity
+            .invite(Some(&acme.id), "carol@example.net", None)
+            .await
+            .unwrap();
+        let resent = identity.resend_invitation(&other.id).await.unwrap();
+        assert_eq!(resent, other, "resending keeps the expiry");
+        let revoked = identity.revoke_invitation(&other.id).await.unwrap();
         assert_eq!(revoked.state, InvitationState::Revoked);
-        assert!(identity.accept_invitation(&invitation.id).await.is_err());
+        assert!(identity.accept_invitation(&other.id).await.is_err());
     }
 }

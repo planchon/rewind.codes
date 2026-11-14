@@ -424,7 +424,8 @@ pub trait IdentityProvider: Send + Sync {
         invitation: &InvitationId,
     ) -> impl Future<Output = Result<Invitation, IdentityError>> + Send;
 
-    /// Sends a pending or expired invitation again, with a new expiry.
+    /// Sends a pending invitation's email again. Its expiry does not change (WorkOS keeps it);
+    /// an expired invitation is refused, and the caller invites the email again.
     fn resend_invitation(
         &self,
         invitation: &InvitationId,
