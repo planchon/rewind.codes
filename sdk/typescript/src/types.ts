@@ -2,7 +2,7 @@
  * The types of the API `/v1`, named as in `api/openapi.json`. They are aliases of the types
  * generated in `generated/api.ts`, so a change of the API shows in the SDK's types.
  */
-import type { components } from "./generated/api.js";
+import type { components, operations } from "./generated/api.js";
 
 type Schemas = components["schemas"];
 
@@ -14,9 +14,12 @@ export type CancelReason = Schemas["CancelReason"];
 export type CheckResult = Schemas["CheckResult"];
 export type CreateApiKey = Schemas["CreateApiKey"];
 export type CreateSubscription = Schemas["CreateSubscription"];
+export type CreateToken = Schemas["CreateToken"];
+export type CreateTokenKey = Schemas["CreateTokenKey"];
 export type CreateToolset = Schemas["CreateToolset"];
 export type Credentials = Schemas["Credentials"];
 export type CredentialsExpired = Schemas["CredentialsExpired"];
+export type DayUsage = Schemas["DayUsage"];
 export type DeclarationFormat = Schemas["DeclarationFormat"];
 export type Declarations = Schemas["Declarations"];
 export type DeclarationsText = Schemas["DeclarationsText"];
@@ -46,13 +49,38 @@ export type LogLevel = Schemas["LogLevel"];
 export type LogLine = Schemas["LogLine"];
 export type McpServer = Schemas["McpServer"];
 export type McpTransport = Schemas["McpTransport"];
+export type Namespace = Schemas["Namespace"];
+export type NamespaceDefaults = Schemas["NamespaceDefaults"];
+export type NamespaceDetail = Schemas["NamespaceDetail"];
+export type NamespaceList = Schemas["NamespaceList"];
+/** The customer's own id for an end user: 1 to 128 ASCII letters, digits, `-`, `_`, `.`, `:` and `@`. */
+export type NamespaceName = Schemas["NamespaceName"];
+/** How `namespaces.list` orders the namespaces: by a use of the month, the largest first, or by name. */
+export type NamespaceOrder = NonNullable<NonNullable<operations["listNamespaces"]["parameters"]["query"]>["order"]>;
 export type OnInterruption = Schemas["OnInterruption"];
 export type ParkedReason = Schemas["ParkedReason"];
 export type Payload = Schemas["Payload"];
-export type Problem = Schemas["Problem"];
+export type Permission = Schemas["Permission"];
+/**
+ * A problem, as the API answers errors. With `quota-exceeded`, it also says which quota was reached (`quota`,
+ * `scope`, `limit`, `used`, `resetsAt`). The document flattens that part as a nullable `allOf` member, which
+ * `openapi-typescript` reads as always present: it is optional here.
+ */
+export type Problem = Omit<Schemas["Problem"], keyof QuotaReached> & Partial<QuotaReached>;
+export type PutNamespace = Schemas["PutNamespace"];
+export type PutNamespaceDefaults = Schemas["PutNamespaceDefaults"];
 export type Quarantine = Schemas["Quarantine"];
 export type QuarantineCause = Schemas["QuarantineCause"];
 export type QuerySpan = Schemas["QuerySpan"];
+export type QuotaAlert = Schemas["QuotaAlert"];
+export type QuotaAlertList = Schemas["QuotaAlertList"];
+export type QuotaKind = Schemas["QuotaKind"];
+export type QuotaReached = Schemas["QuotaReached"];
+export type QuotaScope = Schemas["QuotaScope"];
+export type QuotaUsage = Schemas["QuotaUsage"];
+/** Limits, each optional: the tenant's defaults, a namespace's exceptions, the limits that apply, the ceiling. */
+export type Quotas = Schemas["Quotas"];
+export type RevokedTokens = Schemas["RevokedTokens"];
 export type Role = Schemas["Role"];
 export type Route = Schemas["Route"];
 export type Run = Schemas["Run"];
@@ -77,6 +105,8 @@ export type ServerRole = Schemas["ServerRole"];
 export type ServerSummary = Schemas["ServerSummary"];
 export type Severity = Schemas["Severity"];
 export type SignalAccepted = Schemas["SignalAccepted"];
+/** The claims of a token the customer signs itself, with a key it registered (`kid` `rk_…`). */
+export type SignedTokenClaims = Schemas["SignedTokenClaims"];
 export type StatusCounts = Schemas["StatusCounts"];
 export type StreamEvent = Schemas["StreamEvent"];
 export type Subscription = Schemas["Subscription"];
@@ -85,6 +115,9 @@ export type TaskBatch = Schemas["TaskBatch"];
 export type TaskState = Schemas["TaskState"];
 export type TestRequest = Schemas["TestRequest"];
 export type TestResult = Schemas["TestResult"];
+export type Token = Schemas["Token"];
+export type TokenAlgorithm = Schemas["TokenAlgorithm"];
+export type TokenKey = Schemas["TokenKey"];
 export type Tool = Schemas["Tool"];
 export type ToolFailure = Schemas["ToolFailure"];
 export type ToolFailureKind = Schemas["ToolFailureKind"];

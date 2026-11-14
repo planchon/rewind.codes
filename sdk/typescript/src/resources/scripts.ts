@@ -24,24 +24,34 @@ export interface ListScriptsParams extends RequestOptions {
 export class Scripts {
   constructor(private readonly transport: Transport) {}
 
-  /** Type-checks a script against the sandbox lib and the toolset's declarations. Nothing runs. */
+  /**
+   * Type-checks a script against the sandbox lib and the toolset's declarations, under the limits of the client's
+   * namespace (its longest script). Nothing runs. A key's client without a namespace is refused
+   * (`NamespaceRequiredError`).
+   */
   check(params: CheckParams): Promise<CheckResult> {
     const { signal, ...body } = params;
-    return this.transport.send(() => this.transport.api.POST("/v1/check", { body, signal }), {
-      retry: true,
-      signal,
-    });
+    return this.transport.send(
+      () => this.transport.api.POST("/v1/check", { params: { header: this.transport.namespaceHeader }, body, signal }),
+      { retry: true, createsInNamespace: true, signal },
+    );
   }
 
   /**
-   * Runs a scenario in mock mode, in virtual time: against a cassette, mock handlers and static
-   * responses, and checks its expectations. No tool is really called.
+   * Runs a scenario in mock mode, in virtual time, under the limits of the client's namespace: against a cassette,
+   * mock handlers and static responses, and checks its expectations. No tool is really called. A key's client without
+   * a namespace is refused (`NamespaceRequiredError`).
    */
   test(request: TestRequest, options: RequestOptions = {}): Promise<TestResult> {
-    return this.transport.send(() => this.transport.api.POST("/v1/test", { body: request, signal: options.signal }), {
-      retry: true,
-      signal: options.signal,
-    });
+    return this.transport.send(
+      () =>
+        this.transport.api.POST("/v1/test", {
+          params: { header: this.transport.namespaceHeader },
+          body: request,
+          signal: options.signal,
+        }),
+      { retry: true, createsInNamespace: true, signal: options.signal },
+    );
   }
 
   /** A page of the distinct scripts executed, most recently run first. */

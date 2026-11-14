@@ -11,16 +11,20 @@ export class WebhookVerificationFailed extends RewindError {
   override readonly name = "WebhookVerificationFailed";
 }
 
-const EVENT_TYPES: ReadonlySet<string> = new Set<WebhookEventType>([
-  "run.completed",
-  "run.failed",
-  "run.cancelled",
-  "run.aborted",
-  "run.suspended",
-  "run.quarantined",
-  "tool.schema_changed",
-  "credentials.expired",
-]);
+/** Every kind of event: a kind the API adds and this list misses fails to compile. */
+const EVENT_TYPES: ReadonlySet<string> = new Set(
+  Object.keys({
+    "run.completed": true,
+    "run.failed": true,
+    "run.cancelled": true,
+    "run.aborted": true,
+    "run.suspended": true,
+    "run.quarantined": true,
+    "tool.schema_changed": true,
+    "credentials.expired": true,
+    "quota.alert": true,
+  } satisfies Record<WebhookEventType, true>),
+);
 
 /**
  * Verifies a lifecycle webhook and returns its event. Deliveries are signed following Standard

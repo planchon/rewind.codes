@@ -138,14 +138,19 @@ export interface EventsParams extends RequestOptions {
   maxReconnects?: number | undefined;
 }
 
-/** Runs: start, follow, steer and read them. */
+/**
+ * Runs: start, follow, steer and read them. A client bound to a namespace, or holding an end user's token, reaches
+ * that namespace's runs only; a key's client without one reads every namespace of the tenant.
+ */
 export class Runs {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Starts a run. The script is compiled, checked and type-checked first: a script that cannot
-   * run is refused with `invalid-script` (a `RewindApiError` with `diagnostics`) before any run
-   * exists. With `wait`, answers when the run ends or `wait` passes, whichever comes first.
+   * Starts a run in the client's namespace: the end user it acts for (`rewind.namespace(name)`, or an end user's
+   * token). A key's client without a namespace is refused (`NamespaceRequiredError`). The script is compiled,
+   * checked and type-checked first: a script that cannot run is refused with `invalid-script` (a `RewindApiError`
+   * with `diagnostics`) before any run exists. With `wait`, answers when the run ends or `wait` passes, whichever
+   * comes first.
    */
   async start(params: StartRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
@@ -155,11 +160,11 @@ export class Runs {
     const run = await this.transport.send(
       () =>
         this.transport.api.POST("/v1/runs", {
-          params: { header: { "Idempotency-Key": idempotencyKey } },
+          params: { header: { "Idempotency-Key": idempotencyKey, ...this.transport.namespaceHeader } },
           body: { ...body, wait: firstWait(wait) },
           signal,
         }),
-      { retry: idempotencyKey !== undefined, signal },
+      { retry: idempotencyKey !== undefined, createsInNamespace: true, signal },
     );
     return this.waitUntil(run, asked, deadline, signal);
   }
@@ -306,9 +311,9 @@ export class Runs {
   }
 
   /**
-   * Forks a run with a corrected script (`retry_run`): a new run that reuses the parent's
-   * recorded results while its commands match, and continues live at the first difference, at
-   * `at`, or at the end of the parent's history.
+   * Forks a run with a corrected script (`retry_run`): a new run, in its parent's namespace, that reuses the parent's
+   * recorded results while its commands match, and continues live at the first difference, at `at`, or at the end of
+   * the parent's history.
    */
   async fork(id: string, params: ForkRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;

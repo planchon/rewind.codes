@@ -1,4 +1,4 @@
-import type { Diagnostic, Problem, QuerySpan } from "./types.js";
+import type { Diagnostic, Problem, QuerySpan, QuotaReached } from "./types.js";
 
 /** The kinds of problem the API answers with: the slug of `urn:rewind:problem:<slug>`. */
 export type ProblemSlug =
@@ -10,6 +10,9 @@ export type ProblemSlug =
   | "run-ended"
   | "not-quarantined"
   | "task-not-waiting"
+  | "role-in-use"
+  | "namespace-deleting"
+  | "last-owner"
   | "task-gone"
   | "payload-too-large"
   | "unsupported-media-type"
@@ -18,6 +21,7 @@ export type ProblemSlug =
   | "quota-exceeded"
   | "internal"
   | "toolset-unavailable"
+  | "identity-unavailable"
   | "unavailable";
 
 const PROBLEM_PREFIX = "urn:rewind:problem:";
@@ -29,7 +33,7 @@ export class RewindError extends Error {
 
 /** The API answered with an error (`application/problem+json`). */
 export class RewindApiError extends RewindError {
-  override readonly name = "RewindApiError";
+  override readonly name: string = "RewindApiError";
   /** The HTTP status. */
   readonly status: number;
   /** The problem as the server sent it; `about:blank` when the body was not a problem. */
@@ -59,6 +63,34 @@ export class RewindApiError extends RewindError {
   /** With `invalid-query`: where the term at fault is in the query, in characters. */
   get query(): QuerySpan | undefined {
     return this.problem.query ?? undefined;
+  }
+
+  /**
+   * With `quota-exceeded`: the quota reached, at which scope (`namespace` or `organization`), its limit, the use, and
+   * when a monthly quota frees (`resetsAt`).
+   */
+  get quota(): QuotaReached | undefined {
+    const { quota, scope, limit, used, resetsAt } = this.problem;
+    if (quota === undefined || scope === undefined || limit === undefined || used === undefined) {
+      return undefined;
+    }
+    return { quota, scope, limit, used, ...(resetsAt === undefined ? {} : { resetsAt }) };
+  }
+}
+
+/**
+ * A key's request that creates in a namespace (a run, a check, a test) named none: the server's 400
+ * (`invalid-request`). Every run belongs to an end user: send it from a client bound to the end user's namespace,
+ * `rewind.namespace(name)`, or from a client holding the end user's token, `new Rewind({ token })`.
+ */
+export class NamespaceRequiredError extends RewindApiError {
+  override readonly name: string = "NamespaceRequiredError";
+
+  constructor(problem: Problem) {
+    super(problem);
+    this.message =
+      `${problem.detail.replace(/[.\s]+$/, "")}. This client names no namespace: ` +
+      "start runs, checks and tests with rewind.namespace(endUserId), or with the end user's token (new Rewind({ token }))";
   }
 }
 

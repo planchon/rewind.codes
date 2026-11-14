@@ -8,6 +8,11 @@ export interface HostToolContext {
   /** The claimed task, as the server sent it. */
   readonly task: Task;
   readonly runId: string;
+  /**
+   * The namespace of the run: the end user the handler acts for. Act on their data only, and reach their runs with
+   * `rewind.namespace(ctx.namespace)`.
+   */
+  readonly namespace: string;
   /** The call's position in the run. */
   readonly seq: number;
   /** From 1. Above 1, an earlier attempt was interrupted: the call may already have happened. */
@@ -97,6 +102,10 @@ export interface WorkerOptions {
  * Executes the host tools of a harness: it long-polls `GET /v1/tasks` for its tools, runs each
  * handler, keeps the claim alive with heartbeats while it runs, and answers with the result, or
  * the failure when the handler throws. A handler can also defer its answer.
+ *
+ * One worker with the customer's key serves every end user: each task names the namespace of its
+ * run (`ctx.namespace`). A worker holding an end user's token claims only the tasks of that
+ * namespace's runs.
  */
 export class HostToolWorker {
   /** Settles when the worker has stopped and its handlers have answered; rejects on a fatal error. */
@@ -205,6 +214,7 @@ export class HostToolWorker {
     const context: HostToolContext = {
       task,
       runId: task.runId,
+      namespace: task.namespace,
       seq: task.seq,
       attempt: task.attempt,
       idempotencyKey: task.idempotencyKey,
@@ -435,6 +445,9 @@ function jsonOutcome(task: Task, outcome: Outcome): Outcome {
 }
 
 function defaultOnError(error: unknown, info: WorkerErrorInfo): void {
-  const task = info.task === undefined ? "" : ` (${info.task.tool}, run ${info.task.runId}, call ${info.task.seq})`;
+  const task =
+    info.task === undefined
+      ? ""
+      : ` (${info.task.tool}, run ${info.task.runId}, call ${info.task.seq}, namespace ${info.task.namespace})`;
   console.error(`[Rewind worker] ${info.phase}${task}:`, error);
 }

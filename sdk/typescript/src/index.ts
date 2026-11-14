@@ -1,8 +1,15 @@
 export { Rewind, type RewindOptions, type Webhooks } from "./client.js";
 
-export { RewindApiError, RewindConnectionError, RewindError, isProblem, type ProblemSlug } from "./errors.js";
+export {
+  NamespaceRequiredError,
+  RewindApiError,
+  RewindConnectionError,
+  RewindError,
+  isProblem,
+  type ProblemSlug,
+} from "./errors.js";
 export { formatDuration, toMillis } from "./duration.js";
-export type { TransportOptions } from "./http.js";
+export { isNamespaceName, type TransportOptions } from "./http.js";
 
 export type { RequestOptions } from "./resources/toolsets.js";
 export { Toolsets } from "./resources/toolsets.js";
@@ -27,6 +34,16 @@ export {
   Tools,
   type ToolStatsParams,
 } from "./resources/admin.js";
+export {
+  DefaultLimits,
+  Namespaces,
+  TokenKeys,
+  Tokens,
+  type CreatedToken,
+  type ListNamespacesParams,
+  type NewTokenKey,
+  type QuotaAlertsParams,
+} from "./resources/namespaces.js";
 
 export {
   HostToolError,

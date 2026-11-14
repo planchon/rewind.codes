@@ -11,7 +11,7 @@ import {
   type Task,
   type WorkerErrorInfo,
 } from "../src/index.js";
-import { RUN_ID, TOOLSET, task, until } from "./fixtures.js";
+import { NAMESPACE, RUN_ID, TOOLSET, task, until } from "./fixtures.js";
 import { MockServer, json, noContent, problem, type JsonReply, type MockRequest } from "./mock-server.js";
 
 let server: MockServer;
@@ -83,6 +83,7 @@ describe("the host-tool worker", () => {
 
     expect(context).toMatchObject({
       runId: RUN_ID,
+      namespace: NAMESPACE,
       seq: 3,
       attempt: 1,
       idempotencyKey: `${RUN_ID}/3`,
@@ -90,6 +91,35 @@ describe("the host-tool worker", () => {
       traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
     });
     expect(context?.signal.aborted).toBe(false);
+  });
+
+  it("tells each handler the end user it acts for, whatever the namespace of the task", async () => {
+    const seen: string[] = [];
+    start({
+      ask_user: (_args, ctx) => {
+        seen.push(ctx.namespace);
+        return ctx.namespace;
+      },
+    });
+    queue.push(task({ token: "tok-a", namespace: "alice" }), task({ id: "task-2", token: "tok-b", namespace: "bob" }));
+    await until(() => answers("complete", "tok-a").length === 1 && answers("complete", "tok-b").length === 1);
+    expect(seen.sort()).toEqual(["alice", "bob"]);
+    expect(answers("complete", "tok-a")[0]?.body).toEqual({ result: "alice" });
+    expect(answers("complete", "tok-b")[0]?.body).toEqual({ result: "bob" });
+  });
+
+  it("claims with an end user's token, or for one namespace", async () => {
+    const asAlice = new Rewind({ url: server.url, token: "rewind_nt_alice" });
+    worker = asAlice.worker({ toolset: TOOLSET, tools: { ask_user: () => null }, pollWait: "1s" });
+    await until(() => server.calls("GET", "/v1/tasks").length >= 1);
+    await worker.stop();
+    worker = rewind.namespace("bob").worker({ toolset: TOOLSET, tools: { ask_user: () => null }, pollWait: "1s" });
+    await until(() => server.calls("GET", "/v1/tasks").length >= 2);
+    const [first, second] = server.calls("GET", "/v1/tasks");
+    expect(first?.headers["authorization"]).toBe("Bearer rewind_nt_alice");
+    expect(first?.headers["rewind-namespace"]).toBeUndefined();
+    expect(second?.headers["authorization"]).toBe("Bearer rewind_sk_worker");
+    expect(second?.headers["rewind-namespace"]).toBe("bob");
   });
 
   it("completes with null when the handler returns nothing", async () => {

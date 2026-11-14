@@ -4,7 +4,8 @@ The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 
 - **the client** of the HTTP API `/v1`
   ([`api/openapi.json`](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json)): toolsets, runs,
-  signals, forks, traces, journals, credentials, webhooks;
+  signals, forks, traces, journals, credentials, webhooks, and the end users of the harness (namespaces, their tokens
+  and their quotas);
 - **the host-tool worker**, which executes the harness's own tools when scripts call them;
 - **the agent tools**, ready-made tools for the model (`run_script`, `get_run`…), with adapters for the Anthropic
   and OpenAI tool formats.
@@ -35,7 +36,8 @@ const toolset = await rewind.toolsets.create({
 });
 // toolset.declarations.prompt or .dts → the model's system prompt
 
-const run = await rewind.runs.start({
+// Every run acts for one end user of the harness: its namespace (below).
+const run = await rewind.namespace(user.id).runs.start({
   toolset: toolset.id,
   script: code,
   input: {},
@@ -47,36 +49,131 @@ const run = await rewind.runs.start({
 });
 ```
 
-| Namespace              | Calls                                                                                                                                                                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rewind.toolsets`      | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
-| `rewind.scripts`       | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
-| `rewind.runs`          | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
-| `rewind.tasks`         | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
-| `rewind.approvals`     | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
-| `rewind.payloads`      | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
-| `rewind.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
-| `rewind.webhooks`      | `verify`                                                                                                                                                                                                                           |
-| `rewind.tools`         | `stats`                                                                                                                                                                                                                            |
-| `rewind.apiKeys`       | `create`, `revoke`                                                                                                                                                                                                                 |
-| `rewind.server`        | `info`, `stop`                                                                                                                                                                                                                     |
+| Resource                     | Calls                                                                                                                                                                                                                              |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rewind.toolsets`            | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
+| `rewind.scripts`             | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
+| `rewind.runs`                | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
+| `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
+| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
+| `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts`                                                                                                        |
+| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                               |
+| `rewind.namespaces.tokens`   | `create` (its answer holds the token, once), `revoke`, `revokeAll`                                                                                                                                                                 |
+| `rewind.tokenKeys`           | `create`, `list`, `delete`: the keys the harness signs end users' tokens with                                                                                                                                                      |
+| `rewind.subscriptions`       | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
+| `rewind.webhooks`            | `verify`                                                                                                                                                                                                                           |
+| `rewind.tools`               | `stats`                                                                                                                                                                                                                            |
+| `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                 |
+| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                     |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
 `status`, `slug` (`"run-ended"`, `"invalid-script"`…), `detail` (written for a model), `diagnostics` (for a refused
-script) and `query` (for a query that cannot be read: where the term at fault is). `isProblem(error, "task-gone")` tests the kind. A server that cannot be reached gives a `RewindConnectionError`.
+script), `query` (for a query that cannot be read: where the term at fault is) and `quota` (for `quota-exceeded`: which
+quota, at which scope, its limit, the use and when it frees). `isProblem(error, "task-gone")` tests the kind. A key's
+client that starts a run, checks or tests a script without naming a namespace gets the server's 400 as a
+`NamespaceRequiredError`. A server that cannot be reached gives a `RewindConnectionError`.
 
 **Retries.** A request that is safe to repeat is sent again after a network error or a 503, twice by default
 (`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration, checks and tests, and the requests
-that carry an idempotency key. Starting a run, forking it or sending a signal without a key is never repeated.
+that carry an idempotency key. Starting a run, forking it or sending a signal without a key is never repeated, nor is
+minting a token.
 
 **Waiting.** `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` take `wait`: they answer when the run ends or
 `wait` passes. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never cut it.
 
 **The event stream.** `runs.events(id, { follow: true })` is an async iterator over the run's journal entries as they
 are committed, ending with `{ type: "end" }`. A dropped connection resumes after the last entry received.
+
+## End users: namespaces and tokens
+
+A harness serves its own users, the **end users** of its product. Each one has a **namespace**: their runs, the scripts
+those runs ran, their credentials and their use live there, and nothing of one end user is visible to another. A
+namespace's name is the harness's own id for the end user: 1 to 128 ASCII letters, digits, `-`, `_`, `.`, `:` and `@`
+(an opaque id is better than an email: it appears in webhooks, the dashboard and the service's logs). It is created at
+its first use.
+
+**The harness's backend** holds its API key, which reaches every namespace, and names the end user of each request with
+`rewind.namespace(name)`: a client whose requests carry the header `Rewind-Namespace`. A key needs it to start a run,
+check or test a script (there is no default namespace); on a read, it narrows the answer to that namespace, and a run
+of another end user is missing (404). Without it, a read covers every namespace.
+
+```ts
+const asAlice = rewind.namespace(user.id); // cheap: one per request is fine
+const run = await asAlice.runs.start({ toolset: toolset.id, script: code, wait: "30s" });
+const runs = await asAlice.runs.list({ status: "failed" }); // Alice's runs only
+await rewind.runs.start({ script: code }); // NamespaceRequiredError: the server's 400
+```
+
+**The agent acting for one end user** holds a token of their namespace. With it the agent, and every script its model
+writes, reaches that namespace only. The backend mints an opaque token (`rewind_nt_…`; 1 hour by default, 30 days at
+most), or signs a JWT itself with a key it registered.
+
+```ts
+// In the harness's backend, with its key:
+const { token } = await rewind.namespaces.tokens.create(user.id, {
+  ttl: "1h",
+  permissions: ["runs:read", "runs:start", "runs:control", "toolsets:read"], // the default
+  labels: { conversation: conversation.id }, // optional: the runs it reaches carry them
+});
+
+// In the agent acting for that user:
+const asUser = new Rewind({ url: process.env.REWIND_URL, token });
+const agentTools = asUser.agentTools({ toolset: toolset.id });
+
+// Revoking: one token by its id, or every token of the namespace (signed ones issued before now included).
+await rewind.namespaces.tokens.revoke(id);
+await rewind.namespaces.tokens.revokeAll(user.id);
+```
+
+A token the harness signs needs no call to Rewind: register the public key once, then sign with any JOSE library, such
+as [`jose`](https://github.com/panva/jose). The header names the key (`kid`), `sub` is the namespace, `aud` is
+`rewind`, `iat` and `exp` are at most 30 days apart; `permissions`, `labels` and `jti` are optional
+(`SignedTokenClaims`).
+
+```ts
+import { SignJWT, exportJWK, generateKeyPair } from "jose";
+
+const { publicKey, privateKey } = await generateKeyPair("EdDSA", { crv: "Ed25519" });
+const { kid } = await rewind.tokenKeys.create({ name: "backend", jwk: await exportJWK(publicKey) });
+
+const token = await new SignJWT({ permissions: ["runs:read", "runs:start"] })
+  .setProtectedHeader({ alg: "EdDSA", kid })
+  .setSubject(user.id)
+  .setAudience("rewind")
+  .setIssuedAt()
+  .setExpirationTime("1h")
+  .sign(privateKey);
+// Deleting the key (rewind.tokenKeys.delete(kid)) refuses every token it signed.
+```
+
+**Quotas** protect the platform and the harness from an end user who abuses its product: CPU time per month (alerts
+only), active runs, runs per month, distinct scripts, the longest TTL and the longest script. The harness sets the
+default limits of every namespace and the exceptions of one (a paying end user, a blocked one), under its ceiling.
+
+```ts
+await rewind.namespaces.defaults.put({ defaults: { activeRuns: 5, runsPerMonth: 1_000, maxTtl: "7d" } });
+await rewind.namespaces.put("user_2fQ81", { exceptions: { activeRuns: 0 } }); // blocked
+
+const nearLimits = await rewind.namespaces.list({ above: 0.8, order: "runs" }); // at 80 % of a limit or more
+const alice = await rewind.namespaces.get(user.id); // limits, use per day, alerts, tokens in use
+const { alerts } = await rewind.namespaces.alerts({ month: "2026-11" });
+
+try {
+  await asAlice.runs.start({ script: code });
+} catch (error) {
+  if (isProblem(error, "quota-exceeded")) console.log(error.quota); // { quota: "runs_per_month", scope, limit, used, resetsAt }
+}
+```
+
+- An end user's own credentials for a toolset (their GitHub token): `rewind.namespaces.setCredentials(user.id,
+toolset.id, credentials)`. A run uses its own credentials if it has some, else its namespace's, else the toolset's.
+- `rewind.namespaces.delete(user.id)` erases the end user in the background: their tokens, runs, credentials and use.
+- Toolsets and webhook subscriptions stay the harness's: register the tools once, receive every end user's events,
+  each naming its `namespace`.
 
 ## The host-tool worker
 
@@ -91,8 +188,9 @@ const worker = rewind.worker({
   concurrency: 10,
   tools: {
     lookup_customer: async ({ email }, ctx) => {
+      // ctx.namespace is the end user the run acts for: act on their data only.
       // ctx.idempotencyKey is the same on every attempt: use it to recognize a call already made.
-      const customer = await crm.find(email, { signal: ctx.signal });
+      const customer = await crm.find(ctx.namespace, email, { signal: ctx.signal });
       if (!customer) throw new HostToolError(`no customer ${email}`); // the script gets a ToolError
       return customer;
     },
@@ -110,6 +208,8 @@ await rewind.tasks.complete(token, { answer: "yes" });
 await worker.stop(); // lets the claim in flight finish, then waits for the handlers
 ```
 
+- One worker with the harness's key serves every end user: each task names the namespace of its run
+  (`ctx.namespace`). A worker holding an end user's token claims only the tasks of that namespace's runs.
 - A thrown `HostToolError` is the tool's failure: the script gets a `ToolError` with its `message` and `data`. With
   `retryable: true`, a tool under the `retry` policy is called again later. Any other exception fails the call too,
   with `Name: message`, and is reported to `onError`.
@@ -137,7 +237,8 @@ for (const approval of rewind.approvals.pending(run)) {
 ## The agent tools
 
 ```ts
-const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversation: convId } });
+// The model's runs belong to the end user: a client bound to their namespace, or holding their token.
+const agentTools = rewind.namespace(user.id).agentTools({ toolset: toolset.id, labels: { conversation: convId } });
 
 // Anthropic Messages API
 const answer = await anthropic.messages.create({ model, messages, tools: agentTools.anthropic.tools });
@@ -175,7 +276,8 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   a run without them as for a run that does not exist. Give the harness an API key limited to these labels so the
   server holds the scope too.
 - Mistakes the model can fix (a bad argument, a refused script, a run that has ended) come back as a result with
-  `isError`. Faults of the platform (an unreachable server, a 401, a 5xx) are thrown.
+  `isError`, and so does a quota reached, in words written for the model. Faults of the platform or of the harness (an
+  unreachable server, a 401, a 5xx, a key's client that names no namespace) are thrown.
 - `result.run` holds the run the call started or read, for the harness: `rewind.approvals.pending(result.run)` says what
   waits for it.
 - Options: `tools` (a subset), `wait` (30 s), `maxWait` (2 min, the longest wait the model may ask for), `ttl`,
@@ -195,7 +297,8 @@ app.post("/rewind-events", express.raw({ type: "application/json" }), (req, res)
     throw error;
   }
   // Deduplicate on the webhook-id header: a retried delivery keeps it.
-  if (event.type === "run.completed") resumeConversation(event.data.run);
+  if (event.type === "run.completed") resumeConversation(event.data.run); // event.data.run.namespace: the end user
+  if (event.type === "quota.alert") warnCustomer(event.data); // namespace (null: the ceiling), quota, threshold, used, limit
   res.sendStatus(204);
 });
 ```

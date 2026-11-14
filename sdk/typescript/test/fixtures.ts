@@ -4,6 +4,8 @@ import type { Payload, Run, Task } from "../src/types.js";
 
 export const RUN_ID = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10";
 export const TOOLSET = "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4";
+/** The end user the runs and tasks of the tests belong to. */
+export const NAMESPACE = "user_2fQ81";
 
 /** A payload as the API shows it; `inline: false` leaves the value out, as above 256 KiB. */
 export function payload(value: unknown, inline = true): Payload {
@@ -19,6 +21,7 @@ export function payload(value: unknown, inline = true): Payload {
 export function run(overrides: Partial<Run> = {}): Run {
   return {
     id: RUN_ID,
+    namespace: NAMESPACE,
     status: "completed",
     createdAt: "2026-11-12T10:00:00Z",
     updatedAt: "2026-11-12T10:00:01Z",
@@ -44,6 +47,7 @@ export function task(overrides: Partial<Task> = {}): Task {
     attempt: 1,
     seq: 3,
     runId: RUN_ID,
+    namespace: NAMESPACE,
     idempotencyKey: `${RUN_ID}/3`,
     labels: { conversation: "c-42" },
     heartbeatTimeoutMs: 60_000,

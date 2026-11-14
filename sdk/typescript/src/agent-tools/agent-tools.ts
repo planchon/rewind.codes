@@ -1,5 +1,5 @@
 import { toMillis } from "../duration.js";
-import { RewindApiError, RewindError } from "../errors.js";
+import { NamespaceRequiredError, RewindApiError, RewindError } from "../errors.js";
 import { isValidIdempotencyKey } from "../http.js";
 import { hasLabels } from "../params.js";
 import type { Payloads } from "../resources/admin.js";
@@ -44,7 +44,10 @@ import {
   type Limits,
 } from "./render.js";
 
-/** The parts of the client the agent tools use. */
+/**
+ * The parts of the client the agent tools use. Its namespace is the agent's: take the client from
+ * `rewind.namespace(user.id)`, or one holding the end user's token.
+ */
 export interface AgentToolsClient {
   runs: Runs;
   scripts: Scripts;
@@ -57,8 +60,8 @@ export interface AgentToolsOptions {
   toolset?: string | undefined;
   /**
    * Set on every run the model starts. They scope `list_runs`, and the tools that take a run id
-   * refuse a run that does not carry them. An API key limited to these labels makes the scope
-   * hold on the server too.
+   * refuse a run that does not carry them. An API key or an end user's token limited to these
+   * labels makes the scope hold on the server too.
    */
   labels?: Labels | undefined;
   /** The tools to give the model. All of them by default; `search_tools` only with a toolset. */
@@ -191,7 +194,7 @@ export class AgentTools {
    * Executes a tool call of the model. `input` is the call's arguments, as an object or as a
    * JSON string. Mistakes the model can fix (a bad argument, a refused script, an unknown run)
    * come back as a result with `isError`; a fault of the platform or of the configuration (an
-   * unreachable server, a 401, a 5xx) is thrown.
+   * unreachable server, a 401, a 5xx, a key's client that names no namespace) is thrown.
    *
    * @throws {RewindError} when `name` is not one of these tools, or the platform failed.
    */
@@ -515,6 +518,10 @@ function parseInput(name: AgentToolName, input: unknown): Values {
 function failure(name: AgentToolName, error: unknown, limits: Limits): AgentToolResult {
   if (error instanceof InputError) {
     return { content: `${name}: ${error.message}`, isError: true };
+  }
+  if (error instanceof NamespaceRequiredError) {
+    // The harness's configuration: its client names no end user. The model cannot fix it.
+    throw error;
   }
   if (error instanceof RewindApiError) {
     if (error.slug === "invalid-script") {

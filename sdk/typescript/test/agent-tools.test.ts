@@ -2,8 +2,16 @@ import { createHash } from "node:crypto";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_TOOL_NAMES, Rewind, RewindApiError, RewindError, type AgentTools, type Run } from "../src/index.js";
-import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
+import {
+  AGENT_TOOL_NAMES,
+  NamespaceRequiredError,
+  Rewind,
+  RewindApiError,
+  RewindError,
+  type AgentTools,
+  type Run,
+} from "../src/index.js";
+import { NAMESPACE, RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
 import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
 const LABELS = { conversation: "c-42" };
@@ -20,7 +28,7 @@ let tools: AgentTools;
 beforeEach(async () => {
   server = await MockServer.start();
   rewind = new Rewind({ url: server.url, apiKey: "rewind_sk_agent" });
-  tools = rewind.agentTools({ toolset: TOOLSET, labels: LABELS });
+  tools = rewind.namespace(NAMESPACE).agentTools({ toolset: TOOLSET, labels: LABELS });
   server.on(
     "GET",
     "/v1/runs/{id}/trace",
@@ -316,6 +324,63 @@ describe("run_script", () => {
     server.on("POST", "/v1/runs", problem(401, "unauthorized", "unknown key"));
     await expect(tools.handle("run_script", { code: "x" })).rejects.toMatchObject({ status: 401 });
     await expect(tools.handle("delete_everything", {})).rejects.toBeInstanceOf(RewindError);
+  });
+});
+
+describe("the agent's namespace", () => {
+  it("is named on every request of a client bound to it", async () => {
+    server
+      .on("POST", "/v1/runs", started())
+      .on("POST", "/v1/check", json({ ok: true, diagnostics: [] }))
+      .on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }))
+      .on("GET", "/v1/runs", json({ runs: [] }));
+    serveRun(run());
+    await tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
+    await tools.handle("check_script", { code: "x" });
+    await tools.handle("test_script", { code: "x", scenario: {} });
+    await tools.handle("list_runs", {});
+    await tools.handle("get_run", { run_id: RUN_ID });
+    expect(server.requests.length).toBeGreaterThanOrEqual(5);
+    for (const request of server.requests) {
+      expect(request.headers["rewind-namespace"], `${request.method} ${request.path}`).toBe(NAMESPACE);
+    }
+  });
+
+  it("is the token's, for a client holding an end user's token", async () => {
+    server.on("POST", "/v1/runs", started());
+    const asUser = new Rewind({ url: server.url, token: "rewind_nt_alice" });
+    const result = await asUser.agentTools({ labels: LABELS }).handle("run_script", { code: "x" });
+    expect(result.isError).toBe(false);
+    expect(server.requests[0]?.headers["authorization"]).toBe("Bearer rewind_nt_alice");
+    expect(server.requests[0]?.headers["rewind-namespace"]).toBeUndefined();
+  });
+
+  it("missing from a key's client is the harness's to fix: thrown, never shown to the model", async () => {
+    server.on("POST", "/v1/runs", (request) =>
+      request.headers["rewind-namespace"] === undefined
+        ? problem(400, "invalid-request", "the header Rewind-Namespace is required: it names the end user")
+        : started()(request),
+    );
+    const unbound = rewind.agentTools({ labels: LABELS });
+    await expect(unbound.handle("run_script", { code: "x" })).rejects.toBeInstanceOf(NamespaceRequiredError);
+    expect((await tools.handle("run_script", { code: "x" })).isError).toBe(false);
+  });
+
+  it("over a quota is told to the model", async () => {
+    server.on(
+      "POST",
+      "/v1/runs",
+      problem(429, "quota-exceeded", "This end user has 5 runs active, their limit: wait for one to end.", {
+        quota: "active_runs",
+        scope: "namespace",
+        limit: 5,
+        used: 5,
+      }),
+    );
+    expect(await tools.handle("run_script", { code: "x" })).toEqual({
+      content: "run_script failed: This end user has 5 runs active, their limit: wait for one to end.",
+      isError: true,
+    });
   });
 });
 
