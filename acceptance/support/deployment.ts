@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { Rewind } from "@rewind.codes/sdk";
 import { type Collector, Containers, type Minio, startCollector, startMinio, startPostgres } from "./docker.js";
 import { rewindBinary } from "./paths.js";
+import type { StagingCredentials } from "./workos.js";
 import { eventually, freePort, Processes } from "./processes.js";
 
 /**
@@ -21,12 +22,40 @@ export interface Deployment {
   stop(): Promise<void>;
 }
 
-/** One `rewind server` with both roles, on Turso and local files in `dir`, over TCP. */
-export async function startServer(dir: string): Promise<{ url: string; adminKey: string; admin: Rewind; stop(): Promise<void> }> {
+/** A `rewind server` with both roles, started by `startServer`. */
+export interface Server {
+  /** Its URL, for the API. */
+  url: string;
+  /**
+   * The dashboard's origin as a browser opens it: `localhost`, where browsers keep the sign-in's
+   * `Secure` cookies over `http://`.
+   */
+  origin: string;
+  adminKey: string;
+  admin: Rewind;
+  stop(): Promise<void>;
+}
+
+/**
+ * One `rewind server` with both roles, on Turso and local files in `dir`, over TCP. With
+ * `workos`, the dashboard's sign-in on that WorkOS environment: the four `WORKOS_*`, with a cookie
+ * password made for this server and the redirect URI of its own origin (only a sign-in with GitHub
+ * goes there).
+ */
+export async function startServer(dir: string, options: { workos?: StagingCredentials } = {}): Promise<Server> {
   const processes = new Processes(dir);
   const adminKey = `rewind_sk_${randomBytes(24).toString("hex")}`;
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;
+  const origin = `http://localhost:${port}`;
+  const env = options.workos
+    ? {
+        WORKOS_CLIENT_ID: options.workos.clientId,
+        WORKOS_API_KEY: options.workos.apiKey,
+        WORKOS_COOKIE_PASSWORD: randomBytes(32).toString("hex"),
+        WORKOS_REDIRECT_URI: `${origin}/auth/callback`,
+      }
+    : {};
   const child = processes.start("server", rewindBinary(), [
     "server",
     "--store",
@@ -41,7 +70,7 @@ export async function startServer(dir: string): Promise<{ url: string; adminKey:
     "acme",
     "--listen",
     `127.0.0.1:${port}`,
-  ]);
+  ], { env });
   try {
     await eventually("the server listens", async () => {
       if (child.exitCode !== null) throw new Error(`the server exited with ${child.exitCode}: see ${dir}/server.log`);
@@ -52,7 +81,7 @@ export async function startServer(dir: string): Promise<{ url: string; adminKey:
     await processes.stopAll();
     throw error;
   }
-  return { url, adminKey, admin: new Rewind({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
+  return { url, origin, adminKey, admin: new Rewind({ url, apiKey: adminKey }), stop: () => processes.stopAll() };
 }
 
 export async function startDeployment(dir: string, options: { workers?: number } = {}): Promise<Deployment> {

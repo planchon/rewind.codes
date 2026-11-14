@@ -6,15 +6,17 @@
 #   acceptance/run.sh 1 3 7      these criteria only
 #
 # Needs Rust, Node 22.12 or later with pnpm 10, and Docker (Postgres, MinIO, an OpenTelemetry
-# Collector). It builds what it runs, removes its containers and stops its processes at the end,
-# and writes logs and reports to acceptance/results/ (summary.md, report.json, html/).
+# Collector). Criterion 8 signs in against WorkOS Staging: its credentials, WORKOS_API_KEY and
+# WORKOS_CLIENT_ID, come from the environment; without them it is reported as not run. It builds
+# what it runs, removes its containers and stops its processes at the end, and writes logs and
+# reports to acceptance/results/ (summary.md, report.json, html/).
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 RESULTS="$ROOT/acceptance/results"
 CRITERIA=("$@")
-[ ${#CRITERIA[@]} -eq 0 ] && CRITERIA=(1 2 3 4 5 6 7)
+[ ${#CRITERIA[@]} -eq 0 ] && CRITERIA=(1 2 3 4 5 6 7 8)
 
 selected() {
   local c
@@ -32,15 +34,27 @@ trap 'exit 130' INT TERM
 
 note() { printf '\n== %s\n' "$*"; }
 
+# WorkOS Staging's credentials reach criterion 8's spec only: a step run here gets none of the
+# WORKOS_* (a server given some of the four refuses to start), and the specs' servers neither
+# (acceptance/support/processes.ts).
+WITHOUT_WORKOS=(env -u WORKOS_API_KEY -u WORKOS_CLIENT_ID -u WORKOS_COOKIE_PASSWORD -u WORKOS_REDIRECT_URI)
+staging() { [ -n "${WORKOS_API_KEY:-}" ] && [ -n "${WORKOS_CLIENT_ID:-}" ]; }
+
 # A step run by this script: its output in results/<name>.log, its status in steps.jsonl.
 step() {
   local criterion="$1" name="$2"
   shift 2
   note "criterion $criterion: $name"
   local status=pass
-  "$@" >"$RESULTS/$name.log" 2>&1 || status=fail
+  "${WITHOUT_WORKOS[@]}" "$@" >"$RESULTS/$name.log" 2>&1 || status=fail
   tail -n 5 "$RESULTS/$name.log"
   printf '{"criterion":"%s","name":"%s","status":"%s"}\n' "$criterion" "$name: $*" "$status" >>"$RESULTS/steps.jsonl"
+}
+
+# A criterion that cannot run here, and why: reported as not run, never as passed.
+not_run() {
+  note "criterion $1: not run: $2"
+  printf '{"criterion":"%s","name":"not run","status":"not_run","reason":"%s"}\n' "$1" "$2" >>"$RESULTS/steps.jsonl"
 }
 
 rm -rf "$RESULTS"
@@ -82,6 +96,13 @@ for c in "${CRITERIA[@]}"; do
     3 | 5) specs+=(tests/c3-c5-mcp-test-fork.spec.ts) ;;
     4) specs+=(tests/c4-evals.spec.ts) ;;
     7) specs+=(tests/c7-dashboard.spec.ts) ;;
+    8)
+      if staging; then
+        specs+=(tests/c8-accounts.spec.ts)
+      else
+        not_run 8 "WORKOS_API_KEY and WORKOS_CLIENT_ID (WorkOS Staging) are not set"
+      fi
+      ;;
   esac
 done
 if [ ${#specs[@]} -gt 0 ]; then

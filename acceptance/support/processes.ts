@@ -10,12 +10,17 @@ export class Processes {
 
   constructor(private readonly logDir: string) {}
 
-  /** Starts `command`; its standard output and error go to `<logDir>/<name>.log`. */
+  /**
+   * Starts `command`; its standard output and error go to `<logDir>/<name>.log`. The `WORKOS_*`
+   * of the suite's environment (WorkOS Staging's credentials, for criterion 8) reach a process
+   * only through `options.env`: a server given some of the four refuses to start.
+   */
   start(name: string, command: string, args: string[], options: { env?: NodeJS.ProcessEnv; cwd?: string } = {}) {
     const log = createWriteStream(join(this.logDir, `${name}.log`), { flags: "a" });
+    const inherited = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("WORKOS_")));
     const child = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: { ...inherited, ...options.env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout?.pipe(log, { end: false });
