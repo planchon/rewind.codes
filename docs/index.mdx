@@ -1,0 +1,84 @@
+---
+title: "What is Rewind"
+description: "Your model writes one TypeScript script that calls your tools. Rewind runs it durably, and remembers every step."
+---
+
+Rewind is a runtime for **programmatic tool calling**, built for the developers of agent harnesses. Instead of
+calling your tools one at a time through the conversation, the model writes a TypeScript script that calls them: your
+MCP servers, your own functions, other workflows. Rewind type-checks the script against your tools, runs it in a
+deterministic V8 sandbox, and records every interaction with the outside world in a **journal**.
+
+```ts The model writes this
+import { github, slack } from "rewind:tools";
+import { sleep, signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+
+  await slack.post_message({ channel: "#triage", text: `${stale.length} stale issues in ${input.repo}` });
+
+  const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+  if (!decision?.close) return { closed: 0 };
+
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+
+  await sleep("10d");
+  const reopened = await github.list_issues({ repo: input.repo, state: "open", labels: "reopened" });
+  return { closed: stale.length, reopened: reopened.length };
+}
+```
+
+One script, one tool call from the model's point of view. It lists the issues, filters them in code, waits three days
+for a human, closes the stale ones in parallel, sleeps ten days and checks again. Only the last line comes back into
+the model's context.
+
+## Everything comes from the journal
+
+Every tool call, timer, signal and log line is an entry in the run's journal, linked to the line of TypeScript that
+caused it. The journal is the only source of truth: every feature of Rewind is derived from it.
+
+<Columns cols={2}>
+  <Card title="Durable execution" icon="hourglass">
+    `await sleep("10d")` or wait for a signal. The run survives crashes and deploys, and resumes by re-executing the
+    script against its journal.
+  </Card>
+  <Card title="Replay" icon="rewind">
+    Any run re-executes from its journal with identical results. Fix a failed run with a fork: the calls it already
+    made are not made again.
+  </Card>
+  <Card title="Testing" icon="flask-conical">
+    A recorded run becomes a cassette of mocks. Time is virtual, so a ten-day workflow is tested in milliseconds.
+  </Card>
+  <Card title="Observability" icon="activity">
+    OpenTelemetry traces projected from the journal, and a dashboard of every run and all the code executed, with a
+    debugger that steps through each run.
+  </Card>
+</Columns>
+
+## Who it is for
+
+Rewind is for teams that build agents: a coding agent, a support agent, an operations agent, any product where a model
+calls tools for your users. Your harness keeps its model loop and its prompts. It adds Rewind through the
+[TypeScript SDK](/sdk/overview) (or the HTTP API `/v1`), and gives the model a few ready-made tools: `run_script`,
+`get_run`, `signal_run`, `retry_run` and others.
+
+Each of your users gets a [namespace](/concepts/end-users): their runs, scripts, credentials and quotas, isolated from
+everyone else's.
+
+## Where to go next
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Register a toolset, run a script and read its result in five minutes.
+  </Card>
+  <Card title="Why Rewind" icon="lightbulb" href="/why-rewind">
+    What changes when the model writes code instead of calling tools one by one.
+  </Card>
+  <Card title="How it works" icon="workflow" href="/concepts/how-it-works">
+    The harness, the API, the workers and the journal, end to end.
+  </Card>
+  <Card title="The dashboard" icon="layout-dashboard" href="/dashboard/introduction">
+    Every run, all the code executed, and a debugger that steps through history.
+  </Card>
+</Columns>

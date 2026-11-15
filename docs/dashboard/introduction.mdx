@@ -1,0 +1,60 @@
+---
+title: "The dashboard"
+description: "Every run, all the code executed, and the tools and end users behind them: where to find what, and how to sign in."
+---
+
+The dashboard shows what every script did: each run with its source, its calls and its history, the failures grouped
+across the many scripts models write, the tools' latency and errors, and the use of each end user. It reads the same API
+as the SDK, so what the dashboard shows is what your harness and your model see.
+
+| Where | |
+| --- | --- |
+| The hosted service | [app.rewind.codes](https://app.rewind.codes) |
+| A server of your own | The server's own URL: `rewind server` serves the dashboard at the root (see [Self-hosting](/self-hosting)) |
+
+## Sign in
+
+On [app.rewind.codes](https://app.rewind.codes), sign in with **Continue with GitHub**, or with your email and the
+6-digit code sent to it. Then pick your organization, or create one; an invitation link takes you straight to the
+organization that invited you. While sign-ups are closed, a new email joins the waitlist, and gets an invitation once
+approved.
+
+<Frame>
+  <img src="/images/dashboard/sign-in-light.webp" alt="The sign-in card: Continue with GitHub, or an email and a code" className="block dark:hidden mx-auto max-w-sm" />
+  <img src="/images/dashboard/sign-in-dark.webp" alt="The sign-in card: Continue with GitHub, or an email and a code" className="hidden dark:block mx-auto max-w-sm" />
+</Frame>
+
+A server of your own without WorkOS asks for an API key instead, kept for the tab, or on the device when you ask.
+
+## Find your way
+
+The dashboard has one sidebar:
+
+- **At its top**: the organization picker, and **Find** (press <kbd>F</kbd>): a run by its id, a view, a saved search.
+- **The views**: [Overview](/dashboard/overview), [Observability](/dashboard/observability), [Scripts](/dashboard/scripts),
+  [Tools](/dashboard/tools) and [Namespaces](/dashboard/namespaces).
+- **At its bottom**, the account menu: your [organization](/dashboard/organization) (members, roles, API keys), the
+  theme, the time zone (UTC or local), the server, and sign out.
+
+Observability, a run and the organization turn the sidebar into their own, under a **back** arrow: from a run, back
+returns to the list it was opened from.
+
+<Frame caption="Find: press F anywhere, then type a run id, a view or a saved search">
+  <img src="/images/dashboard/find-light.webp" alt="The Find palette over the Overview" className="block dark:hidden" />
+  <img src="/images/dashboard/find-dark.webp" alt="The Find palette over the Overview" className="hidden dark:block" />
+</Frame>
+
+## What you see depends on your role
+
+The dashboard shows what your role allows. The run views need `runs:read`, the namespace views `namespaces:read`, and
+each part of the organization its own permission. A member limited to labels (`agent:triage`) sees only the runs
+carrying them. See [Roles](/dashboard/organization#roles).
+
+The dashboard never picks an end user: it reads every namespace of your organization. A run's namespace is a column, a
+filter and the term `namespace:` of the [query language](/dashboard/query-language).
+
+## Live
+
+Views refresh on their own: the Overview and the waiting runs every 10 seconds, the namespaces every 30 seconds, and a
+run that is still going follows its event stream as each step is committed. Links carry the view, the query, the
+window and the step, so a URL you share opens the same thing.

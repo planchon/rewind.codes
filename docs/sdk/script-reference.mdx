@@ -1,0 +1,126 @@
+---
+title: "Script reference"
+description: "The modules a script imports: rewind, rewind:tools and rewind:workflows, and the globals of the sandbox."
+---
+
+## `rewind`
+
+```ts
+import { sleep, signal, webhook, run, ToolError, CancelledError, WorkflowError } from "rewind";
+```
+
+### `sleep(duration)`
+
+```ts
+function sleep(duration: Duration): Promise<void>;
+```
+
+Waits for `duration`: a number of milliseconds, or a string such as `"30s"`, `"10d"` or `"1h30m"` (units `ms`, `s`,
+`m`, `h`, `d`, `w`). The wait is durable: the run survives restarts and deploys, and costs nothing while it waits.
+Afterwards, `Date.now()` is at least the time before plus `duration`.
+
+### `signal(name, opts?)`
+
+```ts
+function signal<T = unknown>(name: string): Promise<T>;
+function signal<T = unknown>(name: string, opts: { timeout: Duration }): Promise<T | undefined>;
+```
+
+Waits for the next signal named `name` sent to this run, and returns its payload. A signal sent before the script waits
+is kept in the name's mailbox, first in, first out, so none is lost. With a timeout, returns `undefined` if none arrived
+in time; without one, the wait lasts as long as the run. Names starting with `rewind:` are reserved.
+
+In a run of a workflow, `name` must be one of its declared signals, and the payload has the declared type.
+
+### `webhook(name)`
+
+```ts
+function webhook(name: string): Promise<{ url: string }>;
+```
+
+Returns a unique URL bound to this run and the signal `name`: every request posted to it becomes a signal `name` on this
+run, with the request's body as payload. Give the URL to an external system, then wait with `signal(name)`.
+
+### `run`
+
+```ts
+const run: { readonly id: string; readonly startedAt: Date };
+```
+
+This run. A fork has its own id, so a script that reads `run.id` diverges from its parent there.
+
+### `ToolError`
+
+Thrown by a tool call that failed. Catch it to handle the failure; uncaught, it fails the run.
+
+| Property | What |
+| --- | --- |
+| `message` | What went wrong, written for a model |
+| `tool` | The tool that failed, such as `github.close_issue` |
+| `outcomeUnknown` | The call was interrupted and may or may not have taken effect: check before calling the tool again |
+| `data` | What the tool returned with its error, if anything |
+
+### `CancelledError`
+
+Rejects every pending `await` of the script when the run is cancelled. Catch it to clean up: the script then has one
+chance to end by itself.
+
+### `WorkflowError`
+
+Thrown by `result()` when a run of a workflow this run started failed, was cancelled or aborted, or returned an output
+its workflow's schema refuses.
+
+| Property | What |
+| --- | --- |
+| `workflow` | The workflow, such as `triage` |
+| `runId` | The run that ended so |
+| `status` | `"failed"`, `"cancelled"`, `"aborted"` or `"invalid_output"` |
+
+## `rewind:tools`
+
+Generated for the run's toolset: one export per MCP server (by the name the toolset gives it) or group of host tools,
+and one per host tool without a group. Each tool is an async function taking one object of arguments.
+
+```ts
+import { github, slack, ask_user } from "rewind:tools";
+
+const issues = await github.list_issues({ repo: "acme/api", state: "open" });
+```
+
+Arguments are validated against the tool's schema before the call is recorded: invalid arguments throw a `TypeError`
+at the call site. A failed call throws a `ToolError`.
+
+## `rewind:workflows`
+
+Generated for the run's toolset: one export per workflow it pins.
+
+```ts
+import { triage } from "rewind:workflows";
+```
+
+| Call | Does |
+| --- | --- |
+| `triage.start(input, opts?)` | Starts a run of the pinned version; resolves with its handle once it exists. `opts`: `detached`, `labels`, `ttl` |
+| `run.id` | The started run's id |
+| `run.signal(name, payload)` | Sends one of the workflow's signals; resolves once it is in the run's mailbox. Throws a `ToolError` if the run has ended |
+| `run.result()` | The run's output once it has ended; throws a `WorkflowError` otherwise |
+| `run.result({ timeout })` | The output, or `undefined` if the run has not ended in time |
+| `triage.get(runId)` | A handle on an existing run of the workflow, to signal it |
+
+A run started without `detached: true` is attached: this run does not end before it, and cancels it if this run fails
+or is cancelled.
+
+## Globals
+
+The sandbox has the ECMAScript built-ins (ES2025, `Temporal`, explicit resource management) and exactly these globals:
+
+| Global | Behavior |
+| --- | --- |
+| `Date`, `performance.now()`, `Temporal.Now`, `Intl.DateTimeFormat` | Logical time, identical on replay |
+| `Math.random()`, `crypto.getRandomValues()`, `crypto.randomUUID()` | Seeded per run |
+| `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval` | Durable timers |
+| `console` | Journaled log lines |
+| `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Standard |
+| `fetch` | Only with the toolset's `http` tool, to its allowed hosts. A subset of the web's: no `Request`, `Response` or `Headers` constructors, no streams, no `AbortSignal` |
+
+The isolate runs with `TZ=UTC` and the `en-US` locale. See [The sandbox](/concepts/sandbox) for what is removed and why.

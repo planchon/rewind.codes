@@ -1,0 +1,113 @@
+---
+title: "Workflows"
+description: "Register named, typed scripts; let scripts start, signal and wait for their runs; start them from your harness."
+---
+
+A workflow is a script with a name and JSON Schemas for its input, its output and the signals it accepts. See
+[Workflows](/concepts/workflows) for the model behind them. The complete program of this page is in
+[`examples/workflows`](https://github.com/planchon/rewind.codes/tree/main/examples/workflows).
+
+## Register a workflow
+
+```ts
+const repoCheck = await rewind.workflows.create({
+  name: "repo_check",
+  description: "The stars and open issues of a GitHub repository, once someone acknowledges it.",
+  toolset: base.id,
+  script: repoCheckSource,
+  input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
+  output: {
+    type: "object",
+    properties: {
+      repo: { type: "string" },
+      stars: { type: "integer" },
+      openIssues: { type: "integer" },
+      acknowledgedBy: { type: "string" },
+    },
+    required: ["repo", "stars", "openIssues"],
+  },
+  signals: {
+    acknowledge: { type: "object", properties: { by: { type: "string" } }, required: ["by"] },
+  },
+});
+
+repoCheck.version; // its digest: repo_check@9fbd13f4bb9b
+```
+
+The script is checked against the toolset and the schemas: `main` must take the input and return the output, and
+`signal()` only takes the declared names. Inside it, signals are typed by the declaration:
+
+```ts The workflow's script
+import { signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const res = await fetch(`https://api.github.com/repos/${input.repo}`, {
+    headers: { accept: "application/vnd.github+json", "user-agent": "rewind-examples" },
+  });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status} for ${input.repo}`);
+  const repo = await res.json();
+
+  const ack = await signal("acknowledge", { timeout: "1h" }); // { by: string } | undefined
+  return { repo: input.repo, stars: repo.stargazers_count, openIssues: repo.open_issues_count, acknowledgedBy: ack?.by };
+}
+```
+
+Saving the same workflow again returns the version saved first. Each different save is a new immutable version:
+
+```ts
+const versions = await rewind.workflows.versions("repo_check"); // newest first
+for await (const workflow of rewind.workflows.listAll()) console.log(workflow.name, workflow.version); // the latest of each
+```
+
+## Let scripts start it
+
+A toolset lists the workflows its scripts may start. Derive one from the toolset you already have, without listing its
+servers again:
+
+```ts
+const toolset = await rewind.toolsets.create({ base: base.id, workflows: ["repo_check"] });
+```
+
+Its declarations now tell the model how to use the workflow:
+
+```text
+import { repo_check } from "rewind:workflows";
+repo_check.start({ repo: string }) → run · run.signal("acknowledge", { by: string }) · run.result() → { openIssues: number, repo: string, stars: number, acknowledgedBy?: string } · The stars and open issues of a GitHub repository, once someone acknowledges it.
+```
+
+A script of this toolset fans out over the workflow:
+
+```ts
+import { repo_check } from "rewind:workflows";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => repo_check.start({ repo })));
+  await Promise.all(runs.map((run) => run.signal("acknowledge", { by: "check-all" })));
+  const results = await Promise.all(runs.map((run) => run.result()));
+  return results.sort((a, b) => b.stars - a.stars);
+}
+```
+
+`result()` rejects with a `WorkflowError` when the child failed, was cancelled or aborted: `error.status` says which,
+and `error.runId` names the run. The runs a script starts run in its namespace and inherit its labels; list them with
+`runs.list({ startedBy: parent.id })`.
+
+## Start it from your harness
+
+```ts
+const team = rewind.namespace("team_platform");
+
+const run = await team.runs.start({ workflow: "repo_check", input: { repo: "microsoft/typescript" } });
+await team.runs.signal(run.id, "acknowledge", { by: "the harness" });
+const done = await team.runs.get(run.id, { wait: "30s" });
+```
+
+`workflow: "repo_check"` starts its latest version; `"repo_check@9fbd13f4bb9b"` one version (12 hexadecimal digits at
+least). An input that does not match the schema is refused with `invalid-input`, and a signal the workflow does not
+declare, or whose payload does not match, with `invalid-signal`.
+
+## Workflows the model writes
+
+Give the model the agent tool `save_workflow`, and it saves procedures it wrote as workflows of its own. The agent tools
+then derive a toolset that pins the new version, and its later scripts import it from `rewind:workflows`. See
+[Agent tools](/sdk/agent-tools#workflows-the-model-saves).

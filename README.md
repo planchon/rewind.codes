@@ -9,6 +9,8 @@ The journal gives durable execution (`await sleep("10d")`, signals), replay, tes
 against recorded runs, and observability.
 
 - Site: [rewind.codes](https://rewind.codes); the hosted dashboard is [app.rewind.codes](https://app.rewind.codes).
+- Documentation: [docs.rewind.codes](https://docs.rewind.codes), from [docs/](docs/README.md) (Mintlify); runnable
+  [examples/](examples/README.md) of the SDK.
 - Architecture: [archi/](archi/README.md), the specification the code follows.
 - TypeScript SDK: [sdk/typescript/](sdk/typescript/README.md), the client, the host-tool worker and the agent tools.
 - Dashboard: [dashboard/](dashboard/README.md), the operator's view of every run, served by `rewind-server`.

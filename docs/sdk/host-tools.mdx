@@ -1,0 +1,106 @@
+---
+title: "Host tools"
+description: "Functions of your harness that scripts call: the worker that executes them, their failures, retries and answers that take days."
+---
+
+A host tool is a function of your harness that scripts call like any tool: ask the end user, call another model, start
+a sub-agent, read your database. Declare it in the [toolset](/sdk/toolsets), then run a **worker** that executes it.
+
+The worker long-polls the calls to its tools, runs your handler, keeps the claim alive with heartbeats while it runs,
+and answers with the result, like a Temporal activity worker. It runs in your infrastructure; Rewind never connects to
+it.
+
+```ts
+import { HostToolError, Rewind } from "@rewind.codes/sdk";
+
+const rewind = new Rewind();
+
+const worker = rewind.worker({
+  toolset: toolset.id,
+  concurrency: 10,
+  tools: {
+    "crm.find_customer": async ({ email }: { email: string }, ctx) => {
+      // ctx.namespace is the end user the run acts for: act on their data only.
+      const customer = await crm.find(ctx.namespace, email, { signal: ctx.signal });
+      if (!customer) throw new HostToolError(`no customer ${email}`, { data: { code: "not_found" } });
+      return customer;
+    },
+  },
+});
+
+process.on("SIGTERM", () => worker.stop()); // lets the claims in flight finish, then waits for the handlers
+```
+
+## The handler's context
+
+| Field | What |
+| --- | --- |
+| `ctx.namespace` | The end user the run acts for. One worker with your key serves every end user |
+| `ctx.idempotencyKey` | `{run_id}/{seq}`, the same on every attempt of this call. Give it to the APIs you call, so a call made again does not repeat its effect |
+| `ctx.attempt` | From 1. Above 1, an earlier attempt was interrupted: the call may already have happened |
+| `ctx.runId`, `ctx.seq` | The run, and the call's position in it |
+| `ctx.labels` | The run's labels |
+| `ctx.signal` | Aborted when the claim is lost: the run ended, or the claim expired and another worker took the call. The result is then dropped |
+| `ctx.traceparent` | The W3C trace context, with the tool call's span as parent |
+| `ctx.heartbeat()` | Sends a heartbeat now. The worker already sends them while the handler runs |
+| `ctx.defer()` | Answer later, by a token (below) |
+
+## Failures
+
+- A thrown **`HostToolError`** is the tool's failure: the script gets a `ToolError` with its `message` and `data`, and
+  decides what to do. With `retryable: true`, a tool under the `retry` policy is called again later.
+- **Any other exception** fails the call too, with `Name: message`, and is reported to `onError`.
+
+```ts In the script
+import { ToolError } from "rewind";
+
+try {
+  const customer = await crm.find_customer({ email });
+} catch (error) {
+  if (error instanceof ToolError && (error.data as { code?: string })?.code === "not_found") {
+    // create it instead
+  } else throw error;
+}
+```
+
+A worker that dies mid-call loses its claim when the heartbeats stop (60 seconds by default). Under the `retry` policy,
+the call is given to another worker with the same idempotency key, up to 5 attempts. Under `at_most_once`, it fails
+with `outcomeUnknown: true`: declare it for a tool that must never run twice, such as asking the user a question.
+
+## Answers that take days
+
+A handler can defer its answer: the call becomes `deferred`, needs no heartbeat, and is answered later by its token,
+from any process. The run waits durably meanwhile.
+
+```ts
+const worker = rewind.worker({
+  toolset: toolset.id,
+  tools: {
+    ask_user: async ({ question }: { question: string }, ctx) => {
+      const later = await ctx.defer({ timeout: "3d" }); // bounded by the run's TTL
+      await inbox.save({ user: ctx.namespace, question, token: later.token });
+      // The return value is not an answer: whoever holds the token answers.
+    },
+  },
+});
+
+// Later, maybe in another process, when the user answers:
+await rewind.tasks.complete(token, { answer: "yes" });
+// Or: await rewind.tasks.fail(token, { message: "the user is away" });
+```
+
+The complete program is in [`examples/host-tools`](https://github.com/planchon/rewind.codes/tree/main/examples/host-tools).
+
+## Options
+
+| Option | Default | What |
+| --- | --- | --- |
+| `tools` | | The handlers, by tool name as the toolset declares it (`"crm.find_customer"`). The worker claims only these tools |
+| `toolset` | | Only the calls of runs of this toolset. Leave it out to serve every toolset that declares these tools |
+| `concurrency` | 10 | Handlers running at once |
+| `pollWait` | `"30s"` | How long one claim request waits for a call. `stop()` takes up to this long |
+| `signal` | | Stops the worker when aborted |
+| `onError` | `console.error` | Called with what fails along the way: claims, heartbeats, answers, handlers |
+
+A refused key (401, 403) stops the worker: `worker.done` rejects. Other failures are reported to `onError` and
+retried. A worker holding an end user's token, instead of a key, claims only the calls of that end user's runs.

@@ -1,0 +1,61 @@
+---
+title: "Client reference"
+description: "Every resource of the client and its calls."
+---
+
+Every call takes an `AbortSignal` as `signal`. The types are those of the API, generated from its
+[OpenAPI document](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json) and exported under their names.
+
+| Resource | Calls |
+| --- | --- |
+| `rewind.toolsets` | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials` |
+| `rewind.workflows` | `create`, `list` and `listAll` (the latest version of each), `versions` (newest first) |
+| `rewind.scripts` | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get` (a script's source by its digest) |
+| `rewind.runs` | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`, `sort`, `workflow`, `startedBy`…), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `rewind.tasks` | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`: host-tool tasks at the level of the API |
+| `rewind.approvals` | `pending(run)`, `args`, `approve`, `reject` |
+| `rewind.payloads` | `get`: a value left out above 256 KiB |
+| `rewind.namespaces` | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts` |
+| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every end user, and the ceiling |
+| `rewind.namespaces.tokens` | `create` (its answer holds the token, once), `revoke`, `revokeAll` |
+| `rewind.tokenKeys` | `create`, `list`, `delete`: the keys your backend signs end users' tokens with |
+| `rewind.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete` |
+| `rewind.webhooks` | `verify` |
+| `rewind.tools` | `stats`: latency, errors and retries per tool |
+| `rewind.apiKeys` | `create`, `revoke` |
+| `rewind.server` | `info`, `stop` |
+
+| Method | Returns |
+| --- | --- |
+| `rewind.namespace(name)` | The same client, acting for one end user |
+| `rewind.worker(options)` | A [host-tool worker](/sdk/host-tools), started |
+| `rewind.agentTools(options)` | The [agent tools](/sdk/agent-tools) |
+
+## Exports
+
+| Export | What |
+| --- | --- |
+| `Rewind` | The client |
+| `HostToolError` | A host tool's deliberate failure |
+| `verifyWebhook`, `WebhookVerificationFailed` | Webhook verification |
+| `RewindError`, `RewindApiError`, `RewindConnectionError`, `NamespaceRequiredError`, `isProblem` | [Errors](/sdk/errors) |
+| `anthropicTools`, `openaiChatTools`, `openaiResponsesTools` | The tool-format adapters, for definitions you filter yourself |
+| `runIdempotencyKey`, `idempotencyKeyOf` | How the agent tools derive their idempotency keys |
+| `formatDuration`, `toMillis`, `isNamespaceName` | Helpers |
+| `Run`, `Toolset`, `Task`, `WebhookEvent`, `Workflow`… | The API's types |
+| `paths`, `components`, `operations`, `webhooks` | The OpenAPI types, for a client of your own |
+
+## The HTTP API
+
+The SDK is a client of the HTTP API `/v1`, which any language can call. Requests carry
+`Authorization: Bearer <key or token>`, and `Rewind-Namespace: <end user>` to act for an end user with a key. The full
+contract is the [OpenAPI document](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json).
+
+```bash
+curl https://api.rewind.codes/v1/runs \
+  -H "Authorization: Bearer $REWIND_API_KEY" \
+  -H "Rewind-Namespace: user_ada" \
+  -H "Idempotency-Key: call_8f2c" \
+  -H "Content-Type: application/json" \
+  -d '{"script": "export default async function main() { return 42 }", "wait": "30s"}'
+```

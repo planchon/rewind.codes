@@ -1,0 +1,51 @@
+---
+title: "Examples"
+description: "Runnable programs for every part of the SDK, in the repository's examples directory."
+---
+
+The [`examples/`](https://github.com/planchon/rewind.codes/tree/main/examples) directory of the repository holds one
+program per subject. Each `index.ts` is harness code you run; each `scripts/*.ts` is what a model would write, and runs in
+Rewind's sandbox.
+
+<Columns cols={2}>
+  <Card title="Quickstart" icon="rocket" href="https://github.com/planchon/rewind.codes/tree/main/examples/quickstart">
+    A toolset with the `http` tool and a host tool, a worker, a run and its output.
+  </Card>
+  <Card title="Agent loop" icon="bot" href="https://github.com/planchon/rewind.codes/tree/main/examples/agent">
+    Claude (`anthropic.ts`) and the OpenAI Responses API (`openai.ts`) with the agent tools.
+  </Card>
+  <Card title="Human approval" icon="hand" href="https://github.com/planchon/rewind.codes/tree/main/examples/human-approval">
+    A refund that waits for a manager's signal, then for the harness to approve the payment call.
+  </Card>
+  <Card title="Host tools" icon="server-cog" href="https://github.com/planchon/rewind.codes/tree/main/examples/host-tools">
+    Failures the script catches, idempotency keys, a question answered days later by its token.
+  </Card>
+  <Card title="Workflows" icon="git-branch" href="https://github.com/planchon/rewind.codes/tree/main/examples/workflows">
+    A typed workflow, a script that fans out over its runs, a run started by name.
+  </Card>
+  <Card title="End users" icon="users" href="https://github.com/planchon/rewind.codes/tree/main/examples/end-users">
+    Namespaces, an end user's token, quotas and their refusals, revocation.
+  </Card>
+  <Card title="Webhooks" icon="webhook" href="https://github.com/planchon/rewind.codes/tree/main/examples/webhooks">
+    A subscription, verified deliveries, `run.suspended` and `run.completed`.
+  </Card>
+  <Card title="Testing" icon="flask-conical" href="https://github.com/planchon/rewind.codes/tree/main/examples/testing">
+    Type-checking, scenarios in virtual time, a fork that fixes a failed run, a cassette.
+  </Card>
+</Columns>
+
+## Run them
+
+Node 22.18 or later, which runs TypeScript as is, and pnpm.
+
+```bash
+git clone https://github.com/planchon/rewind.codes.git
+cd rewind.codes/examples
+pnpm install
+cp .env.example .env    # REWIND_URL, REWIND_API_KEY, and a model's key for agent/
+pnpm quickstart         # or: pnpm human-approval, pnpm workflows, pnpm testing…
+```
+
+The scripts reach `api.github.com` without credentials: GitHub allows 60 such requests an hour. `pnpm webhooks` needs
+a URL Rewind can deliver to: a public `https://` URL (a tunnel to your machine, in `WEBHOOK_URL`), or a server of your
+own started with `--allow-private-webhooks`.

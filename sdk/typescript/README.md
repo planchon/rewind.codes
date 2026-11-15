@@ -14,7 +14,9 @@ The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 npm install @rewind.codes/sdk
 ```
 
-Node 22.12 or later. ESM only. The package depends on no model SDK.
+Node 22.12 or later. ESM only. The package depends on no model SDK. The guides are at
+[docs.rewind.codes](https://docs.rewind.codes), and runnable programs in
+[`examples/`](https://github.com/planchon/rewind.codes/tree/main/examples).
 
 ## The client
 

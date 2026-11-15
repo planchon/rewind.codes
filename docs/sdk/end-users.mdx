@@ -1,0 +1,140 @@
+---
+title: "End users"
+description: "Act for one end user, mint tokens for the agents acting for them, set their limits, and follow their use."
+---
+
+Each end user of your product has a [namespace](/concepts/end-users). The complete program of this page is in
+[`examples/end-users`](https://github.com/planchon/rewind.codes/tree/main/examples/end-users).
+
+## From your backend
+
+Your backend holds an API key and names the end user of each request:
+
+```ts
+const asAda = rewind.namespace("user_ada");
+const run = await asAda.runs.start({ toolset: toolset.id, script, wait: "30s" });
+const runs = await asAda.runs.list({ status: "failed" }); // Ada's runs only
+```
+
+## Tokens
+
+An agent acting for one end user should hold a token of their namespace rather than your key: with it, the agent, and
+every script its model writes, reaches that namespace only.
+
+<Tabs>
+  <Tab title="Minted by Rewind">
+    ```ts
+    // In your backend, with your key:
+    const { token, id } = await rewind.namespaces.tokens.create(user.id, {
+      ttl: "1h", // 1 hour by default, 30 days at most
+      permissions: ["runs:read", "runs:start", "runs:control", "toolsets:read"], // the default
+      labels: { conversation: conversation.id }, // optional: it then reaches only the runs carrying them
+    });
+
+    // In the agent acting for that user:
+    const asUser = new Rewind({ url: process.env.REWIND_URL, token });
+    const agentTools = asUser.agentTools({ toolset: toolset.id });
+    ```
+
+    The token, `rewind_nt_…`, is only in this answer.
+  </Tab>
+  <Tab title="Signed by your backend">
+    A token your backend signs needs no call to Rewind: register a public key once, then sign JWTs with any JOSE
+    library.
+
+    ```ts
+    import { SignJWT, exportJWK, generateKeyPair } from "jose";
+
+    // Once:
+    const { publicKey, privateKey } = await generateKeyPair("EdDSA", { crv: "Ed25519" });
+    const { kid } = await rewind.tokenKeys.create({ name: "backend", jwk: await exportJWK(publicKey) });
+
+    // For each agent session:
+    const token = await new SignJWT({ permissions: ["runs:read", "runs:start"] })
+      .setProtectedHeader({ alg: "EdDSA", kid })
+      .setSubject(user.id) // the namespace
+      .setAudience("rewind")
+      .setIssuedAt()
+      .setExpirationTime("1h") // at most 30 days after iat
+      .sign(privateKey);
+    ```
+
+    Keys may be `EdDSA`, `ES256` or `RS256`. Deleting a key (`rewind.tokenKeys.delete(kid)`) refuses every token it
+    signed.
+  </Tab>
+</Tabs>
+
+With a token, another end user's run answers 404:
+
+```ts
+import { isProblem } from "@rewind.codes/sdk";
+
+try {
+  await asUser.runs.get(someoneElsesRun.id);
+} catch (error) {
+  if (isProblem(error, "not-found")) console.log("not visible to this end user");
+}
+```
+
+Revoke one token by its id, or every token of an end user, signed ones issued before now included:
+
+```ts
+await rewind.namespaces.tokens.revoke(id);
+await rewind.namespaces.tokens.revokeAll(user.id);
+```
+
+## Limits
+
+Set default limits for every end user, and exceptions for one, under your organization's ceiling:
+
+```ts
+await rewind.namespaces.defaults.put({ defaults: { activeRuns: 5, runsPerMonth: 1_000, maxTtl: "7d" } });
+
+await rewind.namespaces.put("user_chen", { exceptions: { activeRuns: 20, runsPerMonth: 10_000 } }); // pays for more
+await rewind.namespaces.put("user_erin", { exceptions: { activeRuns: 0 } }); // blocked
+```
+
+| Quota | Counts | Over it |
+| --- | --- | --- |
+| `activeRuns` | Runs not yet ended | Refused |
+| `runsPerMonth` | Runs started this calendar month (UTC), forks included | Refused |
+| `cpuPerMonth` | CPU time of the end user's scripts this month, replays excluded | Never refused: alerts at 80 % and 100 % |
+| `scripts` | Distinct scripts | Refused |
+| `maxTtl` | The longest TTL a run may ask for | Refused above it; the default TTL is lowered to it |
+| `maxScriptLines` | The longest script | Refused |
+
+A refused start throws `quota-exceeded`, whose `quota` says which limit, at which scope, its value, the use and when it
+frees. The agent tools return it to the model in words it can relay.
+
+```ts
+try {
+  await rewind.namespace("user_erin").runs.start({ toolset: toolset.id, script });
+} catch (error) {
+  if (isProblem(error, "quota-exceeded")) console.log(error.quota);
+  // { quota: "active_runs", scope: "namespace", limit: 0, used: 0 }
+}
+```
+
+## Use and alerts
+
+```ts
+const ada = await rewind.namespaces.get("user_ada"); // limits, use per day, alerts, tokens in use
+ada.namespace.usage; // { cpu: "2ms", activeRuns: 0, runsStarted: 2, scripts: 2 }
+
+const near = await rewind.namespaces.list({ above: 0.8, order: "runs" }); // at 80 % of a limit or more
+const { alerts } = await rewind.namespaces.alerts({ month: "2026-11" });
+```
+
+Crossing 80 % and 100 % of a limit also sends the webhook [`quota.alert`](/sdk/webhooks).
+
+## Credentials and erasure
+
+```ts
+// An end user's own credentials for a toolset (their GitHub token):
+await rewind.namespaces.setCredentials(user.id, toolset.id, {
+  servers: { github: { headers: { Authorization: `Bearer ${theirToken}` } } },
+});
+
+// Erase an end user, in the background: their tokens, runs, credentials and use.
+await rewind.namespaces.delete(user.id);
+```

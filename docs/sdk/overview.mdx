@@ -1,0 +1,95 @@
+---
+title: "Install and connect"
+description: "The TypeScript SDK: the API client, the host-tool worker and the agent tools."
+---
+
+`@rewind.codes/sdk` is the TypeScript SDK of Rewind. It has three parts:
+
+<Columns cols={3}>
+  <Card title="The client" icon="cable" href="/sdk/runs">
+    The HTTP API `/v1`: toolsets, workflows, runs, signals, forks, traces, end users, webhooks.
+  </Card>
+  <Card title="The host-tool worker" icon="server-cog" href="/sdk/host-tools">
+    Executes your own tools when scripts call them.
+  </Card>
+  <Card title="The agent tools" icon="bot" href="/sdk/agent-tools">
+    `run_script`, `get_run`, `retry_run`… for your model, with Anthropic and OpenAI adapters.
+  </Card>
+</Columns>
+
+## Install
+
+<CodeGroup>
+```bash npm
+npm install @rewind.codes/sdk
+```
+
+```bash pnpm
+pnpm add @rewind.codes/sdk
+```
+
+```bash yarn
+yarn add @rewind.codes/sdk
+```
+</CodeGroup>
+
+Node 22.12 or later. ESM only. The package depends on no model SDK. Its types are those of the API, generated from
+its OpenAPI document and exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
+
+## Create a client
+
+```ts
+import { Rewind } from "@rewind.codes/sdk";
+
+const rewind = new Rewind({
+  url: process.env.REWIND_URL, // the defaults: both are read from the environment
+  apiKey: process.env.REWIND_API_KEY,
+});
+```
+
+| Option | Default | What |
+| --- | --- | --- |
+| `url` | `REWIND_URL` | The server: `https://api.rewind.codes`, or [your own](/self-hosting) |
+| `apiKey` | `REWIND_API_KEY` | An API key, `rewind_sk_…`. It reaches every namespace of your organization, within its role |
+| `token` | | An end user's token instead of a key: the client then reaches that end user's namespace only |
+| `maxRetries` | 2 | How many times a request that is safe to repeat is sent again after a network error or a 503 |
+
+Create API keys in the dashboard, under **Organization → API keys**, or with `rewind.apiKeys.create`. A key has a role
+(`harness` for a backend, `worker` for a host-tool worker only, `reader` for reading) and may be limited to labels.
+
+## Act for an end user
+
+Every run belongs to an end user of your product: its [namespace](/concepts/end-users). A client with a key names the
+end user of its requests with `namespace()`, which is cheap: one per request is fine.
+
+```ts
+const asAda = rewind.namespace(user.id);
+
+const run = await asAda.runs.start({ toolset: toolset.id, script, wait: "30s" });
+const failed = await asAda.runs.list({ status: "failed" }); // Ada's runs only
+```
+
+A key's client must name a namespace to start a run or to check or test a script; without one, the server's 400 comes
+back as a `NamespaceRequiredError`. On a read, a namespace narrows the answer to it; without one, a read covers every
+namespace.
+
+An agent acting for one end user can instead hold a [token](/sdk/end-users#tokens) of their namespace:
+
+```ts
+const asUser = new Rewind({ url: process.env.REWIND_URL, token });
+```
+
+## Conventions
+
+- **Durations** are numbers of milliseconds or strings: `"30s"`, `"10d"`, `"1h30m"`.
+- **Cancellation.** Every call takes an `AbortSignal` as `signal`.
+- **Waiting.** `runs.start`, `runs.get`, `runs.fork` and `runs.cancel` take `wait`: they answer when the run ends or
+  when `wait` passes. A long wait is split into requests of at most 50 seconds, so proxies never cut it.
+- **Lists** have a `list` that returns a page and a `listAll` that iterates over every item.
+- **Errors** are thrown as `RewindApiError`, with a `slug` you test with `isProblem`. See [Errors](/sdk/errors).
+
+## Versions
+
+The package follows Semantic Versioning. Before 1.0, a minor version (0.2 → 0.3) may break the API and a patch version
+does not. Each version speaks the HTTP API `/v1`; its changes are in the
+[changelog](https://github.com/planchon/rewind.codes/blob/main/sdk/typescript/CHANGELOG.md).

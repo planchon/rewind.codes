@@ -1,0 +1,114 @@
+---
+title: "Tools and toolsets"
+description: "MCP servers, host tools and built-ins; how a toolset pins them, how each call is made, retried and protected."
+---
+
+## Three kinds of tools
+
+| Kind | Called by | For |
+| --- | --- | --- |
+| **MCP tools** | Rewind's dispatcher, an MCP client over streamable HTTP | Every tool of the MCP servers you list |
+| **Host tools** | Your [worker](/sdk/host-tools), which long-polls their calls | Functions that live in your harness: ask the user, call another model, query your database |
+| **Built-ins** | Rewind itself | `http` (the script's only network), `webhook(name)`, and `workflows.<name>.start` and `.signal` for each workflow the toolset pins |
+
+Results go back to the script, never to the model. Your harness is on the path only for its host tools.
+
+## A toolset pins its tools
+
+A **toolset** is the list of what scripts may call: MCP servers, host tools, the `http` tool and its allowed hosts,
+and the workflows scripts may start, with a policy per tool. Registering it connects to the servers, lists their tools
+and **pins** their schemas.
+
+- A toolset is **content-addressed**: its id is the digest of what it pins. Registering the same toolset twice returns
+  the same id, and every run records the toolset it started with.
+- A run keeps its toolset for its whole life, even if the server changes during a ten-day sleep (see below).
+- A toolset can be **derived** from another (`base`): same servers and tools, other workflows.
+
+## Declarations
+
+From the pinned schemas, Rewind generates the declarations of the `rewind:tools` module, in two renderings:
+
+<Tabs>
+  <Tab title="For the type-checker">
+    ```ts rewind-tools.d.ts
+    declare module "rewind:tools" {
+      /** Tools of the harness, group `github`. */
+      export const github: {
+        /** List the issues of a repository. */
+        list_issues(args: { repo: string; state?: "open" | "closed" }): Promise<{ number: number; title: string; updated_at: string }[]>;
+      };
+    }
+    ```
+  </Tab>
+  <Tab title="For the model's prompt">
+    ```text
+    import { github } from "rewind:tools";
+    github.list_issues({ repo: string, state?: "open" | "closed" }) → { number: number, title: string, updated_at: string }[] · List the issues of a repository.
+    webhook(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
+    ```
+  </Tab>
+</Tabs>
+
+Tool names stay as the server defines them, so they match the descriptions the model reads. Arguments are validated
+against the tool's JSON Schema twice: by the type-checker before the run starts, and at run time before the call is
+recorded.
+
+**Observed result types.** Most MCP servers declare no output schema, so the model would write code against a result it
+cannot see. Rewind infers the shape of each tool's results from the results already recorded (keys and types, never
+values), and uses it in the declarations, marked `@observed`.
+
+## Every call has an idempotency key
+
+Each call carries a key, `{run_id}/{seq}`, the same on every attempt: in MCP `_meta` (`codes.rewind/idempotency-key`),
+and in your worker's context (`ctx.idempotencyKey`). A tool that recognizes it does not repeat its effect when a call is
+sent again after an interruption. Calls also carry the W3C trace context, so your server's spans join the run's trace.
+
+## Policies
+
+Each tool has a policy, set when the toolset is registered:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `onInterruption` | `retry`: an interrupted call is sent again with the same key, up to 5 attempts. `at_most_once`: it fails with `outcomeUnknown` | `retry` |
+| `approval` | The call waits for your harness to approve it before it is sent | Off |
+| `timeout` | How long one attempt may take | 5 minutes for MCP tools |
+| `heartbeatTimeout` | How long a host tool's worker may go without a heartbeat | 60 seconds |
+| `concurrency` | Calls of this tool in flight per run | The run's limit, 16 |
+
+Declare `at_most_once` for a tool that ignores the idempotency key and must not run twice: sending an email, a payment
+without a key. The script sees every failure as a `ToolError`, and decides what to do.
+
+## Credentials
+
+Rewind stores credentials encrypted, resolves them at call time and injects them into the connection to your MCP
+server. A call uses, in this order and never merged:
+
+1. the run's own credentials, if it has some;
+2. the credentials of the run's end user for this toolset ([namespace](/concepts/end-users));
+3. the toolset's credentials.
+
+Credentials never enter the sandbox, the journal, a cassette or a trace. If a token expires during a long pause, the
+call is **parked** and your harness gets the webhook `credentials.expired`; once you renew them, the call is sent
+again with the same key.
+
+## When a server changes during a run
+
+A run can pause for days while the MCP server behind it changes. The dispatcher checks each call against the server's
+current schema. A call that no longer matches is not failed silently: it is **parked**, and your harness gets the
+webhook `tool.schema_changed`. You then approve it (continue against the new schema), reject it (the script gets a
+`ToolError`), cancel the run, or fork it with a corrected script.
+
+## The `http` tool
+
+A toolset enables the built-in `http` tool with a list of allowed hosts (`api.github.com`, `*.example.com`). Scripts
+then have `fetch`. Without it, there is no `fetch` and no network at all.
+
+Each request is a journaled tool call, sent by the dispatcher, never from the sandbox:
+
+1. The host must be in the allow-list.
+2. The name is resolved once; private, loopback, link-local and cloud-metadata addresses are refused.
+3. The connection goes to the address that was checked.
+4. Each redirect is checked again, up to 5.
+5. The response is bounded to 5 MB and 30 seconds.
+
+A refused request rejects with a `ToolError`.

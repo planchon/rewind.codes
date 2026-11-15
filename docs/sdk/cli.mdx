@@ -1,0 +1,79 @@
+---
+title: "The CLI"
+description: "rewind: run, check, test, replay and fork scripts from a terminal, against a server or locally."
+---
+
+The `rewind` binary is also a command-line client of the API. It talks to a remote server, or to an **embedded server**
+it starts on demand in a `.rewind/` directory, for local work without any setup. `rewind check`, `rewind test` and the
+replay of an exported journal run in the CLI's own process, without a server.
+
+```bash
+export REWIND_URL=https://api.rewind.codes     # leave it unset to use the embedded server
+export REWIND_API_KEY=rewind_sk_...
+export REWIND_NAMESPACE=user_ada               # the end user; "local" on the embedded server
+
+rewind run triage.ts --toolset toolset.json --input '{"repo":"acme/api"}' --wait 30s
+```
+
+The binary is built from the [repository](https://github.com/planchon/rewind.codes): see
+[Self-hosting](/self-hosting#one-server-for-development).
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v]` | Starts a run and waits for it, up to `--wait` |
+| `rewind check script.ts [--toolset …]` | Type-checks a script against the sandbox and a toolset's declarations |
+| `rewind test scenario.json` | Runs a [scenario](/sdk/testing#in-ci-without-a-server) against mocks and cassettes, in virtual time |
+| `rewind signal <run> <name> [payload]` | Sends a signal |
+| `rewind cancel <run>` | Cancels a run |
+| `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
+| `rewind trace <run> [--entry n]` | The run's trace, as a model reads it; one entry in full |
+| `rewind runs '<query>'` | Lists runs matching a [query](/dashboard/query-language): `rewind runs '@agent:triage status:failed'` |
+| `rewind replay <run or journal.json> [--script fixed.ts]` | Re-executes a run and checks determinism; with `--script`, tells whether a corrected script is compatible with that history |
+| `rewind fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a fork with a corrected script |
+| `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
+| `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
+| `rewind toolsets add\|declarations\|search` | Registers a toolset file, prints its declarations, searches its tools |
+| `rewind namespaces list\|show\|quotas\|delete` | The end users and their use, one end user, their limits (or the defaults with `--defaults`), erasure |
+| `rewind server` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
+
+A toolset file holds what `rewind.toolsets.create` takes, as JSON. Every command takes `--json`: the result as JSON on
+standard output, errors as problem+json on standard error.
+
+```bash
+$ rewind runs 'namespace:ci status:failed'
+RUN                                   STATUS            STARTED                   CALLS  ERRORS  SCRIPT
+01a1e137-7cb0-724e-8ef7-1d0ddee39f8e  failed TypeError  2026-11-15T21:57:52.461Z  2      0       // The first version of triage.ts…
+```
+
+## Exit codes
+
+Scripts in CI branch on the exit code:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | The run completed, or the command succeeded (every expectation of a scenario holds) |
+| 1 | The run failed (an expectation of a scenario does not hold) |
+| 2 | The run was cancelled |
+| 3 | The run was aborted |
+| 4 | The run is still waiting: `--wait` elapsed, or it waits for the outside world |
+| 5 | The run is quarantined |
+| 6 | Refused: an unknown run, or a signal to a run that has ended |
+| 64 | Usage error |
+| 65 | The script was refused at start |
+| 70 | Internal error |
+| 130 | Interrupted by a second Ctrl-C |
+
+## The embedded server
+
+Without `--url`, the CLI uses the server of the `.rewind/` directory (`--dir` picks another), and starts it when needed:
+Turso and local files, its API on a unix socket, no key, the end user `local` unless you name one. It stops after 10
+minutes without requests or work in progress; a sleeping run resumes at the next command.
+
+```text
+project/
+  script.ts
+  rewind.tools.json   static responses per tool, for mock mode
+  .rewind/            created by the first command: journal.db, blobs/, server.sock…
+```

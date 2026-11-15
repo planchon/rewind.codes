@@ -1,0 +1,146 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Rewind",
+  "description": "Rewind runs the TypeScript scripts your model writes to call your tools, in a deterministic sandbox that journals every step: runs wait for days, survive crashes, and replay identically.",
+  "colors": {
+    "primary": "#059669",
+    "light": "#34D399",
+    "dark": "#047857"
+  },
+  "fonts": {
+    "family": "IBM Plex Sans"
+  },
+  "favicon": "/favicon.svg",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg",
+    "href": "https://rewind.codes"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Introduction",
+        "icon": "book-open",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["index", "why-rewind", "quickstart"]
+          },
+          {
+            "group": "How it works",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/journal",
+              "concepts/sandbox",
+              "concepts/tools",
+              "concepts/workflows",
+              "concepts/end-users"
+            ]
+          },
+          {
+            "group": "Run Rewind",
+            "pages": ["self-hosting"]
+          }
+        ]
+      },
+      {
+        "tab": "SDK",
+        "icon": "code",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["sdk/overview", "sdk/examples"]
+          },
+          {
+            "group": "Build a harness",
+            "pages": [
+              "sdk/toolsets",
+              "sdk/agent-tools",
+              "sdk/runs",
+              "sdk/host-tools",
+              "sdk/human-in-the-loop",
+              "sdk/workflows",
+              "sdk/end-users",
+              "sdk/webhooks",
+              "sdk/testing"
+            ]
+          },
+          {
+            "group": "What the model writes",
+            "pages": ["sdk/scripts", "sdk/script-reference"]
+          },
+          {
+            "group": "Reference",
+            "pages": ["sdk/errors", "sdk/reference", "sdk/cli"]
+          }
+        ]
+      },
+      {
+        "tab": "Dashboard",
+        "icon": "layout-dashboard",
+        "groups": [
+          {
+            "group": "Get started",
+            "pages": ["dashboard/introduction"]
+          },
+          {
+            "group": "Runs",
+            "pages": ["dashboard/overview", "dashboard/observability", "dashboard/query-language", "dashboard/run"]
+          },
+          {
+            "group": "Code, tools and end users",
+            "pages": ["dashboard/scripts", "dashboard/tools", "dashboard/namespaces"]
+          },
+          {
+            "group": "Your organization",
+            "pages": ["dashboard/organization"]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/planchon/rewind.codes",
+          "icon": "github"
+        },
+        {
+          "anchor": "Examples",
+          "href": "https://github.com/planchon/rewind.codes/tree/main/examples",
+          "icon": "flask-conical"
+        }
+      ]
+    }
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "rewind.codes",
+        "href": "https://rewind.codes"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Dashboard",
+      "href": "https://app.rewind.codes"
+    }
+  },
+  "contextual": {
+    "options": ["copy", "view", "claude", "chatgpt", "cursor", "vscode"]
+  },
+  "seo": {
+    "metatags": {
+      "canonical": "https://docs.rewind.codes"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/planchon/rewind.codes"
+    }
+  }
+}

@@ -1,0 +1,83 @@
+---
+title: "Errors and retries"
+description: "How the SDK reports errors, which requests it repeats, and how it waits."
+---
+
+## Errors
+
+The API answers errors as `application/problem+json`. The SDK throws them as `RewindApiError`; test their kind with
+`isProblem`.
+
+```ts
+import { isProblem, RewindConnectionError } from "@rewind.codes/sdk";
+
+try {
+  await rewind.namespace(user.id).runs.start({ toolset: toolset.id, script });
+} catch (error) {
+  if (isProblem(error, "invalid-script")) {
+    for (const d of error.diagnostics) console.log(d.message, d.frame);
+  } else if (isProblem(error, "quota-exceeded")) {
+    console.log(error.quota); // { quota, scope, limit, used, resetsAt }
+  } else if (error instanceof RewindConnectionError) {
+    // the server could not be reached
+  } else throw error;
+}
+```
+
+| Property | What |
+| --- | --- |
+| `status` | The HTTP status |
+| `slug` | The kind of problem, below |
+| `detail` | What went wrong, written for a model |
+| `diagnostics` | For a refused script: the type-checker's findings, with location and code frame |
+| `query` | For a query that cannot be read: where the term at fault is, in characters |
+| `quota` | For `quota-exceeded`: which quota, at which scope, its limit, the use, and when it frees |
+
+| Slug | Means |
+| --- | --- |
+| `invalid-request` | A malformed request |
+| `invalid-script` | The script was refused by the checks: see `diagnostics` |
+| `invalid-toolset`, `invalid-workflow` | The toolset or workflow cannot be registered |
+| `invalid-input` | A workflow's input does not match its schema |
+| `invalid-signal` | A reserved signal name, or a signal a workflow does not declare or whose payload does not match |
+| `invalid-query` | A query that cannot be read |
+| `unauthorized`, `forbidden` | No valid key or token; or the caller lacks a permission |
+| `not-found` | Missing, or not visible to the caller: another end user's run answers this |
+| `run-ended` | The run has ended: it takes no signal or cancellation |
+| `quota-exceeded` | An end user's limit, or your organization's ceiling, is reached |
+| `task-gone`, `task-not-waiting` | A tool task that no longer exists, or that is not waiting for this answer |
+| `toolset-unavailable` | An MCP server of the toolset could not be reached or refused |
+| `payload-too-large` | A value above the size the API takes |
+| `namespace-deleting` | The end user is being erased |
+| `unavailable`, `internal` | A fault of the service |
+
+Two more errors come from the SDK itself:
+
+- **`NamespaceRequiredError`**: a key's client started a run, or checked or tested a script, without naming the end user
+  (`rewind.namespace(name)`).
+- **`RewindConnectionError`**: the server could not be reached.
+
+All of them extend `RewindError`.
+
+## Retries
+
+A request that is safe to repeat is sent again after a network error or a 503, twice by default (`maxRetries`): reads,
+`PUT`, `DELETE`, toolset registration and workflow saves (both content-addressed), checks and tests, and every request
+that carries an idempotency key.
+
+Starting a run, forking it or sending a signal **without** an idempotency key is never repeated, nor is minting a
+token. Give them a key, and they become safe to retry:
+
+```ts
+await rewind.runs.start({ toolset: toolset.id, script, idempotencyKey: toolCall.id });
+await rewind.runs.signal(runId, "approval", { close: true }, { idempotencyKey: `approval-${decision.id}` });
+```
+
+## Waiting
+
+`runs.start`, `runs.get`, `runs.fork` and `runs.cancel` take `wait`: they answer when the run ends or `wait` passes,
+whichever comes first. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never
+cut it. Every call also takes an `AbortSignal` as `signal`.
+
+The event stream (`runs.events(id, { follow: true })`) reconnects after a dropped connection, from the next entry, up
+to 5 times by default (`maxReconnects`).

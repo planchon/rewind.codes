@@ -1,0 +1,5 @@
+# Not pages: the screenshot tooling and the package that runs it.
+# Mintlify already ignores node_modules, README.md and the dot directories.
+scripts/
+package.json
+pnpm-lock.yaml

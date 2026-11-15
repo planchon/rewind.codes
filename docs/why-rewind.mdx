@@ -1,0 +1,83 @@
+---
+title: "Why Rewind"
+description: "What changes when the model writes a script instead of calling tools one at a time, and why that script needs a durable, deterministic runtime."
+---
+
+## The problem with one tool call at a time
+
+In a classic agent loop, every tool call is a round trip through the model. To close the stale issues of a repository,
+the model lists the issues, reads all of them in its context, decides, then calls `close_issue` once per issue, each
+call a new turn. That has costs that grow with the task:
+
+- **Tokens and latency.** Every intermediate result goes through the context, and every step waits for a model call.
+- **Loops and parallelism in prose.** "For each of these 40 issues" is expressed in tokens, not in a `for` loop.
+- **Tasks longer than a request.** "Wait for a manager's approval, then refund" does not fit in one HTTP request, and
+  rarely in one conversation turn.
+- **No record.** When a call fails halfway, nobody can say exactly what happened, replay it, or fix it without
+  repeating the side effects.
+
+## What Rewind changes
+
+<Steps>
+  <Step title="The model writes the whole procedure">
+    One script calls every tool the task needs, with loops, `Promise.all`, filters and error handling written in
+    TypeScript. Only its output goes back into the context, bounded to 256 KiB, with a call that reads the rest.
+  </Step>
+  <Step title="Rewind checks it before it runs">
+    Your tools are compiled into TypeScript declarations. The script is type-checked against them in strict mode, so
+    `github.list_issues({ repo: 42 })` is refused with a diagnostic written for the model, before any run exists.
+  </Step>
+  <Step title="The run is durable">
+    A script can `await sleep("10d")` or wait for a signal for days. Nothing holds it in memory meanwhile: when the
+    awaited event arrives, Rewind rebuilds the run from its journal and continues. Crashes and deploys are harmless.
+  </Step>
+  <Step title="Every run can be replayed, tested and debugged">
+    The journal is enough to re-execute a run locally, to turn it into a test fixture, to step through it in the
+    dashboard, or to fork it with a corrected script that does not repeat the calls already made.
+  </Step>
+</Steps>
+
+## Deterministic by construction
+
+Replaying a run only works if the script computes the same thing every time. Workflow engines ask developers to keep
+their code deterministic, and to version it when it changes. Rewind owns the runtime, so it guarantees determinism
+itself:
+
+- `Date.now()`, `new Date()` and `performance.now()` return **logical time**, which only moves when the outside world
+  speaks, identically on replay.
+- `Math.random()` and `crypto.randomUUID()` are seeded per run.
+- There is no file system, no network outside your tools, no environment, nothing that could differ between two
+  executions.
+- Scripts are immutable and content-addressed: a run always replays the exact script it started with, so there is no
+  workflow versioning problem.
+
+What still changes is Rewind itself, and a [determinism epoch](/concepts/journal#determinism-epochs) versions it.
+
+## Built for products with many users
+
+- **Namespaces.** Each end user of your product has one: their runs, scripts, credentials and use, invisible to
+  everyone else. An agent acting for one user holds a token of their namespace only.
+- **Quotas.** Active runs, runs and CPU per month, distinct scripts, the longest TTL and script, per end user, so one
+  user cannot exhaust your platform.
+- **Permission gates.** A tool with the `approval` policy waits for your harness before each call. Scripts never see
+  credentials.
+
+## How it compares
+
+|  | Tools through the conversation | A code sandbox | A workflow engine | Rewind |
+| --- | --- | --- | --- | --- |
+| Who writes the procedure | The model, one call per turn | The model | Your engineers, deployed ahead of time | The model |
+| Calls your MCP servers and functions | Yes | You wire them in | Through activities you write | Yes: typed `rewind:tools` |
+| Checked before it runs | Schema per call | Rarely | At build time | Type-checked against your tools |
+| Waits days, survives restarts | No | No | Yes | Yes |
+| Determinism | Not applicable | Not guaranteed | By developer discipline | By construction |
+| Replay, cassettes, forks | No | No | Replay | Yes |
+| Isolation per end user | Yours to build | Yours to build | Yours to build | Namespaces, tokens, quotas |
+
+## When Rewind is not the right tool
+
+- A single tool call answers the task: calling the tool directly is simpler.
+- The script needs a file system, a shell or npm packages. A script imports only `rewind`, `rewind:tools` and
+  `rewind:workflows`. Give it a tool that does the work instead: a host tool runs anywhere you want.
+- Heavy computation. Each call into a script has a CPU budget (5 seconds by default), and its heap is bounded
+  (128 MiB by default). Scripts orchestrate; tools compute.

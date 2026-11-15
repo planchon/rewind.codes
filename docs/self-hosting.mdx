@@ -1,0 +1,103 @@
+---
+title: "Self-hosting"
+description: "Run the Rewind server yourself: one binary for development, and a production-shaped deployment with Postgres, S3 and sandboxed workers."
+---
+
+The hosted service is at `https://api.rewind.codes`, with its dashboard at [app.rewind.codes](https://app.rewind.codes).
+Rewind is also one binary, `rewind`, that you can run yourself. It holds the server, the CLI, the dashboard and the
+TypeScript checker. Rewind is licensed under the [FSL-1.1-ALv2](https://github.com/planchon/rewind.codes/blob/main/LICENSE.md):
+any use is allowed except offering it as a competing commercial service, and each version becomes Apache 2.0 two years
+after its release.
+
+## One server for development
+
+<Steps>
+  <Step title="Build the binary">
+    You need a Rust toolchain, Node 22.12 or later and pnpm 10: the build embeds the dashboard.
+
+    ```bash
+    git clone https://github.com/planchon/rewind.codes.git
+    cd rewind.codes
+    cargo build --release -p rewind
+    ```
+  </Step>
+  <Step title="Start the server">
+    The master key encrypts the secrets the server stores (credentials, webhook secrets): generate it once and keep
+    it. The admin key is the first API key, with the `operator` role.
+
+    ```bash
+    export REWIND_MASTER_KEY="$(openssl rand -base64 32)"   # keep it: secrets are unreadable without it
+    export REWIND_ADMIN_KEY="rewind_sk_$(openssl rand -hex 24)"
+
+    TZ=UTC ./target/release/rewind server \
+      --store turso:./rewind.db \
+      --public-url http://127.0.0.1:8080
+    ```
+
+    The server listens on `127.0.0.1:8080`, runs both roles (API and workers) in one process, and keeps everything
+    in `rewind.db` and the files next to it.
+  </Step>
+  <Step title="Point the SDK at it">
+    ```bash
+    export REWIND_URL=http://127.0.0.1:8080
+    export REWIND_API_KEY="$REWIND_ADMIN_KEY"
+    ```
+
+    The dashboard is served by the same server at [http://127.0.0.1:8080](http://127.0.0.1:8080). Without WorkOS
+    configured, it asks for an API key.
+  </Step>
+</Steps>
+
+## Options
+
+Every option of `rewind server` also reads an environment variable. `rewind server --help` lists them all.
+
+| Option | Variable | What |
+| --- | --- | --- |
+| `--listen` | `REWIND_LISTEN` | Where the HTTP API listens. `127.0.0.1:8080` by default |
+| `--store` | `REWIND_STORE` | `turso:<path>` for one machine, or `postgres://…` for a deployment |
+| `--blobs` | `REWIND_BLOBS` | Large payloads and archives: a directory, or `s3://<bucket>` (with `--s3-endpoint` and credentials for MinIO or R2) |
+| `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
+| `--admin-key` | `REWIND_ADMIN_KEY` | The first API key, registered at start |
+| `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL |
+| `--role` | | `api`, `worker`, or both (the default) |
+| `--virtual-time` | | Timers fire as soon as nothing else can advance: for tests and demos |
+| `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Deliver lifecycle webhooks to private addresses and `http://`, for local development |
+| `--allow-internal-mcp` | `REWIND_ALLOW_INTERNAL_MCP` | Let toolsets reach MCP servers on these internal hosts or networks |
+| `--quota-*` | `REWIND_QUOTA_*` | The ceiling of the tenants this server creates: active runs, runs and CPU per month, scripts, TTL, script length |
+| `--otlp-endpoint` | `REWIND_OTLP_ENDPOINT` | Export traces, metrics and logs over OTLP |
+
+The sandbox requires `TZ=UTC`: the server refuses to start otherwise.
+
+## Production
+
+The repository's [`deploy/`](https://github.com/planchon/rewind.codes/tree/main/deploy) directory is a
+production-shaped deployment on one Docker host, small enough to read in one sitting: copy it and change what your
+platform does differently.
+
+```bash
+cd deploy
+./init.sh                       # writes .env with fresh secrets, once
+docker compose up -d --build    # builds the image from the repository
+./check-walls.sh                # checks that the workers' network walls hold
+```
+
+| Service | Role |
+| --- | --- |
+| `edge` | The only published port, in front of the API |
+| `api` | `rewind server --role api`: the HTTP API, keys, the dashboard. No V8 |
+| `worker-1`, `worker-2` | `rewind server --role worker`: script execution, tool dispatch, timers, projections. Their only way out is the egress proxy |
+| `egress` | Forwards the workers' traffic to the addresses of allowed names only |
+| `postgres` | The journal, the read model and the encrypted secrets |
+| `minio` | Large payloads and archived journals (S3) |
+| `otel-collector` | Traces, metrics and logs of the API and the workers |
+
+Workers are stateless: add more to scale. The workers can run under gVisor (the `gvisor` Compose profile). The
+[deployment's README](https://github.com/planchon/rewind.codes/blob/main/deploy/README.md) covers configuration,
+upgrades across determinism epochs, backups and load tests.
+
+## The embedded server
+
+The `rewind` CLI also starts a server of its own for local work, on demand, in a `.rewind/` directory: Turso and local
+files, its API on a unix socket, no key. `rewind run script.ts` uses it when no `--url` is given. It stops after 10
+minutes without work; a sleeping run resumes at the next command. See [the CLI](/sdk/cli).

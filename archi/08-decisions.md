@@ -953,3 +953,13 @@ runtime's observable behavior or the port contracts, so they are frozen with for
 | Times are relative ("5h ago") and show the exact time, in UTC and local, on hover; the theme and the time zone are in the member's menu | A time-zone switch in the top bar | The top bar is gone, and an exact time is wanted only when looked at. |
 | The mark is the rewind glyph of the landing, monochrome; green says "completed" only | The green "AP" square | The square predates the name, and a green brand would read as a state. |
 | Find (`F`) opens a palette: a run by its id, a view, a saved search | Only the run lists | A run id pasted from a log or a ticket is the shortest way to a run. |
+
+### Taken for the documentation (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| The documentation is a Mintlify site in `docs/`, served at `docs.rewind.codes` (the owner, 15 November 2026), deployed by Mintlify's GitHub app from `main` with `/docs` as its subdirectory | A site generator of our own (Docusaurus, VitePress) on Vercel | The owner chose Mintlify. It hosts, previews pull requests and serves the pages as Markdown to models; the repository keeps only MDX and `docs.json`. |
+| Three tabs: what Rewind is, why and how it works (with self-hosting); the SDK, with what the model writes and the CLI; the dashboard, view by view. Written in English for harness developers; the pages never link to `archi/` | Publishing the specification | `archi/` is the spec of the code; the documentation says what a user does. |
+| The examples are one pnpm package in `examples/`, against the SDK published on npm (pinned): harness code run by Node's type stripping, and the scripts a model would write under `*/scripts/`, outside `tsc` (the server checks them when a run starts). Each was run against a local server when written; CI type-checks the harness code | Linking `sdk/typescript`; one package per example; snippets in the pages only | An example is what a user copies, with what npm serves. One `pnpm install` runs them all. |
+| The dashboard's screenshots are taken by `docs/scripts/screenshots.ts` (Playwright) from `pnpm dev:mock`, signed in as Ada in Acme, in light and dark, as lossless WebP (sharp); a page shows the one of the reader's theme | Screenshots of the hosted dashboard; PNG | The mocked world is complete and holds no private data, and regenerating after a change of the dashboard is one command. Lossless WebP is a third of the PNG's size. |
+| CI checks the site with `mint validate` and `mint broken-links`, `mint` pinned in `docs/package.json` | Relying on Mintlify's deploy | A broken page or link fails the pull request that caused it. |

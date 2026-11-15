@@ -1,0 +1,27 @@
+---
+title: "Tools"
+description: "Latency, error rate and retries of every tool your scripts call."
+---
+
+The Tools view measures the tools behind your runs over a window: the last hour, 24 hours, 7 or 30 days, optionally for
+one toolset.
+
+<Frame>
+  <img src="/images/dashboard/tools-light.webp" alt="The Tools view: calls, failures, retries and latency percentiles per tool, grouped by server" className="block dark:hidden" />
+  <img src="/images/dashboard/tools-dark.webp" alt="The Tools view: calls, failures, retries and latency percentiles per tool, grouped by server" className="hidden dark:block" />
+</Frame>
+
+At the top: the calls completed, how many failed, the retries, and the slowest tool. Then each tool, grouped by MCP
+server, group of host tools and built-ins:
+
+| Column | What |
+| --- | --- |
+| **Calls**, **Failed**, **Error rate** | How many calls completed, and how many failed |
+| **By kind** | The failures by kind: an error, a timeout, an unavailable server, an unknown outcome |
+| **Retries** | Attempts beyond the first: calls sent again after a transient failure or a lost claim |
+| **p50**, **p95**, **p99**, **max** | Latency, from the call to its result |
+
+A slow or failing tool slows or fails every script that calls it: this is where to look when the Overview's
+**Failing tools** lights up. The SDK reads the same figures with `rewind.tools.stats()`.
+
+The Tools view is not available to a member limited to labels.

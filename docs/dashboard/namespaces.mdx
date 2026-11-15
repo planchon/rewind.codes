@@ -1,0 +1,48 @@
+---
+title: "Namespaces"
+description: "The end users of your product: their use this month against their limits, their alerts, their tokens, and the actions on them."
+---
+
+Each end user of your product has a [namespace](/concepts/end-users). The Namespaces view shows them all for a month,
+with their use against their limits. It needs `namespaces:read`.
+
+<Frame>
+  <img src="/images/dashboard/namespaces-light.webp" alt="The Namespaces view: the ceiling, the default limits, and each end user's use as meters" className="block dark:hidden" />
+  <img src="/images/dashboard/namespaces-dark.webp" alt="The Namespaces view: the ceiling, the default limits, and each end user's use as meters" className="hidden dark:block" />
+</Frame>
+
+- **The first row** is your organization: its ceiling, with the totals of every end user.
+- **Defaults** are the limits of every end user without exceptions. **Edit the defaults** changes them, with
+  `namespaces:write`.
+- **Then each end user**, sorted by CPU, runs or scripts of the month, or by name. Each quota is a meter: orange from
+  80 %, red at 100 %. A CPU time above its quota shows its share (`160%`): CPU is never refused, only alerted on.
+- **Search** by the start of a name, and **At 80 % or more** keeps those near a limit.
+
+## One end user
+
+Open an end user to see their month in detail.
+
+<Frame>
+  <img src="/images/dashboard/namespace-light.webp" alt="One end user: cumulative CPU against its quota, limits and use, alerts, tokens and exceptions" className="block dark:hidden" />
+  <img src="/images/dashboard/namespace-dark.webp" alt="One end user: cumulative CPU against its quota, limits and use, alerts, tokens and exceptions" className="hidden dark:block" />
+</Frame>
+
+| Part | Shows |
+| --- | --- |
+| **Cumulative CPU** | CPU time over the month against the quota, with the days it reached 80 % and 100 % |
+| **Limits and use** | Each limit, the end user's use of it, and whether it is an exception to the defaults |
+| **Alerts** | Every limit crossed this month, and whether the `quota.alert` webhook was sent |
+| **Tokens and exceptions** | The tokens in use, and the exceptions to the defaults |
+
+The arrows next to the month go back in time.
+
+## Actions
+
+| Action | Needs | Does |
+| --- | --- | --- |
+| **See its runs** | `runs:read` | Opens Observability on `namespace:<name>` |
+| **Edit its limits** | `namespaces:write` | Sets its exceptions: more for a paying user, `0` active runs to block someone |
+| **Revoke its tokens** | `tokens:write` | Revokes every token of the end user, signed ones issued before now included |
+| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its name to confirm |
+
+The SDK does the same with [`rewind.namespaces`](/sdk/end-users).

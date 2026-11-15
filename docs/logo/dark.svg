@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 168 40" width="168" height="40">
+  <title>rewind</title>
+  <rect x="2" y="2" width="36" height="36" rx="8" fill="#059669"/>
+  <path d="M20.5 13.25v13.5L10.4 20z M30.6 13.25v13.5L20.5 20z" fill="#ffffff"/>
+  <text x="48" y="27.5" font-family="IBM Plex Sans, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="24" font-weight="600" letter-spacing="-0.4" fill="#f3f2ee">rewind</text>
+</svg>

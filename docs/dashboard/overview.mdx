@@ -1,0 +1,31 @@
+---
+title: "Overview"
+description: "The home page: how many runs started, how they ended, what waits now, and what fails most."
+---
+
+The Overview answers "is everything fine?" over a window of time: the last hour, 24 hours, 7 or 30 days. Every figure,
+bar and row opens the runs behind it in [Observability](/dashboard/observability).
+
+<Frame>
+  <img src="/images/dashboard/overview-light.webp" alt="The Overview: figures, runs by outcome over time, what fails most, failing tools" className="block dark:hidden" />
+  <img src="/images/dashboard/overview-dark.webp" alt="The Overview: figures, runs by outcome over time, what fails most, failing tools" className="hidden dark:block" />
+</Frame>
+
+| Figure | Shows |
+| --- | --- |
+| **Runs started** | Runs started in the window, against the previous window |
+| **Completed** | The share of the runs that ended which completed |
+| **Failed** | Failed runs, plus the aborted and cancelled ones |
+| **Waiting now** | Active runs waiting for the outside world, and how many wait on a signal |
+| **Duration p95** | The 95th and 50th percentiles of the duration of ended runs |
+| **Quarantined** | Runs held until an operator releases them or gives them up |
+
+Below them:
+
+- **Runs started, by outcome**: completed, failed and still active, over the window.
+- **What fails most**: failed runs grouped by fingerprint, the error with its numbers, ids and strings replaced, so
+  the same failure across many different scripts is one row.
+- **Failing tools**: the tools whose calls failed in the window.
+
+The query bar at the top narrows everything to a [query](/dashboard/query-language), such as `@agent:triage` or
+`namespace:user_ada`. **Save** keeps it, and the query and the window follow you into Observability.

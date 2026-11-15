@@ -1,0 +1,60 @@
+---
+title: "Workflows"
+description: "Named scripts with a typed input, output and signals, that scripts and your harness start, signal and wait for."
+---
+
+A **workflow** is a script with a name and a typed interface: JSON Schemas for its input, its output and each signal
+it accepts. Your harness registers workflows, and so does the model, with the agent tool `save_workflow`: a procedure
+it wrote once becomes a building block of its later scripts.
+
+## Typed end to end
+
+Registering a workflow checks its script against its toolset and its own schemas: `main` must accept the input and
+return the output, and `signal()` only takes a declared name and returns that signal's type. A script that starts the
+workflow is checked against the same schemas before it runs.
+
+```ts A script that uses the workflow repo_check
+import { repo_check } from "rewind:workflows";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => repo_check.start({ repo })));
+  await Promise.all(runs.map((run) => run.signal("acknowledge", { by: "check-all" })));
+  const results = await Promise.all(runs.map((run) => run.result()));
+  return results.sort((a, b) => b.stars - a.stars);
+}
+```
+
+| Call | Does |
+| --- | --- |
+| `repo_check.start(input, opts?)` | Starts a run of the workflow and returns its handle once it exists. `opts`: `detached`, `labels` (added to the parent's), `ttl` |
+| `run.signal(name, payload)` | Sends one of the workflow's signals. Resolves once the signal is in the run's mailbox |
+| `run.result()`, `run.result({ timeout })` | The run's output. Rejects with `WorkflowError` if it failed, was cancelled or aborted |
+| `repo_check.get(runId)` | A handle on an existing run of the workflow, to signal it |
+
+## Versions
+
+Each registration is a new immutable **version**, identified by its digest (`repo_check@9fbd13f4bb9b`). A toolset that
+names a workflow pins its latest version when it is registered, as it pins the schemas of MCP tools. Runs that are
+already going keep their version: changing a workflow never breaks a run in flight.
+
+## Attached and detached runs
+
+A run started by a script is **attached** to it: the parent does not end before its attached children, and a parent
+that fails, is cancelled or aborted cancels the children still running. A forgotten `result()` is harmless.
+
+A run started with `detached: true` lives on its own: start a long workflow and move on.
+
+## Started by your harness
+
+Your harness starts runs of a workflow too, by name (its latest version) or by version, and signals them:
+
+```ts
+const run = await rewind.namespace(user.id).runs.start({ workflow: "repo_check", input: { repo: "acme/api" } });
+await rewind.runs.signal(run.id, "acknowledge", { by: "the harness" });
+```
+
+A run of a workflow accepts only the signals its workflow declares, with a payload that matches their schema;
+anything else is refused (422), whoever sends it.
+
+In the dashboard, a run of a workflow shows its workflow and version, the run that started it, and the runs it started
+in **Runs started**. See [Workflows in the SDK](/sdk/workflows).

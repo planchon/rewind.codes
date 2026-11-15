@@ -1,0 +1,115 @@
+---
+title: "Toolsets"
+description: "Register what scripts may call: MCP servers, host tools, the http tool and workflows, with a policy per tool."
+---
+
+A toolset lists what scripts may call. Registering it connects to its MCP servers, pins the schemas of their tools,
+and returns the generated declarations. See [Tools and toolsets](/concepts/tools) for how calls are made.
+
+```ts
+const toolset = await rewind.toolsets.create({
+  mcp: [
+    { name: "github", url: "https://mcp.example.com/github" },
+    {
+      name: "stripe",
+      url: "https://mcp.example.com/stripe",
+      policies: { create_refund: { approval: true, onInterruption: "at_most_once" } },
+    },
+  ],
+  host: [
+    {
+      name: "ask_user",
+      description: "Ask the end user a question and return their answer.",
+      inputSchema: { type: "object", properties: { question: { type: "string" } }, required: ["question"] },
+      outputSchema: { type: "object", properties: { answer: { type: "string" } }, required: ["answer"] },
+      policy: { onInterruption: "at_most_once" },
+    },
+  ],
+  http: { allow: ["api.github.com", "*.example.com"] },
+  credentials: { servers: { github: { headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } } } },
+});
+```
+
+<ParamField body="mcp" type="McpServer[]">
+  MCP servers over streamable HTTP. `name` is the namespace of their tools in `rewind:tools` (`github.list_issues`);
+  `policies` sets the policy of some of their tools, by the name the server gives them.
+</ParamField>
+
+<ParamField body="host" type="HostTool[]">
+  Your own tools, executed by your [worker](/sdk/host-tools). A name `group.tool` puts the tool in the `group`
+  namespace (`crm.find_customer`). `inputSchema` is required and validated before each call; `outputSchema` types the
+  result in the declarations, and is not validated.
+</ParamField>
+
+<ParamField body="http" type="{ allow: string[]; policy?: ToolPolicy }">
+  Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only. `*.example.com` allows the subdomains.
+</ParamField>
+
+<ParamField body="workflows" type="string[]">
+  The [workflows](/sdk/workflows) scripts may start: `"triage"` pins its latest version, `"triage@9f2c4e1a07b3"` one
+  version.
+</ParamField>
+
+<ParamField body="base" type="string">
+  Derives the toolset from a registered one: its servers, tools and workflows are kept as pinned, and `workflows` adds
+  or pins workflows again. `mcp`, `host` and `http` must then be empty.
+</ParamField>
+
+<ParamField body="credentials" type="Credentials">
+  The MCP servers' credentials, by server name: the `headers` sent to each server, such as `Authorization`. Used to
+  list their tools, then kept as the toolset's. They are not part of its id.
+</ParamField>
+
+A toolset is content-addressed: registering the same toolset again returns the same `id`, so registering it at every
+start of your harness is fine.
+
+## Policies
+
+Each tool has a policy. Every field is optional.
+
+| Field | Default | What |
+| --- | --- | --- |
+| `onInterruption` | `"retry"` | `"retry"`: a call interrupted mid-flight is sent again with the same idempotency key, up to 5 attempts. `"at_most_once"`: it fails with `outcomeUnknown` |
+| `approval` | `false` | Each call waits for your harness's approval before it is sent. See [Human in the loop](/sdk/human-in-the-loop#approve-a-tool-call) |
+| `timeout` | `"5m"` for MCP tools | How long one attempt may take |
+| `heartbeatTimeout` | `"60s"` | How long a host tool's worker may go without a heartbeat |
+| `concurrency` | | Calls of this tool in flight per run, under the run's limit of 16 |
+
+## Declarations for the model
+
+`toolset.declarations` holds two renderings of the toolset's `rewind:tools` module: `prompt`, one compact line per tool
+for the model's system prompt, and `dts`, the TypeScript declarations scripts are checked against.
+
+```ts
+const system = [
+  "Solve each task by writing one TypeScript script and running it with run_script.",
+  "What scripts can use:",
+  toolset.declarations.prompt,
+].join("\n");
+```
+
+A toolset too large for the prompt can be searched instead: give the model the agent tool `search_tools`, or search
+yourself:
+
+```ts
+const { tools } = await rewind.toolsets.search(toolset.id, "close an issue", { limit: 5 }); // best first: name, prompt, dts
+const text = await rewind.toolsets.declarations(toolset.id, { format: "prompt" });
+```
+
+## Credentials
+
+Credentials are set per toolset, per end user and toolset, or per run. A call uses the run's if it has some, then its
+namespace's, then the toolset's; never merged.
+
+```ts
+const bearer = (token: string) => ({ servers: { github: { headers: { Authorization: `Bearer ${token}` } } } });
+
+await rewind.toolsets.setCredentials(toolset.id, bearer(orgToken)); // every run of the toolset
+await rewind.namespaces.setCredentials(user.id, toolset.id, bearer(userToken)); // one end user's runs
+await rewind.runs.setCredentials(run.id, bearer(freshToken)); // one run
+```
+
+Setting credentials replaces the previous ones at that level.
+
+When a token expires during a long pause, the call is parked and you get the webhook `credentials.expired`. Set new
+credentials at the same level, and the call is sent again with the same idempotency key.

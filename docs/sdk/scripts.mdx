@@ -1,0 +1,139 @@
+---
+title: "Writing scripts"
+description: "What the model writes, how to prompt for it, and the patterns that make scripts robust."
+---
+
+A script is what the model writes and Rewind runs: one TypeScript module whose default export is the entry point.
+This page is for you, to prompt the model well and to read its scripts; the agent tools already describe the format to
+the model.
+
+```ts
+import { github, slack } from "rewind:tools";
+import { signal, ToolError } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  // ...
+  return { closed: 3 };
+}
+```
+
+- **One module.** Its default export is `async function main(input)`. Input and output are JSON.
+- **Three imports.** `rewind:tools` (the toolset's tools), `rewind:workflows` (the workflows it pins) and `rewind` (the
+  [standard library](/sdk/script-reference)). No npm packages, no relative imports, no dynamic `import()`.
+- **Strict TypeScript.** The script is type-checked against the toolset's declarations before it runs.
+
+## Prompting the model
+
+Put the toolset's declarations in the system prompt, and say how you want the model to work:
+
+```ts
+const system = [
+  "Solve each task by writing one TypeScript script and running it with run_script: the script",
+  "makes every call the task needs, in loops and in parallel, and returns only the answer.",
+  "If a run fails, read the error, fix the script and call retry_run: calls already made are reused.",
+  "",
+  "What scripts can use:",
+  toolset.declarations.prompt,
+].join("\n");
+```
+
+What helps in practice:
+
+- **Ask for one script per task**, which returns only what the conversation needs. Intermediate data stays in the run.
+- **Mention `retry_run`.** A failed run is fixed by a fork that does not repeat its calls, rather than by a new run
+  that does.
+- **Describe your host tools well.** Their `description` is the model's only documentation, and so are your MCP
+  servers' tool descriptions.
+- **Give output schemas** to host tools. MCP tools without one get [observed types](/concepts/tools#declarations) after
+  their first results.
+
+## Patterns
+
+<AccordionGroup>
+  <Accordion title="Calls in parallel">
+    Tool calls are promises: run independent ones together. A run has at most 16 calls in flight; the others wait
+    for a slot.
+
+    ```ts
+    const details = await Promise.all(ids.map((id) => crm.get_customer({ id })));
+    ```
+  </Accordion>
+
+  <Accordion title="Handle a tool's failure">
+    A failed call throws a `ToolError`. Catch it where the script can do something better than fail.
+
+    ```ts
+    import { ToolError } from "rewind";
+
+    const results = await Promise.allSettled(stale.map((i) => github.close_issue({ repo, number: i.number })));
+    const failed = results.filter((r) => r.status === "rejected").map((r) => (r.reason as ToolError).message);
+    ```
+
+    `error.outcomeUnknown` is `true` when the call was interrupted and may have taken effect: check before calling
+    again.
+  </Accordion>
+
+  <Accordion title="Wait for a person">
+    ```ts
+    import { signal } from "rewind";
+
+    const decision = await signal<{ close: boolean }>("approval", { timeout: "3d" });
+    if (decision === undefined) return { closed: 0, why: "no answer in 3 days" };
+    ```
+
+    The harness, or the model with `signal_run`, sends the signal. See [Human in the loop](/sdk/human-in-the-loop).
+  </Accordion>
+
+  <Accordion title="Wait for time to pass">
+    ```ts
+    import { sleep } from "rewind";
+
+    await sleep("10d"); // durable: nothing runs meanwhile
+    const reopened = await github.list_issues({ repo, state: "open", labels: "reopened" });
+    ```
+  </Accordion>
+
+  <Accordion title="Poll until something is ready">
+    ```ts
+    import { sleep } from "rewind";
+
+    let deployment = await vercel.get_deployment({ id });
+    while (deployment.state === "BUILDING") {
+      await sleep("30s");
+      deployment = await vercel.get_deployment({ id });
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Log what matters">
+    `console.log` lines are journaled, shown in the dashboard next to their line, and returned with the run: the
+    model sees the last ones.
+
+    ```ts
+    console.log(`${stale.length} of ${issues.length} open issues are stale`);
+    ```
+  </Accordion>
+
+  <Accordion title="Fan out over a workflow">
+    ```ts
+    import { triage } from "rewind:workflows";
+
+    const runs = await Promise.all(repos.map((repo) => triage.start({ repo })));
+    const results = await Promise.all(runs.map((run) => run.result()));
+    ```
+
+    See [Workflows](/sdk/workflows).
+  </Accordion>
+</AccordionGroup>
+
+## Mistakes Rewind catches
+
+| Mistake | What happens |
+| --- | --- |
+| A wrong argument type, a missing field, an unknown tool | Refused before the run starts, with a diagnostic and a code frame |
+| `fetch`, `require`, `process`, `Buffer` used by habit | Refused, with a hint that says what to use instead |
+| A forgotten `await` on a tool call | Flagged by the checker. At run time, the call still completes before the run ends |
+| An `async` callback passed to `forEach` | Flagged: use `for … of` with `await`, or `Promise.all` over `map` |
+| Waiting for something that can never happen | The run fails with `DeadlockError` instead of hanging |
+| An infinite loop | The call into the script exceeds its CPU budget (5 s), and the run is aborted |

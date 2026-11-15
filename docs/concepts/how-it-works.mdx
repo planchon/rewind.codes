@@ -1,0 +1,113 @@
+---
+title: "How it works"
+description: "The harness, the Rewind API, the workers and the journal: what happens from the model's run_script to the run's result."
+---
+
+## The pieces
+
+Your **harness** is the product that runs the agent: its model loop, its prompts, its users. It talks to **Rewind**
+through the HTTP API `/v1`, usually through the TypeScript SDK.
+
+```mermaid
+%%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
+flowchart LR
+  subgraph harness["Your harness"]
+    direction TB
+    model["Model loop<br/>with the agent tools"]
+    worker["Host-tool worker"]
+    hooks["Webhook receiver"]
+  end
+  subgraph rewind["Rewind"]
+    direction TB
+    api["API server /v1"]
+    workers["Workers<br/>V8 sandboxes"]
+    dispatcher["Tool dispatcher"]
+    store[("Journal<br/>Postgres + S3")]
+  end
+  mcp["Your MCP servers"]
+
+  model -- "runs.start" --> api
+  worker -- "long-poll tasks" --> api
+  api -- "signed webhooks" --> hooks
+  api --> store
+  workers <--> store
+  workers --> dispatcher
+  dispatcher -- "MCP, http" --> mcp
+```
+
+| Piece | Role |
+| --- | --- |
+| API server | Registers toolsets and workflows, starts runs, takes signals and approvals, serves reads and the dashboard. |
+| Workers | Execute scripts in V8 isolates, one activation at a time, and commit each step to the journal. |
+| Tool dispatcher | Sends the calls Rewind makes itself: MCP tools and the built-in `http` tool. Credentials are injected here, never in the sandbox. |
+| Scheduler | Fires durable timers: `sleep`, `setTimeout`, signal timeouts, run deadlines. |
+| Journal | Postgres holds every run's history; large payloads go to S3. It is the only source of truth. |
+| Host-tool worker | Part of your harness, from the SDK. Executes the tools that live in your code. |
+
+## The life of a run
+
+<Steps>
+  <Step title="Register a toolset">
+    Your MCP servers, your own host tools, the `http` tool, the workflows scripts may start. Rewind connects to the
+    servers, **pins** the schemas of their tools and generates TypeScript declarations: `rewind-tools.d.ts` for the
+    type-checker, and a compact rendering for the model's prompt.
+  </Step>
+  <Step title="Give the model its tools">
+    The declarations go in the system prompt. The [agent tools](/sdk/agent-tools) go in the model's tool list:
+    `run_script`, `check_script`, `test_script`, `get_run`, `signal_run`, `retry_run` and more.
+  </Step>
+  <Step title="The model calls run_script">
+    The SDK starts a run in the namespace of the end user the agent acts for, with the script, its input, a `wait`
+    (30 seconds by default), the tool call's id as idempotency key, and your labels. The script is type-checked first;
+    a refused script comes back to the model with its diagnostics.
+  </Step>
+  <Step title="The run executes">
+    A worker runs the script in a sandbox. Each tool call becomes a task: Rewind sends MCP and `http` calls itself,
+    and your worker claims the calls to host tools. If the run ends within `wait`, its output goes back to the model.
+    Otherwise the model gets the run's id and what it waits for: "waiting for signal `approval`".
+  </Step>
+  <Step title="It resumes, possibly days later">
+    A signal arrives, a timer fires, a human approves. The run continues from its journal. When it ends, your harness
+    gets a signed webhook (`run.completed`, `run.failed`), and can resume the conversation with the result.
+  </Step>
+</Steps>
+
+```mermaid
+sequenceDiagram
+  participant M as Model
+  participant H as Harness (SDK)
+  participant R as Rewind
+  participant W as Your worker
+  M->>H: run_script({ code })
+  H->>R: runs.start({ script, toolset, wait: "30s" })
+  R->>R: type-check, then run in the sandbox
+  R->>W: task: ask_user({ question })
+  W-->>R: deferred (the user answers later)
+  R-->>H: active, waiting for ask_user
+  H-->>M: "Run 01a1… is waiting for ask_user"
+  Note over R: Nothing runs meanwhile. The journal holds the run.
+  W->>R: complete(token, { answer: "yes" })
+  R->>R: resume from the journal, continue
+  R-->>H: webhook run.completed { output }
+  H->>M: the result, in the conversation
+```
+
+## Why a run can wait for days
+
+A run in Rewind holds no memory while it waits. Each time something from the outside arrives (a tool's result, a timer,
+a signal), a worker **activates** the run: it delivers the event to the script, lets the script run until it waits
+again, and commits what happened to the journal in one transaction.
+
+If the worker still has the run's isolate in memory, it delivers the event directly. If not (another worker, a restart,
+a deploy, ten days later), it starts a fresh isolate and **replays** the script against the journal: every `await`
+that already has a recorded result returns it at once, without calling anything, until the script reaches the new
+event. Determinism guarantees that the replay takes the same path. [The journal](/concepts/journal) explains how.
+
+## Where things run
+
+| Code | Runs in |
+| --- | --- |
+| The script the model writes | Rewind's sandbox: V8, no file system, no network except through tools |
+| Your MCP servers | Wherever you host them. Rewind reaches them over streamable HTTP. |
+| Your host tools | Your infrastructure, in the SDK's worker |
+| Your model loop | Your harness. Rewind never calls a model itself: a host tool can. |

@@ -1,0 +1,19 @@
+---
+title: "Scripts"
+description: "Every distinct script your models wrote, with its runs, its outcomes, its tools and its labels."
+---
+
+Scripts are content-addressed: two runs of the same source are runs of one script. The Scripts view lists every distinct
+script executed, the most recently run first.
+
+<Frame>
+  <img src="/images/dashboard/scripts-light.webp" alt="The Scripts view: each script with its runs by outcome, its tools and its labels" className="block dark:hidden" />
+  <img src="/images/dashboard/scripts-dark.webp" alt="The Scripts view: each script with its runs by outcome, its tools and its labels" className="hidden dark:block" />
+</Frame>
+
+Each row shows the script's first lines and digest, its runs and their outcomes, the tools it called and the labels of its
+runs. Filter by a label (`agent:triage`) to see what one agent writes.
+
+Open a script to read its full source and its runs. From a run, the **Script** detail opens the same page.
+
+Use it to see what your models actually write: which scripts run most, which fail, and which tools they reach for.

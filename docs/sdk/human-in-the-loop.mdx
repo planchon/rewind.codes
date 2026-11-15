@@ -1,0 +1,109 @@
+---
+title: "Human in the loop"
+description: "Runs that wait for a person or an external system: signals, webhooks, and tool calls your harness approves."
+---
+
+A run can wait for the outside world for as long as its TTL allows: minutes, days, weeks. Nothing runs and nothing is
+held in memory meanwhile. Rewind gives three ways to wait.
+
+| Need | Use |
+| --- | --- |
+| The script waits for a decision or an event | A **signal**: `await signal("approval")` in the script, `runs.signal()` from your harness |
+| An external system that does not know run ids must notify the run | A **webhook URL**: `await webhook("pr_merged")` in the script |
+| Your harness must consent to a sensitive call, with its exact arguments | The **approval policy** on that tool |
+
+## Signals
+
+```ts In the script
+import { signal } from "rewind";
+
+const review = await signal<{ approved: boolean; note?: string }>("manager_review", { timeout: "3d" });
+if (review === undefined) return { refunded: false, why: "no review within 3 days" };
+if (!review.approved) return { refunded: false, why: review.note ?? "rejected" };
+```
+
+```ts In your harness, when the manager decides
+await rewind.runs.signal(runId, "manager_review", { approved: true }, { idempotencyKey: `review-${runId}` });
+```
+
+Each run has one mailbox per signal name, first in, first out:
+
+- If the script already waits on `signal("manager_review")`, the signal resolves it.
+- If not yet, the signal is kept. The next `signal("manager_review")` returns it at once: nothing is lost if the
+  manager decides before the script reaches that line.
+- Two signals with the same name are returned by two successive `signal()` calls, in arrival order.
+- With `{ timeout }`, `signal()` returns `undefined` if nothing arrived in time. Without one, the run's TTL bounds
+  the wait.
+
+Send signals with an idempotency key: the same key sent twice delivers one signal. Without one, a retried request leaves
+a second signal in the mailbox. Signal names starting with `rewind:` are reserved. A run that has ended refuses
+signals (`run-ended`).
+
+The model sends signals too, with the agent tool `signal_run`, and so do other scripts, to runs of
+[workflows](/sdk/workflows).
+
+## Webhook URLs for external systems
+
+External systems do not know run ids. A script asks for a URL bound to itself and a signal name; everything posted to
+it becomes that signal.
+
+```ts In the script
+import { signal, webhook } from "rewind";
+import { github } from "rewind:tools";
+
+const hook = await webhook("pr_merged");
+await github.create_webhook({ repo, url: hook.url, events: ["pull_request"] });
+const event = await signal("pr_merged");
+```
+
+When the sender gives a delivery id, it is used as the signal's idempotency key. The server needs a public URL
+(`--public-url` on a server of your own) to hand out webhook URLs.
+
+## Approve a tool call
+
+A tool with the `approval` policy waits for your harness before each call is sent. The run is suspended, and its state
+says which call waits, with its arguments, so the person who decides sees exactly what will happen.
+
+```ts In the toolset
+{
+  name: "payments.refund",
+  description: "Refund an order. Moves money: the harness approves each call.",
+  inputSchema: { /* ... */ },
+  policy: { approval: true, onInterruption: "at_most_once" },
+}
+```
+
+```ts In your harness
+const run = await rewind.runs.get(runId);
+
+for (const approval of rewind.approvals.pending(run)) {
+  const args = await rewind.approvals.args(approval); // from the run's state, or by digest when large
+  if (await askAHuman(approval.tool, args)) await rewind.approvals.approve(approval);
+  else await rewind.approvals.reject(approval, "the user refused"); // the script gets a ToolError with this message
+}
+```
+
+You learn that a run waits from the run's state (`run.waitingFor`), from the agent tools' results (`result.run`), or
+from the webhook `run.suspended`.
+
+<Note>
+  The same calls handle a tool call **parked** because the tool's schema changed during the run (`approval.reason` is
+  `"schema_changed"`): approve it to continue against the new schema, or reject it. A call parked because credentials
+  expired is not an approval: [renew the credentials](/sdk/toolsets#credentials) instead.
+</Note>
+
+## A complete example
+
+[`examples/human-approval`](https://github.com/planchon/rewind.codes/tree/main/examples/human-approval) runs a refund
+that waits for a manager's signal, then for your harness to approve the payment call:
+
+```text
+[notify] Refund of 129.9 EUR asked for order ord_1042: arrived broken
+run 01a1e131-7407-77fa-96a6-8179084ebfa4: active, waiting for [ 'signal' ]
+payments.refund waits for approval, at line 15: { amount: 129.9, orderId: 'ord_1042' }
+[payments] refund ord_1042, idempotency key 01a1e131-7407-77fa-96a6-8179084ebfa4/4
+run 01a1e131-7407-77fa-96a6-8179084ebfa4: completed { refundId: 're_ord_1042', refunded: true }
+```
+
+In the dashboard, **Observability → Waiting** lists every run waiting for the outside world, grouped by what it waits
+for, with the line it is paused on.

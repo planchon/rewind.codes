@@ -1,8 +1,8 @@
 # CI of Rewind: the Rust workspace (formatting, lints, every test with the Docker services the
 # tests start: Postgres, MinIO, the OpenTelemetry Collector; the e2e corpus; the OpenAPI
-# document), the SDK and the dashboard, the image, and the reference deployment under load. On
-# main, it deploys the sites on Vercel: app.rewind.codes once the dashboard's checks pass, and
-# rewind.codes (deploy/railway/README.md, "Vercel").
+# document), the SDK and the dashboard, the documentation and the examples, the image, and the
+# reference deployment under load. On main, it deploys the sites on Vercel: app.rewind.codes once
+# the dashboard's checks pass, and rewind.codes (deploy/railway/README.md, "Vercel").
 name: CI
 
 on:
@@ -128,6 +128,48 @@ jobs:
       - name: The types generated from api/openapi.json are current
         run: pnpm generate:api && git diff --exit-code -- src/generated/api.ts
       - run: pnpm build
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: docs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: docs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: The site builds, and every link resolves
+        run: pnpm check
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: examples
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: examples/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: The harness code type-checks against the published SDK
+        run: pnpm typecheck
 
   image:
     name: Image

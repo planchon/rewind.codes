@@ -1,0 +1,87 @@
+---
+title: "Run"
+description: "One run in depth: the debugger with its time cursor, the journal, the logs, the LLM trace and the runs it started."
+---
+
+Open a run from anywhere: a row of Observability, a figure of the Overview, Find with its id. Its sidebar holds its
+status and id, its sections, and its details: namespace, workflow and version, the run that started it, script, toolset,
+calls, trace id and labels. A run that is still going updates live, step by step.
+
+## Debugger
+
+The debugger is the source of the script, with what each line caused beside it: tool calls with their duration, log
+lines, timers, signal waits. Above it, the **timeline** shows each call, timer and signal wait as a span, with idle time
+compressed. When the run waits, a banner says for what, at which line, and how to answer.
+
+<Frame caption="A run waiting for the signal approval, at line 11, after two calls">
+  <img src="/images/dashboard/run-debugger-light.webp" alt="The debugger: a waiting banner, the timeline, the source with each call beside its line, and the step inspector" className="block dark:hidden" />
+  <img src="/images/dashboard/run-debugger-dark.webp" alt="The debugger: a waiting banner, the timeline, the source with each call beside its line, and the step inspector" className="hidden dark:block" />
+</Frame>
+
+### The time cursor
+
+A run's history is a sequence of **steps**: something from outside (the start, a tool's result, a timer, a signal, a
+cancellation) and what the script did in response. The cursor steps through them like a debugger:
+
+- **Step back**, **Step**, first and last, or the <kbd>←</kbd> and <kbd>→</kbd> keys. **every step** also stops on the
+  steps that change nothing in the source.
+- At each step, the source marks the awaits that just resumed, the calls issued, those still open and those done. The
+  panel on the right says why the run woke up, what it did, and where it is paused.
+- **Hover** an underlined call to see its arguments and result as known at that step, or a variable bound to an awaited
+  call (`const issues = await github.list_issues(…)`), or `input`, to see its value. **Click** to pin it as a watch.
+- The step is in the URL (`?step=`): a link opens the run at that moment. On a live run, the cursor follows the head.
+
+<Frame caption="Hovering issues at step 3: the value github.list_issues returned, with a watch pinned">
+  <img src="/images/dashboard/run-time-cursor-light.webp" alt="The time cursor: a hover showing the value of issues, and a watch in the side panel" className="block dark:hidden" />
+  <img src="/images/dashboard/run-time-cursor-dark.webp" alt="The time cursor: a hover showing the value of issues, and a watch in the side panel" className="hidden dark:block" />
+</Frame>
+
+<Note>
+  Only values that crossed the journal are known: inputs, results, signals, and the variables bound to an awaited call.
+  What the script computes in between is not recorded, and the dashboard runs no code.
+</Note>
+
+Payloads show their size, digest and preview; their full value loads on demand.
+
+## Journal
+
+Every entry of the run: its index, its time from the start, its event, its detail and its line. Select one to see it in
+full.
+
+<Frame>
+  <img src="/images/dashboard/run-journal-light.webp" alt="The journal of a run: run_started, schedule_tool_call, tool_call_completed, log, start_timer, signal_awaited" className="block dark:hidden" />
+  <img src="/images/dashboard/run-journal-dark.webp" alt="The journal of a run: run_started, schedule_tool_call, tool_call_completed, log, start_timer, signal_awaited" className="hidden dark:block" />
+</Frame>
+
+## Logs
+
+The script's `console.*` lines, with their level and line.
+
+## LLM trace
+
+The run as a model reads it with `get_run`: each event with its outcome, compact. Use it to see what your agent saw.
+
+<Frame>
+  <img src="/images/dashboard/run-trace-light.webp" alt="The LLM trace of a run" className="block dark:hidden" />
+  <img src="/images/dashboard/run-trace-dark.webp" alt="The LLM trace of a run" className="hidden dark:block" />
+</Frame>
+
+## Runs started
+
+The runs of [workflows](/concepts/workflows) this run started, each with how it ended, the call that started it, and
+whether it is detached. `triage.start(…)` and `run.signal("approval", …)` read as the script wrote them.
+
+<Frame>
+  <img src="/images/dashboard/run-started-light.webp" alt="The runs a script started: two runs of triage and one detached run of digest" className="block dark:hidden" />
+  <img src="/images/dashboard/run-started-dark.webp" alt="The runs a script started: two runs of triage and one detached run of digest" className="hidden dark:block" />
+</Frame>
+
+## Actions
+
+At the top right:
+
+- **Forks**: the runs forked from this one, such as the `retry_run` of a failed run.
+- **Journal**: downloads the run's journal document, which replays on its own (`rewind replay journal.json`).
+- **Cassette**: downloads its calls and signals, for [tests](/sdk/testing#test-against-a-real-run).
+
+**Back** returns to the list of Observability the run was opened from, with its query.

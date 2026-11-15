@@ -1,0 +1,80 @@
+---
+title: "The sandbox"
+description: "What a script can do, what it cannot, and why every run is deterministic."
+---
+
+Scripts run in a V8 isolate that Rewind controls entirely. Every way the script could observe the world goes through
+the journal, so the same script, input and journal always give the same execution.
+
+## What exists in the sandbox
+
+| Global | Behavior |
+| --- | --- |
+| `Date.now()`, `new Date()`, `performance.now()`, `Temporal.Now`, `Intl.DateTimeFormat` | [Logical time](/concepts/journal#logical-time): moves only when an event is delivered to the run |
+| `Math.random()` | A pseudo-random generator seeded per run |
+| `crypto.getRandomValues()`, `crypto.randomUUID()` | A cryptographic generator seeded per run: tokens a script makes are not predictable, and replay identically |
+| `setTimeout`, `setInterval` | Durable timers, like `sleep` |
+| `console.*` | Journaled as log lines, shown in the dashboard and returned with the run |
+| `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `queueMicrotask` | Present: pure and deterministic |
+| `ArrayBuffer`, typed arrays | Present, within a memory budget (128 MiB by default). Past it, an allocation throws `RangeError`, which the script can catch |
+| `fetch` | Only when the toolset enables the [`http` tool](/concepts/tools#the-http-tool), for its allowed hosts. Each request is a journaled tool call, sent by Rewind |
+| `WeakRef`, `FinalizationRegistry`, `SharedArrayBuffer`, `Atomics`, `WebAssembly` | Removed: they expose garbage collection or threads, or run code the sandbox cannot see |
+| File system, environment, processes, network, Node and Deno APIs | Absent |
+
+Scripts run with `TZ=UTC` and the `en-US` locale, so `Intl` output does not depend on the host.
+
+## What a script can import
+
+| Module | Holds |
+| --- | --- |
+| `rewind:tools` | Generated for the toolset: one namespace per MCP server or group of host tools |
+| `rewind:workflows` | Generated for the toolset: one export per workflow it pins |
+| `rewind` | The standard library: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError`, `WorkflowError` |
+
+Nothing else: no npm packages, no relative imports, no dynamic `import()`. See the
+[script reference](/sdk/script-reference).
+
+## What type-checks is what exists
+
+Before a run starts, its script is type-checked in strict mode by the TypeScript 7 compiler against exactly these
+globals and the toolset's declarations. A name a model reaches for by habit but that does not exist (`fetch` without the
+`http` tool, `require`, `process`, `Buffer`) is refused with a hint that says what to use instead. Rewind also flags two
+mistakes the compiler does not catch:
+
+| Rule | Flags |
+| --- | --- |
+| Floating promise | A tool call, a `rewind` function or an async function used as a statement: neither awaited, returned nor assigned |
+| Ignored async callback | An `async` function passed to `forEach` and the like, which ignore its result |
+
+Diagnostics are written for a model: location, message and a short code frame.
+
+```text
+error TS2322 Type 'number' is not assignable to type 'string'.
+7 | export default async function main(input: { repo: string }) {
+8 |   const issues = await github.list_issues({ repo: 42, state: "open" });
+  |                                             ^^^^
+```
+
+## Limits
+
+| Limit | Default | When exceeded |
+| --- | --- | --- |
+| CPU time per call into the script (`main`, or the delivery of one event) | 5 s | The run is aborted (`limit_exceeded`) |
+| Heap | 128 MiB | The run is aborted |
+| Array buffers | 128 MiB | The allocation throws `RangeError` |
+| Tool calls in flight per run | 16 | The next calls wait for a slot |
+| A run's lifetime (TTL) | 30 days | The run is cancelled |
+
+The CPU budget applies to each call into the script, not to a whole activation, so replaying a long history never
+exhausts it. CPU time is also counted per end user each month, for [quotas](/concepts/end-users#quotas).
+
+## Security
+
+- **Credentials never enter the sandbox.** They are injected by the dispatcher into the connection to your MCP
+  server, and never appear in the journal, a cassette or a trace.
+- **No network of its own.** The `http` tool sends requests from the dispatcher, only to the toolset's allowed
+  hosts, and refuses private, loopback, link-local and cloud-metadata addresses, at every redirect.
+- **Your permission gates stay yours.** A tool with the `approval` policy is not sent until your harness approves
+  that exact call.
+- **Workers are sandboxed too.** In production, the workers that run scripts reach the network only through an egress
+  proxy, and can run under gVisor.

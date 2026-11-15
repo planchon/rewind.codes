@@ -1,0 +1,177 @@
+---
+title: "Quickstart"
+description: "Register a toolset, serve a host tool, run a script and read its result."
+---
+
+This walkthrough runs a script that reads a GitHub repository through the built-in `http` tool and calls one function
+of your own. The complete program is [`examples/quickstart`](https://github.com/planchon/rewind.codes/tree/main/examples/quickstart).
+
+<Steps>
+  <Step title="Get an API key">
+    Sign in to the dashboard at [app.rewind.codes](https://app.rewind.codes), open the account menu at the bottom of
+    the sidebar, then **Organization → API keys → New key**. Give it the `harness` role. The secret is shown once:
+    copy it.
+
+    <Frame>
+      <img src="/images/dashboard/organization-api-key-created-light.webp" alt="A new API key, shown once after its creation" className="block dark:hidden" />
+      <img src="/images/dashboard/organization-api-key-created-dark.webp" alt="A new API key, shown once after its creation" className="hidden dark:block" />
+    </Frame>
+
+    Running your own server instead? See [Self-hosting](/self-hosting): the steps below are the same with its URL.
+  </Step>
+
+  <Step title="Install the SDK">
+    Node 22.12 or later. The package is ESM only and depends on no model SDK.
+
+    <CodeGroup>
+    ```bash npm
+    npm install @rewind.codes/sdk
+    ```
+
+    ```bash pnpm
+    pnpm add @rewind.codes/sdk
+    ```
+    </CodeGroup>
+
+    The client reads its server and key from the environment:
+
+    ```bash
+    export REWIND_URL=https://api.rewind.codes
+    export REWIND_API_KEY=rewind_sk_...
+    ```
+  </Step>
+
+  <Step title="Register a toolset">
+    A toolset is what scripts may call. This one enables the `http` tool for `api.github.com` only, and declares a
+    host tool, `notify`, that your own code executes.
+
+    ```ts index.ts
+    import { Rewind } from "@rewind.codes/sdk";
+
+    const rewind = new Rewind();
+
+    const toolset = await rewind.toolsets.create({
+      http: { allow: ["api.github.com"] },
+      host: [
+        {
+          name: "notify",
+          description: "Send a short message to the user.",
+          inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+        },
+      ],
+    });
+
+    console.log(toolset.declarations.prompt);
+    ```
+
+    Rewind answers with the declarations of the toolset, in a compact form for the model's prompt:
+
+    ```text
+    import { notify } from "rewind:tools";
+    fetch(url, { method?, headers?, body? }) → Response · The http tool, a global: HTTP requests to these hosts only: api.github.com.
+    notify({ text: string }) → unknown · Send a short message to the user.
+    webhook(name) → { url: string } · From "rewind": a URL bound to this run; what is posted to it becomes the signal `name`.
+    ```
+  </Step>
+
+  <Step title="Serve the host tool">
+    A worker long-polls the calls to your host tools, runs the handler and answers. It runs in your infrastructure:
+    the handler can reach your database, your users, another model.
+
+    ```ts index.ts
+    const worker = rewind.worker({
+      toolset: toolset.id,
+      tools: {
+        notify: async ({ text }: { text: string }, ctx) => {
+          console.log(`[notify for ${ctx.namespace}] ${text}`);
+          return { sent: true };
+        },
+      },
+    });
+    ```
+  </Step>
+
+  <Step title="Run a script">
+    In a harness, the model writes the script. Here it is a file:
+
+    ```ts scripts/repo-report.ts
+    import { notify } from "rewind:tools";
+
+    export default async function main(input: { repo: string }) {
+      const res = await fetch(`https://api.github.com/repos/${input.repo}`, {
+        headers: { accept: "application/vnd.github+json", "user-agent": "rewind-quickstart" },
+      });
+      if (!res.ok) throw new Error(`GitHub answered ${res.status} for ${input.repo}`);
+      const repo = await res.json();
+
+      const report = {
+        repo: repo.full_name as string,
+        stars: repo.stargazers_count as number,
+        openIssues: repo.open_issues_count as number,
+        pushedAt: repo.pushed_at as string,
+      };
+      console.log(`${report.repo}: ${report.stars} stars`);
+
+      await notify({ text: `${report.repo} has ${report.openIssues} open issues and pull requests.` });
+      return report;
+    }
+    ```
+
+    Start it in the namespace of the end user it acts for, and wait up to 30 seconds for its result:
+
+    ```ts index.ts
+    import { readFile } from "node:fs/promises";
+
+    const script = await readFile(new URL("./scripts/repo-report.ts", import.meta.url), "utf8");
+    const run = await rewind.namespace("quickstart-user").runs.start({
+      toolset: toolset.id,
+      script,
+      input: { repo: "nodejs/node" },
+      wait: "30s",
+      labels: { example: "quickstart" },
+    });
+
+    console.log(`run ${run.id}: ${run.status}`);
+    console.log(run.output?.value);
+    await worker.stop();
+    ```
+  </Step>
+
+  <Step title="Read the result">
+    ```text
+    [notify for quickstart-user] nodejs/node has 1326 open issues and pull requests.
+    run 01a1e12f-cd53-75ef-8e51-785602c9b0d6: completed
+    { openIssues: 1326, pushedAt: '2026-11-15T19:15:27Z', repo: 'nodejs/node', stars: 123766 }
+    ```
+
+    The script was type-checked against the toolset, ran in the sandbox, sent its request through the `http` tool and
+    its `notify` call to your worker. Each of these is an entry in the run's journal.
+  </Step>
+
+  <Step title="Look at the run">
+    Open **Observability** in the dashboard and click the run. The debugger shows the script with each call next to
+    the line that made it, a timeline, and a cursor that steps through the run's history.
+
+    <Frame>
+      <img src="/images/dashboard/run-debugger-light.webp" alt="The debugger of a run: the source with each call beside its line, and the timeline" className="block dark:hidden" />
+      <img src="/images/dashboard/run-debugger-dark.webp" alt="The debugger of a run: the source with each call beside its line, and the timeline" className="hidden dark:block" />
+    </Frame>
+  </Step>
+</Steps>
+
+## Next steps
+
+<Columns cols={2}>
+  <Card title="Give it to your model" icon="bot" href="/sdk/agent-tools">
+    Plug `run_script` and the other agent tools into Claude or an OpenAI model.
+  </Card>
+  <Card title="Wait for a human" icon="hand" href="/sdk/human-in-the-loop">
+    Signals, approvals, and runs that wait for days.
+  </Card>
+  <Card title="Connect your MCP servers" icon="plug" href="/sdk/toolsets">
+    Toolsets, policies and credentials.
+  </Card>
+  <Card title="All the examples" icon="flask-conical" href="/sdk/examples">
+    Runnable programs for every part of the SDK.
+  </Card>
+</Columns>

@@ -1,0 +1,160 @@
+---
+title: "Testing"
+description: "Type-check scripts, run scenarios against mocks in virtual time, test against the calls of real runs, and fix failed runs with forks."
+---
+
+A run's behavior depends only on its script, its input and what the outside world answered. So a script is tested by
+answering its calls with mocks: no tool is called, and time is virtual. The complete program of this page is in
+[`examples/testing`](https://github.com/planchon/rewind.codes/tree/main/examples/testing).
+
+## Type-check
+
+```ts
+const ci = rewind.namespace("ci");
+const { ok, diagnostics } = await ci.scripts.check({ toolset: toolset.id, script });
+
+for (const d of diagnostics) console.log(`${d.severity} ${d.code} ${d.message}\n${d.frame}`);
+```
+
+```text
+error TS2322 Type 'number' is not assignable to type 'string'.
+7 | export default async function main(input: { repo: string }) {
+8 |   const issues = await github.list_issues({ repo: 42, state: "open" });
+  |                                             ^^^^
+```
+
+A script with only warnings passes. `runs.start` checks the script anyway, unless you pass `check: false`.
+
+## Scenarios
+
+A scenario runs a script in **mock mode**: its calls are answered by mocks, its signals are sent on a schedule, and
+time is virtual, so a 3-day timeout or a 10-day sleep passes at once. It reports a trace and the expectations that do
+not hold.
+
+```ts
+const result = await ci.scripts.test({
+  toolset: toolset.id,
+  script,
+  input: { repo: "acme/api" },
+  tools: {
+    "github.list_issues": issues,
+    "slack.post_message": { ok: true },
+    "github.close_issue": { closed: true },
+  },
+  signals: [{ name: "approval", payload: { close: true }, when: "1h" }],
+  expect: {
+    status: "completed",
+    output: { closed: 2 },
+    calls: { "github.list_issues": 1, "slack.post_message": 1, "github.close_issue": 2 },
+  },
+});
+
+result.passed; // every expectation holds
+result.failures; // one sentence each, written for a model
+result.trace; // the run's trace
+```
+
+<ParamField body="tools" type="Record<string, unknown>">
+  Static responses per tool: the result, or `{ "$error": "message" }` for a failure.
+</ParamField>
+<ParamField body="mocks" type="string">
+  TypeScript mock handlers, run in an isolate of their own so they cannot break the script's determinism. The module
+  default-exports its handlers by full tool name or by namespace; each receives the arguments and
+  `{ tool, runId, seq, attempt, idempotencyKey }`, and returns the result or throws.
+</ParamField>
+<ParamField body="cassette" type="object">
+  The calls and signals of a real run (below). Tried first, then the mock handlers, then the static responses.
+</ParamField>
+<ParamField body="signals" type="{ name, payload?, when? }[]">
+  Signals sent during the run, in order. `when` is `"blocked"` (the default: once the run can advance no further
+  without the outside world), or a duration of virtual time after the start, such as `"2h"`.
+</ParamField>
+<ParamField body="expect" type="Expectations">
+  What must be true at the end; what is not given is not checked. `status`; `output`, which the output must contain
+  (objects compared key by key); `error`, the name of the error and part of its message; `calls`, the number of calls
+  per tool: list every tool the script calls.
+</ParamField>
+
+```ts Mock handlers
+const mocks = `export default {
+  "github.list_issues": ({ repo }) => [{ number: 4, title: "Crash", repo, updated_at: "2025-01-01T00:00:00Z", labels: [] }],
+  slack: {
+    post_message: async ({ channel }, call) => ({ ok: true, channel, key: call.idempotencyKey }),
+  },
+};`;
+```
+
+<Warning>
+  A run that waits for a signal **with a timeout** is never blocked: virtual time moves straight to the timeout. Give
+  such a signal a `when` shorter than the timeout, like `"1h"` above; with the default `"blocked"`, it would arrive
+  after the timeout fired.
+</Warning>
+
+## Test against a real run
+
+A run's calls and signals, exported as a **cassette**, answer each call with what the real tool answered. Record a
+cassette from a run that went well, and test the next version of the script against it:
+
+```ts
+const cassette = await rewind.runs.journal(run.id, { as: "cassette" });
+
+const replayed = await ci.scripts.test({
+  toolset: toolset.id,
+  script: nextVersion,
+  input: { repo: "acme/api" },
+  cassette, // it holds the run's signals too
+  expect: { status: "completed", output: { closed: 2 } },
+});
+```
+
+The model does the same with the agent tool `test_script` and `scenario.from_run`.
+
+## Fix a failed run
+
+A fork re-executes a corrected script against a failed run's history: while it makes the same calls, their recorded
+results are reused, then it continues live. In the example, the first version of the script fails on an issue without
+labels, after it posted to Slack. The fork does not post again:
+
+```ts
+const failed = await ci.runs.start({ toolset: toolset.id, script: v1, input, wait: "10s" });
+// failed: TypeError: Cannot read properties of undefined (reading 'name')
+
+const fixed = await ci.runs.fork(failed.id, { script: v2, wait: "10s" });
+```
+
+```text
+v1 01a1e137-7cb0-724e-8ef7-1d0ddee39f8e: failed, TypeError: Cannot read properties of undefined (reading 'name')
+fork 01a1e137-7dc2-77bd-8a15-9eac80e24d01: completed { areas: [ 'ci', 'unlabelled' ], closed: 2 }
+calls the worker executed, both runs together: [
+  'github.list_issues',
+  'slack.post_message',
+  'github.close_issue #12',
+  'github.close_issue #31'
+]
+```
+
+## In CI, without a server
+
+The `rewind` CLI runs scenarios and replays in its own process, without a server. A scenario file holds the same fields,
+with paths instead of contents:
+
+```json triage.scenario.json
+{
+  "script": "triage.ts",
+  "toolset": "toolset.json",
+  "input": { "repo": "acme/api" },
+  "cassette": "cassettes/triage.json",
+  "mocks": "triage.mocks.ts",
+  "tools": { "slack.post_message": { "ok": true } },
+  "signals": [{ "name": "approval", "when": "1h", "payload": { "close": true } }],
+  "expect": { "status": "completed", "output": { "closed": 3 } }
+}
+```
+
+```bash
+rewind test triage.scenario.json            # exits 0 when every expectation holds
+rewind replay journal.json                  # re-executes an exported run and checks determinism
+rewind replay journal.json --script v2.ts   # is v2 compatible with that history? where does it diverge?
+```
+
+See [the CLI](/sdk/cli).

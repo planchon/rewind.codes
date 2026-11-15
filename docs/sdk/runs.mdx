@@ -1,0 +1,173 @@
+---
+title: "Runs"
+description: "Start runs, wait for them, follow them live, search them, cancel and fork them."
+---
+
+## Start a run
+
+A run executes a script with a toolset, or a version of a [workflow](/sdk/workflows), for one end user.
+
+```ts
+const run = await rewind.namespace(user.id).runs.start({
+  toolset: toolset.id,
+  script: code,
+  input: { repo: "acme/api" },
+  wait: "30s",
+  idempotencyKey: toolCall.id,
+  labels: { agent: "triage", conversation: conversation.id },
+  traceparent,
+  ttl: "7d",
+});
+```
+
+<ParamField body="script" type="string">
+  The TypeScript source: one ES module whose default export is the entry point. Or give `workflow` instead.
+</ParamField>
+<ParamField body="toolset" type="string">
+  The toolset the script imports from `rewind:tools`.
+</ParamField>
+<ParamField body="workflow" type="string">
+  Instead of a script: `"triage"` for the workflow's latest version, `"triage@9f2c4e1a07b3"` for one version. The input
+  is checked against its input schema.
+</ParamField>
+<ParamField body="input" type="unknown" default="{}">
+  The argument of `main`: any JSON value.
+</ParamField>
+<ParamField body="wait" type="Duration">
+  Wait up to this long for the run to end. The run is returned as it is then: ended, or still active with what it waits
+  for. Without it, the call returns once the run is created, before it ran.
+</ParamField>
+<ParamField body="idempotencyKey" type="string">
+  A request repeated with the same key returns the run the first one started, instead of starting another.
+</ParamField>
+<ParamField body="labels" type="Record<string, string>">
+  Your metadata: the agent, the conversation, the environment. Labels filter runs in the API and the dashboard, scope
+  `list_runs`, keys and tokens limited to labels, and webhook subscriptions. The script never sees them.
+</ParamField>
+<ParamField body="traceparent" type="string">
+  The W3C trace context of the caller, typically the LLM call that wrote the script: the run appears under it in your
+  traces. `tracestate` too.
+</ParamField>
+<ParamField body="ttl" type="Duration" default="30d">
+  The run's time to live: it is cancelled at its deadline. Bounded by the end user's `maxTtl`.
+</ParamField>
+<ParamField body="check" type="boolean" default="true">
+  Type-check the script before starting it. A refused script throws `RewindApiError` with the slug `invalid-script` and
+  its `diagnostics`. A workflow's script is not checked again.
+</ParamField>
+<ParamField body="credentials" type="Credentials">
+  The run's own credentials, used instead of its namespace's and its toolset's.
+</ParamField>
+
+## Read a run
+
+```ts
+const run = await rewind.runs.get(id, { wait: "10s" }); // wait for it to end, up to 10 s
+
+run.status; // "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted"
+run.output?.value; // with completed: what main returned
+run.error; // with failed or cancelled: name, message, location, code frame, the call that failed
+run.waitingFor; // with active: the signals, timers, tool calls and approvals it waits for
+run.logs; // the last 20 console lines
+run.namespace; // the end user
+```
+
+Values (`input`, `output`, tool arguments and results) are payloads: `{ digest, bytes, preview, value }`. A value larger
+than 256 KiB is left out; read it with `rewind.payloads.get(digest)`.
+
+## Follow a run live
+
+`events` is an async iterator over the run's journal entries as they are committed. A dropped connection resumes after
+the last entry received.
+
+```ts
+for await (const event of rewind.runs.events(run.id, { follow: true })) {
+  if (event.type === "end") break;
+  console.log(event);
+}
+```
+
+## The trace, for a model or a human
+
+`trace` returns the run as a model reads it: each event with its line, its outcome and its timing.
+
+```ts
+const trace = await rewind.runs.trace(run.id);
+const entry = await rewind.runs.entry(run.id, 7); // one journal entry in full
+```
+
+```text
+run 01a1e138-3320-7665-b261-b4c1b61d1a43  completed
+script 9be9b50b11c5 · toolset 45fccf8bdfcb · started 2026-11-15T21:58:38Z · forked from 01a1e138-320f-73ed-8aa7-8f4493637471
+
+  idx  at        event                                                       line   outcome
+    0  +0.0s     run started · input {"repo":"acme/api"}
+    1  +0.0s     #1 github.list_issues({"repo":"acme/api","state":"open"})   L8     → 3 items · 305 B · 0.0s · entry 2
+    3  +0.0s     #2 slack.post_message({"channel":"#triage","text":"2 stale issues in acme/api"})  L10    → {"ok":true} · 11 B
+    5  +0.1s     timer #3 3d (timeout of signal "approval")                  L13    → cancelled
+    6  +0.1s     waiting for signal "approval"                               L13    → received after 10.1s · entry 7
+    7  +10.2s    signal "approval" ← {"close":true}
+    9  +10.2s    #4 github.close_issue({"number":12,"repo":"acme/api"})      L16    → {"closed":true} · 15 B · 0.0s
+   11  +10.3s    #5 github.close_issue({"number":31,"repo":"acme/api"})      L16    → {"closed":true} · 15 B · 0.0s
+   13  +10.4s    completed → {"areas":["ci","unlabelled"],"closed":2}
+```
+
+## Search runs
+
+Runs are searched with the [query language](/dashboard/query-language), the same as the dashboard's query bar and the
+CLI.
+
+```ts
+const page = await rewind.runs.list({ q: "@agent:triage status:failed,aborted started:>now-24h", sort: "activity" });
+for await (const run of rewind.runs.listAll({ q: "waiting:approval" })) console.log(run.id);
+
+const stats = await rewind.runs.stats({ q: "@agent:triage" }); // counts by status, series, facets
+const failures = await rewind.runs.failures({ q: "@agent:triage" }); // failed runs grouped by fingerprint
+```
+
+Filters also exist as parameters: `status`, `labels`, `tool`, `script`, `error`, `workflow`, `startedBy`, `parent`,
+`quarantined`. A query that cannot be read is refused with `invalid-query`, and the error says where the term at fault
+is.
+
+## Cancel a run
+
+Every pending `await` of the script rejects with `CancelledError`, and the script gets one activation to clean up.
+
+```ts
+const run = await rewind.runs.cancel(id, { reason: "the user closed the conversation", wait: "10s" });
+```
+
+## Fork a run with a corrected script
+
+A fork reuses the parent's recorded results while the corrected script makes the same calls, then continues live: the
+calls already made are not made again. This is what the agent tool `retry_run` does.
+
+```ts
+const fixed = await rewind.runs.fork(failed.id, {
+  script: correctedScript,
+  wait: "30s",
+  // at: 12,          go live from this journal entry, even if the calls still match
+  // input: { ... },  another input than the parent's
+});
+```
+
+The fork has its own id and TTL, and its parent's seed, input, toolset and namespace. The fork's `parent` names the run
+it came from.
+
+## Export a run
+
+```ts
+const journal = await rewind.runs.journal(run.id); // the journal document, which replays on its own
+const cassette = await rewind.runs.journal(run.id, { as: "cassette" }); // its calls and signals, for tests
+```
+
+## Quarantine and deletion
+
+A run whose replay diverged from its journal, or whose activations failed 5 times in a row, is quarantined (`run.quarantine`
+says why). It is not failed: fix the cause, then release it, or give it up.
+
+```ts
+await rewind.runs.release(id); // activated again
+await rewind.runs.giveUp(id); // ends aborted
+await rewind.runs.delete(id); // erases the run: its journal, its archive and its rows
+```

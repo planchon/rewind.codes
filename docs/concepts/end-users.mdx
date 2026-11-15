@@ -1,0 +1,61 @@
+---
+title: "End users and namespaces"
+description: "Each user of your product has a namespace: their runs, scripts, credentials and use, isolated from everyone else's, with their own limits."
+---
+
+Your harness serves its own users: the **end users** of your product. In Rewind, each one has a **namespace**. Their
+runs, the scripts those runs ran, their credentials and their use live there, and nothing of one end user is visible to
+another.
+
+## Naming the end user
+
+A namespace's name is your own id for the end user: 1 to 128 ASCII letters, digits, `-`, `_`, `.`, `:` and `@`.
+Prefer an opaque id (`user_2fQ81`) to an email: names appear in webhooks, the dashboard and logs. A namespace is
+created at its first use.
+
+## Two ways to reach a namespace
+
+```mermaid
+flowchart LR
+  backend["Your backend<br/>holds the API key"] -- "Rewind-Namespace: user_ada" --> rewind["Rewind"]
+  backend -- "mints a token for Ada" --> agent["The agent acting for Ada<br/>holds Ada's token"]
+  agent -- "reaches Ada's namespace only" --> rewind
+```
+
+- **Your backend** holds an API key, which reaches every namespace. It names the end user of each request: in the SDK,
+  `rewind.namespace(user.id)`, which sends the header `Rewind-Namespace`. A key must name a namespace to start a run;
+  on a read, naming one narrows the answer to it.
+- **The agent acting for one end user** holds a **token** of their namespace. With it the agent, and every script its
+  model writes, reaches that namespace only: another user's run answers 404. Your backend mints opaque tokens
+  (`rewind_nt_…`, 1 hour by default, 30 days at most), or signs JWTs itself with a key it registered.
+
+A token can also carry **labels** (a conversation, an agent): it then reaches only the runs carrying them.
+
+## Quotas
+
+Quotas protect your platform, and your bill, from an end user who abuses your product.
+
+| Quota | Counts |
+| --- | --- |
+| `activeRuns` | Runs not yet ended. A start above it is refused |
+| `runsPerMonth` | Runs started in the calendar month (UTC) |
+| `cpuPerMonth` | CPU time of the end user's scripts in the month, replays excluded. **Never refused**: crossing 80 % and 100 % sends an alert |
+| `scripts` | Distinct scripts |
+| `maxTtl` | The longest TTL a run may ask for |
+| `maxScriptLines` | The longest script |
+
+You set **default limits** for every end user, and **exceptions** for one: more for a paying user, `activeRuns: 0`
+to block someone. Everything stays under your organization's **ceiling**. A refused start answers `quota-exceeded`
+with which quota, its limit, the use and when it frees, in words the model can relay. Crossing 80 % and 100 % of a
+limit sends the webhook `quota.alert`.
+
+## What stays yours
+
+Toolsets and webhook subscriptions belong to your organization, not to a namespace: register your tools once, and
+receive every end user's events, each naming its namespace. One host-tool worker with your key serves every end user:
+each task says which one it acts for.
+
+An end user's own credentials (their GitHub token) can be set on their namespace for a toolset. A run uses its own
+credentials first, then its namespace's, then the toolset's: Alice's token is never sent for a run of Bob's.
+
+See [End users in the SDK](/sdk/end-users) and the [Namespaces view](/dashboard/namespaces) of the dashboard.

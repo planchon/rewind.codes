@@ -1,0 +1,68 @@
+---
+title: "Query language"
+description: "One language to search runs, in the dashboard's query bar, the SDK, the API and the CLI."
+---
+
+Runs are searched with one query language everywhere: the dashboard's query bar, `rewind.runs.list({ q })` in the SDK,
+the `q` parameter of the API, and `rewind runs '<query>'` in the CLI.
+
+Terms are separated by spaces, and **all must hold**. A comma inside a term means **or**. A leading `-` **excludes**.
+
+```text
+@agent:triage status:failed,aborted -@env:test started:>now-24h "rate limit"
+```
+
+The failed or aborted runs of the triage agent, outside the test environment, started in the last 24 hours, whose
+error, first line or labels mention "rate limit".
+
+## Terms
+
+| Term | Matches runs |
+| --- | --- |
+| `namespace:alice`, `namespace:alice,bob` | Of these end users |
+| `@agent:triage` | Carrying the label `agent` with the value `triage` |
+| `@customer:acme*` | With a label value starting with `acme` |
+| `@conversation:*` | With the label set, whatever its value |
+| `status:failed,aborted` | With one of these statuses: `pending`, `active`, `completed`, `failed`, `cancelled`, `aborted` |
+| `tool:github.close_issue`, `tool:github.*` | That called this tool, or a tool starting with `github.` |
+| `error:timeout`, `error:TypeError` | With a call that failed with this kind, or that ended with this error name (or abort kind) |
+| `waiting:*` | Active and waiting for the outside world |
+| `waiting:signal,approval` | Waiting for: `signal`, `timer`, `call` (a tool Rewind calls), `host` (a host tool), `approval`, `parked`, `deferred` |
+| `signal:approval` | Waiting for this signal |
+| `started:>2026-11-01`, `started:>now-24h` | By start: a date, a time, or `now` minus a duration |
+| `ended:<…`, `activity:>…` | By end, or by last activity |
+| `duration:>5m` | By duration, for ended runs |
+| `calls:>=20`, `errors:>0` | By number of tool calls, or of failed calls |
+| `script:9f2c4e1a` | Of this script, by digest prefix (8 hexadecimal digits at least) |
+| `toolset:…`, `id:0193a5c4` | By toolset digest or run id prefix |
+| `parent:<run id>` | Forks of this run |
+| `workflow:triage` | Runs of this workflow |
+| `started_by:<run id>` | Runs this run started |
+| `fingerprint:<fingerprint>` | In this failure group |
+| `quarantined:yes`, `quarantined:no` | Quarantined or not |
+| `mode:mock` | By mode: `live` or `mock` |
+| `rate`, `"rate limit"` | Containing this text, case-insensitive, in the error's message, the script's first line, a label's value or the run's id |
+
+Comparisons are `>`, `>=`, `<`, `<=`, or a range `a..b`. Field names are case-sensitive.
+
+## What is never searched
+
+Logs and payloads (arguments, results, inputs, outputs) are never searched: they may hold what your tools returned,
+which Rewind does not index.
+
+## Scope
+
+A query only ever sees what its caller may see: your organization; one end user's runs for a token, or with the
+`Rewind-Namespace` header; and only the runs carrying its labels for a key, a token or a member limited to labels.
+
+## Examples
+
+| Question | Query |
+| --- | --- |
+| What failed in production today? | `status:failed @env:prod started:>now-24h` |
+| Which runs wait for an approval? | `waiting:approval` |
+| Which runs called the payment tool and failed a call? | `tool:payments.* errors:>0` |
+| Everything one end user ran this week | `namespace:user_2fQ81 started:>now-7d` |
+| Long runs of the triage workflow | `workflow:triage duration:>1h` |
+| Runs of one conversation | `@conversation:c-42` |
+| Timeouts, outside tests | `error:timeout -mode:mock` |
