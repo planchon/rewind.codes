@@ -2,13 +2,14 @@
 // durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
 // figure, bar and row opens the runs behind it. Polled every 10 seconds.
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { queryFault } from "../api/client";
 import { useFailures, useRunStats, useToolStats } from "../api/queries";
 import type { RunStatus } from "../api/types";
-import { Link } from "../app/namespace";
 import { useSettings } from "../app/settings";
 import { Empty, Loading, ProblemView } from "../components/bits";
 import { Meter, StackedBars, Tile } from "../components/Charts";
+import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { SaveSearch } from "../components/SaveSearch";
 import { RANGES, type RangeKey } from "../model/filters";
@@ -103,7 +104,8 @@ export function OverviewView() {
 
   const fault = queryFault(current.error) ?? queryFault(waiting.error);
   const started = windowTerm("started", win);
-  const runsLink = (...terms: string[]) => queryLink("/runs", joinQuery(q, started, ...terms));
+  const runsLink = (...terms: string[]) =>
+    queryLink("/observability", joinQuery(q, started, ...terms));
 
   let body: ReactNode;
   if (fault) {
@@ -152,14 +154,14 @@ export function OverviewView() {
             tone="good"
           />
           <Tile
-            to={queryLink("/failures", q, win === "24h" ? {} : { window: win })}
+            to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
             label="Failed"
             value={formatCount(s.statuses.failed)}
             context={`+ ${formatCount(s.statuses.aborted)} aborted, ${formatCount(s.statuses.cancelled)} cancelled`}
             tone={failed > 0 ? "critical" : undefined}
           />
           <Tile
-            to={queryLink("/waiting", q)}
+            to={queryLink("/observability/waiting", q)}
             label="Waiting now"
             value={waitingNow ? formatCount(waitingNow.runs) : "–"}
             context={waitingNow ? `${formatCount(waitingNow.waiting.signal)} on a signal` : " "}
@@ -172,7 +174,7 @@ export function OverviewView() {
             context={durations ? `p50 ${formatDuration(durations.p50)}` : "no run ended"}
           />
           <Tile
-            to={queryLink("/runs", joinQuery(q, "quarantined:yes"))}
+            to={queryLink("/observability", joinQuery(q, "quarantined:yes"))}
             label="Quarantined"
             value={formatCount(s.quarantined)}
             context="held until an operator acts"
@@ -198,7 +200,7 @@ export function OverviewView() {
                 bucketLabel={(b) => `${formatTime(b.from, zone).slice(0, 16)} – ${tick(b.to)}`}
                 href={(b, status: RunStatus) =>
                   queryLink(
-                    "/runs",
+                    "/observability",
                     joinQuery(
                       q,
                       `status:${status}`,
@@ -216,7 +218,9 @@ export function OverviewView() {
             <header className="panel-head">
               <h2>What fails most</h2>
               <span className="end">
-                <Link to={queryLink("/failures", q, win === "24h" ? {} : { window: win })}>
+                <Link
+                  to={queryLink("/observability/failures", q, win === "24h" ? {} : { window: win })}
+                >
                   Every failure →
                 </Link>
               </span>
@@ -229,7 +233,7 @@ export function OverviewView() {
                   <li key={g.fingerprint}>
                     <Link
                       to={queryLink(
-                        "/runs",
+                        "/observability",
                         joinQuery(q, `fingerprint:${g.fingerprint}`, windowTerm("ended", win)),
                       )}
                       title={g.signature}
@@ -279,16 +283,22 @@ export function OverviewView() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Overview</h1>
-        <Seg<RangeKey>
-          label="Window"
-          value={win}
-          onChange={setWin}
-          options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-        />
-        <span className="muted">{WINDOW_WORDS[win]} · every 10 s</span>
-      </div>
+      <PageHeader
+        title="Overview"
+        actions={
+          <>
+            <span className="live-note" title={`${WINDOW_WORDS[win]}, read again every 10 s`}>
+              <span className="live-dot" aria-hidden="true" /> Live
+            </span>
+            <Seg<RangeKey>
+              label="Window"
+              value={win}
+              onChange={setWin}
+              options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
+            />
+          </>
+        }
+      />
       <QueryBar value={q} onSubmit={setQ} facets={current.data?.facets} fault={fault}>
         <SaveSearch q={q} view="overview" />
       </QueryBar>

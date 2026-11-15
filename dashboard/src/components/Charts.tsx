@@ -2,8 +2,8 @@
 // chart library (archi/08-decisions.md): a few bars, each a link to the runs behind it, with a
 // tooltip on hover and an accessible name. Colors are the run statuses', always with a legend.
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import type { RunStatus, StatusCounts } from "../api/types";
-import { Link } from "../app/namespace";
 import { formatCount } from "../model/format";
 import { StatusGlyph } from "./Status";
 import { useTooltip } from "./Tooltip";
@@ -36,6 +36,8 @@ export interface StackedBarsProps {
   /** Axis labels under the first, middle and last bars. */
   tick: (ms: number) => string;
   height?: number;
+  /** The statuses' legend under the bars. */
+  legend?: boolean;
 }
 
 const GAP = 2;
@@ -48,6 +50,7 @@ export function StackedBars({
   href,
   tick,
   height = 120,
+  legend = true,
 }: StackedBarsProps) {
   const tip = useTooltip();
   const totals = buckets.map((b) => STACK_ORDER.reduce((n, s) => n + b.counts[s], 0));
@@ -143,7 +146,7 @@ export function StackedBars({
           );
         })}
       </div>
-      {present.length > 0 && (
+      {legend && present.length > 0 && (
         <figcaption className="chart-legend">
           {present.map((s) => (
             <span key={s} className={`status ${s}`}>

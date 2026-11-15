@@ -52,7 +52,10 @@ describe("ToolsView", () => {
     expect(
       within(row)
         .getAllByRole("link")
-        .some((a) => a.getAttribute("href") === "/runs?q=tool%3Aweather.forecast+error%3Atimeout"),
+        .some(
+          (a) =>
+            a.getAttribute("href") === "/observability?q=tool%3Aweather.forecast+error%3Atimeout",
+        ),
     ).toBe(true);
 
     await user.click(screen.getByRole("button", { name: "24h" }));

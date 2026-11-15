@@ -516,7 +516,7 @@ export function withQuery(params: URLSearchParams, q: string): URLSearchParams {
   return next;
 }
 
-/** `/runs?q=…`, and the same for the other views that take a query. */
+/** `/observability?q=…`, and the same for the other views that take a query. */
 export function queryLink(path: string, q: string, extra: Record<string, string> = {}): string {
   const params = new URLSearchParams();
   if (q.trim()) params.set("q", q.trim());

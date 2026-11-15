@@ -1,4 +1,4 @@
-// The journal itself, the script's logs, and the LLM trace, in tabs.
+// The journal itself, the script's logs, and the LLM trace: each a section of the run's page.
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
 import { useRunTrace } from "../../api/queries";
@@ -11,7 +11,7 @@ const ROW = 24;
 
 type Tab = "journal" | "logs" | "trace";
 
-function JournalList({
+export function JournalList({
   model,
   selected,
   onSelect,
@@ -77,7 +77,7 @@ function JournalList({
   );
 }
 
-function Logs({
+export function Logs({
   model,
   onSelect,
   onSelectLine,
@@ -112,7 +112,7 @@ function Logs({
   );
 }
 
-function LlmTrace({ runId, historyLen }: { runId: string; historyLen: number }) {
+export function LlmTrace({ runId, historyLen }: { runId: string; historyLen: number }) {
   const trace = useRunTrace(runId, historyLen);
   if (trace.isPending) return <Loading>Loading the trace…</Loading>;
   if (trace.isError) return <ProblemView error={trace.error} title="The trace could not be read" />;

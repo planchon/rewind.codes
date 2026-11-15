@@ -1,7 +1,9 @@
-// The table of runs, shared by the Runs view and a script's page.
+// The table of runs, shared by Observability and a script's page. A run opened from it returns
+// to the page it was opened from (`useRunLinkState`).
 import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
+import { Link, useNavigate } from "react-router";
 import type { RunPage, RunSummary } from "../api/types";
-import { Link, useNavigate } from "../app/namespace";
+import { useRunLinkState } from "../app/runLinks";
 import {
   Ago,
   Digest,
@@ -49,6 +51,7 @@ export function RunTable({
   empty,
 }: RunTableProps) {
   const navigate = useNavigate();
+  const linkState = useRunLinkState();
   const now = useNow(5_000);
 
   if (query.isPending) return <Loading>Loading runs…</Loading>;
@@ -57,26 +60,20 @@ export function RunTable({
   const runs = query.data.pages.flatMap((p) => p.runs);
   const showError = runs.some((r) => r.error);
   const showWakes = runs.some((r) => r.wakesAt);
+  const open = (id: string) => void navigate(`/runs/${id}`, { state: linkState });
   return (
     <div className="table-wrap">
-      <table className="grid">
+      <table className="grid runs-table">
         <thead>
           <tr>
-            <th>Status</th>
             <th>Run</th>
+            <th>Status</th>
             {showNamespace && <th title="The end user the run acts for">Namespace</th>}
-            <th>Labels</th>
             {!hideScript && <th>Script</th>}
             <th>Started</th>
             <th className="right">Duration</th>
-            <th className="right" title="Tool calls">
+            <th className="right" title="Tool calls, and those that failed">
               Calls
-            </th>
-            <th className="right" title="Tool calls that failed">
-              Errors
-            </th>
-            <th className="right" title="Journal entries">
-              Entries
             </th>
             {showWakes && <th title="When a waiting run wakes by itself">Wakes</th>}
             {showError && <th>Error</th>}
@@ -89,18 +86,12 @@ export function RunTable({
               className="link"
               onClick={(e) => {
                 if ((e.target as HTMLElement).closest("a, button")) return;
-                navigate(`/runs/${run.id}`);
+                open(run.id);
               }}
             >
-              <td>
-                <span className="labels">
-                  <StatusBadge status={run.status} />
-                  {run.quarantined && <QuarantineTag />}
-                </span>
-              </td>
-              <td>
-                <span className="labels">
-                  <Link to={`/runs/${run.id}`} className="row-link">
+              <td className="wrap run-cell">
+                <span className="run-cell-id">
+                  <Link to={`/runs/${run.id}`} state={linkState} className="row-link">
                     <RunId id={run.id} />
                   </Link>
                   {run.parent && (
@@ -110,12 +101,24 @@ export function RunTable({
                   )}
                   {run.workflow && (
                     <Link
-                      to={queryLink("/runs", fieldTerm("workflow", run.workflow))}
+                      to={queryLink("/observability", fieldTerm("workflow", run.workflow))}
                       title={`A run of the workflow ${run.workflow}${run.startedBy ? `, started by the run ${run.startedBy}` : ""}`}
                     >
                       <span className="tag mono">{run.workflow}</span>
                     </Link>
                   )}
+                </span>
+                {Object.keys(run.labels).length > 0 && (
+                  <LabelList
+                    labels={run.labels}
+                    {...(onPickLabel ? { onPick: onPickLabel } : {})}
+                  />
+                )}
+              </td>
+              <td>
+                <span className="labels">
+                  <StatusBadge status={run.status} />
+                  {run.quarantined && <QuarantineTag />}
                 </span>
               </td>
               {showNamespace && (
@@ -123,20 +126,17 @@ export function RunTable({
                   {onPickNamespace ? (
                     <button
                       type="button"
-                      className="link-btn mono ns-cell"
+                      className="link-btn ns-cell"
                       title={`Only runs of ${run.namespace}`}
                       onClick={() => onPickNamespace(run.namespace)}
                     >
                       {run.namespace}
                     </button>
                   ) : (
-                    <span className="mono ns-cell">{run.namespace}</span>
+                    <span className="ns-cell">{run.namespace}</span>
                   )}
                 </td>
               )}
-              <td className="wrap">
-                <LabelList labels={run.labels} {...(onPickLabel ? { onPick: onPickLabel } : {})} />
-              </td>
               {!hideScript && (
                 <td>
                   {onPickScript ? (
@@ -159,11 +159,15 @@ export function RunTable({
               <td className="right">
                 <Duration run={run} now={now} />
               </td>
-              <td className="right num">{formatCount(run.toolCalls)}</td>
-              <td className={`right num${run.errors > 0 ? " tone-critical" : " muted"}`}>
-                {formatCount(run.errors)}
+              <td className="right num">
+                {formatCount(run.toolCalls)}
+                {run.errors > 0 && (
+                  <span className="tone-critical" title="Tool calls that failed">
+                    {" "}
+                    · {formatCount(run.errors)} failed
+                  </span>
+                )}
               </td>
-              <td className="right num dim">{formatCount(run.historyLen)}</td>
               {showWakes && (
                 <td className="num dim" title={run.wakesAt ?? undefined}>
                   {run.wakesAt ? formatRelative(Date.parse(run.wakesAt), now) : ""}

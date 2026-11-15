@@ -3,35 +3,25 @@ import { Lock } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import {
   createHashRouter,
+  Navigate,
   Outlet,
   type RouteObject,
   RouterProvider,
+  useLocation,
   useRouteError,
 } from "react-router";
 import { ApiError } from "../api/client";
 import { WHOAMI } from "../api/organization";
 import { ProblemView } from "../components/bits";
-import { FailuresView } from "../views/FailuresView";
-import { NamespacesView } from "../views/namespaces/NamespacesView";
-import { NamespaceView } from "../views/namespaces/NamespaceView";
+import { fieldTerm, joinQuery } from "../model/query";
 import { OverviewView } from "../views/OverviewView";
-import { ApiKeysView } from "../views/org/ApiKeysView";
-import { InvitationsView } from "../views/org/InvitationsView";
-import { MembersView } from "../views/org/MembersView";
-import { OrganizationIndex, OrganizationView } from "../views/org/OrganizationView";
-import { RolesView } from "../views/org/RolesView";
-import { SettingsView } from "../views/org/SettingsView";
-import { RunsView } from "../views/RunsView";
-import { RunView } from "../views/run/RunView";
+import { ObservabilityView } from "../views/observability/ObservabilityView";
 import { ScriptsView } from "../views/ScriptsView";
-import { ScriptView } from "../views/ScriptView";
 import { ToolsView } from "../views/ToolsView";
-import { WaitingView } from "../views/WaitingView";
 import { useAccess } from "./access";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
-import { Navigate } from "./namespace";
 import { SessionProvider, type SessionProviderProps, useSession } from "./session";
 import { SettingsProvider } from "./settings";
 
@@ -87,6 +77,20 @@ function ToolStats() {
   return <ToolsView />;
 }
 
+/**
+ * A link of an earlier version: `#/runs`, `#/waiting` and `#/failures` open Observability with their
+ * query, and the namespace filter they named (`?ns=bob`) becomes the term `namespace:bob`.
+ */
+function Moved({ to }: { to: string }) {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  const ns = params.get("ns");
+  params.delete("ns");
+  if (ns) params.set("q", joinQuery(params.get("q"), fieldTerm("namespace", ns)));
+  const rest = params.toString();
+  return <Navigate to={rest ? `${to}?${rest}` : to} replace />;
+}
+
 /** The first view the caller may open. */
 function Home() {
   const access = useAccess();
@@ -95,6 +99,9 @@ function Home() {
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
   return <CannotRead />;
 }
+
+/** A run's page, loaded when one is opened: the debugger, its parser and its source view. */
+const runView = async () => ({ Component: (await import("../views/run/RunView")).RunView });
 
 export const routes: RouteObject[] = [
   {
@@ -107,27 +114,73 @@ export const routes: RouteObject[] = [
         element: <Reading />,
         children: [
           { path: "overview", element: <OverviewView /> },
-          { path: "runs", element: <RunsView /> },
-          { path: "waiting", element: <WaitingView /> },
-          { path: "failures", element: <FailuresView /> },
-          { path: "runs/:id", element: <RunView /> },
+          { path: "observability", element: <ObservabilityView /> },
+          { path: "observability/:view", element: <ObservabilityView /> },
+          { path: "runs", element: <Moved to="/observability" /> },
+          { path: "waiting", element: <Moved to="/observability/waiting" /> },
+          { path: "failures", element: <Moved to="/observability/failures" /> },
+          // One route for every section: the page stays mounted, and its event stream open.
+          { path: "runs/:id/:section?", lazy: runView },
           { path: "scripts", element: <ScriptsView /> },
-          { path: "scripts/:digest", element: <ScriptView /> },
+          {
+            path: "scripts/:digest",
+            lazy: async () => ({ Component: (await import("../views/ScriptView")).ScriptView }),
+          },
           { path: "tools", element: <ToolStats /> },
         ],
       },
-      { path: "namespaces", element: <NamespacesView /> },
-      { path: "namespaces/:name", element: <NamespaceView /> },
+      {
+        path: "namespaces",
+        lazy: async () => ({
+          Component: (await import("../views/namespaces/NamespacesView")).NamespacesView,
+        }),
+      },
+      {
+        path: "namespaces/:name",
+        lazy: async () => ({
+          Component: (await import("../views/namespaces/NamespaceView")).NamespaceView,
+        }),
+      },
       {
         path: "organization",
-        element: <OrganizationView />,
+        lazy: async () => ({
+          Component: (await import("../views/org/OrganizationView")).OrganizationView,
+        }),
         children: [
-          { index: true, element: <OrganizationIndex /> },
-          { path: "members", element: <MembersView /> },
-          { path: "invitations", element: <InvitationsView /> },
-          { path: "roles", element: <RolesView /> },
-          { path: "api-keys", element: <ApiKeysView /> },
-          { path: "settings", element: <SettingsView /> },
+          {
+            index: true,
+            lazy: async () => ({
+              Component: (await import("../views/org/OrganizationView")).OrganizationIndex,
+            }),
+          },
+          {
+            path: "members",
+            lazy: async () => ({
+              Component: (await import("../views/org/MembersView")).MembersView,
+            }),
+          },
+          {
+            path: "invitations",
+            lazy: async () => ({
+              Component: (await import("../views/org/InvitationsView")).InvitationsView,
+            }),
+          },
+          {
+            path: "roles",
+            lazy: async () => ({ Component: (await import("../views/org/RolesView")).RolesView }),
+          },
+          {
+            path: "api-keys",
+            lazy: async () => ({
+              Component: (await import("../views/org/ApiKeysView")).ApiKeysView,
+            }),
+          },
+          {
+            path: "settings",
+            lazy: async () => ({
+              Component: (await import("../views/org/SettingsView")).SettingsView,
+            }),
+          },
         ],
       },
       { path: "*", element: <NotFound /> },

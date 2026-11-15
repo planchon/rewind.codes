@@ -1,25 +1,30 @@
-// Failures: the failed, cancelled and aborted runs of a window, grouped by fingerprint (the error's
-// name and its message with what varies set aside), across the many scripts models write. A group
-// opens its runs; its latest run opens on the step that failed.
+// Observability's failures: the failed, cancelled and aborted runs of a window, grouped by
+// fingerprint (the error's name and its message with what varies set aside), across the many
+// scripts models write. A group opens its runs; its latest run opens on the step that failed.
 import type { ReactNode } from "react";
-import { queryFault } from "../api/client";
-import { useFailures } from "../api/queries";
-import { Link, useNavigate } from "../app/namespace";
-import { Ago, Empty, Loading, ProblemView, RunId } from "../components/bits";
-import { Sparkline } from "../components/Charts";
-import { QueryBar } from "../components/QueryBar";
-import { SaveSearch } from "../components/SaveSearch";
-import { StatusBadge } from "../components/Status";
-import { RANGES, type RangeKey } from "../model/filters";
-import { formatCount, formatDuration, splitLabel } from "../model/format";
-import { joinQuery, labelTerm, queryLink } from "../model/query";
-import { Seg } from "./FilterBits";
-import { BUCKETS, useSearchQuery, useWindow, WINDOW_WORDS, WINDOWS, windowTerm } from "./search";
+import { Link, useNavigate } from "react-router";
+import { queryFault } from "../../api/client";
+import { useFailures } from "../../api/queries";
+import { useRunLinkState } from "../../app/runLinks";
+import { Ago, Empty, Loading, ProblemView, RunId } from "../../components/bits";
+import { Sparkline } from "../../components/Charts";
+import { StatusBadge } from "../../components/Status";
+import { RANGES, type RangeKey } from "../../model/filters";
+import { formatCount, formatDuration, splitLabel } from "../../model/format";
+import { joinQuery, labelTerm, queryLink } from "../../model/query";
+import { BUCKETS, WINDOW_WORDS, windowTerm } from "../search";
 
-export function FailuresView() {
-  const { q, setQ } = useSearchQuery();
-  const [win, setWin] = useWindow();
+export function FailureGroups({
+  q,
+  setQ,
+  win,
+}: {
+  q: string;
+  setQ: (q: string) => void;
+  win: RangeKey;
+}) {
   const navigate = useNavigate();
+  const linkState = useRunLinkState();
   const width = RANGES[win];
   const { bucket, ms: bucketMs } = BUCKETS[win];
   const failures = useFailures(
@@ -38,7 +43,10 @@ export function FailuresView() {
   );
   const fault = queryFault(failures.error);
   const groupLink = (fingerprint: string) =>
-    queryLink("/runs", joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)));
+    queryLink(
+      "/observability",
+      joinQuery(q, `fingerprint:${fingerprint}`, windowTerm("ended", win)),
+    );
 
   let body: ReactNode;
   if (fault) {
@@ -74,7 +82,7 @@ export function FailuresView() {
                 className="link"
                 onClick={(e) => {
                   if ((e.target as HTMLElement).closest("a, button")) return;
-                  navigate(groupLink(g.fingerprint));
+                  void navigate(groupLink(g.fingerprint));
                 }}
               >
                 <td className="wrap signature-cell">
@@ -138,6 +146,7 @@ export function FailuresView() {
                     <StatusBadge status={g.latest.status} />
                     <Link
                       to={`/runs/${g.latest.id}`}
+                      state={linkState}
                       title="The run that ended last, on the step that failed"
                     >
                       <RunId id={g.latest.id} />
@@ -158,24 +167,12 @@ export function FailuresView() {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Failures</h1>
-        <Seg<RangeKey>
-          label="Window"
-          value={win}
-          onChange={setWin}
-          options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-        />
-        <span className="muted">
-          {failures.data
-            ? `${formatCount(failures.data.runs)} runs, ${formatCount(failures.data.totalGroups)} signatures, ended in ${WINDOW_WORDS[win]}`
-            : WINDOW_WORDS[win]}
-        </span>
-      </div>
-      <QueryBar value={q} onSubmit={setQ} fault={fault}>
-        <SaveSearch q={q} view="failures" />
-      </QueryBar>
+    <div className="stack">
+      <p className="view-note muted">
+        {failures.data
+          ? `${formatCount(failures.data.runs)} runs, ${formatCount(failures.data.totalGroups)} signatures, ended in ${WINDOW_WORDS[win]}`
+          : WINDOW_WORDS[win]}
+      </p>
       {body}
     </div>
   );

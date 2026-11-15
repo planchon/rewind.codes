@@ -1,13 +1,18 @@
 // Saved searches: a name and a query, kept in the browser like the key (archi/08-decisions.md,
 // "Saved searches are kept in the browser"), so the dashboard keeps sending only GET. Storage
-// can be missing or throw: the searches then last until the page is closed.
+// can be missing or throw: the searches then last until the page is closed. Observability lists
+// them in its sidebar.
 import { useCallback, useSyncExternalStore } from "react";
+import { queryLink } from "../model/query";
 import { read, write } from "./storage";
 
 const KEY = "rewind.searches";
 
-/** The views a search opens. */
-export type SearchView = "overview" | "runs" | "waiting" | "failures";
+/**
+ * The views a search opens: the Overview, or a view of Observability ("runs" is every run, the
+ * name searches saved before Observability keep).
+ */
+export type SearchView = "overview" | "runs" | "active" | "waiting" | "failures";
 
 export interface SavedSearch {
   name: string;
@@ -15,7 +20,20 @@ export interface SavedSearch {
   view: SearchView;
 }
 
-const VIEWS: readonly SearchView[] = ["overview", "runs", "waiting", "failures"];
+const VIEWS: readonly SearchView[] = ["overview", "runs", "active", "waiting", "failures"];
+
+const PATHS: Record<SearchView, string> = {
+  overview: "/overview",
+  runs: "/observability",
+  active: "/observability/active",
+  waiting: "/observability/waiting",
+  failures: "/observability/failures",
+};
+
+/** Where a saved search opens, with its query. */
+export function savedSearchPath(search: SavedSearch): string {
+  return queryLink(PATHS[search.view], search.q);
+}
 
 const listeners = new Set<() => void>();
 /** What was written when storage refused it. */

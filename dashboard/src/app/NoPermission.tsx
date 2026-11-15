@@ -1,8 +1,8 @@
 // What the caller cannot see, said plainly, with where they can go instead.
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { useAccess } from "./access";
-import { Link } from "./namespace";
 
 export function NoPermission({
   permission,

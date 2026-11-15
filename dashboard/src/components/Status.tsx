@@ -1,4 +1,4 @@
-// Run statuses and call outcomes: always a glyph and a word, never color alone.
+// Run statuses and call outcomes: always a mark and a word, never color alone.
 import {
   Ban,
   CircleCheck,
@@ -7,35 +7,28 @@ import {
   CircleX,
   FlaskConical,
   GitFork,
-  OctagonX,
   TriangleExclamationPoint,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { RunStatus } from "../api/types";
 
-const STATUS_ICON = {
-  completed: CircleCheck,
-  failed: CircleX,
-  aborted: OctagonX,
-  cancelled: Ban,
-  active: CircleDot,
-  pending: CircleDashed,
-} as const;
-
-export function StatusGlyph({ status, size = 13 }: { status: RunStatus; size?: number }) {
-  const Icon = STATUS_ICON[status];
+/** A run's status: a dot in the status's color, then its word (Geist's status dot). */
+export function StatusGlyph({ status, size = 10 }: { status: RunStatus; size?: number }) {
+  const d = Math.max(6, Math.min(10, size - 2));
   return (
-    <span className={`glyph${status === "active" ? " pulse" : ""}`} aria-hidden="true">
-      <Icon size={size} strokeWidth={2.25} />
-    </span>
+    <span
+      className={`status-dot${status === "active" ? " live" : ""}`}
+      style={{ width: d, height: d }}
+      aria-hidden="true"
+    />
   );
 }
 
 export function StatusBadge({ status, large = false }: { status: RunStatus; large?: boolean }) {
   return (
     <span className={`status ${status}${large ? " large" : ""}`}>
-      <StatusGlyph status={status} size={large ? 15 : 13} />
-      {status}
+      <StatusGlyph status={status} size={large ? 12 : 10} />
+      <span className="status-word">{status}</span>
     </span>
   );
 }

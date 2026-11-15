@@ -17,7 +17,7 @@ describe("ScriptsView", () => {
     const row = within(forecast as HTMLElement);
     expect(row.getByRole("link", { name: "64" })).toHaveAttribute(
       "href",
-      `/runs?q=script%3A${SCRIPTS.FORECAST.digest}`,
+      `/observability?q=script%3A${SCRIPTS.FORECAST.digest}`,
     );
     expect(row.getByRole("button", { name: "weather.forecast" })).toBeInTheDocument();
     expect(row.getByTitle(/\d+ completed, \d+ failed/)).toBeInTheDocument();

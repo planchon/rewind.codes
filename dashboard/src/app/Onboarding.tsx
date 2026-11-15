@@ -8,7 +8,7 @@ import { useMyInvitations, useWhoami } from "../api/organization";
 import { Ago, Loading } from "../components/bits";
 import { ErrorNote } from "../components/ErrorNote";
 import { displayName } from "../model/access";
-import { UserMenu, useJoinOrCreate } from "./AccountMenus";
+import { AccountMenu, useJoinOrCreate } from "./AccountMenus";
 import { Brand } from "./Brand";
 import { useSession } from "./session";
 
@@ -31,13 +31,11 @@ export function Onboarding() {
   };
 
   return (
-    <div className="shell">
-      <header className="topbar">
-        <div className="brand-wrap">
-          <Brand />
-        </div>
-        <div className="topbar-end">
-          <UserMenu user={user} />
+    <div className="onboarding-shell">
+      <header className="onboarding-bar">
+        <Brand />
+        <div>
+          <AccountMenu user={user} />
         </div>
       </header>
       <main className="onboarding">

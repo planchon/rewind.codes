@@ -1,19 +1,16 @@
-// Waiting: every run paused on the outside world, grouped by what it waits for (a signal, an
-// approval, a timer, a tool), with the line it is paused on and when it wakes. The soonest to
-// wake first. A row opens the run at its last step. Polled every 10 seconds.
+// Observability's waiting runs: every run paused on the outside world, grouped by what it waits
+// for (a signal, an approval, a timer, a tool), with the line it is paused on and when it wakes.
+// The soonest to wake first. A row opens the run at its last step. Polled every 10 seconds.
 import { Fragment, type ReactNode } from "react";
-import { useSearchParams } from "react-router";
-import { queryFault } from "../api/client";
-import { useRunStats, useRuns, useScript } from "../api/queries";
-import type { RunSummary, RunWait, WaitCounts, WaitKind } from "../api/types";
-import { Link, useNavigate } from "../app/namespace";
-import { Empty, LabelList, Loading, ProblemView, RunId, useNow } from "../components/bits";
-import { QueryBar } from "../components/QueryBar";
-import { SaveSearch } from "../components/SaveSearch";
-import { StatusGlyph } from "../components/Status";
-import { formatCount, formatDuration, formatRelative } from "../model/format";
-import { joinQuery, labelTerm, withTerm } from "../model/query";
-import { useSearchQuery } from "./search";
+import { Link, useNavigate, useSearchParams } from "react-router";
+import { queryFault } from "../../api/client";
+import { useRuns, useScript } from "../../api/queries";
+import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../api/types";
+import { useRunLinkState } from "../../app/runLinks";
+import { Empty, LabelList, Loading, ProblemView, RunId, useNow } from "../../components/bits";
+import { StatusGlyph } from "../../components/Status";
+import { formatCount, formatDuration, formatRelative } from "../../model/format";
+import { joinQuery, labelTerm, withTerm } from "../../model/query";
 
 const POLL = 10_000;
 
@@ -111,24 +108,28 @@ interface Row {
   more: number;
 }
 
-export function WaitingView() {
-  const { q, setQ } = useSearchQuery();
+export function WaitingRuns({
+  q,
+  setQ,
+  stats,
+}: {
+  q: string;
+  setQ: (q: string) => void;
+  /** The statistics of the waiting runs the query matches, for the tabs' counts. */
+  stats: RunStats | undefined;
+}) {
   const [params, setParams] = useSearchParams();
   const tab = readTab(params);
   const navigate = useNavigate();
+  const linkState = useRunLinkState();
   const now = useNow(10_000);
   const tabTerm = tab.kinds.length === 0 ? "waiting:*" : `waiting:${tab.kinds.join(",")}`;
-  const stats = useRunStats(
-    `waiting|${q}`,
-    () => ({ q: joinQuery(q, "waiting:*"), top: 10 }),
-    POLL,
-  );
   const runs = useRuns(
     `waiting|${tab.tab}|${q}`,
     () => ({ q: joinQuery(q, tabTerm), sort: "wakes", limit: 100 }),
     POLL,
   );
-  const fault = queryFault(runs.error) ?? queryFault(stats.error);
+  const fault = queryFault(runs.error);
 
   const rows: Row[] = [];
   for (const run of runs.data?.pages.flatMap((p) => p.runs) ?? []) {
@@ -197,7 +198,7 @@ export function WaitingView() {
                     className="link"
                     onClick={(e) => {
                       if ((e.target as HTMLElement).closest("a, button")) return;
-                      navigate(`/runs/${run.id}`);
+                      void navigate(`/runs/${run.id}`, { state: linkState });
                     }}
                   >
                     <td className="wrap waiting-run">
@@ -207,6 +208,7 @@ export function WaitingView() {
                         </span>
                         <Link
                           to={`/runs/${run.id}`}
+                          state={linkState}
                           className="row-link"
                           title="Open the run at its last step"
                         >
@@ -265,17 +267,7 @@ export function WaitingView() {
   }
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <h1>Waiting</h1>
-        <span className="muted">
-          {stats.data ? `${formatCount(stats.data.runs)} runs paused on the outside world` : " "}
-          {" · the soonest to wake first · every 10 s"}
-        </span>
-      </div>
-      <QueryBar value={q} onSubmit={setQ} facets={stats.data?.facets} fault={fault}>
-        <SaveSearch q={q} view="waiting" />
-      </QueryBar>
+    <div className="stack">
       <div className="tabs view-tabs" role="tablist" aria-label="What the runs wait for">
         {TABS.map((t) => (
           <button
@@ -293,8 +285,8 @@ export function WaitingView() {
             }
           >
             {t.label}{" "}
-            <span className="num muted">
-              {stats.data ? formatCount(tabCount(t, stats.data.runs, stats.data.waiting)) : ""}
+            <span className="count">
+              {stats ? formatCount(tabCount(t, stats.runs, stats.waiting)) : "–"}
             </span>
           </button>
         ))}

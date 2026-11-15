@@ -3,12 +3,26 @@ import { useState } from "react";
 import type { User } from "../api/types";
 import { displayName, initials } from "../model/access";
 
+/** Rewind's mark: the rewind glyph, in the text's color (green says "completed" only). */
+export function Mark({ size = 16 }: { size?: number }) {
+  return (
+    <svg
+      className="brand-mark"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="currentColor"
+    >
+      <path d="M11 19 2 12l9-7v14zM22 19l-9-7 9-7v14z" />
+    </svg>
+  );
+}
+
 export function Brand() {
   return (
     <div className="brand">
-      <span className="brand-mark" aria-hidden="true">
-        AP
-      </span>
+      <Mark />
       <span className="brand-name">Rewind</span>
     </div>
   );

@@ -1,10 +1,10 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
 // outcome, the tools it called and the labels it ran with.
-import { useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import { useScripts } from "../api/queries";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../api/types";
-import { keepNamespace, Link, useNavigate } from "../app/namespace";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
+import { PageHeader } from "../components/PageHeader";
 import { StatusGlyph } from "../components/Status";
 import {
   readScriptFilters,
@@ -38,7 +38,7 @@ export function Outcomes({ counts, digest }: { counts: RunCounts; digest?: strin
           digest ? (
             <Link
               key={s}
-              to={queryLink("/runs", `status:${s} script:${digest}`)}
+              to={queryLink("/observability", `status:${s} script:${digest}`)}
               className={`status ${s}`}
               title={`${counts[s]} ${s}`}
             >
@@ -90,7 +90,11 @@ function ScriptRow({
         <Digest digest={script.digest} />
       </td>
       <td className="right">
-        <Link to={queryLink("/runs", `script:${script.digest}`)} className="num" title="Its runs">
+        <Link
+          to={queryLink("/observability", `script:${script.digest}`)}
+          className="num"
+          title="Its runs"
+        >
           {formatCount(totalRuns(script.runs))}
         </Link>
       </td>
@@ -141,7 +145,7 @@ export function ScriptsView() {
   const key = writeScriptFilters(filters).toString();
   const scripts = useScripts(key, toScriptsQuery(filters));
   const update = (patch: Partial<ScriptFilters>) =>
-    setParams((current) => keepNamespace(current, writeScriptFilters({ ...filters, ...patch })));
+    setParams(writeScriptFilters({ ...filters, ...patch }));
   const addLabel = (pair: string) => {
     if (!filters.labels.includes(pair)) update({ labels: [...filters.labels, pair] });
   };
@@ -149,10 +153,8 @@ export function ScriptsView() {
   const list = scripts.data?.pages.flatMap((p) => p.scripts) ?? [];
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Scripts</h1>
-        <span className="muted">every distinct source executed, most recently run first</span>
-      </div>
+      <PageHeader title="Scripts" />
+      <p className="page-intro">Every distinct source executed, the most recently run first.</p>
       <section className="filters" aria-label="Filters">
         <AddFilter
           fields={[

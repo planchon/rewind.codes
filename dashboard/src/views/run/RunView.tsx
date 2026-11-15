@@ -1,26 +1,39 @@
-// Run: the source with each tool call, timer, signal wait and log next to the line that caused
-// it; the timeline; the journal; payloads on demand. Live through the event stream while the run
-// goes on. A time cursor steps through the history: the source, its notes and the timeline show
-// the run as it was after a step, and hovering a call or a variable shows its value then.
-import { FileCode, MessageSquareText } from "lucide-react";
+// Run: one run, analysed in depth (archi/05). Its sidebar holds its status, its sections and its
+// details; its sections are the debugger (the source with each tool call, timer, signal wait and
+// log next to the line that caused it; the timeline; the time cursor; payloads on demand), the
+// journal, the logs, the LLM trace and the runs it started. Live through the event stream while
+// the run goes on. The time cursor steps through the history: the source, its notes and the
+// timeline show the run as it was after a step, and hovering a call or a variable shows its value
+// then. "Back" returns to the list of Observability the run was opened from.
+import {
+  Bug,
+  FileCode,
+  GitBranch,
+  MessageSquareText,
+  ScrollText,
+  Sparkles,
+  Terminal,
+} from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
 import { ApiError } from "../../api/client";
 import { useRun, useRunJournal, useScript } from "../../api/queries";
 import { isEnded } from "../../api/types";
-import { Link } from "../../app/namespace";
-import { Loading, ProblemView, useNow } from "../../components/bits";
+import { runBackPath } from "../../app/runLinks";
+import { PageSidebar } from "../../app/sidebar";
+import { Empty, Loading, ProblemView, RunId, useNow } from "../../components/bits";
 import { CodeView, type LineMark } from "../../components/CodeView";
+import { PageHeader } from "../../components/PageHeader";
 import { OutcomeGlyph } from "../../components/Status";
-import { formatDuration, formatRelative } from "../../model/format";
+import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { type Activity, buildRunModel, type RunModel } from "../../model/run";
 import { gutterMarks, markMeaning, markSymbol } from "../../model/steps";
-import { callName, endedRunOf, readRunEnd } from "../../model/workflows";
+import { callName, endedRunOf, readRunEnd, startedRuns } from "../../model/workflows";
 import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
 import { activityOutcome, activityTitle } from "./describe";
 import { Inspector, type Selection } from "./Inspector";
-import { JournalPanel } from "./JournalPanel";
-import { RunBanners, RunHeader } from "./RunHeader";
+import { JournalList, LlmTrace, Logs } from "./JournalPanel";
+import { RunActions, RunBanners, RunCard, RunDetails } from "./RunHeader";
 import { StartedRuns } from "./StartedRuns";
 import { Timeline } from "./Timeline";
 import { buildTargets, sourceIndex } from "./targets";
@@ -233,8 +246,15 @@ function Notes({
   );
 }
 
+type Section = "debugger" | "journal" | "logs" | "trace" | "started";
+
+const SECTIONS: readonly Section[] = ["debugger", "journal", "logs", "trace", "started"];
+
 export function RunView() {
-  const { id = "" } = useParams();
+  const { id = "", section: rawSection } = useParams();
+  const section = (rawSection ?? "debugger") as Section;
+  const location = useLocation();
+  const back = runBackPath(location.state);
   const [params, setParams] = useSearchParams();
   const run = useRun(id);
   const journal = useRunJournal(id);
@@ -332,6 +352,7 @@ export function RunView() {
     [atCursor, errorLine],
   );
 
+  if (!SECTIONS.includes(section)) return <Navigate to={`/runs/${id}`} replace />;
   if (run.isPending) return <Loading>Loading the run…</Loading>;
   if (run.isError) {
     const notFound = run.error instanceof ApiError && run.error.status === 404;
@@ -342,7 +363,7 @@ export function RunView() {
           title={notFound ? "No such run" : "The run could not be read"}
         />
         <p>
-          <Link to="/runs">Back to the runs</Link>
+          <Link to={back}>Back to the runs</Link>
         </p>
       </div>
     );
@@ -358,168 +379,280 @@ export function RunView() {
     input: model.start?.event.input ?? null,
   };
   const hovered = hover ? targets?.byKey.get(hover.key) : undefined;
+  const sectionTo = (to: Section) => ({
+    pathname: to === "debugger" ? `/runs/${r.id}` : `/runs/${r.id}/${to}`,
+    search: params.toString() ? `?${params.toString()}` : "",
+  });
+  const started = startedRuns(model).length;
+  const nav: { section: Section; label: string; icon: ReactNode; end: ReactNode }[] = [
+    {
+      section: "debugger",
+      label: "Debugger",
+      icon: <Bug size={16} />,
+      end:
+        cursor.steps.length > 0 ? (
+          <span className="nav-meta num">
+            step {cursor.n + 1}/{cursor.steps.length}
+          </span>
+        ) : null,
+    },
+    {
+      section: "journal",
+      label: "Journal",
+      icon: <ScrollText size={16} />,
+      end: <span className="count">{formatCount(model.entries.length)}</span>,
+    },
+    {
+      section: "logs",
+      label: "Logs",
+      icon: <Terminal size={16} />,
+      end: <span className="count">{formatCount(model.logs.length)}</span>,
+    },
+    { section: "trace", label: "LLM trace", icon: <Sparkles size={16} />, end: null },
+    {
+      section: "started",
+      label: "Runs started",
+      icon: <GitBranch size={16} />,
+      end: <span className="count">{formatCount(started)}</span>,
+    },
+  ];
+  const inspector = (
+    <Inspector
+      run={r}
+      model={model}
+      selection={selection}
+      onSelectEntry={selectEntry}
+      onSelectLine={selectLine}
+      onClear={() => select(null)}
+      steps={cursor.steps}
+      onGoStep={cursor.go}
+    />
+  );
   return (
     <div className="page run-page">
-      <RunHeader run={r} model={model} state={journal.state} />
-      {journal.state === "error" && (
-        <ProblemView error={journal.error} title="The journal could not be read" />
-      )}
-      <RunBanners run={r} model={model} onSelectEntry={selectEntry} onSelectLine={selectLine} />
-      <StartedRuns
-        runId={r.id}
-        model={model}
-        live={live}
-        onSelectEntry={selectEntry}
-        onSelectLine={selectLine}
+      <PageSidebar title="Run" back={back} backLabel="Back to the runs">
+        <RunCard run={r} state={journal.state} />
+        <nav className="nav" aria-label="Run">
+          {nav.map((n) => (
+            <Link
+              key={n.section}
+              to={sectionTo(n.section)}
+              state={location.state}
+              className="nav-item"
+              aria-current={section === n.section ? "page" : undefined}
+            >
+              <span className="nav-icon" aria-hidden="true">
+                {n.icon}
+              </span>
+              <span className="nav-label">{n.label}</span>
+              {n.end && <span className="nav-end">{n.end}</span>}
+            </Link>
+          ))}
+        </nav>
+        <section className="pane-section" aria-label="Details">
+          <h2 className="pane-label">Details</h2>
+          <RunDetails run={r} model={model} />
+        </section>
+      </PageSidebar>
+      <PageHeader
+        crumbs={<Link to={back}>Observability</Link>}
+        title={<RunId id={r.id} />}
+        actions={<RunActions run={r} />}
       />
-      <CursorBar cursor={cursor} live={live} failedStep={failedStep} t0={model.firstAt} />
-
-      <section className="panel" aria-label="Timeline">
-        <header className="panel-head">
-          <h2>Timeline</h2>
-          {model.firstAt !== null && model.lastAt !== null && (
-            <span className="muted num">
-              {formatDuration((live ? now : model.lastAt) - model.firstAt)} from the first entry
-              {live ? " to now" : " to the last"}
-            </span>
-          )}
-        </header>
-        {journal.entries.length === 0 && journal.state !== "ended" ? (
-          <Loading>Reading the journal…</Loading>
-        ) : (
-          <Timeline
-            model={model}
-            now={live ? now : null}
-            selected={selectedIdx}
-            onSelect={selectEntry}
-            cursor={{
-              steps: cursor.steps,
-              n: cursor.n,
-              last: cursor.cursor,
-              atHead: cursor.atHead,
-              onSeek: cursor.go,
-            }}
-          />
+      <div className="page-body">
+        {journal.state === "error" && (
+          <ProblemView error={journal.error} title="The journal could not be read" />
         )}
-      </section>
+        <RunBanners run={r} model={model} onSelectEntry={selectEntry} onSelectLine={selectLine} />
 
-      <div className="run-body">
-        <section className="panel source-panel" aria-label="Source">
-          <header className="panel-head">
-            <h2>
-              <FileCode size={13} aria-hidden="true" style={{ verticalAlign: -2 }} /> script.ts
-            </h2>
-            {marks ? (
-              <span className="mark-legend muted">
-                <span>
-                  <b className="mk resumed">▸</b> resumed
-                </span>
-                <span>
-                  <b className="mk issued">①</b> issued
-                </span>
-                <span>
-                  <b className="mk paused">‖</b> paused
-                </span>
-                <span>
-                  <b className="mk done">✓</b> done
-                </span>
-              </span>
-            ) : (
-              <span className="muted">each line with what it caused</span>
-            )}
-            {unattributed.length > 0 && (
-              <span className="end muted" title="Activities recorded without a callsite">
-                {unattributed.length} without a line
-              </span>
-            )}
-          </header>
-          {script.isPending ? (
-            <Loading>Loading the source…</Loading>
-          ) : script.isError ? (
-            <div className="panel-body">
-              <ProblemView error={script.error} title="The source could not be read" />
-            </div>
-          ) : (
-            <CodeView
-              source={script.data.source}
-              notesTitle="What each line caused"
-              notes={(line) => (
-                <Notes
-                  model={atCursor}
-                  line={line}
+        {section === "debugger" && (
+          <>
+            <CursorBar cursor={cursor} live={live} failedStep={failedStep} t0={model.firstAt} />
+            <section className="panel" aria-label="Timeline">
+              <header className="panel-head">
+                <h2>Timeline</h2>
+                {model.firstAt !== null && model.lastAt !== null && (
+                  <span className="muted num">
+                    {formatDuration((live ? now : model.lastAt) - model.firstAt)} from the first
+                    entry
+                    {live ? " to now" : " to the last"}
+                  </span>
+                )}
+              </header>
+              {journal.entries.length === 0 && journal.state !== "ended" ? (
+                <Loading>Reading the journal…</Loading>
+              ) : (
+                <Timeline
+                  model={model}
+                  now={live ? now : null}
                   selected={selectedIdx}
-                  now={now}
-                  onSelectEntry={selectEntry}
-                  onSelectLine={selectLine}
+                  onSelect={selectEntry}
+                  cursor={{
+                    steps: cursor.steps,
+                    n: cursor.n,
+                    last: cursor.cursor,
+                    atHead: cursor.atHead,
+                    onSeek: cursor.go,
+                  }}
                 />
               )}
-              mark={mark}
-              gutter={
-                marks
-                  ? (line) => {
-                      const m = marks.get(line);
-                      return m ? (
-                        <span className={`mk ${m.kind}`} title={markMeaning(m)}>
-                          {markSymbol(m)}
-                        </span>
-                      ) : (
-                        <span className="mk" />
-                      );
-                    }
-                  : undefined
-              }
-              targets={targets ? (line) => targets.byLine.get(line) ?? [] : undefined}
-              targetClass={(key) =>
-                `${watches.includes(key) ? "pinned" : ""}${hover?.key === key ? " hovered" : ""}`.trim()
-              }
-              targetEvents={targets ? targetEvents : undefined}
-              selectedLine={selectedLine}
-              focusLine={selectedLine}
-              onLineClick={selectLine}
-            />
-          )}
-        </section>
-        <div className="run-side">
-          <StepPanel
-            cursor={cursor}
-            model={model}
-            watches={watches}
-            targets={targets?.byKey ?? new Map()}
-            ctx={ctx}
-            onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
-            onSelectLine={selectLine}
-            onSelectEntry={selectEntry}
-          />
-          <Inspector
-            run={r}
-            model={model}
-            selection={selection}
-            onSelectEntry={selectEntry}
-            onSelectLine={selectLine}
-            onClear={() => select(null)}
-            steps={cursor.steps}
-            onGoStep={cursor.go}
-          />
-        </div>
-      </div>
-      {hover && hovered && (
-        <ValuePopover
-          target={hovered}
-          anchor={hover.rect}
-          ctx={ctx}
-          pinned={watches.includes(hover.key)}
-          onEnter={keepHover}
-          onLeave={dropHover}
-        />
-      )}
+            </section>
 
-      <JournalPanel
-        runId={r.id}
-        model={model}
-        selected={selectedIdx}
-        onSelect={selectEntry}
-        onSelectLine={selectLine}
-      />
+            <div className="run-body">
+              <section className="panel source-panel" aria-label="Source">
+                <header className="panel-head">
+                  <h2>
+                    <FileCode size={14} aria-hidden="true" /> script.ts
+                  </h2>
+                  {marks ? (
+                    <span className="mark-legend muted">
+                      <span>
+                        <b className="mk resumed">▸</b> resumed
+                      </span>
+                      <span>
+                        <b className="mk issued">①</b> issued
+                      </span>
+                      <span>
+                        <b className="mk paused">‖</b> paused
+                      </span>
+                      <span>
+                        <b className="mk done">✓</b> done
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="muted">each line with what it caused</span>
+                  )}
+                  {unattributed.length > 0 && (
+                    <span className="end muted" title="Activities recorded without a callsite">
+                      {unattributed.length} without a line
+                    </span>
+                  )}
+                </header>
+                {script.isPending ? (
+                  <Loading>Loading the source…</Loading>
+                ) : script.isError ? (
+                  <div className="panel-body">
+                    <ProblemView error={script.error} title="The source could not be read" />
+                  </div>
+                ) : (
+                  <CodeView
+                    source={script.data.source}
+                    notesTitle="What each line caused"
+                    notes={(line) => (
+                      <Notes
+                        model={atCursor}
+                        line={line}
+                        selected={selectedIdx}
+                        now={now}
+                        onSelectEntry={selectEntry}
+                        onSelectLine={selectLine}
+                      />
+                    )}
+                    mark={mark}
+                    gutter={
+                      marks
+                        ? (line) => {
+                            const m = marks.get(line);
+                            return m ? (
+                              <span className={`mk ${m.kind}`} title={markMeaning(m)}>
+                                {markSymbol(m)}
+                              </span>
+                            ) : (
+                              <span className="mk" />
+                            );
+                          }
+                        : undefined
+                    }
+                    targets={targets ? (line) => targets.byLine.get(line) ?? [] : undefined}
+                    targetClass={(key) =>
+                      `${watches.includes(key) ? "pinned" : ""}${hover?.key === key ? " hovered" : ""}`.trim()
+                    }
+                    targetEvents={targets ? targetEvents : undefined}
+                    selectedLine={selectedLine}
+                    focusLine={selectedLine}
+                    onLineClick={selectLine}
+                  />
+                )}
+              </section>
+              <div className="run-side">
+                <StepPanel
+                  cursor={cursor}
+                  model={model}
+                  watches={watches}
+                  targets={targets?.byKey ?? new Map()}
+                  ctx={ctx}
+                  onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
+                  onSelectLine={selectLine}
+                  onSelectEntry={selectEntry}
+                />
+                {inspector}
+              </div>
+            </div>
+            {hover && hovered && (
+              <ValuePopover
+                target={hovered}
+                anchor={hover.rect}
+                ctx={ctx}
+                pinned={watches.includes(hover.key)}
+                onEnter={keepHover}
+                onLeave={dropHover}
+              />
+            )}
+          </>
+        )}
+
+        {section === "journal" && (
+          <div className="run-body">
+            <section className="panel" aria-label="Journal">
+              <header className="panel-head">
+                <h2>Journal</h2>
+                <span className="muted">lifecycle · commands · completions · annotations</span>
+              </header>
+              <JournalList model={model} selected={selectedIdx} onSelect={selectEntry} />
+            </section>
+            <div className="run-side">{inspector}</div>
+          </div>
+        )}
+
+        {section === "logs" && (
+          <div className="run-body">
+            <section className="panel" aria-label="Logs">
+              <header className="panel-head">
+                <h2>Logs</h2>
+                <span className="muted">what the script wrote with console</span>
+              </header>
+              <Logs model={model} onSelect={selectEntry} onSelectLine={selectLine} />
+            </section>
+            <div className="run-side">{inspector}</div>
+          </div>
+        )}
+
+        {section === "trace" && (
+          <section className="panel" aria-label="LLM trace">
+            <header className="panel-head">
+              <h2>LLM trace</h2>
+              <span className="muted">what a model reads with get_run</span>
+            </header>
+            <LlmTrace runId={r.id} historyLen={model.entries.length} />
+          </section>
+        )}
+
+        {section === "started" &&
+          (started === 0 ? (
+            <Empty>This run started no other run.</Empty>
+          ) : (
+            <div className="run-body">
+              <StartedRuns
+                runId={r.id}
+                model={model}
+                live={live}
+                onSelectEntry={selectEntry}
+                onSelectLine={selectLine}
+              />
+              <div className="run-side">{inspector}</div>
+            </div>
+          ))}
+      </div>
     </div>
   );
 }

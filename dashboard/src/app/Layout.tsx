@@ -1,150 +1,204 @@
-import { LogOut, Monitor, Moon, Star, Sun, X } from "lucide-react";
-import { useRef } from "react";
-import { Outlet, useLocation } from "react-router";
+// The frame of the app (archi/05, "One sidebar"): a sidebar with the organization picker and Find
+// at its top, the views or the page's own sidebar below, the account at its bottom; the page on
+// the right. The query (`q`) follows the reader from the Overview to Observability.
+import {
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  FileCode,
+  LayoutGrid,
+  Search,
+  Users,
+  Wrench,
+} from "lucide-react";
+import { type ReactNode, useCallback, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router";
 import { queryLink } from "../model/query";
-import { OrganizationSwitcher, UserMenu } from "./AccountMenus";
+import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
 import { useAccess } from "./access";
-import { useServer } from "./Gate";
-import { NamespaceFilter } from "./NamespaceFilter";
-import { Link, NavLink } from "./namespace";
-import { useSavedSearches } from "./searches";
-import { maskKey, useSession } from "./session";
-import { type ThemeChoice, useSettings } from "./settings";
+import { FindDialog, useFindShortcut } from "./Find";
+import { useSession } from "./session";
+import { SidebarProvider, useSidebar } from "./sidebar";
 
-const NEXT_THEME: Record<ThemeChoice, ThemeChoice> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
-const THEME_ICON = { system: Monitor, light: Sun, dark: Moon } as const;
+/**
+ * The query (`q`) and the window (`window`) of the views that take them: they follow the reader
+ * from the Overview to Observability and back.
+ */
+function carried(pathname: string, search: string): { q: string; extra: Record<string, string> } {
+  if (pathname !== "/overview" && !pathname.startsWith("/observability"))
+    return { q: "", extra: {} };
+  const params = new URLSearchParams(search);
+  const win = params.get("window");
+  return { q: params.get("q") ?? "", extra: win ? { window: win } : {} };
+}
 
-/** The views that take a query: it follows the operator from one to the other. */
-const QUERY_VIEWS = new Set(["/overview", "/runs", "/waiting", "/failures"]);
-/** The views that take a window. */
-const WINDOW_VIEWS = new Set(["/overview", "/failures"]);
-
-function SavedMenu() {
-  const { searches, remove } = useSavedSearches();
-  const menu = useRef<HTMLDetailsElement>(null);
-  if (searches.length === 0) return null;
+function NavItem({
+  to,
+  icon,
+  label,
+  current,
+  opensSidebar = false,
+  onReopen,
+}: {
+  to: string;
+  icon: ReactNode;
+  label: string;
+  current: boolean;
+  /** The view has its own sidebar: a "›" says so. */
+  opensSidebar?: boolean;
+  /** Shows the view's own sidebar again, when it is the current page. */
+  onReopen?: () => void;
+}) {
   return (
-    <details className="saved-menu" ref={menu}>
-      <summary title="Saved searches, kept in this browser">
-        <Star size={12} aria-hidden="true" /> Saved{" "}
-        <span className="num muted">{searches.length}</span>
-      </summary>
-      <ul aria-label="Saved searches">
-        {searches.map((s) => (
-          <li key={s.name}>
-            <Link
-              to={queryLink(`/${s.view}`, s.q)}
-              title={`${s.view}: ${s.q || "every run"}`}
-              onClick={() => menu.current?.removeAttribute("open")}
-            >
-              <span className="saved-name">{s.name}</span>
-              <span className="mono muted saved-q">{s.q || "every run"}</span>
-            </Link>
+    <Link
+      to={to}
+      className="nav-item"
+      aria-current={current ? "page" : undefined}
+      onClick={(e) => {
+        if (current && onReopen) {
+          e.preventDefault();
+          onReopen();
+        }
+      }}
+    >
+      <span className="nav-icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="nav-label">{label}</span>
+      {opensSidebar && <ChevronRight size={14} className="nav-end" aria-hidden="true" />}
+    </Link>
+  );
+}
+
+function MainNav() {
+  const access = useAccess();
+  const { pathname, search } = useLocation();
+  const { pane, setShowViews } = useSidebar();
+  const reads = access.can("runs:read");
+  const { q, extra } = carried(pathname, search);
+  const inObservability = pathname.startsWith("/observability") || pathname.startsWith("/runs/");
+  const reopen = pane ? () => setShowViews(false) : undefined;
+  return (
+    <div className="nav">
+      {reads && (
+        <>
+          <NavItem
+            to={queryLink("/overview", q, extra)}
+            icon={<LayoutGrid size={16} />}
+            label="Overview"
+            current={pathname === "/overview"}
+          />
+          <NavItem
+            to={queryLink("/observability", q, extra)}
+            icon={<Eye size={16} />}
+            label="Observability"
+            current={inObservability}
+            opensSidebar
+            {...(reopen ? { onReopen: reopen } : {})}
+          />
+          <NavItem
+            to="/scripts"
+            icon={<FileCode size={16} />}
+            label="Scripts"
+            current={pathname.startsWith("/scripts")}
+          />
+          {access.toolStats && (
+            <NavItem
+              to="/tools"
+              icon={<Wrench size={16} />}
+              label="Tools"
+              current={pathname.startsWith("/tools")}
+            />
+          )}
+        </>
+      )}
+      {access.can("namespaces:read") && (
+        <NavItem
+          to="/namespaces"
+          icon={<Users size={16} />}
+          label="Namespaces"
+          current={pathname.startsWith("/namespaces")}
+        />
+      )}
+    </div>
+  );
+}
+
+function Sidebar({ onFind }: { onFind: () => void }) {
+  const { pane, showViews, setShowViews, setSlot } = useSidebar();
+  const navigate = useNavigate();
+  const { phase } = useSession();
+  const server = useServerLine();
+  const paneShown = pane !== null && !showViews;
+  const member = phase.kind === "member" ? phase.state.user : null;
+  return (
+    <aside className="sidebar" aria-label="Sidebar">
+      <div className="sidebar-head">
+        <OrganizationSwitcher />
+        <button type="button" className="find-button" onClick={onFind}>
+          <Search size={14} aria-hidden="true" />
+          <span>Find</span>
+          <kbd className="kbd">F</kbd>
+        </button>
+      </div>
+      <div className="sidebar-panes">
+        <nav
+          className="sidebar-pane"
+          aria-label="Views"
+          data-shown={paneShown ? undefined : ""}
+          inert={paneShown}
+        >
+          <MainNav />
+        </nav>
+        <div
+          className="sidebar-pane"
+          {...(pane ? { role: "region", "aria-label": pane.title } : {})}
+          data-shown={paneShown ? "" : undefined}
+          inert={!paneShown}
+          hidden={pane === null}
+        >
+          {pane && (
             <button
               type="button"
-              className="icon-btn"
-              aria-label={`Forget the saved search ${s.name}`}
-              onClick={() => remove(s.name)}
+              className="pane-head"
+              title={pane.backLabel}
+              aria-label={`${pane.backLabel} (${pane.title})`}
+              onClick={() => {
+                if (pane.back !== null) void navigate(pane.back);
+                else setShowViews(true);
+              }}
             >
-              <X size={12} />
+              <ChevronLeft size={16} aria-hidden="true" />
+              <span>{pane.title}</span>
             </button>
-          </li>
-        ))}
-      </ul>
-    </details>
+          )}
+          <div className="pane-body" ref={setSlot} />
+        </div>
+      </div>
+      <div className="sidebar-foot">
+        <AccountMenu
+          user={member}
+          server={server}
+          onOrganization={() => void navigate("/organization")}
+        />
+      </div>
+    </aside>
   );
 }
 
 export function Layout() {
-  const location = useLocation();
-  const here = new URLSearchParams(location.search);
-  const carried = QUERY_VIEWS.has(location.pathname) ? (here.get("q") ?? "") : "";
-  const win = WINDOW_VIEWS.has(location.pathname) ? here.get("window") : null;
-  const link = (path: string) =>
-    queryLink(path, carried, win && WINDOW_VIEWS.has(path) ? { window: win } : {});
-  const server = useServer();
-  const access = useAccess();
-  const { key, signOut, phase } = useSession();
-  const { theme, setTheme, zone, setZone } = useSettings();
-  const ThemeIcon = THEME_ICON[theme];
-  const epochs = server.epochs.join(", ");
-  const reads = access.can("runs:read");
-  const member = phase.kind === "member" ? phase.state.user : null;
-
+  const [finding, setFinding] = useState(false);
+  const openFind = useCallback(() => setFinding(true), []);
+  useFindShortcut(openFind);
   return (
-    <div className="shell">
-      <header className="topbar">
-        <Link to="/" className="brand" aria-label="Rewind dashboard">
-          <span className="brand-mark" aria-hidden="true">
-            AP
-          </span>
-          <span className="brand-name">Rewind</span>
-        </Link>
-        <nav className="nav" aria-label="Views">
-          {reads && (
-            <>
-              <NavLink to={link("/overview")}>Overview</NavLink>
-              <NavLink to={link("/runs")}>Runs</NavLink>
-              <NavLink to={link("/waiting")}>Waiting</NavLink>
-              <NavLink to={link("/failures")}>Failures</NavLink>
-              <NavLink to="/scripts">Scripts</NavLink>
-              {access.toolStats && <NavLink to="/tools">Tools</NavLink>}
-            </>
-          )}
-          {access.can("namespaces:read") && <NavLink to="/namespaces">Namespaces</NavLink>}
-          {access.sections.length > 0 && <NavLink to="/organization">Organization</NavLink>}
-          {reads && <SavedMenu />}
-        </nav>
-        <div className="topbar-end">
-          <span className="server-meta" title={`Roles: ${server.roles.join(", ")}`}>
-            rewind {server.version} · epoch{server.epochs.length > 1 ? "s" : ""} {epochs}
-            {server.embedded ? " · embedded" : ""}
-            {server.virtualTime ? " · virtual time" : ""}
-          </span>
-          <fieldset className="seg">
-            <legend className="sr-only">Time zone</legend>
-            <button type="button" aria-pressed={zone === "utc"} onClick={() => setZone("utc")}>
-              UTC
-            </button>
-            <button type="button" aria-pressed={zone === "local"} onClick={() => setZone("local")}>
-              Local
-            </button>
-          </fieldset>
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label={`Theme: ${theme}. Switch to ${NEXT_THEME[theme]}`}
-            title={`Theme: ${theme}`}
-            onClick={() => setTheme(NEXT_THEME[theme])}
-          >
-            <ThemeIcon size={15} />
-          </button>
-          {member && <OrganizationSwitcher />}
-          {reads && <NamespaceFilter />}
-          {member && <UserMenu user={member} />}
-          {phase.kind === "key" && key && (
-            <span className="copyable" title="The API key in use">
-              <span className="mono">{maskKey(key)}</span>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Sign out"
-                title="Sign out"
-                onClick={() => void signOut()}
-              >
-                <LogOut size={14} />
-              </button>
-            </span>
-          )}
-        </div>
-      </header>
-      <main className="main">
-        <Outlet />
-      </main>
-    </div>
+    <SidebarProvider>
+      <div className="shell">
+        <Sidebar onFind={openFind} />
+        <main className="main">
+          <Outlet />
+        </main>
+      </div>
+      <FindDialog open={finding} onOpenChange={setFinding} />
+    </SidebarProvider>
   );
 }

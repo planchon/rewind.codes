@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <title>Rewind</title>
-  <rect width="64" height="64" rx="14" fill="#059669"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="26" font-weight="600" fill="#ffffff">AP</text>
+  <style>rect{fill:#171717}path{fill:#fff}@media (prefers-color-scheme:dark){rect{fill:#ededed}path{fill:#0a0a0a}}</style>
+  <rect width="64" height="64" rx="14"/>
+  <path d="M31 20v24L13 32zM51 20v24L33 32z"/>
 </svg>

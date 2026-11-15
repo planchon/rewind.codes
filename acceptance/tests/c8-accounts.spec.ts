@@ -126,7 +126,13 @@ test.describe("criterion 8: accounts, organizations and access", () => {
     expect(failures, "everything the test created in WorkOS Staging is removed").toEqual([]);
   });
 
-  /** Opens a part of the Organization view. */
+  /** Opens the Organization view, from the account menu. */
+  async function openOrganization(page: Page) {
+    await page.getByLabel(/^Account:/).click();
+    await page.getByRole("menuitem", { name: "Organization" }).click();
+  }
+
+  /** Opens a part of the Organization view, in its sidebar. */
   async function openSection(page: Page, name: string) {
     await page.getByRole("navigation", { name: "Organization" }).getByRole("link", { name, exact: true }).click();
   }
@@ -161,10 +167,11 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       await create.getByRole("button", { name: "Create", exact: true }).click();
       // The session moved onto the new organization: its owner reads its runs.
       await expect(page).toHaveURL(/#\/overview/);
-      await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Organization" }).click();
+      await openOrganization(page);
       await expect(page).toHaveURL(/#\/organization\/members/);
-      await expect(page.getByRole("heading", { level: 1, name: organizationName })).toBeVisible();
-      organization = (await page.locator(".page-head .copyable .mono").textContent())?.trim() ?? "";
+      await expect(page.getByRole("region", { name: "Organization" })).toContainText(organizationName);
+      await expect(page.getByRole("heading", { level: 1, name: "Members" })).toBeVisible();
+      organization = (await page.locator(".org-card .digest").textContent())?.trim() ?? "";
       expect(organization).toMatch(/^org_/);
       created.organizations.push(organization);
       const me = page.locator("table.grid tbody tr", { hasText: owner });
@@ -282,8 +289,8 @@ test.describe("criterion 8: accounts, organizations and access", () => {
         await expect(other).toHaveURL(/#\/overview/);
         expect(other.url()).not.toContain("invitation_token");
         expect(await workos.invitationState(invitation.id)).toBe("accepted");
-        await other.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Organization" }).click();
-        await expect(other.getByRole("heading", { level: 1, name: organizationName })).toBeVisible();
+        await openOrganization(other);
+        await expect(other.getByRole("region", { name: "Organization" })).toContainText(organizationName);
         const sections = other.getByRole("navigation", { name: "Organization" }).getByRole("link");
         await expect(sections).toHaveText(["Members", "Invitations", "Roles"]);
         await expect(other.locator("table.grid tbody tr", { hasText: invitee }).locator(".tag", { hasText: /^reader$/ })).toBeVisible();

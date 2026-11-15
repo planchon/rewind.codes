@@ -196,7 +196,7 @@ describe("a namespace's page", () => {
     expect(screen.getByText("none: the defaults apply")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "See its runs" })).toHaveAttribute(
       "href",
-      "/runs?ns=bob",
+      "/observability?q=namespace%3Abob",
     );
   });
 

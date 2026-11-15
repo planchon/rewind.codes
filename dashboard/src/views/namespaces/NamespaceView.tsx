@@ -5,16 +5,17 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { useParams, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { NAMESPACES, useNamespaceDefaults, useNamespaceDetail } from "../../api/namespaces";
 import type { NamespaceDetail, Quotas, RevokedTokens } from "../../api/types";
 import { useAccess } from "../../app/access";
-import { Link, NS_PARAM } from "../../app/namespace";
 import { useApi } from "../../app/session";
 import { Ago, CopyButton, Loading, ProblemView, Time, useNow } from "../../components/bits";
 import { CpuChart } from "../../components/CpuChart";
 import { ErrorNote } from "../../components/ErrorNote";
+import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
+import { fieldTerm, queryLink } from "../../model/query";
 import {
   crossingDay,
   cumulativeCpu,
@@ -229,55 +230,58 @@ function NamespacePage() {
   const crossed = cpuLimit ? crossingDay(points, cpuLimit, 100) : null;
   const canWrite = access.can("namespaces:write") && !deleting;
   const canRevoke = access.can("tokens:write") && !deleting;
-  const runs = `/runs?${new URLSearchParams({ [NS_PARAM]: ns.name })}`;
+  const runs = queryLink("/observability", fieldTerm("namespace", ns.name));
 
   return (
     <div className="page">
-      <div className="page-head">
-        <Link to="/namespaces" className="muted">
-          Namespaces
-        </Link>
-        <span className="muted" aria-hidden="true">
-          /
-        </span>
-        <h1 className="mono">{ns.name}</h1>
-        <CopyButton text={ns.name} label="Copy the namespace" />
+      <PageHeader
+        crumbs={<Link to="/namespaces">Namespaces</Link>}
+        title={
+          <span className="copyable">
+            <span className="mono">{ns.name}</span>
+            <CopyButton text={ns.name} label="Copy the namespace" />
+          </span>
+        }
+        actions={
+          <>
+            <Link className="btn" to={runs} title="Its runs, in Observability">
+              See its runs
+            </Link>
+            {canWrite && !editing && (
+              <button type="button" className="btn" onClick={() => setEditing(true)}>
+                <Pencil size={12} /> Edit its limits
+              </button>
+            )}
+            {canRevoke && (
+              <ConfirmButton
+                confirm={`Revoke every token of ${ns.name}?`}
+                onConfirm={() => revoke.mutate()}
+                pending={revoke.isPending}
+                title="Its opaque tokens, and its signed tokens issued before now"
+              >
+                Revoke its tokens
+              </ConfirmButton>
+            )}
+            {canWrite && !erasing && (
+              <button type="button" className="btn" onClick={() => setErasing(true)}>
+                <Trash2 size={12} /> Erase…
+              </button>
+            )}
+          </>
+        }
+      />
+      <p className="page-intro">
         {deleting ? (
           <span className="tag critical">
             being erased since <Ago ms={Date.parse(deleting)} />
           </span>
         ) : (
-          <span className="muted">
-            created <Time ms={Date.parse(ns.createdAt)} /> · active{" "}
+          <>
+            Created <Time ms={Date.parse(ns.createdAt)} /> · active{" "}
             <Ago ms={Date.parse(ns.lastActiveAt)} />
-          </span>
+          </>
         )}
-        <div className="actions">
-          <Link className="btn" to={runs} title="Every view narrowed to this end user">
-            See its runs
-          </Link>
-          {canWrite && !editing && (
-            <button type="button" className="btn" onClick={() => setEditing(true)}>
-              <Pencil size={12} /> Edit its limits
-            </button>
-          )}
-          {canRevoke && (
-            <ConfirmButton
-              confirm={`Revoke every token of ${ns.name}?`}
-              onConfirm={() => revoke.mutate()}
-              pending={revoke.isPending}
-              title="Its opaque tokens, and its signed tokens issued before now"
-            >
-              Revoke its tokens
-            </ConfirmButton>
-          )}
-          {canWrite && !erasing && (
-            <button type="button" className="btn" onClick={() => setErasing(true)}>
-              <Trash2 size={12} /> Erase…
-            </button>
-          )}
-        </div>
-      </div>
+      </p>
 
       {revoked && (
         <div className="notice" role="status">

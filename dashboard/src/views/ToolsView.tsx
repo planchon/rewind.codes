@@ -1,11 +1,11 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
 // host-tool group), over a window, optionally for one toolset.
 import { Fragment } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import { useToolStats } from "../api/queries";
 import type { ToolStats } from "../api/types";
-import { keepNamespace, Link } from "../app/namespace";
 import { Empty, Loading, ProblemView, Time } from "../components/bits";
+import { PageHeader } from "../components/PageHeader";
 import { useTooltip } from "../components/Tooltip";
 import {
   type RangeKey,
@@ -103,7 +103,7 @@ export function ToolsView() {
   const key = writeToolFilters(filters).toString();
   const stats = useToolStats(`tools:${key}`, () => toToolStatsQuery(filters, Date.now()));
   const update = (patch: Partial<ToolFilters>) =>
-    setParams((current) => keepNamespace(current, writeToolFilters({ ...filters, ...patch })));
+    setParams(writeToolFilters({ ...filters, ...patch }));
   const tip = useTooltip();
 
   const tools = stats.data?.tools ?? [];
@@ -116,15 +116,13 @@ export function ToolsView() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Tools</h1>
-        {stats.data && (
-          <span className="muted">
-            calls completed from <Time ms={Date.parse(stats.data.since)} /> to{" "}
-            <Time ms={Date.parse(stats.data.until)} />
-          </span>
-        )}
-      </div>
+      <PageHeader title="Tools" />
+      {stats.data && (
+        <p className="page-intro">
+          Calls completed from <Time ms={Date.parse(stats.data.since)} /> to{" "}
+          <Time ms={Date.parse(stats.data.until)} />.
+        </p>
+      )}
       <section className="filters" aria-label="Filters">
         <Seg<RangeKey>
           label="Window"
@@ -236,7 +234,7 @@ export function ToolsView() {
                       <tr key={t.tool}>
                         <td className="mono tool-name">
                           <Link
-                            to={queryLink("/runs", fieldTerm("tool", t.tool))}
+                            to={queryLink("/observability", fieldTerm("tool", t.tool))}
                             title={`Runs that called ${t.tool}`}
                           >
                             {t.tool}
@@ -266,7 +264,7 @@ export function ToolsView() {
                                   key={kind}
                                   className="label"
                                   to={queryLink(
-                                    "/runs",
+                                    "/observability",
                                     `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
                                   )}
                                   title={`Runs where ${t.tool} failed with ${kind}`}

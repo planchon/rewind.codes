@@ -259,16 +259,20 @@ single-page application, served by `rewind-server`.
 
 | View | Shows |
 | --- | --- |
-| Overview | The home page: runs by outcome over time, success rate, durations, runs waiting now, quarantined runs, what fails most, failing tools; every mark opens the runs behind it |
-| Waiting | Every run paused on the outside world, grouped by what it waits for (signals, approvals, timers, tools), with the line it is paused on and when it wakes |
-| Failures | Failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run |
-| Runs | The query bar, with suggestions drawn from the values that exist, and the counts of each value (facets) beside the results |
+| Overview | The home page: runs by outcome over time, success rate, durations, runs waiting now, quarantined runs, what fails most, failing tools; every mark opens the runs behind it in Observability |
+| Observability | The runs, looked at and filtered. Four views: every run (the query bar, with suggestions drawn from the values that exist, the runs over time and the results), the active ones, those waiting on the outside world (grouped by what they wait for: signals, approvals, timers, tools; with the line each is paused on and when it wakes) and the failures (failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run). Its sidebar holds the views, the saved searches and the filters: the values of each field with their counts (facets), which add or remove their term in the query |
+| Run | One run, analysed in depth. Its sidebar holds its status, its identifiers and details (namespace, workflow and the run that started it, script, toolset, labels) and its sections: the debugger (the source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor), the journal, the logs, the LLM trace, and the runs it started |
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used |
-| Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor; for a run of a workflow, its workflow, the run that started it and the runs it started |
 | Tools | Latency, error rate and retries, per tool and per toolset |
-| Organization | The members and their grants, the invitations, the roles and their permissions, the API keys; each part shown to whoever holds its permission |
 | Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search, and a filter of those above 80 %. A namespace's page: its cumulative CPU against its quota over the month, its alerts, its tokens in use, its exceptions, and the actions its permissions allow (change its limits, revoke its tokens, delete it) |
+| Organization | Opened from the member's menu: the members and their grants, the invitations, the roles and their permissions, the API keys, the settings; each part shown to whoever holds its permission |
 
+- **One sidebar.** The organization picker and a search of runs and views sit at its top. Below,
+  the views; a view that needs more than a toolbar (Observability, Run, Organization) turns the
+  sidebar into its own, with a "back" at its head: from Observability or Organization it shows
+  the views again without leaving the page, from a run it returns to the list it was opened
+  from. The member's menu, at the bottom, holds the organization, the theme, the time zone and
+  the sign-out.
 - **The time cursor.** The commit invariant makes a history a sequence of steps: a trigger
   (the start, a tool result, a timer, a signal, a cancellation) and the commands committed
   with it. The Run page steps through them like a debugger: at each step the source marks the
@@ -280,10 +284,8 @@ single-page application, served by `rewind-server`.
   script computes in between is not recorded, and the dashboard does not execute code.
 - **Searches.** The query follows the operator from one view to another in the URL. Saved
   searches are kept in the browser.
-- **The namespace filter.** A search field beside the organization picker (a tenant can have
-  many thousands of namespaces) narrows every view to one namespace: it is kept in the URL
-  (`?ns=`) and sent as the `Rewind-Namespace` header. Without it, Runs shows each run's namespace
-  in a column and a facet.
+- **Namespaces.** No namespace is picked in the dashboard: it reads every namespace of the
+  organization. A run's namespace is a column, a filter and the term `namespace:` of the query.
 - **Signing in.** Members sign in with GitHub or a code by email, on the dashboard's pages, and
   pick an organization; someone without one creates it or accepts an invitation. A server
   without WorkOS asks for an API key ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).

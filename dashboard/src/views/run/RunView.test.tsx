@@ -145,14 +145,17 @@ describe("RunView", () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
     const run = find(world, (r) => r.labels.conversation === "c-77");
-    renderApp(`/runs/${run.id}`, { world });
+    const { router } = renderApp(`/runs/${run.id}`, { world });
+    const sections = await screen.findByRole("navigation", { name: "Run" });
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: /Journal/ })).toHaveTextContent(
+      expect(within(sections).getByRole("link", { name: /Journal/ })).toHaveTextContent(
         String(run.journal.entries.length),
       ),
     );
-    expect(screen.getAllByText("schedule_tool_call").length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("tab", { name: /Logs/ }));
+    await user.click(within(sections).getByRole("link", { name: /Journal/ }));
+    expect(router.state.location.pathname).toBe(`/runs/${run.id}/journal`);
+    expect((await screen.findAllByText("schedule_tool_call")).length).toBeGreaterThan(0);
+    await user.click(within(sections).getByRole("link", { name: /Logs/ }));
     expect(screen.getAllByText("provision failed (1/3), retrying in 1m").length).toBeGreaterThan(0);
   });
 
@@ -163,7 +166,7 @@ describe("RunView", () => {
 
     it("lists the runs a run started, with how each ended, and reads their calls naturally", async () => {
       const user = userEvent.setup();
-      renderApp(`/runs/${parent.id}`, { world });
+      const { router } = renderApp(`/runs/${parent.id}/started`, { world });
       const panel = await screen.findByRole("region", { name: "Runs it started" });
       expect(children).toHaveLength(3);
       for (const child of children) {
@@ -177,27 +180,11 @@ describe("RunView", () => {
       expect(within(panel).getByText("detached")).toBeInTheDocument();
       // The detached run ended after this one: its end never came back.
       expect(within(panel).getByText("not ended with this run")).toBeInTheDocument();
-      expect(within(panel).getByRole("link", { name: "In Runs" })).toHaveAttribute(
+      expect(within(panel).getByRole("link", { name: "In Observability" })).toHaveAttribute(
         "href",
-        `/runs?q=started_by%3A${parent.id}`,
+        `/observability?q=started_by%3A${parent.id}`,
       );
-
-      await waitFor(() =>
-        expect(within(notesOf(4)).getByRole("button")).toHaveTextContent(/triage\.start\(…\)\s*×2/),
-      );
-      expect(within(notesOf(5)).getByRole("button")).toHaveTextContent(
-        /run\.signal\("approval", …\)\s*×2/,
-      );
-      expect(within(notesOf(6)).getByRole("button")).toHaveTextContent(/digest\.start\(…\)/);
-      expect(within(notesOf(7)).getByRole("button")).toHaveTextContent(
-        /run\.result\(\)\s*×2\s*all ended/,
-      );
-      // In the journal, the end signals read as the ends of those runs.
       const [first, second] = children as [RunFixture, RunFixture];
-      expect(screen.getByText(`end of run ${shortRunId(first.id)}: completed`)).toBeInTheDocument();
-      expect(
-        screen.getByText(`end of run ${shortRunId(second.id)}: completed`),
-      ).toBeInTheDocument();
 
       // The end of a run, selected: the run it is the end of, and its status.
       await user.click(
@@ -217,6 +204,27 @@ describe("RunView", () => {
       );
       expect(await within(inspector).findByText("#1 triage.start(…)")).toBeInTheDocument();
       expect(within(inspector).getByRole("link", { name: first.id })).toBeInTheDocument();
+
+      // In the source, the calls read naturally.
+      await router.navigate(`/runs/${parent.id}`);
+      await waitFor(() =>
+        expect(within(notesOf(4)).getByRole("button")).toHaveTextContent(/triage\.start\(…\)\s*×2/),
+      );
+      expect(within(notesOf(5)).getByRole("button")).toHaveTextContent(
+        /run\.signal\("approval", …\)\s*×2/,
+      );
+      expect(within(notesOf(6)).getByRole("button")).toHaveTextContent(/digest\.start\(…\)/);
+      expect(within(notesOf(7)).getByRole("button")).toHaveTextContent(
+        /run\.result\(\)\s*×2\s*all ended/,
+      );
+      // In the journal, the end signals read as the ends of those runs.
+      await router.navigate(`/runs/${parent.id}/journal`);
+      expect(
+        await screen.findByText(`end of run ${shortRunId(first.id)}: completed`),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(`end of run ${shortRunId(second.id)}: completed`),
+      ).toBeInTheDocument();
     });
 
     it("shows a run of a workflow: its version, and the run that started it", async () => {
@@ -225,9 +233,9 @@ describe("RunView", () => {
       const ref = `triage@${WORKFLOWS.triage.version.slice(0, 12)}`;
       expect(await screen.findByRole("link", { name: ref })).toHaveAttribute(
         "href",
-        "/runs?q=workflow%3Atriage",
+        "/observability?q=workflow%3Atriage",
       );
-      const started = screen.getByRole("link", { name: `started by ${shortRunId(parent.id)}` });
+      const started = screen.getByRole("link", { name: shortRunId(parent.id) });
       expect(started).toHaveAttribute("href", `/runs/${parent.id}`);
       expect(screen.queryByRole("region", { name: "Runs it started" })).toBeNull();
     });
@@ -236,7 +244,7 @@ describe("RunView", () => {
       const detached = children.find((c) => c.startedBy?.detached) as RunFixture;
       renderApp(`/runs/${detached.id}`, { world });
       expect(
-        await screen.findByRole("link", { name: `started by ${shortRunId(parent.id)} · detached` }),
+        await screen.findByRole("link", { name: `${shortRunId(parent.id)} · detached` }),
       ).toHaveAttribute("href", `/runs/${parent.id}`);
       expect(
         screen.getByRole("link", { name: `digest@${WORKFLOWS.digest.version.slice(0, 12)}` }),

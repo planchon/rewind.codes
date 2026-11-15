@@ -6,7 +6,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Search } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import {
   NAMESPACES,
   useNamespaceDefaults,
@@ -16,9 +16,9 @@ import {
 } from "../../api/namespaces";
 import type { Namespace, NamespaceOrder, QuotaAlert, Quotas } from "../../api/types";
 import { useAccess } from "../../app/access";
-import { Link } from "../../app/namespace";
 import { useApi } from "../../app/session";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
+import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
 import {
   formatQuota,
@@ -199,20 +199,22 @@ function Namespaces() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Namespaces</h1>
-        <span className="muted">
-          {monthLabel(month)}
-          {riskyCount !== null && <> · {riskyCount} at 80% or more of a limit</>}
-        </span>
-        {write && !editing && defaults.data && (
-          <div className="actions">
+      <PageHeader
+        title="Namespaces"
+        actions={
+          write &&
+          !editing &&
+          defaults.data && (
             <button type="button" className="btn" onClick={() => setEditing(true)}>
-              <Pencil size={12} /> Edit the defaults
+              <Pencil size={14} aria-hidden="true" /> Edit the defaults
             </button>
-          </div>
-        )}
-      </div>
+          )
+        }
+      />
+      <p className="page-intro">
+        {monthLabel(month)}
+        {riskyCount !== null && <> · {riskyCount} at 80% or more of a limit</>}
+      </p>
 
       <p className="section-intro dim">
         A namespace is one end user of yours: their runs, tokens and use. The ceiling is the

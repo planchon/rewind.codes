@@ -1,8 +1,7 @@
 // The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
 // with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
-// `/auth`, which read and write the session cookie and never see a token. A client bound to a
-// namespace sends it as `Rewind-Namespace` with every request to `/v1`: the reads are narrowed
-// to that end user.
+// `/auth`, which read and write the session cookie and never see a token. It never names a
+// namespace (`Rewind-Namespace`): the dashboard reads every namespace of the organization.
 import createClient from "openapi-fetch";
 import type {
   ApiKey,
@@ -50,9 +49,6 @@ import type {
 } from "./types";
 
 const PROBLEM_PREFIX = "urn:rewind:problem:";
-
-/** The header naming the namespace (the end user) a key's or a member's request acts for. */
-export const NAMESPACE_HEADER = "Rewind-Namespace";
 
 /** An answer of the API that is not a success, read from its `application/problem+json`. */
 export class ApiError extends Error {
@@ -130,8 +126,6 @@ export interface ApiOptions {
    */
   renew?: () => Promise<boolean>;
   fetch?: (request: Request) => Promise<Response>;
-  /** The namespace every request to `/v1` names; `null` reads every namespace. */
-  namespace?: string | null;
 }
 
 type Client = ReturnType<typeof createClient<paths>>;
@@ -163,20 +157,12 @@ function isV1(url: string): boolean {
 export class Api {
   readonly baseUrl: string;
   readonly client: Client;
-  /** The namespace this client's requests name, or `null` for every namespace. */
-  readonly namespace: string | null;
-  private readonly options: ApiOptions;
   private readonly token: () => string | null;
   private readonly renew: (() => Promise<boolean>) | undefined;
   private readonly doFetch: (request: Request) => Promise<Response>;
-  /** The client without a namespace, which keeps the bound ones. */
-  private root: Api = this;
-  private readonly bound = new Map<string, Api>();
 
   constructor(options: ApiOptions) {
-    this.options = options;
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.namespace = options.namespace ?? null;
     this.token = options.token;
     this.renew = options.renew;
     this.doFetch = options.fetch ?? ((request) => globalThis.fetch(request));
@@ -186,27 +172,10 @@ export class Api {
     });
   }
 
-  /**
-   * The same client, its requests naming a namespace; without one, they read every namespace.
-   * One client per namespace, so that it can be a dependency of effects and memos.
-   */
-  inNamespace(namespace: string | null): Api {
-    const root = this.root;
-    if (namespace === null) return root;
-    let api = root.bound.get(namespace);
-    if (!api) {
-      api = new Api({ ...root.options, namespace });
-      api.root = root;
-      root.bound.set(namespace, api);
-    }
-    return api;
-  }
-
-  /** Adds the token, and the namespace, to a request's headers. */
+  /** Adds the token to a request's headers. */
   authorize(headers: Headers): void {
     const token = this.token();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    if (this.namespace !== null) headers.set(NAMESPACE_HEADER, this.namespace);
   }
 
   private withToken(request: Request): Request {

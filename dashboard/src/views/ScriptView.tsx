@@ -1,10 +1,10 @@
 // One script: its source, and its runs.
-import { useParams, useSearchParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import { useRuns, useScript } from "../api/queries";
 import { RUN_STATUSES, type RunStatus } from "../api/types";
-import { keepNamespace } from "../app/namespace";
 import { Digest, Loading, ProblemView } from "../components/bits";
 import { CodeView } from "../components/CodeView";
+import { PageHeader } from "../components/PageHeader";
 import { StatusGlyph } from "../components/Status";
 import { fieldTerm, joinQuery } from "../model/query";
 import { Seg } from "./FilterBits";
@@ -25,11 +25,8 @@ export function ScriptView() {
 
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>Script</h1>
-        <Digest digest={digest} full />
-        {headline && <span className="muted mono ellipsis">{headline}</span>}
-      </div>
+      <PageHeader crumbs={<Link to="/scripts">Scripts</Link>} title={<Digest digest={digest} />} />
+      {headline && <p className="page-intro mono ellipsis">{headline}</p>}
       <section className="panel">
         <header className="panel-head">
           <h2>Source</h2>
@@ -47,17 +44,13 @@ export function ScriptView() {
           <CodeView source={script.data.source} />
         )}
       </section>
-      <div className="page-head">
-        <h2 style={{ fontSize: 13.5 }}>Runs of this script</h2>
+      <div className="section-head">
+        <h2>Runs of this script</h2>
         <Seg<RunStatus | "any">
           label="Status"
           value={status ?? "any"}
           onChange={(v) =>
-            setParams(
-              (current) =>
-                keepNamespace(current, new URLSearchParams(v === "any" ? {} : { status: v })),
-              { replace: true },
-            )
+            setParams(new URLSearchParams(v === "any" ? {} : { status: v }), { replace: true })
           }
           options={[
             { value: "any", label: "Any status" },

@@ -149,8 +149,8 @@ test.describe("criterion 7: the dashboard", () => {
     await page.getByRole("button", { name: "Continue" }).click();
     await expect(page).toHaveURL(/#\/overview/);
     await expect(page.getByRole("link", { name: /Waiting now\s*1/ })).toBeVisible();
-    await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Runs" }).click();
-    await expect(page).toHaveURL(/#\/runs/);
+    await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Observability" }).click();
+    await expect(page).toHaveURL(/#\/observability/);
     await expect.poll(shown(page)).toEqual([...Object.values(runs), waiter].map((r) => r.id).sort());
 
     // By label.
@@ -173,9 +173,9 @@ test.describe("criterion 7: the dashboard", () => {
     // The query lives in the URL.
     expect(page.url()).toContain("DeadlockError");
 
-    // A facet's value: a click asks for it.
+    // A filter's value, in Observability's sidebar: a click asks for it.
     await search(page, "");
-    const status = page.getByRole("complementary", { name: "Facets" }).getByRole("region", { name: "Status" });
+    const status = page.getByRole("region", { name: "Filters" }).getByRole("group", { name: "Status" });
     await status.getByRole("button", { name: /^Status failed, 2 runs$/ }).click();
     await expect.poll(shown(page)).toEqual([runs.charge.id, runs.stuck.id].sort());
 
@@ -241,19 +241,19 @@ test.describe("criterion 7: the dashboard", () => {
     await expect(watches).toContainText("not assigned yet");
 
     // Waiting: the run waiting for the signal, on its line.
-    await page.goto(`${server.url}/#/waiting`);
+    await page.goto(`${server.url}/#/observability/waiting`);
     const waiting = page.locator("table.grid tbody tr", { has: page.locator(`.run-id[title="${waiter.id}"]`) });
     await expect(waiting).toContainText('signal "go-ahead"');
     await expect(waiting).toContainText('const go = await signal<{ go: boolean }>("go-ahead");');
     await expect(page.getByRole("tab", { name: /Signals/ })).toContainText("1");
 
     // Failures: the deadlock is a group, which opens its runs.
-    await page.goto(`${server.url}/#/failures`);
+    await page.goto(`${server.url}/#/observability/failures`);
     const group = page.locator("table.grid tbody tr", { hasText: "DeadlockError" }).first();
     await expect(group).toBeVisible();
     await expect(group).toContainText(runs.stuck.id.slice(0, 8));
     await group.locator("td").first().getByRole("link").click();
-    await expect(page).toHaveURL(/#\/runs\?q=fingerprint/);
+    await expect(page).toHaveURL(/#\/observability\?q=fingerprint/);
     await expect.poll(shown(page)).toEqual([runs.stuck.id]);
 
     // A failed run: the call that failed, on its line, and the error.

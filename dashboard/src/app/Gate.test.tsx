@@ -10,8 +10,9 @@ import { server } from "../test/server";
 describe("Gate", () => {
   it("lets the operator in at once when the server needs no key", async () => {
     renderApp("/runs");
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
-    expect(screen.getByText(/rewind 0\.1\.0/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByLabelText("Account: API key"));
+    expect(await screen.findByText(/rewind 0\.1\.0/)).toBeInTheDocument();
   });
 
   it("asks for a key, says when it is refused, and keeps it for the tab only", async () => {
@@ -29,7 +30,7 @@ describe("Gate", () => {
     await user.clear(screen.getByLabelText("API key"));
     await user.type(screen.getByLabelText("API key"), "rewind_sk_good");
     await user.click(screen.getByRole("button", { name: /continue/i }));
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
     expect(screen.getByText("rewind_sk_…good")).toBeInTheDocument();
     expect(window.sessionStorage.getItem("rewind.key")).toBe("rewind_sk_good");
     expect(window.localStorage.getItem("rewind.key")).toBeNull();
@@ -43,10 +44,11 @@ describe("Gate", () => {
     await user.type(await screen.findByLabelText("API key"), "rewind_sk_good");
     await user.click(screen.getByLabelText("Remember on this device"));
     await user.click(screen.getByRole("button", { name: /continue/i }));
-    await screen.findByRole("heading", { name: "Runs" });
+    await screen.findByRole("heading", { name: "All runs" });
     expect(window.localStorage.getItem("rewind.key")).toBe("rewind_sk_good");
 
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(screen.getByLabelText("Account: API key"));
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
     expect(await screen.findByLabelText("API key")).toBeInTheDocument();
     expect(window.localStorage.getItem("rewind.key")).toBeNull();
     expect(window.sessionStorage.getItem("rewind.key")).toBeNull();
@@ -59,7 +61,8 @@ describe("Gate", () => {
     await user.type(await screen.findByLabelText("API key"), "rewind_sk_first");
     await user.click(screen.getByRole("button", { name: /continue/i }));
     expect((await screen.findAllByText("c-42")).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    await user.click(screen.getByLabelText("Account: API key"));
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
     await screen.findByLabelText("API key");
 
     // Another tenant's key, whose runs are slow to come.
@@ -77,7 +80,7 @@ describe("Gate", () => {
     );
     await user.type(screen.getByLabelText("API key"), "rewind_sk_second");
     await user.click(screen.getByRole("button", { name: /continue/i }));
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
     expect(screen.queryByText("c-42")).toBeNull();
     release();
     expect(await screen.findByText("No run yet.")).toBeInTheDocument();

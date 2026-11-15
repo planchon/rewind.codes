@@ -40,8 +40,9 @@ describe("the onboarding", () => {
     await user.click(within(create).getByRole("button", { name: "Create" }));
 
     expect(await screen.findByLabelText("Organization: Initech")).toBeInTheDocument();
-    // An owner sees the whole Organization view.
-    await user.click(screen.getByRole("link", { name: "Organization" }));
+    // An owner sees the whole Organization view, opened from the account menu.
+    await user.click(screen.getByLabelText("Account: Margaret Hamilton"));
+    await user.click(await screen.findByRole("menuitem", { name: "Organization" }));
     const nav = await screen.findByRole("navigation", { name: "Organization" });
     expect(
       within(nav)

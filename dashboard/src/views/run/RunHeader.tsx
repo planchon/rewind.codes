@@ -1,18 +1,13 @@
-// The run's header (status, ids, metadata, labels, exports) and its banners: how it failed, why
-// it is quarantined, what it waits for.
-import { Download, Workflow } from "lucide-react";
+// The run's card, details and actions (in its sidebar and its header), and its banners: how it
+// failed, why it is quarantined, what it waits for.
+import { Download, GitFork } from "lucide-react";
 import { useState } from "react";
+import { Link, useNavigate } from "react-router";
 import type { JournalState } from "../../api/queries";
 import type { Run, Waiting } from "../../api/types";
-import { Link, NS_PARAM, useNavigate, useScopedApi } from "../../app/namespace";
-import { Ago, CopyButton, Digest, LabelList, RunId, Time, useNow } from "../../components/bits";
-import {
-  ForkTag,
-  MockTag,
-  OutcomeBadge,
-  QuarantineTag,
-  StatusBadge,
-} from "../../components/Status";
+import { useApi } from "../../app/session";
+import { Ago, CopyButton, Digest, LabelList, RunId, useNow } from "../../components/bits";
+import { MockTag, OutcomeBadge, QuarantineTag, StatusBadge } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
@@ -38,7 +33,7 @@ function LiveState({ state }: { state: JournalState }) {
 }
 
 function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette" }) {
-  const api = useScopedApi();
+  const api = useApi();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   return (
@@ -70,176 +65,190 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
         }
       }}
     >
-      <Download size={13} /> {as === "journal" ? "Journal" : "Cassette"}
+      <Download size={14} aria-hidden="true" /> {as === "journal" ? "Journal" : "Cassette"}
     </button>
   );
 }
 
-export function RunHeader({
-  run,
-  model,
-  state,
-}: {
-  run: Run;
-  model: RunModel;
-  state: JournalState;
-}) {
+/** The run at the head of its sidebar: its status, when it started, its id, its stream. */
+export function RunCard({ run, state }: { run: Run; state: JournalState }) {
+  return (
+    <div className="run-card">
+      <div className="run-card-status">
+        <StatusBadge status={run.status} />
+        <span className="run-card-ago">
+          <Ago ms={Date.parse(run.createdAt)} />
+        </span>
+      </div>
+      <span className="run-card-id">
+        <RunId id={run.id} />
+      </span>
+      <div className="run-card-tags">
+        <LiveState state={state} />
+        {run.mode === "mock" && <MockTag />}
+        {run.quarantine && <QuarantineTag />}
+      </div>
+    </div>
+  );
+}
+
+/** The actions of the run's page: its forks, its journal and its cassette. */
+export function RunActions({ run }: { run: Run }) {
+  return (
+    <>
+      <Link
+        className="btn"
+        to={queryLink("/observability", `parent:${run.id}`)}
+        title="Runs forked from this one"
+      >
+        <GitFork size={14} aria-hidden="true" /> Forks
+      </Link>
+      <ExportButton runId={run.id} as="journal" />
+      <ExportButton runId={run.id} as="cassette" />
+    </>
+  );
+}
+
+/** The run's details, in its sidebar whatever the section. */
+export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
   const now = useNow(10_000);
   const navigate = useNavigate();
   const started = Date.parse(run.createdAt);
   const ended = run.endedAt ? Date.parse(run.endedAt) : null;
+  const failedCalls = model.calls.filter((c) => c.end?.outcome === "failed").length;
   return (
-    <header className="run-head">
-      <div className="run-title">
-        <StatusBadge status={run.status} large />
-        <RunId id={run.id} full />
-        {run.mode === "mock" && <MockTag />}
-        {run.parent && (
-          <Link
-            to={`/runs/${run.parent.run}`}
-            title={`Forked from ${run.parent.run}${run.parent.at != null ? ` at entry ${run.parent.at}` : ""}`}
-          >
-            <ForkTag>fork of {run.parent.run.slice(0, 8)}…</ForkTag>
-          </Link>
-        )}
-        {run.startedBy && (
-          <Link
-            to={`/runs/${run.startedBy.run}`}
-            title={`Started by the run ${run.startedBy.run}, at its call #${run.startedBy.seq}${
-              run.startedBy.detached
-                ? ": detached, it lives on its own"
-                : ": that run does not end before this one, and cancels it if it fails"
-            }`}
-          >
-            <span className="tag">
-              <span className="glyph" aria-hidden="true">
-                <Workflow size={11} strokeWidth={2.5} />
-              </span>
-              started by {shortRunId(run.startedBy.run)}
-              {run.startedBy.detached && " · detached"}
-            </span>
-          </Link>
-        )}
-        {run.quarantine && <QuarantineTag />}
-        <span className="run-title-end">
-          <LiveState state={state} />
-          <Link
-            className="btn ghost"
-            to={queryLink("/runs", `parent:${run.id}`)}
-            title="Runs forked from this one"
-          >
-            Forks
-          </Link>
-          <ExportButton runId={run.id} as="journal" />
-          <ExportButton runId={run.id} as="cassette" />
-        </span>
+    <dl className="run-details">
+      <div>
+        <dt>{ended ? "Duration" : "Running for"}</dt>
+        <dd className="num">{formatDuration((ended ?? now) - started)}</dd>
       </div>
-      <dl className="run-meta">
-        {run.workflow && (
-          <div>
-            <dt>workflow</dt>
-            <dd>
-              <Link
-                to={queryLink("/runs", fieldTerm("workflow", run.workflow.name))}
-                className="mono"
-                title={`Version ${run.workflow.version}. The runs of this workflow`}
-              >
-                {workflowRef(run.workflow)}
-              </Link>
-            </dd>
-          </div>
-        )}
+      <div>
+        <dt>Started</dt>
+        <dd>
+          <Ago ms={started} />
+        </dd>
+      </div>
+      {!ended && (
         <div>
-          <dt>namespace</dt>
+          <dt>Expires</dt>
+          <dd className="num" title={run.expiresAt}>
+            {formatRelative(Date.parse(run.expiresAt), now)}
+          </dd>
+        </div>
+      )}
+      <div>
+        <dt>Namespace</dt>
+        <dd>
+          <Link
+            to={queryLink("/observability", fieldTerm("namespace", run.namespace))}
+            title="The end user the run acts for: their runs"
+          >
+            {run.namespace}
+          </Link>
+        </dd>
+      </div>
+      {run.workflow && (
+        <div>
+          <dt>Workflow</dt>
           <dd>
             <Link
+              to={queryLink("/observability", fieldTerm("workflow", run.workflow.name))}
               className="mono"
-              to={`/runs?${new URLSearchParams({ [NS_PARAM]: run.namespace })}`}
-              title="The end user the run acts for: their runs"
+              title={`Version ${run.workflow.version}. The runs of this workflow`}
             >
-              {run.namespace}
+              {workflowRef(run.workflow)}
             </Link>
           </dd>
         </div>
+      )}
+      {run.startedBy && (
         <div>
-          <dt>script</dt>
+          <dt>Started by</dt>
           <dd>
-            <Link to={`/scripts/${run.script}`} title="The script's page">
-              <Digest digest={run.script} />
+            <Link
+              to={`/runs/${run.startedBy.run}`}
+              title={`Started by the run ${run.startedBy.run}, at its call #${run.startedBy.seq}${
+                run.startedBy.detached
+                  ? ": detached, it lives on its own"
+                  : ": that run does not end before this one, and cancels it if it fails"
+              }`}
+            >
+              <span className="mono">{shortRunId(run.startedBy.run)}</span>
+              {run.startedBy.detached && " · detached"}
             </Link>
           </dd>
         </div>
+      )}
+      {run.parent && (
         <div>
-          <dt>toolset</dt>
+          <dt>Fork of</dt>
           <dd>
-            <Link to={`/tools?toolset=${run.toolset}`} title="Statistics of this toolset's tools">
-              <Digest digest={run.toolset} />
+            <Link
+              to={`/runs/${run.parent.run}`}
+              title={`Forked from ${run.parent.run}${run.parent.at != null ? ` at entry ${run.parent.at}` : ""}`}
+            >
+              <span className="mono">{shortRunId(run.parent.run)}</span>
             </Link>
           </dd>
         </div>
-        <div>
-          <dt>started</dt>
-          <dd>
-            <Time ms={started} />{" "}
-            <span className="muted">
-              (<Ago ms={started} />)
-            </span>
-          </dd>
-        </div>
-        <div>
-          <dt>{ended ? "took" : "running for"}</dt>
-          <dd className="num">{formatDuration((ended ?? now) - started)}</dd>
-        </div>
-        {!ended && (
-          <div>
-            <dt>expires</dt>
-            <dd className="num" title={run.expiresAt}>
-              {formatRelative(Date.parse(run.expiresAt), now)}
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>entries</dt>
-          <dd className="num">{formatCount(run.historyLen)}</dd>
-        </div>
-        <div>
-          <dt>calls</dt>
-          <dd className="num">
-            {formatCount(model.calls.length)}
-            {model.calls.some((c) => c.end?.outcome === "failed") && (
-              <span className="tone-critical">
-                {" "}
-                · {model.calls.filter((c) => c.end?.outcome === "failed").length} failed
-              </span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>epoch</dt>
-          <dd className="num">{run.epoch}</dd>
-        </div>
-        <div>
-          <dt>trace</dt>
-          <dd>
-            <span className="copyable">
-              <span className="digest" title={run.traceId}>
-                {run.traceId.slice(0, 12)}…
-              </span>
-              <CopyButton text={run.traceId} label="Copy trace id" />
-            </span>
-          </dd>
-        </div>
-      </dl>
-      <div className="run-labels">
-        <LabelList
-          labels={run.labels}
-          onPick={(pair) => {
-            const at = pair.indexOf(":");
-            navigate(queryLink("/runs", labelTerm(pair.slice(0, at), pair.slice(at + 1))));
-          }}
-        />
+      )}
+      <div>
+        <dt>Script</dt>
+        <dd>
+          <Link to={`/scripts/${run.script}`} title="The script's page">
+            <Digest digest={run.script} />
+          </Link>
+        </dd>
       </div>
-    </header>
+      <div>
+        <dt>Toolset</dt>
+        <dd>
+          <Link to={`/tools?toolset=${run.toolset}`} title="Statistics of this toolset's tools">
+            <Digest digest={run.toolset} />
+          </Link>
+        </dd>
+      </div>
+      <div>
+        <dt>Calls</dt>
+        <dd className="num">
+          {formatCount(model.calls.length)}
+          {failedCalls > 0 && <span className="tone-critical"> · {failedCalls} failed</span>}
+        </dd>
+      </div>
+      <div>
+        <dt>Entries · epoch</dt>
+        <dd className="num">
+          {formatCount(run.historyLen)} · {run.epoch}
+        </dd>
+      </div>
+      <div>
+        <dt>Trace</dt>
+        <dd>
+          <span className="copyable">
+            <span className="digest" title={run.traceId}>
+              {run.traceId.slice(0, 12)}…
+            </span>
+            <CopyButton text={run.traceId} label="Copy trace id" />
+          </span>
+        </dd>
+      </div>
+      {Object.keys(run.labels).length > 0 && (
+        <div className="run-details-labels">
+          <dt>Labels</dt>
+          <dd>
+            <LabelList
+              labels={run.labels}
+              onPick={(pair) => {
+                const at = pair.indexOf(":");
+                void navigate(
+                  queryLink("/observability", labelTerm(pair.slice(0, at), pair.slice(at + 1))),
+                );
+              }}
+            />
+          </dd>
+        </div>
+      )}
+    </dl>
   );
 }
 

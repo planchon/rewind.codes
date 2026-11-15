@@ -49,7 +49,7 @@ describe("sign-in", () => {
     expect(within(orgs).getByText("Globex")).toBeInTheDocument();
     await user.click(within(orgs).getByText("Acme"));
 
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
     const [chosen] = callsTo("/auth/organization", "POST");
     expect(JSON.parse((await chosen?.body) ?? "")).toEqual({ organizationId: "org_01ACME" });
     // `/v1` gets the access token; `/auth` never does.
@@ -76,7 +76,7 @@ describe("sign-in", () => {
     await user.clear(screen.getByLabelText("Code"));
     await user.type(screen.getByLabelText("Code"), codeFor(world, "grace@example.net"));
     // Grace has one organization: no choice to make.
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
   });
 
   it("verifies the email when WorkOS asks for it", async () => {
@@ -88,7 +88,7 @@ describe("sign-in", () => {
     expect(await screen.findByRole("heading", { name: "Verify your email" })).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Verification code"), codeFor(world, "alan@example.net"));
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
     expect(callsTo("/auth/email-verification", "POST")).toHaveLength(1);
     // Alan's grant is limited to labels: the tool statistics are not for him.
     expect(screen.queryByRole("link", { name: "Tools" })).toBeNull();

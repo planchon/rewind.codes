@@ -1,6 +1,6 @@
 // The runs this run started, from its journal: each call of `workflows.<name>.start` that
 // answered a run id, with that run's end once it came back as a `rewind:ended:` signal.
-import { Link } from "../../app/namespace";
+import { Link } from "react-router";
 import { OutcomeBadge, StatusBadge } from "../../components/Status";
 import { shortRunId } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
@@ -30,10 +30,10 @@ export function StartedRuns({
         <span className="muted num">{runs.length}</span>
         <span className="end">
           <Link
-            to={queryLink("/runs", fieldTerm("started_by", runId))}
-            title="These runs in the list of runs"
+            to={queryLink("/observability", fieldTerm("started_by", runId))}
+            title="These runs in Observability"
           >
-            In Runs
+            In Observability
           </Link>
         </span>
       </header>

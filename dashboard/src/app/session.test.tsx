@@ -31,8 +31,10 @@ describe("the session", () => {
     const world = signedIn("grace@example.net", undefined, { now: NOW, tokenTtlMs: 61_000 });
     const first = currentToken(world);
     const { callsTo, router } = renderApp("/runs", { world });
-    expect(await screen.findByRole("heading", { name: "Runs" })).toBeInTheDocument();
-    expect(callsTo("/v1/runs")[0]?.headers.get("Authorization")).toBe(`Bearer ${first}`);
+    expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(callsTo("/v1/runs")[0]?.headers.get("Authorization")).toBe(`Bearer ${first}`),
+    );
 
     await waitFor(() => expect(currentToken(world)).not.toBe(first), { timeout: 4_000 });
     const second = currentToken(world);
@@ -45,7 +47,7 @@ describe("the session", () => {
   it("renews a refused token once, and sends the request again", async () => {
     const world = signedIn("grace@example.net");
     const { callsTo, router } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "Runs" });
+    await screen.findByRole("heading", { name: "All runs" });
     const before = callsTo("/auth/session").length;
 
     // The token is refused (expired, say), but the session holds.
@@ -65,7 +67,7 @@ describe("the session", () => {
   it("goes back to the sign-in page when the session has ended", async () => {
     const world = signedIn("grace@example.net");
     const { router } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "Runs" });
+    await screen.findByRole("heading", { name: "All runs" });
 
     world.access.tokens.clear();
     world.access.session = null;
@@ -78,10 +80,10 @@ describe("the session", () => {
     const user = userEvent.setup();
     const world = signedIn("grace@example.net");
     const { callsTo } = renderApp("/runs", { world });
-    await screen.findByRole("heading", { name: "Runs" });
+    await screen.findByRole("heading", { name: "All runs" });
     await user.click(screen.getByLabelText("Account: Grace Hopper"));
-    expect(screen.getByText("grace@example.net")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByText("grace@example.net")).toBeVisible();
+    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
     expect(await screen.findByRole("heading", { name: "Sign in to Rewind" })).toBeVisible();
     const [out] = callsTo("/auth/logout", "POST");
     expect(out?.headers.get("Content-Type")).toMatch(/application\/json/);
@@ -95,8 +97,8 @@ describe("the session", () => {
     expect((await screen.findAllByText("c-42")).length).toBeGreaterThan(0);
 
     await user.click(screen.getByLabelText("Organization: Acme"));
-    const list = screen.getByRole("list", { name: "Your organizations" });
-    await user.click(within(list).getByRole("button", { name: "Globex" }));
+    const list = await screen.findByRole("group", { name: "Organizations" });
+    await user.click(within(list).getByRole("menuitem", { name: "Globex" }));
 
     expect(await screen.findByLabelText("Organization: Globex")).toBeInTheDocument();
     const switched = callsTo("/auth/session", "POST").at(-1);

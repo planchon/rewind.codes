@@ -24,13 +24,13 @@ describe("OverviewView", () => {
     expect(completed).toHaveTextContent(/%.*of the \d+ runs that ended/);
     expect(hrefOf(completed).get("q")).toBe("@env:prod started:>now-24h status:completed");
     const failed = within(figures).getByRole("link", { name: /Failed/ });
-    expect(failed.getAttribute("href")).toMatch(/^\/failures\?q=/);
+    expect(failed.getAttribute("href")).toMatch(/^\/observability\/failures\?q=/);
     expect(failed).toHaveTextContent(/aborted, \d+ cancelled/);
     // Waiting now: whenever they started. The approval, the 10-day sleep, the claimed ask_user, the
     // quarantined digest; not the triage of the test environment.
     const waiting = within(figures).getByRole("link", { name: /Waiting now/ });
     await waitFor(() => expect(waiting).toHaveTextContent(/Waiting now\s*5\s*1 on a signal/));
-    expect(waiting).toHaveAttribute("href", "/waiting?q=%40env%3Aprod");
+    expect(waiting).toHaveAttribute("href", "/observability/waiting?q=%40env%3Aprod");
     expect(within(figures).getByRole("link", { name: /Duration p95/ })).toHaveTextContent(/p50/);
     const quarantined = within(figures).getByRole("link", { name: /Quarantined/ });
     expect(quarantined).toHaveTextContent(/Quarantined\s*1/);
@@ -59,7 +59,7 @@ describe("OverviewView", () => {
     renderApp("/overview?window=7d");
     const fails = await screen.findByRole("region", { name: "What fails most" });
     const top = (await within(fails).findAllByRole("link")).filter((a) =>
-      a.getAttribute("href")?.startsWith("/runs"),
+      a.getAttribute("href")?.startsWith("/observability?"),
     );
     expect(top.length).toBeGreaterThan(0);
     expect(hrefOf(top[0] as HTMLElement).get("q")).toMatch(
@@ -67,7 +67,7 @@ describe("OverviewView", () => {
     );
     expect(within(fails).getByRole("link", { name: "Every failure →" })).toHaveAttribute(
       "href",
-      "/failures?window=7d",
+      "/observability/failures?window=7d",
     );
     const tools = screen.getByRole("region", { name: "Failing tools" });
     const forecast = await within(tools).findByRole("link", { name: /weather\.forecast/ });
@@ -91,11 +91,11 @@ describe("OverviewView", () => {
       .find((u) => u.searchParams.get("bucket") === "6h")
       ?.searchParams.get("since");
     expect(Date.now() - Date.parse(since ?? "")).toBeGreaterThan(7 * 86_400_000 - 60_000);
-    // The window follows to Failures.
+    // The window follows to Observability.
     expect(
       within(screen.getByRole("navigation", { name: "Views" })).getByRole("link", {
-        name: "Failures",
+        name: "Observability",
       }),
-    ).toHaveAttribute("href", "/failures?window=7d");
+    ).toHaveAttribute("href", "/observability?window=7d");
   });
 });

@@ -129,14 +129,14 @@ export function Time({ ms, withMs = false }: { ms: number; withMs?: boolean }) {
   );
 }
 
+/** A relative time ("5h ago"); the exact time, in UTC and local, on hover. */
 export function Ago({ ms }: { ms: number }) {
-  const { zone } = useSettings();
   const now = useNow();
   return (
     <time
       className="num nowrap"
       dateTime={new Date(ms).toISOString()}
-      title={`${formatTime(ms, zone)}${zone === "utc" ? " UTC" : ""}`}
+      title={`${formatTime(ms, "utc")} UTC · ${formatTime(ms, "local")} local`}
     >
       {formatRelative(ms, now)}
     </time>

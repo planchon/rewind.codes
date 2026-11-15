@@ -307,6 +307,8 @@ describe("the Organization view", () => {
         .getAllByRole("link")
         .map((a) => a.textContent),
     ).toEqual(["Roles", "API keys"]);
-    expect(await screen.findByRole("heading", { name: "Access" })).toBeInTheDocument();
+    // Without an organization, its sidebar says access, and the page opens on the first part.
+    expect(screen.getByRole("region", { name: "Organization" })).toHaveTextContent(/Access/);
+    expect(await screen.findByRole("heading", { name: "Roles" })).toBeInTheDocument();
   });
 });

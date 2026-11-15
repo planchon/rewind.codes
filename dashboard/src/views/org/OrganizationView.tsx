@@ -1,42 +1,73 @@
-// Organization: the members and their grants, the invitations, the roles and their permissions,
-// the API keys, the settings; each part shown to whoever holds its permission.
+// Organization, opened from the account menu: the members and their grants, the invitations, the
+// roles and their permissions, the API keys, the settings; each part shown to whoever holds its
+// permission, and listed in the organization's own sidebar.
+
+import { KeyRound, Mail, Shield, SlidersHorizontal, Users } from "lucide-react";
 import type { ReactNode } from "react";
-import { Outlet } from "react-router";
+import { Navigate, NavLink, Outlet, useLocation } from "react-router";
+import { OrgAvatar } from "../../app/AccountMenus";
 import { SECTIONS, useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
-import { Navigate, NavLink } from "../../app/namespace";
+import { PageSidebar } from "../../app/sidebar";
 import { CopyButton } from "../../components/bits";
+import { PageHeader } from "../../components/PageHeader";
+
+const ICONS: Record<string, ReactNode> = {
+  members: <Users size={16} />,
+  invitations: <Mail size={16} />,
+  roles: <Shield size={16} />,
+  "api-keys": <KeyRound size={16} />,
+  settings: <SlidersHorizontal size={16} />,
+};
 
 export function OrganizationView() {
   const access = useAccess();
+  const { pathname } = useLocation();
   const org = access.organization;
+  const current = access.sections.find((s) => pathname.startsWith(`/organization/${s.path}`));
   return (
     <div className="page">
-      <div className="page-head">
-        <h1>{org ? org.name : "Access"}</h1>
-        {org ? (
-          <span className="copyable muted">
-            <span className="mono">{org.id}</span>
-            <CopyButton text={org.id} label="Copy the organization's id" />
-          </span>
-        ) : (
-          access.identity.tenant && (
-            <span className="muted">
-              tenant <span className="mono">{access.identity.tenant}</span>
-            </span>
-          )
+      <PageSidebar title="Organization" back={null} backLabel="Show the views">
+        <div className="org-card">
+          {org ? (
+            <>
+              <OrgAvatar organization={org} size={24} />
+              <div className="org-card-text">
+                <strong>{org.name}</strong>
+                <span className="copyable">
+                  <span className="digest">{org.id}</span>
+                  <CopyButton text={org.id} label="Copy the organization's id" />
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="org-card-text">
+              <strong>Access</strong>
+              {access.identity.tenant && (
+                <span className="muted">
+                  tenant <span className="mono">{access.identity.tenant}</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        {access.sections.length > 0 && (
+          <nav className="nav" aria-label="Organization">
+            {access.sections.map((s) => (
+              <NavLink key={s.path} to={`/organization/${s.path}`} className="nav-item">
+                <span className="nav-icon" aria-hidden="true">
+                  {ICONS[s.path]}
+                </span>
+                <span className="nav-label">{s.title}</span>
+              </NavLink>
+            ))}
+          </nav>
         )}
+      </PageSidebar>
+      <PageHeader crumbs={org ? org.name : "Access"} title={current?.title ?? "Organization"} />
+      <div className="page-body org-body">
+        <Outlet />
       </div>
-      {access.sections.length > 0 && (
-        <nav className="subnav" aria-label="Organization">
-          {access.sections.map((s) => (
-            <NavLink key={s.path} to={`/organization/${s.path}`}>
-              {s.title}
-            </NavLink>
-          ))}
-        </nav>
-      )}
-      <Outlet />
     </div>
   );
 }

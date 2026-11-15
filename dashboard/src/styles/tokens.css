@@ -1,167 +1,260 @@
-/* Design tokens. Light by default; dark from the system unless the viewer picked light, or when
-   the viewer picked dark. Status colors are reserved for run and call states and always come
-   with a glyph and a word. */
+/* Design tokens: Geist's, the design system of Vercel (archi/08, "Taken for the dashboard's
+   redesign"). Light by default; dark from the system unless the viewer picked light, or when
+   the viewer picked dark.
+
+   - The ten grays each have a role: 100–300 component backgrounds (rest, hover, active),
+     400–600 borders (default, hover, active), 700–800 high-contrast fills, 900–1000 text.
+   - background-200 is the page and the sidebar; background-100 the cards on it.
+   - The color scales say a state or a link, never decorate. A run's status is a dot and a word.
+   - The semantic names below the scales (--bg, --surface, --ink, --line…) are what the views
+     use; they point into the scales. */
+
+@font-face {
+  font-family: "Geist";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/geist/files/geist-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url("@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2")
+    format("woff2-variations");
+  unicode-range:
+    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
 
 :root {
   color-scheme: light;
-  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 
-  --bg: #f3f2ee;
-  --surface: #ffffff;
-  --surface-2: #f8f7f4;
-  --surface-3: #eeede8;
-  --line: #e1dfd8;
-  --line-strong: #c9c6bc;
-  --ink: #1a1915;
-  --ink-2: #55534c;
-  --ink-3: #87857c;
-  --brand: #059669;
+  /* Geist's scales */
+  --ds-background-100: #ffffff;
+  --ds-background-200: #fafafa;
+  --ds-gray-100: #f2f2f2;
+  --ds-gray-200: #ebebeb;
+  --ds-gray-300: #e6e6e6;
+  --ds-gray-400: #ebebeb;
+  --ds-gray-500: #c9c9c9;
+  --ds-gray-600: #a8a8a8;
+  --ds-gray-700: #8f8f8f;
+  --ds-gray-800: #7d7d7d;
+  --ds-gray-900: #4d4d4d;
+  --ds-gray-1000: #171717;
+  --ds-gray-alpha-100: #0000000d;
+  --ds-gray-alpha-200: #00000014;
+  --ds-gray-alpha-400: #00000014;
+  --ds-blue-200: #eaf4ff;
+  --ds-blue-400: #cce7ff;
+  --ds-blue-700: #0070f7;
+  --ds-blue-900: #0064e2;
+  --ds-red-200: #ffe9ea;
+  --ds-red-400: #ffd8d7;
+  --ds-red-800: #e70022;
+  --ds-red-900: #d60020;
+  --ds-amber-200: #fff4d4;
+  --ds-amber-400: #ffdd84;
+  --ds-amber-700: #ffb200;
+  --ds-amber-800: #ff9900;
+  --ds-amber-900: #a64f00;
+  --ds-green-200: #e5fce7;
+  --ds-green-400: #b9f5bc;
+  --ds-green-700: #28a948;
+  --ds-green-900: #107d32;
+  --ds-teal-700: #00a694;
+  --ds-teal-900: #007a6e;
+  --ds-purple-200: #f9f1ff;
+  --ds-purple-400: #f1d9ff;
+  --ds-purple-700: #9f00f4;
+  --ds-purple-900: #7c00c9;
+  --ds-pink-900: #c41562;
 
-  --accent: #1f5fcc;
+  /* Materials: radius by role, a 1px stroke drawn as a shadow, translucent lifts */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-border: 0 0 0 1px var(--ds-gray-alpha-400);
+  --shadow-card: 0 0 0 1px #00000014, 0 2px 2px #0000000a;
+  --shadow-menu:
+    0 0 0 1px #00000014, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
+  --shadow-modal:
+    0 0 0 1px #00000014, 0 1px 1px #00000005, 0 8px 16px -4px #0000000a, 0 24px 32px -8px #0000000f;
+  --focus-ring: 0 0 0 2px var(--ds-background-100), 0 0 0 4px var(--focus);
+  --ease: cubic-bezier(0.175, 0.885, 0.32, 1.1);
+
+  /* The frame, as measured on Vercel's dashboard */
+  --sidebar-width: 256px;
+  --header-height: 56px;
+  --row-height: 36px;
+
+  /* What the views use */
+  --bg: var(--ds-background-200);
+  --surface: var(--ds-background-100);
+  --surface-2: var(--ds-gray-100);
+  --surface-3: var(--ds-gray-200);
+  --line: var(--ds-gray-400);
+  --line-strong: var(--ds-gray-500);
+  --ink: var(--ds-gray-1000);
+  --ink-2: var(--ds-gray-900);
+  --ink-3: var(--ds-gray-800);
+  --brand: var(--ds-gray-1000);
+
+  --accent: var(--ds-blue-700);
   --accent-ink: #ffffff;
-  --accent-soft: #e4ecfa;
-  --accent-line: #b9cdf2;
-  --focus: #1f5fcc;
+  --accent-soft: var(--ds-blue-200);
+  --accent-line: var(--ds-blue-400);
+  --focus: var(--ds-blue-700);
 
-  --good: #0c8f3d;
-  --good-soft: #e2f3e8;
-  --critical: #c8322f;
-  --critical-soft: #fbe8e6;
-  --serious: #c45a1c;
-  --serious-soft: #fcecdf;
-  --warning: #b07800;
-  --warning-mark: #e9a300;
-  --warning-soft: #fbf1d6;
-  --info: #1f5fcc;
-  --info-soft: #e4ecfa;
-  --neutral: #77756d;
-  --neutral-soft: #ecebe6;
+  --good: var(--ds-green-700);
+  --good-ink: var(--ds-green-900);
+  --good-soft: var(--ds-green-200);
+  --critical: var(--ds-red-800);
+  --critical-ink: var(--ds-red-900);
+  --critical-soft: var(--ds-red-200);
+  --serious: var(--ds-amber-800);
+  --serious-soft: var(--ds-amber-200);
+  --warning: var(--ds-amber-900);
+  --warning-mark: var(--ds-amber-700);
+  --warning-soft: var(--ds-amber-200);
+  --info: var(--ds-blue-700);
+  --info-soft: var(--ds-blue-200);
+  --waiting: var(--ds-purple-700);
+  --waiting-ink: var(--ds-purple-900);
+  --waiting-soft: var(--ds-purple-200);
+  --neutral: var(--ds-gray-700);
+  --neutral-soft: var(--ds-gray-200);
 
-  --series-call: #2a78d6;
-  --series-timer: #b77a00;
-  --series-signal: #6250d6;
-  --series-log: #87857c;
+  --series-call: var(--ds-blue-700);
+  --series-timer: var(--ds-amber-700);
+  --series-signal: var(--ds-purple-700);
+  --series-log: var(--ds-gray-700);
 
-  --code-bg: #fdfcfa;
-  --code-gutter: #f6f5f1;
-  --tok-keyword: #8b2fa8;
-  --tok-string: #2b7a3b;
-  --tok-number: #b4501a;
-  --tok-comment: #8e8c83;
-  --tok-type: #0d6f7a;
-  --tok-def: #1f4fb0;
-  --tok-prop: #3d3b35;
-  --tok-punct: #6f6d65;
+  --code-bg: var(--ds-background-100);
+  --code-gutter: var(--ds-background-200);
+  --tok-keyword: var(--ds-pink-900);
+  --tok-string: var(--ds-green-900);
+  --tok-number: var(--ds-blue-900);
+  --tok-comment: var(--ds-gray-800);
+  --tok-type: var(--ds-teal-900);
+  --tok-def: var(--ds-purple-900);
+  --tok-prop: var(--ds-gray-1000);
+  --tok-punct: var(--ds-gray-900);
 
-  --shadow-pop: 0 6px 24px rgb(20 18 12 / 0.14), 0 1px 3px rgb(20 18 12 / 0.12);
+  --shadow-pop: var(--shadow-menu);
   --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(0 0 0 / 0.08) 3px 5px);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #111110;
-    --surface: #191917;
-    --surface-2: #1e1e1c;
-    --surface-3: #282825;
-    --line: #2d2d2a;
-    --line-strong: #44433e;
-    --ink: #ecebe5;
-    --ink-2: #b4b2a8;
-    --ink-3: #807e75;
-    --brand: #10b981;
-
-    --accent: #6ea2f2;
-    --accent-ink: #0d1420;
-    --accent-soft: #1a2638;
-    --accent-line: #2f4a72;
-    --focus: #6ea2f2;
-
-    --good: #3fbf6a;
-    --good-soft: #15291c;
-    --critical: #f0706b;
-    --critical-soft: #36191a;
-    --serious: #ee9058;
-    --serious-soft: #35231a;
-    --warning: #f0b93a;
-    --warning-mark: #f0b93a;
-    --warning-soft: #33290f;
-    --info: #6ea2f2;
-    --info-soft: #1a2638;
-    --neutral: #98968c;
-    --neutral-soft: #262624;
-
-    --series-call: #3987e5;
-    --series-timer: #c98500;
-    --series-signal: #9085e9;
-    --series-log: #807e75;
-
-    --code-bg: #161614;
-    --code-gutter: #1b1b19;
-    --tok-keyword: #d18ce6;
-    --tok-string: #8fcf8f;
-    --tok-number: #f0a36b;
-    --tok-comment: #7b796f;
-    --tok-type: #6fc7cf;
-    --tok-def: #8db4f5;
-    --tok-prop: #d6d4cc;
-    --tok-punct: #9a988e;
-
-    --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+    --ds-background-100: #0a0a0a;
+    --ds-background-200: #000000;
+    --ds-gray-100: #1a1a1a;
+    --ds-gray-200: #1f1f1f;
+    --ds-gray-300: #292929;
+    --ds-gray-400: #2e2e2e;
+    --ds-gray-500: #454545;
+    --ds-gray-600: #878787;
+    --ds-gray-700: #8f8f8f;
+    --ds-gray-800: #7d7d7d;
+    --ds-gray-900: #a1a1a1;
+    --ds-gray-1000: #ededed;
+    --ds-gray-alpha-100: #ffffff0f;
+    --ds-gray-alpha-200: #ffffff17;
+    --ds-gray-alpha-400: #ffffff24;
+    --ds-blue-200: #022248;
+    --ds-blue-400: #003771;
+    --ds-blue-700: #0071f6;
+    --ds-blue-900: #50a8ff;
+    --ds-red-200: #440d13;
+    --ds-red-400: #6f101b;
+    --ds-red-800: #e2162a;
+    --ds-red-900: #ff5e63;
+    --ds-amber-200: #331b00;
+    --ds-amber-400: #573200;
+    --ds-amber-700: #ffb200;
+    --ds-amber-800: #ff9900;
+    --ds-amber-900: #ff9900;
+    --ds-green-200: #003110;
+    --ds-green-400: #004616;
+    --ds-green-700: #00ab3e;
+    --ds-green-900: #00ca52;
+    --ds-teal-700: #00a794;
+    --ds-teal-900: #00c9b5;
+    --ds-purple-200: #341142;
+    --ds-purple-400: #541a76;
+    --ds-purple-700: #9440d5;
+    --ds-purple-900: #c472fb;
+    --ds-pink-900: #ff518d;
+    --shadow-card: 0 0 0 1px #ffffff24, 0 1px 2px #00000029;
+    --shadow-menu:
+      0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
+    --shadow-modal:
+      0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 8px 16px -4px #0000000a,
+      0 24px 32px -8px #0000000f;
+    --focus: var(--ds-blue-900);
+    --accent: var(--ds-blue-900);
     --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(255 255 255 / 0.1) 3px 5px);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #111110;
-  --surface: #191917;
-  --surface-2: #1e1e1c;
-  --surface-3: #282825;
-  --line: #2d2d2a;
-  --line-strong: #44433e;
-  --ink: #ecebe5;
-  --ink-2: #b4b2a8;
-  --ink-3: #807e75;
-  --brand: #10b981;
-
-  --accent: #6ea2f2;
-  --accent-ink: #0d1420;
-  --accent-soft: #1a2638;
-  --accent-line: #2f4a72;
-  --focus: #6ea2f2;
-
-  --good: #3fbf6a;
-  --good-soft: #15291c;
-  --critical: #f0706b;
-  --critical-soft: #36191a;
-  --serious: #ee9058;
-  --serious-soft: #35231a;
-  --warning: #f0b93a;
-  --warning-mark: #f0b93a;
-  --warning-soft: #33290f;
-  --info: #6ea2f2;
-  --info-soft: #1a2638;
-  --neutral: #98968c;
-  --neutral-soft: #262624;
-
-  --series-call: #3987e5;
-  --series-timer: #c98500;
-  --series-signal: #9085e9;
-  --series-log: #807e75;
-
-  --code-bg: #161614;
-  --code-gutter: #1b1b19;
-  --tok-keyword: #d18ce6;
-  --tok-string: #8fcf8f;
-  --tok-number: #f0a36b;
-  --tok-comment: #7b796f;
-  --tok-type: #6fc7cf;
-  --tok-def: #8db4f5;
-  --tok-prop: #d6d4cc;
-  --tok-punct: #9a988e;
-
-  --shadow-pop: 0 8px 28px rgb(0 0 0 / 0.5), 0 1px 3px rgb(0 0 0 / 0.4);
+  --ds-background-100: #0a0a0a;
+  --ds-background-200: #000000;
+  --ds-gray-100: #1a1a1a;
+  --ds-gray-200: #1f1f1f;
+  --ds-gray-300: #292929;
+  --ds-gray-400: #2e2e2e;
+  --ds-gray-500: #454545;
+  --ds-gray-600: #878787;
+  --ds-gray-700: #8f8f8f;
+  --ds-gray-800: #7d7d7d;
+  --ds-gray-900: #a1a1a1;
+  --ds-gray-1000: #ededed;
+  --ds-gray-alpha-100: #ffffff0f;
+  --ds-gray-alpha-200: #ffffff17;
+  --ds-gray-alpha-400: #ffffff24;
+  --ds-blue-200: #022248;
+  --ds-blue-400: #003771;
+  --ds-blue-700: #0071f6;
+  --ds-blue-900: #50a8ff;
+  --ds-red-200: #440d13;
+  --ds-red-400: #6f101b;
+  --ds-red-800: #e2162a;
+  --ds-red-900: #ff5e63;
+  --ds-amber-200: #331b00;
+  --ds-amber-400: #573200;
+  --ds-amber-700: #ffb200;
+  --ds-amber-800: #ff9900;
+  --ds-amber-900: #ff9900;
+  --ds-green-200: #003110;
+  --ds-green-400: #004616;
+  --ds-green-700: #00ab3e;
+  --ds-green-900: #00ca52;
+  --ds-teal-700: #00a794;
+  --ds-teal-900: #00c9b5;
+  --ds-purple-200: #341142;
+  --ds-purple-400: #541a76;
+  --ds-purple-700: #9440d5;
+  --ds-purple-900: #c472fb;
+  --ds-pink-900: #ff518d;
+  --shadow-card: 0 0 0 1px #ffffff24, 0 1px 2px #00000029;
+  --shadow-menu:
+    0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 4px 8px -4px #0000000a, 0 16px 24px -8px #0000000f;
+  --shadow-modal:
+    0 0 0 1px #ffffff25, 0 1px 1px #00000005, 0 8px 16px -4px #0000000a, 0 24px 32px -8px #0000000f;
+  --focus: var(--ds-blue-900);
+  --accent: var(--ds-blue-900);
   --hatch: repeating-linear-gradient(135deg, transparent 0 3px, rgb(255 255 255 / 0.1) 3px 5px);
 }

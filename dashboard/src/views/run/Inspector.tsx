@@ -2,9 +2,9 @@
 // a source line; the run's input and output when nothing is.
 import { X } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 import { useRunEntry } from "../../api/queries";
 import type { Entry, Payload, Run } from "../../api/types";
-import { Link } from "../../app/namespace";
 import { ProblemView, Time } from "../../components/bits";
 import { JsonValue, PayloadView } from "../../components/Payload";
 import { OutcomeBadge, StatusBadge } from "../../components/Status";
@@ -186,7 +186,7 @@ function ActivityDetail({
             <dt>tool</dt>
             <dd>
               <Link
-                to={queryLink("/runs", fieldTerm("tool", a.tool))}
+                to={queryLink("/observability", fieldTerm("tool", a.tool))}
                 className="mono"
                 title="Runs that called this tool"
               >
