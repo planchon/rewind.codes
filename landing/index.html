@@ -2,239 +2,329 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light dark" />
-    <title>Rewind · durable tool calling for agents</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0a09" />
+    <title>Rewind · infrastructure for the agentic revolution</title>
     <meta
       name="description"
-      content="Your model writes a TypeScript script that calls your tools. Rewind runs it in a deterministic sandbox and journals every interaction: runs sleep for days, survive crashes, and replay identically."
+      content="Your agents write a workflow for each user and each task. Rewind runs every one of them: durable, isolated on V8, re-testable and observable by default."
     />
-    <meta property="og:title" content="Rewind · durable tool calling for agents" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://rewind.codes" />
+    <meta property="og:title" content="Rewind · scale the agentic revolution" />
     <meta
       property="og:description"
-      content="A deterministic, durable TypeScript runtime for programmatic tool calling."
+      content="Your agents write a workflow for each user and each task. Rewind runs every one of them."
     />
-    <meta property="og:url" content="https://rewind.codes" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:image" content="https://rewind.codes/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500&family=Geist:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap"
     />
-    <link rel="stylesheet" href="/styles.css" />
-    <script src="/player.js" defer></script>
+    <link rel="stylesheet" href="styles.css" />
+    <script>document.documentElement.classList.add("js");</script>
+    <script src="hero-data.js" defer></script>
+    <script src="main.js" defer></script>
+    <script src="pillars.js" defer></script>
   </head>
   <body>
-    <header class="top">
-      <div class="wrap top-row">
-        <a class="brand" href="/" aria-label="Rewind, home">
-          <svg viewBox="0 0 64 64" aria-hidden="true">
-            <rect width="64" height="64" rx="14" />
-            <path d="M33 20v24L15 32z M51 20v24L33 32z" />
-          </svg>
-          <span>rewind</span>
-        </a>
-        <nav class="nav" aria-label="Sections">
-          <a href="#journal">Journal</a>
-          <a href="#harness">Harness</a>
-          <a href="#sandbox">Sandbox</a>
-          <a class="button small" href="https://app.rewind.codes">Dashboard</a>
-        </nav>
-      </div>
-    </header>
+    <a class="mark" href="./" aria-label="Rewind, home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M33 20v24L15 32z M51 20v24L33 32z" /></svg>
+      <span>rewind</span>
+    </a>
 
     <main>
-      <section class="hero wrap">
-        <p class="eyebrow">Programmatic tool calling, durable by design</p>
-        <h1>Your model writes the script.<br />Rewind runs it, and remembers every step.</h1>
-        <p class="lead">
-          Instead of calling tools one at a time through the conversation, the model writes one
-          TypeScript script that calls your MCP servers and harness tools. Rewind runs it in a
-          deterministic V8 sandbox and journals every interaction with the outside world. A run can
-          wait days for a human, survive a crash or a deploy, and replay exactly.
-        </p>
-        <div class="actions">
-          <a class="button" href="https://app.rewind.codes">Open the dashboard</a>
-          <a class="button ghost" href="#harness">See how a harness plugs in</a>
+      <!-- Hero: no header, just the image. -->
+      <section class="hero" aria-labelledby="hero-title">
+        <canvas
+          class="hero-art"
+          data-hero
+          role="img"
+          aria-label="A human hand reaches out to an agent's hand drawn as a mesh of nodes, after Michelangelo's Creation of Adam. A spark lights up between their fingertips."
+        ></canvas>
+        <div class="hero-copy wrap">
+          <h1 id="hero-title">Scale the agentic revolution.</h1>
+          <div class="hero-row">
+            <p class="hero-lead">
+              Your agent writes the workflow each of its users needs, for each task. Rewind runs
+              every one of them: durable, isolated, observable.
+            </p>
+            <div class="actions">
+              <a class="button" href="https://docs.rewind.codes/quickstart">Get started</a>
+              <a class="button ghost" href="https://app.rewind.codes">Open the dashboard</a>
+            </div>
+          </div>
         </div>
-
-        <figure class="player" aria-label="A run of a triage script and its journal">
-          <div class="player-head">
-            <span class="file">triage.ts</span>
-            <span class="status" data-status>pending</span>
-            <span class="clock" data-clock>Nov 3, 09:12</span>
-          </div>
-          <div class="player-body">
-            <pre class="code" data-code><code><span data-line="1"><span class="ln">1</span><span class="k">import</span> { github, slack } <span class="k">from</span> <span class="s">"rewind:tools"</span>;</span><span data-line="2"><span class="ln">2</span><span class="k">import</span> { sleep, signal } <span class="k">from</span> <span class="s">"rewind"</span>;</span><span data-line="3"><span class="ln">3</span></span><span data-line="4"><span class="ln">4</span><span class="k">const</span> DAY = <span class="n">86_400_000</span>;</span><span data-line="5"><span class="ln">5</span></span><span data-line="6"><span class="ln">6</span><span class="k">export default async function</span> <span class="f">main</span>({ repo }: { repo: <span class="t">string</span> }) {</span><span data-line="7"><span class="ln">7</span>  <span class="k">const</span> issues = <span class="k">await</span> github.<span class="f">list_issues</span>({ repo, state: <span class="s">"open"</span> });</span><span data-line="8"><span class="ln">8</span>  <span class="k">const</span> stale = issues.<span class="f">filter</span>((i) =&gt; Date.<span class="f">now</span>() - Date.<span class="f">parse</span>(i.updated_at) &gt; <span class="n">30</span> * DAY);</span><span data-line="9"><span class="ln">9</span></span><span data-line="10"><span class="ln">10</span>  <span class="k">await</span> slack.<span class="f">post_message</span>({ channel: <span class="s">"#triage"</span>, text: <span class="s">`${stale.length} stale issues`</span> });</span><span data-line="11"><span class="ln">11</span></span><span data-line="12"><span class="ln">12</span>  <span class="k">const</span> ok = <span class="k">await</span> <span class="f">signal</span>&lt;{ close: <span class="t">boolean</span> }&gt;(<span class="s">"approval"</span>, { timeout: <span class="s">"3d"</span> });</span><span data-line="13"><span class="ln">13</span>  <span class="k">if</span> (!ok?.close) <span class="k">return</span> { closed: <span class="n">0</span> };</span><span data-line="14"><span class="ln">14</span></span><span data-line="15"><span class="ln">15</span>  <span class="k">await</span> Promise.<span class="f">all</span>(stale.<span class="f">map</span>((i) =&gt; github.<span class="f">close_issue</span>({ repo, number: i.number })));</span><span data-line="16"><span class="ln">16</span></span><span data-line="17"><span class="ln">17</span>  <span class="k">await</span> <span class="f">sleep</span>(<span class="s">"10d"</span>);</span><span data-line="18"><span class="ln">18</span>  <span class="k">const</span> reopened = <span class="k">await</span> github.<span class="f">list_issues</span>({ repo, state: <span class="s">"open"</span>, labels: <span class="s">"reopened"</span> });</span><span data-line="19"><span class="ln">19</span>  <span class="k">return</span> { closed: stale.length, reopened: reopened.length };</span><span data-line="20"><span class="ln">20</span>}</span></code></pre>
-            <ol class="journal" data-journal aria-label="Journal"></ol>
-          </div>
-          <div class="transport">
-            <button type="button" class="rewind" data-rewind aria-label="Rewind and replay from the journal">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6v12L3 12z M21 6v12l-9-6z" /></svg>
-              <span>Rewind</span>
-            </button>
-            <input
-              type="range"
-              min="0"
-              max="15"
-              value="0"
-              step="1"
-              data-scrub
-              aria-label="Position in the journal"
-            />
-            <span class="note" data-note>Live: every effect is recorded once.</span>
-          </div>
-          <figcaption>
-            A real script shape: one tool call per line of business logic, a human approval that may
-            take days, a ten-day sleep. Drag the bar, or rewind: replaying reads results from the
-            journal and sends no tool call twice.
-          </figcaption>
-        </figure>
+        <span class="scroll-cue" aria-hidden="true"></span>
       </section>
 
-      <section id="journal" class="band">
+      <!-- The shift -->
+      <section class="shift wrap" aria-labelledby="shift-title">
+        <h2 id="shift-title" class="statement" data-reveal>
+          Software used to be written once, for everyone.
+          <span>Now an agent writes it for one person, for one task, in the minute they ask.</span>
+        </h2>
+        <div class="shift-grid">
+          <article data-reveal>
+            <h3>One user, one workflow</h3>
+            <p>
+              An agent no longer picks among the features you shipped. It writes the workflow its
+              user asked for, and no one else will ever run it.
+            </p>
+          </article>
+          <article data-reveal>
+            <h3>Real tools, real time</h3>
+            <p>
+              That workflow books, pays, reminds and follows up. It calls real services, waits days
+              for an answer, and may run for months.
+            </p>
+          </article>
+          <article data-reveal>
+            <h3>Millions at once</h3>
+            <p>
+              Every user of every agent, each with code no human has read. It needs a place to run
+              that is safe, durable and inspectable by construction.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <!-- Why Rewind -->
+      <section id="why" class="why" aria-labelledby="why-title">
         <div class="wrap">
-          <h2>One journal. Everything else is derived from it.</h2>
-          <p class="section-lead">
-            Every tool call, timer, signal and log line is an event in the run's journal, linked to
-            the line of TypeScript that caused it. No feature gets a side channel.
-          </p>
-          <div class="grid four">
-            <article class="card">
-              <h3>Durable execution</h3>
-              <p>
-                <code>await sleep("10d")</code> or wait for a signal. The run survives crashes and
-                deploys, and resumes by re-executing the script against its journal.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Replay</h3>
-              <p>
-                Any run re-executes from its journal, locally, with identical results. Scripts are
-                content-addressed: no workflow versioning problem.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Testing</h3>
-              <p>
-                A recorded run becomes a cassette of mocks. Time is virtual, so a ten-day workflow
-                is tested in milliseconds.
-              </p>
-            </article>
-            <article class="card">
-              <h3>Observability</h3>
-              <p>
-                OpenTelemetry traces projected from the journal, and a dashboard of every run and
-                all the code executed on the platform.
-              </p>
-            </article>
+          <div class="section-head">
+            <h2 id="why-title" data-reveal>Built for code<br />no human wrote.</h2>
+            <p class="section-lead" data-reveal>
+              Everything an agent's workflow needs is there by default, not bolted on later. The
+              agent writes TypeScript; Rewind does the rest.
+            </p>
           </div>
-        </div>
-      </section>
 
-      <section id="harness" class="wrap split">
-        <div>
-          <h2>Built for agent harness developers</h2>
-          <ol class="steps">
+          <ol class="flow" aria-label="How a workflow runs" data-reveal>
             <li>
-              <strong>Register a toolset.</strong> MCP servers and your own host tools. Rewind pins
-              their schemas and returns TypeScript declarations for the system prompt.
+              <span class="flow-node"><i></i></span>
+              <strong>Your user</strong>
+              <span>asks for something</span>
             </li>
             <li>
-              <strong>Give the model <code>run_script</code>.</strong> If the run ends within
-              <code>wait</code>, the result comes back inline. Otherwise the model gets the run's
-              state: "suspended, waiting for signal approval".
+              <span class="flow-node"><i></i></span>
+              <strong>Your agent</strong>
+              <span>writes the workflow in TypeScript</span>
+            </li>
+            <li class="flow-rewind">
+              <span class="flow-node"><i></i></span>
+              <strong>Rewind</strong>
+              <span>runs it, durable and isolated, and records every step</span>
             </li>
             <li>
-              <strong>Answer host tools from your worker.</strong> Ask the end user, call another
-              LLM, start a sub-agent: the SDK worker long-polls tasks, like activity workers.
-            </li>
-            <li>
-              <strong>Resume the conversation on webhooks.</strong> <code>run.completed</code>,
-              <code>run.failed</code> and <code>run.suspended</code> arrive signed.
+              <span class="flow-node"><i></i></span>
+              <strong>The world</strong>
+              <span>your tools, MCP servers, other agents, people</span>
             </li>
           </ol>
+
+          <div class="pillars">
+            <article class="pillar" data-reveal>
+              <div class="viz" data-scene="deploy">
+                <span class="viz-hint">Click to deploy another</span>
+              </div>
+              <h3>Deployed in one call</h3>
+              <p>The agent writes the workflow and runs it with a single tool call. No build, no pipeline, no server: the workflow exists the moment the agent writes it.</p>
+            </article>
+            <article class="pillar" data-reveal>
+              <div class="viz" data-scene="tools">
+                <span class="viz-hint">Hover a tool</span>
+              </div>
+              <h3>Every tool, from code</h3>
+              <p>One workflow calls your MCP servers and your agent's own functions: a person for an approval, another model, a sub-agent. Dozens of calls, not dozens of turns.</p>
+            </article>
+            <article class="pillar span-2" data-reveal>
+              <div class="viz" data-scene="durable">
+                <button type="button" class="viz-action" data-action="crash">Crash the worker</button>
+              </div>
+              <h3>Durable by default</h3>
+              <p>A workflow waits days for a reply, sleeps until March, survives crashes and deploys, and resumes exactly where it stopped. No step is ever done twice.</p>
+            </article>
+            <article class="pillar" data-reveal>
+              <div class="viz" data-scene="isolated">
+                <span class="viz-hint">Click an isolate to break out</span>
+              </div>
+              <h3>Isolated on V8</h3>
+              <p>Each workflow runs in its own V8 isolate, on workers built with Deno's crates. No file system, no network unless you allow it, no access but the tools you grant.</p>
+            </article>
+            <article class="pillar span-2" data-reveal>
+              <div class="viz" data-scene="retest">
+                <span class="viz-hint">Drag to rewind</span>
+              </div>
+              <h3>Re-testable by default</h3>
+              <p>When generated code has a bug, the agent fixes it and tests again. Past runs replay as tests, time is virtual so ten days pass in milliseconds, and a fixed run resumes without repeating a single call.</p>
+            </article>
+            <article class="pillar" data-reveal>
+              <div class="viz" data-scene="harness">
+                <span class="viz-hint">Pick a format, or unplug Rewind</span>
+              </div>
+              <h3>Plugs into your harness</h3>
+              <p>Ready-made agent tools in the Anthropic and OpenAI formats, and typed declarations of your tools for the prompt. Your agent keeps its model, its loop and its tools.</p>
+            </article>
+            <article class="pillar span-2" data-reveal>
+              <div class="viz" data-scene="observable">
+                <span class="viz-hint">Hover a span</span>
+              </div>
+              <h3>Observable by default</h3>
+              <p>Every tool call, wait, answer and log is recorded and tied to the line that caused it. Traces go to OpenTelemetry, and the dashboard shows every run of every user.</p>
+            </article>
+            <article class="pillar span-2" data-reveal>
+              <div class="viz" data-scene="scale">
+                <span class="viz-hint">Move across to add load</span>
+              </div>
+              <h3>Every user, at scale</h3>
+              <p>Each of your users gets a namespace: one user's agent never sees another's runs. Stateless workers scale out with the load, and quotas per user alert you before one user hurts the rest.</p>
+            </article>
+          </div>
         </div>
-        <pre class="snippet"><code><span class="k">const</span> toolset = <span class="k">await</span> rewind.toolsets.<span class="f">create</span>({
-  mcp: [{ name: <span class="s">"github"</span>, url: <span class="s">"https://mcp.example.com/github"</span> }],
-  host: [{ name: <span class="s">"ask_user"</span>, inputSchema, policy: { onInterruption: <span class="s">"at_most_once"</span> } }],
-});
-
-<span class="c">// toolset.declarations → the system prompt</span>
-
-<span class="k">const</span> run = <span class="k">await</span> rewind.runs.<span class="f">start</span>({
-  toolset: toolset.id,
-  script: code,                 <span class="c">// written by the model</span>
-  wait: <span class="s">"30s"</span>,                  <span class="c">// inline result if it ends in time</span>
-  idempotencyKey: toolCall.id,  <span class="c">// a retry returns the same run</span>
-  labels: { conversation: conversation.id },
-  traceparent,                  <span class="c">// joins the agent's trace</span>
-});</code></pre>
       </section>
 
-      <section class="band">
+      <!-- Everyday life -->
+      <section id="life" class="life" aria-labelledby="life-title">
         <div class="wrap">
-          <h2>Agent tools, ready to plug in</h2>
-          <p class="section-lead">
-            The model needs more than <code>run_script</code>: it checks, tests, follows and steers
-            its runs. The SDK ships the definitions and handlers, with adapters for the Anthropic and
-            OpenAI tool formats.
-          </p>
-          <dl class="tools">
-            <div><dt>run_script</dt><dd>Type-checks, starts the run, returns the output or its state.</dd></div>
-            <div><dt>check_script</dt><dd>Type-check only, with hints for what models reach for by habit.</dd></div>
-            <div><dt>test_script</dt><dd>Runs against mocks and cassettes, in virtual time.</dd></div>
-            <div><dt>get_run</dt><dd>Status and LLM trace, or one journal entry in full.</dd></div>
-            <div><dt>list_runs</dt><dd>The runs of the same conversation, scoped by labels.</dd></div>
-            <div><dt>signal_run</dt><dd>Sends a signal: an approval, an answer, an event.</dd></div>
-            <div><dt>cancel_run</dt><dd>Cancels a run, with a grace period for cleanup.</dd></div>
-            <div><dt>retry_run</dt><dd>Forks a failed run with a fixed script; finished calls are reused, not repeated.</dd></div>
-            <div><dt>search_tools</dt><dd>Finds declarations in toolsets too large for the prompt.</dd></div>
-          </dl>
+          <div class="section-head">
+            <h2 id="life-title" data-reveal>One person, one task,<br />one workflow.</h2>
+            <p class="section-lead" data-reveal>
+              Each of these is written by an agent in the minute someone asks, for that person
+              alone. Rewind runs it for as long as it takes.
+            </p>
+          </div>
+          <ul class="legend" data-reveal aria-label="Legend">
+            <li><i class="m call"></i>calls a tool</li>
+            <li><i class="m wait"></i>waits</li>
+            <li><i class="m human"></i>a person answers</li>
+            <li><i class="m done"></i>done</li>
+          </ul>
+
+          <div class="stories">
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Léa · travel app</span>
+                <span class="span">9 days</span>
+              </header>
+              <blockquote>“Book the train to Lyon for the wedding once it drops under €60. Check with Marc first.”</blockquote>
+              <ol class="steps">
+                <li class="wait"><time>Day 0–9</time>Checks fares every morning</li>
+                <li class="call"><time>Day 9</time>€54 found. Asks Marc</li>
+                <li class="human"><time>+3 h</time>Marc says yes</li>
+                <li class="done"><time>Day 9</time>Two seats booked, added to the shared calendar</li>
+              </ol>
+            </article>
+
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Karim · plumber, invoicing app</span>
+                <span class="span">3 weeks</span>
+              </header>
+              <blockquote>“Chase my unpaid invoices: politely after a week, firmly after two, then hand them back to me.”</blockquote>
+              <ol class="steps">
+                <li class="call"><time>Day 0</time>Finds five unpaid invoices</li>
+                <li class="wait"><time>Day 7</time>A polite reminder to each client</li>
+                <li class="wait"><time>Day 14</time>Three paid. A firm reminder to the other two</li>
+                <li class="human"><time>Day 21</time>Asks Karim to call the last one</li>
+              </ol>
+            </article>
+
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Inès · renting app</span>
+                <span class="span">12 days</span>
+              </header>
+              <blockquote>“Find me a two-bedroom near the canal under €1,400 and book visits on my free evenings.”</blockquote>
+              <ol class="steps">
+                <li class="wait"><time>Every hour</time>Reads the new listings</li>
+                <li class="call"><time>Day 10</time>A match. Checks Inès's calendar, writes to the agency</li>
+                <li class="human"><time>Day 12</time>The agency confirms Thursday, 7 pm</li>
+                <li class="done"><time>Day 12</time>Visit in the calendar, directions sent</li>
+              </ol>
+            </article>
+
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Sophie · family care app</span>
+                <span class="span">Months</span>
+              </header>
+              <blockquote>“Remind Dad to take his evening pills, and tell me if he misses two in a row.”</blockquote>
+              <ol class="steps">
+                <li class="wait"><time>8 pm daily</time>Reminds Dad and waits for his “done”</li>
+                <li class="human"><time>Most nights</time>Dad answers, the day is logged</li>
+                <li class="call"><time>Day 41</time>Two misses in a row: Sophie is alerted</li>
+                <li class="wait"><time>Still running</time>Next reminder tonight</li>
+              </ol>
+            </article>
+
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Tom · personal assistant</span>
+                <span class="span">4 months</span>
+              </header>
+              <blockquote>“Cancel my gym membership when the contract ends in March, and make sure it's done.”</blockquote>
+              <ol class="steps">
+                <li class="wait"><time>Nov → Mar 1</time>Sleeps until the notice date</li>
+                <li class="call"><time>Mar 1</time>Sends the cancellation by registered email</li>
+                <li class="wait"><time>Mar 11</time>No answer yet: follows up</li>
+                <li class="done"><time>Mar 13</time>Cancellation confirmed, Tom is told</li>
+              </ol>
+            </article>
+
+            <article class="story" data-reveal>
+              <header>
+                <span class="who">Amélie · recruiter, hiring tool</span>
+                <span class="span">2 weeks</span>
+              </header>
+              <blockquote>“Follow up with every candidate who hasn't answered in three days, and book the ones who reply.”</blockquote>
+              <ol class="steps">
+                <li class="call"><time>Day 0</time>Writes to twelve candidates</li>
+                <li class="wait"><time>Day 3</time>Follows up with the seven who didn't answer</li>
+                <li class="human"><time>Day 4–9</time>Five reply with their availability</li>
+                <li class="done"><time>Day 9</time>Five interviews in Amélie's calendar</li>
+              </ol>
+            </article>
+          </div>
         </div>
       </section>
 
-      <section id="sandbox" class="wrap">
-        <h2>Deterministic by construction</h2>
-        <p class="section-lead">
-          Replay only works if the script cannot observe anything the journal does not hold. Rewind
-          owns the runtime, so determinism is guaranteed by the sandbox, not by developer discipline.
-        </p>
-        <div class="table-wrap">
-          <table>
-            <thead>
-              <tr><th scope="col">In the script</th><th scope="col">In the sandbox</th></tr>
-            </thead>
-            <tbody>
-              <tr><td><code>Date.now()</code>, <code>new Date()</code>, <code>Temporal.Now</code></td><td>Logical time, recorded with each event</td></tr>
-              <tr><td><code>Math.random()</code>, <code>crypto.randomUUID()</code></td><td>Seeded generators, keyed by the run's 256-bit seed</td></tr>
-              <tr><td><code>setTimeout</code>, <code>sleep("10d")</code></td><td>Durable timers: the run sleeps in the database, not in memory</td></tr>
-              <tr><td><code>console.log</code></td><td>Journaled as log annotations, next to the line that wrote them</td></tr>
-              <tr><td><code>fetch</code></td><td>Absent, unless the toolset allows the <code>http</code> tool and its hosts</td></tr>
-              <tr><td>File system, env, process, <code>WebAssembly</code></td><td>Absent. No ambient authority: every capability comes from the toolset</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section class="band closing">
+      <!-- Get started -->
+      <section id="start" class="start" aria-label="Get started">
         <div class="wrap">
-          <h2>Start from the dashboard</h2>
-          <p class="section-lead">
-            Every run, all the code executed, every tool call with its latency and errors. The API
-            lives at <code>api.rewind.codes</code>.
-          </p>
-          <div class="actions">
-            <a class="button" href="https://app.rewind.codes">Open the dashboard</a>
+          <div class="cta" data-reveal>
+            <p class="cta-title">Your agents are ready to write.<br />Let them run.</p>
+            <div class="cta-actions">
+              <a class="button big" href="https://docs.rewind.codes/quickstart">Get started</a>
+              <a class="button ghost" href="mailto:paul@planchon.io?subject=Rewind%20for%20our%20infrastructure">Looking for an enterprise solution?</a>
+            </div>
           </div>
         </div>
       </section>
     </main>
 
-    <footer class="wrap foot">
-      <span>rewind.codes</span>
-      <span>A deterministic, durable TypeScript runtime for programmatic tool calling.</span>
+    <footer class="foot">
+      <div class="wrap foot-row">
+        <span class="foot-brand">
+          <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M33 20v24L15 32z M51 20v24L33 32z" /></svg>
+          rewind.codes
+        </span>
+        <nav aria-label="Links">
+          <a href="https://app.rewind.codes">Dashboard</a>
+          <a href="https://docs.rewind.codes">Docs</a>
+          <a href="https://github.com/planchon/rewind.codes">GitHub</a>
+          <a href="https://www.npmjs.com/package/@rewind.codes/sdk">npm</a>
+        </nav>
+      </div>
+      <p class="wrap foot-note">
+        Infrastructure for the agentic revolution. Source available under FSL-1.1-ALv2. Hero after
+        Michelangelo's <i>Creation of Adam</i>, in the public domain.
+      </p>
     </footer>
   </body>
 </html>
