@@ -2419,11 +2419,18 @@
               "string",
               "null"
             ]
+          },
+          "total": {
+            "description": "How many namespaces match the query, across every page.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
           }
         },
         "required": [
           "month",
-          "namespaces"
+          "namespaces",
+          "total"
         ],
         "type": "object"
       },

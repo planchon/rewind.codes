@@ -73,8 +73,8 @@ pub use journal::{
 };
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DropNamespace, InvalidNamespace, Month, Namespace,
-    NamespaceCursor, NamespaceFilter, NamespaceName, NamespaceOrder, NamespaceUsage,
-    NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas,
+    NamespaceCursor, NamespaceFilter, NamespaceName, NamespaceOrder, NamespacePage,
+    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas,
     Threshold, Usage, UsageDelta, UsageOf, limits,
 };
 pub use read_model::{

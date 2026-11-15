@@ -169,6 +169,23 @@ impl AccessStore for MemoryAccess {
             .count() as u64)
     }
 
+    async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let ended: Vec<Digest> = state
+            .tokens
+            .values()
+            .filter(|token| {
+                token.expires_at < before || token.revoked_at.is_some_and(|at| at < before)
+            })
+            .map(|token| token.hash)
+            .take(limit)
+            .collect();
+        for hash in &ended {
+            state.tokens.remove(hash);
+        }
+        Ok(ended.len() as u64)
+    }
+
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
         let mut state = self.lock()?;
         if state.token_keys.contains_key(&key.kid) {

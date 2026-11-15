@@ -1,7 +1,7 @@
 //! The worker role (`archi/06-storage-and-scale.md`, "Leases, fencing, workers"): activations
 //! with the sticky cache and the lease heartbeat, the dispatch of tool calls with their claims'
 //! heartbeats, the scheduler (timers, deadlines, deferred tasks), the projector, the retention
-//! jobs with the erasure of deleted namespaces, the writing of the CPU time counted per
+//! jobs with the erasure of deleted namespaces and the purge of ended tokens, the writing of the CPU time counted per
 //! namespace and the sending of quota alerts ("Quotas"), and, once at start, the retry of the
 //! quarantined runs of this build's epochs.
 //!
@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use rewind_core::Timestamp;
 use rewind_engine::ActivationOutcome;
-use rewind_engine::ports::{FeedConsumer, JournalStore, VirtualTime};
+use rewind_engine::ports::{AccessStore, FeedConsumer, JournalStore, StoreError, VirtualTime};
 use rewind_engine::quotas::QuotaAlerts;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -27,6 +27,11 @@ use crate::wake::{POLL, wait};
 const CLAIM_HEARTBEAT: Duration = Duration::from_secs(1);
 /// How often the retention jobs run.
 const HOUSEKEEPING: Duration = Duration::from_secs(300);
+/// How long an end user's opaque token is kept once expired or revoked: a margin for the
+/// clocks of the servers, and a day to read its row after an incident.
+const TOKENS_KEPT: Duration = Duration::from_secs(24 * 3_600);
+/// How many tokens one statement of the purge deletes.
+const TOKEN_PURGE_BATCH: usize = 1_000;
 /// How long a loop waits after a failure of the store before it tries again.
 const BACKOFF: Duration = Duration::from_secs(1);
 
@@ -296,7 +301,27 @@ async fn housekeeping(app: Arc<App>) {
             }
             Err(error) => tracing::error!(%error, "the retention jobs failed"),
         }
+        match purge_tokens(&app).await {
+            Ok(0) => {}
+            Ok(purged) => tracing::info!(purged, "ended tokens deleted"),
+            Err(error) => tracing::error!(%error, "the ended tokens were not deleted"),
+        }
         let _ = tokio::time::timeout(HOUSEKEEPING, stop.changed()).await;
+    }
+}
+
+/// Deletes the end users' opaque tokens expired or revoked more than [`TOKENS_KEPT`] ago, batch
+/// after batch (`archi/06-storage-and-scale.md`, "Retention and deletion").
+async fn purge_tokens(app: &App) -> Result<u64, StoreError> {
+    let kept = u64::try_from(TOKENS_KEPT.as_millis()).unwrap_or(u64::MAX);
+    let before = Timestamp::from_millis(app.now().as_millis().saturating_sub(kept));
+    let mut purged = 0;
+    loop {
+        let batch = app.store.purge_tokens(before, TOKEN_PURGE_BATCH).await?;
+        purged += batch;
+        if batch < TOKEN_PURGE_BATCH as u64 || app.stopping() {
+            return Ok(purged);
+        }
     }
 }
 

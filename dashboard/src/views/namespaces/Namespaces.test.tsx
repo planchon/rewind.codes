@@ -56,6 +56,8 @@ describe("the Namespaces view", () => {
     const defaults = rows()[1] as HTMLElement;
     expect(within(defaults).getByText("TTL 7d · script 300 lines")).toBeInTheDocument();
     expect(within(defaults).getByText("3,000")).toBeInTheDocument();
+    // The first page of how many there are.
+    expect(screen.getByText(/^50 of 1,2\d\d namespaces$/)).toBeInTheDocument();
   });
 
   it("colors each quota from 80 % and keeps a CPU above its quota full, with its overrun", async () => {

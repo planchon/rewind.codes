@@ -19,7 +19,7 @@ use crate::ports::{
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
+    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
     QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf,
 };
 
@@ -1877,7 +1877,7 @@ impl JournalStore for MemoryJournal {
     async fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
-    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+    ) -> Result<NamespacePage, StoreError> {
         let state = self.lock()?;
         let key = |usage: &Usage| match filter.order {
             NamespaceOrder::Cpu => usage.of(QuotaKind::CpuPerMonth).unwrap_or(0),
@@ -1932,7 +1932,8 @@ impl JournalStore for MemoryJournal {
                 .cmp(a_key)
                 .then_with(|| a.namespace.name.cmp(&b.namespace.name))
         });
-        Ok(listed
+        let total = u64::try_from(listed.len()).unwrap_or(u64::MAX);
+        let namespaces = listed
             .into_iter()
             .filter(|(key, listed)| {
                 filter.after.as_ref().is_none_or(|after| {
@@ -1941,7 +1942,8 @@ impl JournalStore for MemoryJournal {
             })
             .take(filter.limit)
             .map(|(_, listed)| listed)
-            .collect())
+            .collect();
+        Ok(NamespacePage { namespaces, total })
     }
 
     async fn namespace_usage(

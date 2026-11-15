@@ -11,7 +11,7 @@ For the HTTP API `/v1` with namespaces: the end users of a harness, their tokens
 - `new Rewind({ token })`: a client holding an end user's token, opaque (`rewind_nt_…`) or a JWT the harness signed
   with a key it registered. It reaches that end user's namespace only.
 - `rewind.namespaces`: `list` and `listAll` (by prefix, above a share of a limit, ordered by CPU time, runs, scripts or
-  name), `get` (limits, use per day, alerts, tokens in use), `put` (exceptions to the default limits), `delete`,
+  name; a page says how many match, `total`), `get` (limits, use per day, alerts, tokens in use), `put` (exceptions to the default limits), `delete`,
   `setCredentials` (an end user's credentials for a toolset) and `alerts`; `rewind.namespaces.defaults` (`get`, `put`);
   `rewind.namespaces.tokens` (`create`, `revoke`, `revokeAll`); `rewind.tokenKeys` (`create`, `list`, `delete`).
 - The host-tool worker gives each handler the end user it acts for: `ctx.namespace`.

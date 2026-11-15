@@ -220,22 +220,35 @@ pub(super) async fn list(
             .prefix
             .as_deref()
             .is_some_and(|prefix| !bound.as_str().starts_with(prefix))
-            || filter.after.is_some()
         {
             return Ok(Json(NamespaceList {
                 month: month.to_string(),
                 namespaces: Vec::new(),
+                total: 0,
                 next: None,
             }));
         }
         filter.prefix = Some(bound.as_str().to_owned());
         filter.order = NamespaceOrder::Name;
+        filter.after = None;
         filter.limit = 1;
     }
-    let mut found = app.store.list_namespaces(&filter).await?;
-    if let Some(bound) = &caller.namespace {
-        found.retain(|listed| listed.namespace.name == *bound);
-    }
+    let page = app.store.list_namespaces(&filter).await?;
+    let (found, total) = match &caller.namespace {
+        // Its own namespace, on the first page only; the store's total counts those its name
+        // prefixes.
+        Some(bound) => {
+            let found: Vec<_> = page
+                .namespaces
+                .into_iter()
+                .filter(|listed| listed.namespace.name == *bound)
+                .collect();
+            let total = u64::try_from(found.len()).unwrap_or(0);
+            let found = if query.after.is_some() { Vec::new() } else { found };
+            (found, total)
+        }
+        None => (page.namespaces, page.total),
+    };
     let next = (caller.namespace.is_none() && found.len() == limit)
         .then(|| found.last())
         .flatten()
@@ -246,6 +259,7 @@ pub(super) async fn list(
             .iter()
             .map(|listed| view(&listed.namespace, &listed.limits, &listed.usage))
             .collect(),
+        total,
         next,
     }))
 }

@@ -2556,6 +2556,11 @@ export interface components {
             namespaces: components["schemas"]["Namespace"][];
             /** @description The cursor of the next page, absent on the last one. */
             next?: string | null;
+            /**
+             * Format: int64
+             * @description How many namespaces match the query, across every page.
+             */
+            total: number;
         };
         /**
          * @description A namespace's name: the customer's own id for the end user. 1 to 128 ASCII letters, digits,

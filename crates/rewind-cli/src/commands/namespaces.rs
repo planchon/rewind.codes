@@ -178,7 +178,11 @@ fn listing(page: &NamespaceList) -> String {
             namespace.last_active_at.to_string(),
         ]);
     }
-    format!("{}\n{}", page.month, render::table(&rows))
+    let counted = match page.total {
+        1 => "1 namespace".to_owned(),
+        total => format!("{total} namespaces"),
+    };
+    format!("{} · {counted}\n{}", page.month, render::table(&rows))
 }
 
 /// The six quotas: their limit, a second column, and the use of the counted ones.
@@ -332,10 +336,11 @@ mod tests {
                 last_active_at: at(),
                 deleting_since: Some(at()),
             }],
+            total: 12,
             next: None,
         };
         let text = listing(&page);
-        assert!(text.starts_with("2026-11\nNAME"), "{text}");
+        assert!(text.starts_with("2026-11 · 12 namespaces\nNAME"), "{text}");
         assert!(text.contains("alice (erasing)"), "{text}");
         assert!(text.contains("30m/2h"), "{text}");
         assert!(text.contains("3/10"), "{text}");

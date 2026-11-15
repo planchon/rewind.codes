@@ -147,7 +147,7 @@ runs_to_archive(now, limit)        archive_run(run, document, now)
 runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
 put_namespace(tenant, name, exceptions, now) / get_namespace(tenant, name)
-list_namespaces(NamespaceFilter { tenant, prefix, above, order, month, after, limit }) -> [NamespaceUsage]
+list_namespaces(NamespaceFilter { tenant, prefix, above, order, month, after, limit }) -> { [NamespaceUsage], total }
 namespace_usage(tenant, Namespace(name) | Tenant, month) -> Usage { cpu, runs_started, active_runs, scripts, days }
 revoke_namespace_tokens(tenant, name, now)    namespace_has_script(tenant, name, digest)
 delete_namespace(tenant, name, now) -> Started | NotFound    namespaces_to_erase(limit)
@@ -284,10 +284,11 @@ Contracts, all covered by the conformance suite:
   Deleted | NotFound | InUse`: the tenant's own roles, their permissions as strings that the
   server interprets; `InUse` while a grant points to the role, decided in the same transaction.
   `put_token(token) / find_token(hash) / revoke_token(tenant, hash, now) / revoke_tokens(tenant,
-  namespace, now) -> count / count_tokens(tenant, namespace, now)`: end users' opaque tokens, by
-  the SHA-256 of their secret, with their tenant, namespace, permissions, labels, expiry, creator
-  and dates; `find_token` returns a token even when it is revoked or expired, and the server
-  refuses it. `put_token_key(key) / find_token_key(kid) / list_token_keys(tenant) /
+  namespace, now) -> count / count_tokens(tenant, namespace, now) / purge_tokens(before, limit)
+  -> count`: end users' opaque tokens, by the SHA-256 of their secret, with their tenant,
+  namespace, permissions, labels, expiry, creator and dates; `find_token` returns a token even
+  when it is revoked or expired, and the server refuses it; `purge_tokens` deletes, in every
+  tenant, those expired or revoked before a time. `put_token_key(key) / find_token_key(kid) / list_token_keys(tenant) /
   delete_token_key(tenant, kid)`: the public keys a tenant signs its tokens with (a JWK), named
   `rk_…`, with the permissions their tokens may carry.
   `put_grant(grant, keep) / grant(tenant, principal) / list_grants(tenant) /
@@ -580,7 +581,7 @@ Conventions:
 | | `GET /v1/api-keys` | `api_keys:read` | The tenant's keys, without their secret, each with its grant |
 | | `POST /v1/api-keys` | `api_keys:write` | Creates a key with a name, a role and allowed labels; an operator may name another tenant. The secret is only in this answer |
 | | `DELETE /v1/api-keys/{id}` | `api_keys:write` | Revokes a key |
-| Namespaces | `GET /v1/namespaces` | `namespaces:read` | The namespaces, paged: `prefix`, `above` (a share of a limit, `0.8`), `order` (`cpu`, `runs`, `scripts`, `name`); each with its limits, its exceptions and its use this month |
+| Namespaces | `GET /v1/namespaces` | `namespaces:read` | The namespaces, paged: `prefix`, `above` (a share of a limit, `0.8`), `order` (`cpu`, `runs`, `scripts`, `name`); each with its limits, its exceptions and its use this month; how many match across the pages (`total`) |
 |  | `GET /v1/namespaces/{name}` | `namespaces:read` | One namespace: its limits and exceptions, its use per day over a `month`, its alerts, its tokens in use |
 |  | `PUT /v1/namespaces/{name}` | `namespaces:write` | Creates the namespace, or sets its exceptions; `null` gives a quota back to the default |
 |  | `DELETE /v1/namespaces/{name}` | `namespaces:write` | Erases the end user in the background (202): tokens, runs, credentials, usage |

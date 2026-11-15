@@ -450,6 +450,14 @@ pub struct NamespaceFilter {
     pub limit: usize,
 }
 
+/// A page of [`JournalStore::list_namespaces`](super::JournalStore::list_namespaces).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NamespacePage {
+    pub namespaces: Vec<NamespaceUsage>,
+    /// How many namespaces match the filter, across every page: `after` and `limit` aside.
+    pub total: u64,
+}
+
 /// A namespace with the limits that apply to it and its use of a month (without days).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceUsage {

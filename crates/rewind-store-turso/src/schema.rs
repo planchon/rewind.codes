@@ -546,6 +546,8 @@ CREATE TABLE tokens (
     revoked_at INTEGER
 ) STRICT;
 CREATE INDEX tokens_by_namespace ON tokens (tenant, namespace);
+CREATE INDEX tokens_by_expiry ON tokens (expires_at);
+CREATE INDEX tokens_by_revocation ON tokens (revoked_at);
 
 CREATE TABLE token_keys (
     kid TEXT PRIMARY KEY,

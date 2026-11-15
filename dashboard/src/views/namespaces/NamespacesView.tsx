@@ -168,16 +168,16 @@ function Namespaces() {
     ...(above ? { above: ABOVE } : {}),
   };
   const list = useNamespaceList(query);
-  const atRisk = useNamespaceList({ above: ABOVE, limit: 100 });
+  // Its total is the count: one namespace is enough to read it.
+  const atRisk = useNamespaceList({ above: ABOVE, limit: 1 });
   const defaults = useNamespaceDefaults();
   const alerts = useQuotaAlerts(null);
 
   const month = list.data?.pages[0]?.month ?? defaults.data?.month ?? monthOf(Date.now());
   const rows = list.data?.pages.flatMap((p) => p.namespaces) ?? [];
-  const risky = atRisk.data?.pages.flatMap((p) => p.namespaces) ?? [];
-  const riskyCount = atRisk.data
-    ? `${formatCount(risky.length)}${atRisk.hasNextPage ? "+" : ""}`
-    : null;
+  const total = list.data?.pages.at(-1)?.total ?? rows.length;
+  const riskyTotal = atRisk.data?.pages[0]?.total;
+  const riskyCount = riskyTotal === undefined ? null : formatCount(riskyTotal);
   const byNamespace = useMemo(() => {
     const map = new Map<string, QuotaAlert[]>();
     for (const a of alerts.data?.alerts ?? []) {
@@ -349,8 +349,8 @@ function Namespaces() {
           {rows.length > 0 && (
             <div className="list-foot">
               <span className="num">
-                {formatCount(rows.length)} namespace{rows.length === 1 ? "" : "s"}
-                {list.hasNextPage ? " shown" : ""}
+                {list.hasNextPage ? `${formatCount(rows.length)} of ` : ""}
+                {formatCount(total)} namespace{total === 1 ? "" : "s"}
               </span>
               {list.hasNextPage && (
                 <button

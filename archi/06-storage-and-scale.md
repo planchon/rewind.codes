@@ -318,7 +318,7 @@ Every request to `/v1` carries a Bearer token, and nothing else authenticates it
   tokens issued before that moment (`tokens_revoked_before`); `DELETE /v1/tokens/{id}` revokes
   one; deleting a token key invalidates every token it signed. Every request reads the token's
   state again: a revocation applies from the next request, and closes an event stream opened
-  with the token.
+  with the token. The workers delete an opaque token a day after it expired or was revoked.
 
 The dashboard gets its access token from `/auth`, the only routes that read a cookie
 ([07](07-code-architecture.md#sign-in-auth)). People sign in with GitHub or with a 6-digit code
@@ -418,6 +418,7 @@ Active runs are never touched. Defaults, configurable per tenant:
 | A finished run's journal | 30 days in Postgres (or Turso). Then archived to S3 as a [journal document](02-journal.md#stored-format-v1) for 1 year, and loaded on demand |
 | The read model | 90 days |
 | Payloads | As long as a run's journal, live or archived, references them; deleted 24 h after the last reference is gone |
+| An end user's opaque token | Until 24 h after it expired or was revoked; a namespace's erasure revokes its tokens |
 
 - `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
   rows, its credentials, its payload references and its count in `namespace_scripts`. Tool

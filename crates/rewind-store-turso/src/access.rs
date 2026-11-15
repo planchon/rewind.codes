@@ -351,6 +351,17 @@ impl AccessStore for TursoStore {
         Ok(row.map(|row| row.u64(0)).transpose()?.unwrap_or(0))
     }
 
+    async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        let connection = self.connection().await?;
+        Ok(sql::execute(
+            &connection,
+            "DELETE FROM tokens WHERE hash IN \
+             (SELECT hash FROM tokens WHERE expires_at < ?1 OR revoked_at < ?1 LIMIT ?2)",
+            vec![ts(before), sql::limit(limit)],
+        )
+        .await?)
+    }
+
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
         let connection = self.connection().await?;
         let connection = &*connection;

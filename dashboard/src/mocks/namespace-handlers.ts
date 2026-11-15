@@ -154,6 +154,7 @@ export function namespaceHandlers(world: World, now: () => number) {
       return HttpResponse.json({
         month,
         namespaces: page.map(({ ns }) => namespaceDto(namespaces, ns, month)),
+        total: listed.length,
         ...(next ? { next } : {}),
       });
     }),

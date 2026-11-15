@@ -65,6 +65,11 @@ pub async fn run_all<S: AccessStore>(new_store: impl Fn() -> S) {
     check!(
         "access",
         new_store(),
+        tokens_expired_or_revoked_are_purged
+    );
+    check!(
+        "access",
+        new_store(),
         token_keys_are_found_by_kid_and_deleted_per_tenant
     );
 }
@@ -816,6 +821,56 @@ pub async fn tokens_are_found_by_hash_and_revoked_per_namespace<S: AccessStore>(
                 .and_then(|token| token.revoked_at),
             None,
             "other namespaces and tenants keep their tokens"
+        );
+    }
+}
+
+pub async fn tokens_expired_or_revoked_are_purged<S: AccessStore>(store: &S) {
+    let live = token("rewind_nt_live", acme(), "alice", at(3_600));
+    let expired = token("rewind_nt_expired", acme(), "alice", at(60));
+    let just_expired = token("rewind_nt_just", acme(), "alice", at(100));
+    let revoked = token("rewind_nt_revoked", tenant("other"), "bob", at(3_600));
+    let revoked_late = token("rewind_nt_late", acme(), "bob", at(3_600));
+    for written in [&live, &expired, &just_expired, &revoked, &revoked_late] {
+        store.put_token(written).await.expect("put_token");
+    }
+    store
+        .revoke_token(&tenant("other"), revoked.hash, at(50))
+        .await
+        .expect("revoke_token");
+    store
+        .revoke_token(&acme(), revoked_late.hash, at(100))
+        .await
+        .expect("revoke_token");
+    assert_eq!(
+        store.purge_tokens(at(100), 1).await.expect("purge_tokens"),
+        1,
+        "at most the limit"
+    );
+    assert_eq!(
+        store.purge_tokens(at(100), 10).await.expect("purge_tokens"),
+        1,
+        "the rest, in every tenant"
+    );
+    assert_eq!(
+        store.purge_tokens(at(100), 10).await.expect("purge_tokens"),
+        0
+    );
+    for (token, kept) in [
+        (&live, true),
+        (&expired, false),
+        (&just_expired, true),
+        (&revoked, false),
+        (&revoked_late, true),
+    ] {
+        assert_eq!(
+            store
+                .find_token(token.hash)
+                .await
+                .expect("find_token")
+                .is_some(),
+            kept,
+            "only the tokens expired or revoked before the time are deleted"
         );
     }
 }

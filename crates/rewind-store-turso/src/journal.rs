@@ -19,7 +19,7 @@ use rewind_engine::ports::{
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
+    NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use turso::{Connection, Row, Value};
 
@@ -2428,7 +2428,7 @@ impl JournalStore for TursoStore {
     async fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
-    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+    ) -> Result<NamespacePage, StoreError> {
         let connection = self.connection().await?;
         Ok(namespaces::list_namespaces(&connection, filter).await?)
     }

@@ -455,6 +455,21 @@ impl AccessStore for PostgresStore {
         Ok(u64::try_from(live).unwrap_or(0))
     }
 
+    async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        // Workers purge at the same time: each skips the rows another is deleting.
+        let purged = sqlx::query(
+            "DELETE FROM tokens WHERE hash IN (\
+                 SELECT hash FROM tokens WHERE expires_at < $1 OR revoked_at < $1 \
+                 LIMIT $2 FOR UPDATE SKIP LOCKED)",
+        )
+        .bind(ts(before))
+        .bind(crate::sql::limit(limit))
+        .execute(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(purged.rows_affected())
+    }
+
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {
         let permissions: Vec<&str> = key.permissions.iter().map(String::as_str).collect();
         let inserted = sqlx::query(

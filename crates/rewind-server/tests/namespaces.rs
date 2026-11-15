@@ -1186,6 +1186,7 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
         .await
         .unwrap();
     assert_eq!(all.namespaces.len(), 3);
+    assert_eq!(all.total, 3);
     let by_name = NamespaceListQuery {
         order: Some(NamespaceOrder::Name),
         ..NamespaceListQuery::default()
@@ -1207,6 +1208,7 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
     let first = reader.list_namespaces(&by_runs).await.unwrap();
     assert_eq!(first.namespaces[0].name, ns("team:busy"));
     assert_eq!(first.namespaces[0].usage.runs_started, 2);
+    assert_eq!(first.total, 3, "the total counts every page");
     let second = reader
         .list_namespaces(&NamespaceListQuery {
             after: first.next.clone(),
@@ -1223,6 +1225,7 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
         .await
         .unwrap();
     assert_eq!(prefixed.namespaces.len(), 2);
+    assert_eq!(prefixed.total, 2);
     let above = reader
         .list_namespaces(&NamespaceListQuery {
             above: Some(0.8),
@@ -1231,6 +1234,7 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
         .await
         .unwrap();
     assert_eq!(above.namespaces.len(), 1);
+    assert_eq!(above.total, 1);
     assert_eq!(above.namespaces[0].name, ns("team:busy"));
     let narrowed = reader
         .with_namespace(ns("team:idle"))
@@ -1238,7 +1242,17 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
         .await
         .unwrap();
     assert_eq!(narrowed.namespaces.len(), 1);
+    assert_eq!(narrowed.total, 1, "a namespace bound counts itself alone");
     assert_eq!(narrowed.namespaces[0].name, ns("team:idle"));
+    let busy_alone = reader
+        .with_namespace(ns("team:busy"))
+        .list_namespaces(&NamespaceListQuery {
+            prefix: Some("team:".into()),
+            ..NamespaceListQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(busy_alone.total, 1);
     assert_eq!(
         refused(
             reader

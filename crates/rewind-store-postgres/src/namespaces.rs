@@ -16,7 +16,7 @@ use std::time::Duration;
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
     CreateRun, Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, NewRun, QuotaAlert,
+    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, NewRun, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention, Tenant, TenantId,
     Threshold, Usage, UsageDelta, UsageOf,
 };
@@ -1061,7 +1061,7 @@ pub(crate) async fn ack_quota_alerts(
 pub(crate) async fn list_namespaces(
     conn: &mut PgConnection,
     filter: &NamespaceFilter,
-) -> Result<Vec<NamespaceUsage>, Error> {
+) -> Result<NamespacePage, Error> {
     let (from, to) = days_of(filter.month);
     let order = match filter.order {
         NamespaceOrder::Cpu => "cpu",
@@ -1097,21 +1097,25 @@ pub(crate) async fn list_namespaces(
                LEFT JOIN s ON s.namespace = n.name \
                WHERE n.tenant = $1 AND ($4::text IS NULL OR starts_with(n.name, $4))), \
          k AS (SELECT j.*, CASE $5 WHEN 'cpu' THEN cpu WHEN 'runs' THEN runs \
-                                   WHEN 'scripts' THEN kept ELSE 0 END AS key FROM j) \
-         SELECT tenant, name, {plain}, tokens_revoked_before, created_at, last_active_at, \
-                deleting_since, l_cpu, l_active, l_runs, l_scripts, l_ttl, l_lines, \
-                cpu, runs, active, kept, key \
-         FROM k \
-         WHERE ($6::numeric IS NULL \
-                OR (l_cpu > 0 AND cpu::numeric * 100 >= l_cpu::numeric * $6) \
-                OR (l_active > 0 AND active::numeric * 100 >= l_active::numeric * $6) \
-                OR (l_runs > 0 AND runs::numeric * 100 >= l_runs::numeric * $6) \
-                OR (l_scripts > 0 AND kept::numeric * 100 >= l_scripts::numeric * $6)) \
-         AND ($7::bigint IS NULL OR key < $7 OR (key = $7 AND name > $8)) \
-         ORDER BY key DESC, name LIMIT $9",
+                                   WHEN 'scripts' THEN kept ELSE 0 END AS key FROM j), \
+         f AS (SELECT * FROM k \
+               WHERE $6::numeric IS NULL \
+               OR (l_cpu > 0 AND cpu::numeric * 100 >= l_cpu::numeric * $6) \
+               OR (l_active > 0 AND active::numeric * 100 >= l_active::numeric * $6) \
+               OR (l_runs > 0 AND runs::numeric * 100 >= l_runs::numeric * $6) \
+               OR (l_scripts > 0 AND kept::numeric * 100 >= l_scripts::numeric * $6)), \
+         c AS (SELECT count(*)::bigint AS total FROM f) \
+         SELECT p.tenant, p.name, {plain}, p.tokens_revoked_before, p.created_at, \
+                p.last_active_at, p.deleting_since, p.l_cpu, p.l_active, p.l_runs, p.l_scripts, \
+                p.l_ttl, p.l_lines, p.cpu, p.runs, p.active, p.kept, p.key, c.total \
+         FROM c LEFT JOIN LATERAL ( \
+             SELECT * FROM f \
+             WHERE $7::bigint IS NULL OR key < $7 OR (key = $7 AND name > $8) \
+             ORDER BY key DESC, name LIMIT $9) p ON true \
+         ORDER BY p.key DESC, p.name",
         defaults = quota_columns("default_"),
         terminal = terminal!(),
-        plain = quota_columns(""),
+        plain = quota_columns("p."),
     );
     let rows = sqlx::query(&sql)
         .bind(tenant(&filter.tenant))
@@ -1125,19 +1129,27 @@ pub(crate) async fn list_namespaces(
         .bind(limit(filter.limit))
         .fetch_all(&mut *conn)
         .await?;
-    rows.iter()
-        .map(|row| {
-            Ok(NamespaceUsage {
-                namespace: namespace_from_row(row)?,
-                limits: quotas_from_row(row, 12)?,
-                usage: Usage {
-                    cpu: row.duration(18)?,
-                    runs_started: row.u64(19)?,
-                    active_runs: row.u64(20)?,
-                    scripts: row.u64(21)?,
-                    days: Vec::new(),
-                },
-            })
-        })
-        .collect()
+    // One row with the total alone when the page is empty: its namespace columns are null.
+    let total = match rows.first() {
+        Some(row) => row.u64(23)?,
+        None => 0,
+    };
+    let mut namespaces = Vec::with_capacity(rows.len());
+    for row in &rows {
+        if row.opt_text(1)?.is_none() {
+            continue;
+        }
+        namespaces.push(NamespaceUsage {
+            namespace: namespace_from_row(row)?,
+            limits: quotas_from_row(row, 12)?,
+            usage: Usage {
+                cpu: row.duration(18)?,
+                runs_started: row.u64(19)?,
+                active_runs: row.u64(20)?,
+                scripts: row.u64(21)?,
+                days: Vec::new(),
+            },
+        });
+    }
+    Ok(NamespacePage { namespaces, total })
 }

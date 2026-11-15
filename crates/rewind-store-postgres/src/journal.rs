@@ -32,7 +32,7 @@ use rewind_engine::ports::{
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
+    NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
@@ -2977,10 +2977,7 @@ impl JournalStore for PostgresStore {
     async fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
-    ) -> Result<Vec<NamespaceUsage>, StoreError> {
-        if nothing(filter.limit) {
-            return Ok(Vec::new());
-        }
+    ) -> Result<NamespacePage, StoreError> {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(namespaces::list_namespaces(&mut conn, filter).await?)
     }

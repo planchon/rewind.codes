@@ -260,6 +260,8 @@ pub struct NamespaceList {
     /// The month whose use is listed, `2026-11`.
     pub month: String,
     pub namespaces: Vec<Namespace>,
+    /// How many namespaces match the query, across every page.
+    pub total: u64,
     /// The cursor of the next page, absent on the last one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,

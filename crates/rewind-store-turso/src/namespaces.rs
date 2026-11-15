@@ -15,7 +15,7 @@ use std::time::Duration;
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
     CreateRun, Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, NewRun, QuotaAlert,
+    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, NewRun, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention, Tenant, TenantId,
     Threshold, Usage, UsageDelta, UsageOf,
 };
@@ -976,7 +976,7 @@ pub(crate) async fn ack_quota_alerts(
 pub(crate) async fn list_namespaces(
     connection: &Connection,
     filter: &NamespaceFilter,
-) -> Result<Vec<NamespaceUsage>, Error> {
+) -> Result<NamespacePage, Error> {
     let record = tenant_or_default(connection, &filter.tenant).await?;
     let rows = sql::query(
         connection,
@@ -1053,7 +1053,8 @@ pub(crate) async fn list_namespaces(
     listed.sort_by(|(a_key, a), (b_key, b)| {
         (Reverse(*a_key), &a.namespace.name).cmp(&(Reverse(*b_key), &b.namespace.name))
     });
-    Ok(listed
+    let total = u64::try_from(listed.len()).unwrap_or(u64::MAX);
+    let namespaces = listed
         .into_iter()
         .filter(|(key, listed)| {
             filter.after.as_ref().is_none_or(|after| {
@@ -1062,7 +1063,8 @@ pub(crate) async fn list_namespaces(
         })
         .take(filter.limit)
         .map(|(_, listed)| listed)
-        .collect())
+        .collect();
+    Ok(NamespacePage { namespaces, total })
 }
 
 /// Whether a use reaches `percent` of one of its counted limits.

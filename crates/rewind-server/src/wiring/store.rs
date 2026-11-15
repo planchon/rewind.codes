@@ -36,7 +36,7 @@ use rewind_engine::ports::{
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Token, TokenKey, Usage,
+    NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Token, TokenKey, Usage,
     UsageDelta, UsageOf,
 };
 use rewind_store_postgres::PostgresStore;
@@ -610,7 +610,7 @@ impl JournalStore for Store {
     async fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
-    ) -> Result<Vec<NamespaceUsage>, StoreError> {
+    ) -> Result<NamespacePage, StoreError> {
         journal!(self, store => store.list_namespaces(filter).await)
     }
 
@@ -766,6 +766,10 @@ impl AccessStore for Store {
         now: Timestamp,
     ) -> Result<u64, StoreError> {
         access!(self, store => store.count_tokens(tenant, namespace, now).await)
+    }
+
+    async fn purge_tokens(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        access!(self, store => store.purge_tokens(before, limit).await)
     }
 
     async fn put_token_key(&self, key: &TokenKey) -> Result<(), StoreError> {

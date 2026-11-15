@@ -273,8 +273,9 @@ pub enum GrantClaim {
 /// - **Claims.** `claim_grant` moves an invitation's grant to the user who accepted it, unless
 ///   the user already has one, atomically.
 /// - **Tokens.** Found by their hash, unique across tenants; `revoke_tokens` revokes every live
-///   token of one namespace of one tenant, and `count_tokens` counts the live ones. Token keys
-///   are found by their `kid`, unique across tenants; deleting one is scoped by its tenant.
+///   token of one namespace of one tenant, and `count_tokens` counts the live ones;
+///   `purge_tokens` deletes, in every tenant, the tokens expired or revoked before a time. Token
+///   keys are found by their `kid`, unique across tenants; deleting one is scoped by its tenant.
 /// - **Time.** Stores never read a clock: every method that depends on time takes it.
 ///
 /// Lists are ordered: keys by creation time then hash, roles by name, grants by principal
@@ -340,6 +341,14 @@ pub trait AccessStore: Send + Sync {
         tenant: &TenantId,
         namespace: &NamespaceName,
         now: Timestamp,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// Deletes at most `limit` tokens, of any tenant, whose `expires_at` or `revoked_at` is
+    /// before `before`. Returns how many: fewer than `limit` once none is left.
+    fn purge_tokens(
+        &self,
+        before: Timestamp,
+        limit: usize,
     ) -> impl Future<Output = Result<u64, StoreError>> + Send;
 
     /// Stores a token key. A `kid` already stored is a `Conflict`.

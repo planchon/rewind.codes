@@ -97,6 +97,9 @@ CREATE TABLE tokens (
     revoked_at bigint
 );
 CREATE INDEX tokens_by_namespace ON tokens (tenant, namespace);
+-- The purge of tokens expired or revoked.
+CREATE INDEX tokens_by_expiry ON tokens (expires_at);
+CREATE INDEX tokens_by_revocation ON tokens (revoked_at) WHERE revoked_at IS NOT NULL;
 
 CREATE TABLE token_keys (
     kid text COLLATE "C" PRIMARY KEY,

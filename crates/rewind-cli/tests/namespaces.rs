@@ -109,6 +109,7 @@ async fn list(
     axum::Json(NamespaceList {
         month: "2026-11".into(),
         namespaces: vec![namespace("alice", &exceptions)],
+        total: 2,
         next: Some("840-alice".into()),
     })
     .into_response()

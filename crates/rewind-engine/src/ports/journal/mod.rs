@@ -33,7 +33,7 @@ use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
 use super::namespaces::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
-    NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
+    NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use super::tenancy::{RunRef, Tenant, TenantId, TenantScope};
 use super::webhooks::Subscription;
@@ -628,11 +628,12 @@ pub trait JournalStore: Send + Sync {
 
     /// The tenant's namespaces matching the filter, each with its limits (its exceptions over
     /// the tenant's defaults) and its use of `filter.month`, without days. Ordered by the use of
-    /// the order, the largest first, then by name; or by name.
+    /// the order, the largest first, then by name; or by name. The page says how many match
+    /// the filter across every page.
     fn list_namespaces(
         &self,
         filter: &NamespaceFilter,
-    ) -> impl Future<Output = Result<Vec<NamespaceUsage>, StoreError>> + Send;
+    ) -> impl Future<Output = Result<NamespacePage, StoreError>> + Send;
 
     /// The use of a namespace, or of the tenant across its namespaces, in a month: CPU time and
     /// runs created over the month, with its days; active runs and distinct scripts now.

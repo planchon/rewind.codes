@@ -4243,8 +4243,8 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
         after,
         limit,
     };
-    let names_of = |listed: Vec<crate::ports::NamespaceUsage>| -> Vec<String> {
-        listed
+    let names_of = |page: crate::ports::NamespacePage| -> Vec<String> {
+        page.namespaces
             .into_iter()
             .map(|listed| listed.namespace.name.to_string())
             .collect()
@@ -4253,46 +4253,53 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
         .list_namespaces(&filter(NamespaceOrder::Runs, None, None, None, 10))
         .await
         .expect("list_namespaces");
-    assert_eq!(by_runs[0].usage.runs_started, 8);
-    assert_eq!(by_runs[0].limits.runs_per_month, Some(10));
+    assert_eq!(by_runs.total, 4);
+    assert_eq!(by_runs.namespaces[0].usage.runs_started, 8);
+    assert_eq!(by_runs.namespaces[0].limits.runs_per_month, Some(10));
     assert_eq!(names_of(by_runs), ["user-c", "user-b", "other", "user-a"]);
-    assert_eq!(
-        names_of(
-            store
-                .list_namespaces(&filter(NamespaceOrder::Name, Some("user-"), None, None, 10))
-                .await
-                .expect("list_namespaces")
-        ),
-        ["user-a", "user-b", "user-c"]
-    );
-    assert_eq!(
-        names_of(
-            store
-                .list_namespaces(&filter(NamespaceOrder::Runs, None, Some(80), None, 10))
-                .await
-                .expect("list_namespaces")
-        ),
-        ["user-c"],
-        "8 runs of 10"
-    );
+    let prefixed = store
+        .list_namespaces(&filter(NamespaceOrder::Name, Some("user-"), None, None, 10))
+        .await
+        .expect("list_namespaces");
+    assert_eq!(prefixed.total, 3, "the total counts what the prefix matches");
+    assert_eq!(names_of(prefixed), ["user-a", "user-b", "user-c"]);
+    let above = store
+        .list_namespaces(&filter(NamespaceOrder::Runs, None, Some(80), None, 10))
+        .await
+        .expect("list_namespaces");
+    assert_eq!(above.total, 1, "the total counts what the share matches");
+    assert_eq!(names_of(above), ["user-c"], "8 runs of 10");
     let first = store
         .list_namespaces(&filter(NamespaceOrder::Runs, None, None, None, 2))
         .await
         .expect("list_namespaces");
-    let last = first.last().expect("two");
+    assert_eq!(first.total, 4, "the total ignores the limit");
+    let last = first.namespaces.last().expect("two");
     let after = NamespaceCursor {
         key: last.usage.runs_started,
         name: last.namespace.name.clone(),
     };
-    assert_eq!(
-        names_of(
-            store
-                .list_namespaces(&filter(NamespaceOrder::Runs, None, None, Some(after), 10))
-                .await
-                .expect("list_namespaces")
-        ),
-        ["other", "user-a"]
-    );
+    let rest = store
+        .list_namespaces(&filter(NamespaceOrder::Runs, None, None, Some(after), 10))
+        .await
+        .expect("list_namespaces");
+    assert_eq!(rest.total, 4, "the total ignores the cursor");
+    assert_eq!(names_of(rest), ["other", "user-a"]);
+    let past = NamespaceCursor {
+        key: 0,
+        name: namespace("zzz"),
+    };
+    let empty = store
+        .list_namespaces(&filter(NamespaceOrder::Runs, None, None, Some(past), 10))
+        .await
+        .expect("list_namespaces");
+    assert!(empty.namespaces.is_empty());
+    assert_eq!(empty.total, 4, "an empty page still has its total");
+    let none = store
+        .list_namespaces(&filter(NamespaceOrder::Name, Some("nobody"), None, None, 10))
+        .await
+        .expect("list_namespaces");
+    assert_eq!(none, crate::ports::NamespacePage::default());
 }
 
 pub async fn an_erased_namespace_takes_no_run_and_is_dropped_once_empty<S: JournalStore>(
