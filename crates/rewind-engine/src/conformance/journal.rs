@@ -4261,7 +4261,10 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
         .list_namespaces(&filter(NamespaceOrder::Name, Some("user-"), None, None, 10))
         .await
         .expect("list_namespaces");
-    assert_eq!(prefixed.total, 3, "the total counts what the prefix matches");
+    assert_eq!(
+        prefixed.total, 3,
+        "the total counts what the prefix matches"
+    );
     assert_eq!(names_of(prefixed), ["user-a", "user-b", "user-c"]);
     let above = store
         .list_namespaces(&filter(NamespaceOrder::Runs, None, Some(80), None, 10))
@@ -4296,7 +4299,13 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
     assert!(empty.namespaces.is_empty());
     assert_eq!(empty.total, 4, "an empty page still has its total");
     let none = store
-        .list_namespaces(&filter(NamespaceOrder::Name, Some("nobody"), None, None, 10))
+        .list_namespaces(&filter(
+            NamespaceOrder::Name,
+            Some("nobody"),
+            None,
+            None,
+            10,
+        ))
         .await
         .expect("list_namespaces");
     assert_eq!(none, crate::ports::NamespacePage::default());

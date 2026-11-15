@@ -19,8 +19,9 @@ use crate::ports::{
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
-    QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf,
+    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert,
+    QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta,
+    UsageOf,
 };
 
 /// `JournalStore` in memory: engine tests and mock mode. It is the reference implementation
@@ -1874,10 +1875,7 @@ impl JournalStore for MemoryJournal {
             .cloned())
     }
 
-    async fn list_namespaces(
-        &self,
-        filter: &NamespaceFilter,
-    ) -> Result<NamespacePage, StoreError> {
+    async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {
         let state = self.lock()?;
         let key = |usage: &Usage| match filter.order {
             NamespaceOrder::Cpu => usage.of(QuotaKind::CpuPerMonth).unwrap_or(0),

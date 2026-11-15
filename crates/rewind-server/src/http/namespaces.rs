@@ -244,7 +244,11 @@ pub(super) async fn list(
                 .filter(|listed| listed.namespace.name == *bound)
                 .collect();
             let total = u64::try_from(found.len()).unwrap_or(0);
-            let found = if query.after.is_some() { Vec::new() } else { found };
+            let found = if query.after.is_some() {
+                Vec::new()
+            } else {
+                found
+            };
             (found, total)
         }
         None => (page.namespaces, page.total),

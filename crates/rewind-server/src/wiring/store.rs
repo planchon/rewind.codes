@@ -607,10 +607,7 @@ impl JournalStore for Store {
         journal!(self, store => store.get_namespace(tenant, name).await)
     }
 
-    async fn list_namespaces(
-        &self,
-        filter: &NamespaceFilter,
-    ) -> Result<NamespacePage, StoreError> {
+    async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {
         journal!(self, store => store.list_namespaces(filter).await)
     }
 

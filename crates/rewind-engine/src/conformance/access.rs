@@ -62,11 +62,7 @@ pub async fn run_all<S: AccessStore>(new_store: impl Fn() -> S) {
         new_store(),
         tokens_are_found_by_hash_and_revoked_per_namespace
     );
-    check!(
-        "access",
-        new_store(),
-        tokens_expired_or_revoked_are_purged
-    );
+    check!("access", new_store(), tokens_expired_or_revoked_are_purged);
     check!(
         "access",
         new_store(),

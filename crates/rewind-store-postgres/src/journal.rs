@@ -2974,10 +2974,7 @@ impl JournalStore for PostgresStore {
         Ok(namespaces::get_namespace(&mut conn, tenant_id, name).await?)
     }
 
-    async fn list_namespaces(
-        &self,
-        filter: &NamespaceFilter,
-    ) -> Result<NamespacePage, StoreError> {
+    async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(namespaces::list_namespaces(&mut conn, filter).await?)
     }

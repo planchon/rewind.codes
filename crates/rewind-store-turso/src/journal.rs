@@ -2425,10 +2425,7 @@ impl JournalStore for TursoStore {
         Ok(namespaces::get_namespace(&connection, tenant_id, name).await?)
     }
 
-    async fn list_namespaces(
-        &self,
-        filter: &NamespaceFilter,
-    ) -> Result<NamespacePage, StoreError> {
+    async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {
         let connection = self.connection().await?;
         Ok(namespaces::list_namespaces(&connection, filter).await?)
     }
