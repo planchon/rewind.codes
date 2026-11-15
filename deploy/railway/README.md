@@ -67,6 +67,7 @@ set on each). A release build of the server takes Railway about 10 minutes.
 | `WORKOS_COOKIE_PASSWORD` | api | 32 random bytes in hexadecimal (`openssl rand -hex 32`): the key of the sign-in's sealed cookies. Changing it signs everyone out |
 | `WORKOS_REDIRECT_URI` | api | `https://app.rewind.codes/auth/callback`, registered in WorkOS |
 | `REWIND_PUBLIC_URL` | api, worker | `https://api.rewind.codes`: `webhook()` URLs start with it |
+| `REWIND_QUOTA_ACTIVE_RUNS` | api | `10000`: the ceiling of active runs given to each organization created from then on (formerly `REWIND_RUN_QUOTA`). An organization keeps its own ceiling, which `PUT /v1/organizations/{tenant}/quotas` changes |
 | `REWIND_WORKER_NAME` | api | `api`. The worker keeps the default, its host name and process id, unique per replica |
 | `REWIND_ACTIVATIONS`, `REWIND_DISPATCHES`, `REWIND_CACHE_INSTANCES`, `REWIND_CACHE_MEMORY` | worker | `4`, `64`, `500`, `384MiB`, for a 1 GB limit |
 | `REWIND_LOG` | api, worker | `info` |
