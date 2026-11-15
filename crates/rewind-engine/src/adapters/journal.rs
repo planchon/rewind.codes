@@ -3,8 +3,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, RunId, Script, Seq, Timestamp,
-    ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, Payload, RunId, Script, Seq, Timestamp,
+    ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow, end_signal_name,
 };
 
 use crate::adapters::random_token;
@@ -13,9 +13,9 @@ use crate::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
-    StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef, TaskState,
-    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask, Trigger,
-    WebhookTarget, WebhookToken, deferred_timeout_failure,
+    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask,
+    Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 
 /// `JournalStore` in memory: engine tests and mock mode. It is the reference implementation
@@ -41,6 +41,11 @@ struct State {
     feed: BTreeMap<u64, FeedRow>,
     next_inbox_id: u64,
     next_feed_id: u64,
+    /// Workflow versions, with the order they were stored in.
+    workflows: BTreeMap<(TenantId, Digest), (u64, StoredWorkflow)>,
+    next_workflow: u64,
+    /// Run → its watchers: watcher → (`seq` of the start, attached).
+    watchers: BTreeMap<RunId, BTreeMap<RunId, (Seq, bool)>>,
 }
 
 #[derive(Debug)]
@@ -193,6 +198,66 @@ impl State {
         }
         let completion = outcome.into_completion(seq);
         self.push_inbox(run_id, Trigger::Completion(completion), now);
+    }
+
+    /// Enqueues a completion unless the run has ended or the key was seen.
+    fn enqueue(
+        &mut self,
+        run_id: RunId,
+        completion: Completion,
+        idempotency_key: Option<String>,
+        now: Timestamp,
+    ) -> Enqueued {
+        let Some(run) = self.runs.get_mut(&run_id) else {
+            return Enqueued::RunEnded;
+        };
+        if run.is_terminal() {
+            return Enqueued::RunEnded;
+        }
+        if let Some(key) = idempotency_key
+            && !run.signal_keys.insert(key)
+        {
+            return Enqueued::Duplicate;
+        }
+        self.push_inbox(run_id, Trigger::Completion(completion), now);
+        Enqueued::Accepted
+    }
+
+    /// What a run's end does to the runs around it: its end to each of its watchers, and a
+    /// cancellation to each run it watches attached.
+    fn propagate_end(
+        &mut self,
+        run_id: RunId,
+        end: Option<&rewind_core::JsonValue>,
+        now: Timestamp,
+    ) {
+        let name = end_signal_name(run_id);
+        let watchers: Vec<RunId> = self
+            .watchers
+            .get(&run_id)
+            .map(|watchers| watchers.keys().copied().collect())
+            .unwrap_or_default();
+        if let Some(end) = end {
+            for watcher in watchers {
+                let completion = Completion::SignalReceived {
+                    name: name.clone(),
+                    payload: Payload::Value(end.clone()),
+                };
+                self.enqueue(watcher, completion, Some(name.clone()), now);
+            }
+        }
+        let attached: Vec<RunId> = self
+            .watchers
+            .iter()
+            .filter(|(_, watchers)| matches!(watchers.get(&run_id), Some((_, true))))
+            .map(|(child, _)| *child)
+            .collect();
+        for child in attached {
+            let completion = Completion::CancelRequested {
+                reason: rewind_core::starter_ended(run_id),
+            };
+            self.enqueue(child, completion, None, now);
+        }
     }
 
     /// Clears what a run that has ended no longer needs.
@@ -439,6 +504,13 @@ impl JournalStore for MemoryJournal {
         if let Some(key) = idempotency_key {
             state.idempotency_keys.insert((tenant, key), run.run.id);
         }
+        if let Some(started_by) = state.runs[&run.run.id].record.metadata.started_by {
+            state
+                .watchers
+                .entry(run.run.id)
+                .or_default()
+                .insert(started_by.run, (started_by.seq, !started_by.detached));
+        }
         state.push_inbox(run.run.id, Trigger::RunStarted(run.started), run.created_at);
         Ok(CreateRun::Created(Created {
             run: run.run,
@@ -454,22 +526,123 @@ impl JournalStore for MemoryJournal {
         now: Timestamp,
     ) -> Result<Enqueued, StoreError> {
         let mut state = self.lock()?;
-        let found = state.run_mut(run)?;
-        if found.is_terminal() {
-            return Ok(Enqueued::RunEnded);
-        }
-        if let Some(key) = idempotency_key
-            && !found.signal_keys.insert(key)
-        {
-            return Ok(Enqueued::Duplicate);
-        }
-        state.push_inbox(run.id, Trigger::Completion(completion), now);
-        Ok(Enqueued::Accepted)
+        state.run_mut(run)?;
+        Ok(state.enqueue(run.id, completion, idempotency_key, now))
     }
 
     async fn get_run(&self, run: &RunRef) -> Result<Option<RunRecord>, StoreError> {
         let state = self.lock()?;
         Ok(state.run(run).ok().map(|found| found.record.clone()))
+    }
+
+    async fn watch_run(
+        &self,
+        run: &RunRef,
+        watcher: RunId,
+        seq: Seq,
+    ) -> Result<Option<Watched>, StoreError> {
+        let mut state = self.lock()?;
+        let Ok(found) = state.run(run) else {
+            return Ok(None);
+        };
+        let ended = found.is_terminal();
+        state
+            .watchers
+            .entry(run.id)
+            .or_default()
+            .entry(watcher)
+            .or_insert((seq, false));
+        Ok(Some(Watched { ended }))
+    }
+
+    async fn put_workflow(
+        &self,
+        tenant: &TenantId,
+        workflow: &Workflow,
+        labels: &BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> Result<StoredWorkflow, StoreError> {
+        let mut state = self.lock()?;
+        let order = state.next_workflow;
+        let key = (tenant.clone(), workflow.version());
+        let (_, stored) = state.workflows.entry(key).or_insert_with(|| {
+            (
+                order,
+                StoredWorkflow {
+                    workflow: workflow.clone(),
+                    labels: labels.clone(),
+                    created_at: now,
+                },
+            )
+        });
+        let stored = stored.clone();
+        state.next_workflow += 1;
+        Ok(stored)
+    }
+
+    async fn get_workflow(
+        &self,
+        tenant: &TenantId,
+        version: Digest,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let state = self.lock()?;
+        Ok(state
+            .workflows
+            .get(&(tenant.clone(), version))
+            .map(|(_, stored)| stored.clone()))
+    }
+
+    async fn workflow_versions(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let state = self.lock()?;
+        let mut versions: Vec<&(u64, StoredWorkflow)> = state
+            .workflows
+            .iter()
+            .filter(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.name() == name && stored.carries(labels)
+            })
+            .map(|(_, row)| row)
+            .collect();
+        versions.sort_by(|(a_order, a), (b_order, b)| {
+            (b.created_at, b_order).cmp(&(a.created_at, a_order))
+        });
+        Ok(versions
+            .into_iter()
+            .map(|(_, stored)| stored.clone())
+            .collect())
+    }
+
+    async fn latest_workflows(
+        &self,
+        filter: &WorkflowFilter,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let state = self.lock()?;
+        let mut latest: BTreeMap<&str, &(u64, StoredWorkflow)> = BTreeMap::new();
+        for ((owner, _), row) in &state.workflows {
+            let (order, stored) = row;
+            if owner != &filter.tenant || !stored.carries(&filter.labels) {
+                continue;
+            }
+            let name = stored.workflow.name();
+            if filter.after.as_deref().is_some_and(|after| name <= after) {
+                continue;
+            }
+            let newer = latest.get(name).is_none_or(|(known_order, known)| {
+                (stored.created_at, order) > (known.created_at, known_order)
+            });
+            if newer {
+                latest.insert(name, row);
+            }
+        }
+        Ok(latest
+            .into_values()
+            .take(filter.limit.unwrap_or(usize::MAX))
+            .map(|(_, stored)| stored.clone())
+            .collect())
     }
 
     async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, StoreError> {
@@ -766,6 +939,7 @@ impl JournalStore for MemoryJournal {
         }
         if terminal {
             state.end_run(lease.run.id);
+            state.propagate_end(lease.run.id, activation.end.as_ref(), now);
         }
         Ok(())
     }
@@ -1493,6 +1667,10 @@ impl JournalStore for MemoryJournal {
         };
         if let Some(key) = removed.record.idempotency_key {
             state.idempotency_keys.remove(&(run.tenant.clone(), key));
+        }
+        state.watchers.remove(&run.id);
+        for watchers in state.watchers.values_mut() {
+            watchers.remove(&run.id);
         }
         state.feed.retain(|_, row| row.item.run.id != run.id);
         for ((tenant, _), stored) in state.payloads.iter_mut() {

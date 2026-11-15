@@ -295,12 +295,17 @@ function field(name: string, operand: string, now: number): Predicate {
       const prefixes = hexPrefixes(name, operand, true);
       return (r) => prefixes.some((p) => r.id.replaceAll("-", "").startsWith(p));
     }
-    case "parent": {
+    case "parent":
+    case "started_by": {
       const id = operand.toLowerCase();
       const digits = id.replaceAll("-", "");
       if (digits.length !== 32 || !/^[0-9a-f]+$/.test(digits))
-        throw new Error(`parent: "${operand}" is not a run id`);
-      return (r) => r.parent?.replaceAll("-", "") === digits;
+        throw new Error(`${name}: "${operand}" is not a run id`);
+      return (r) => (name === "parent" ? r.parent : r.startedBy)?.replaceAll("-", "") === digits;
+    }
+    case "workflow": {
+      const names = exact(name, operand);
+      return (r) => r.workflow != null && names.includes(r.workflow);
     }
     case "fingerprint": {
       const values = exact(name, operand).map((v) => {

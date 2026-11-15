@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use rewind_core::{Digest, Script};
 
-use crate::ports::{CheckerError, Diagnostic, ToolDeclarations, TypeChecker};
+use crate::ports::{CheckerError, Diagnostic, ToolDeclarations, TypeChecker, WorkflowDeclarations};
 
 /// `TypeChecker` that answers from a table: the diagnostics given for a script's digest, none
 /// for any other script. For engine tests and wherever tsgo is not available.
@@ -35,5 +35,14 @@ impl TypeChecker for StaticTypeChecker {
             .get(&script.digest())
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn check_workflow(
+        &self,
+        script: &Script,
+        declarations: &ToolDeclarations,
+        _workflow: &WorkflowDeclarations,
+    ) -> Result<Vec<Diagnostic>, CheckerError> {
+        self.check(script, declarations).await
     }
 }

@@ -755,6 +755,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the workflows
+         * @description The latest version of each workflow the caller sees, by name.
+         */
+        get: operations["listWorkflows"];
+        put?: never;
+        /**
+         * Save a workflow (`save_workflow`)
+         * @description Checks the workflow's script against its toolset and its own schemas, and saves it as a
+         *     new version, the workflow's latest. Saving the same version again returns it (200).
+         */
+        post: operations["createWorkflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A workflow's versions */
+        get: operations["getWorkflowVersions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export interface webhooks {
     "credentials.expired": {
@@ -1055,6 +1097,12 @@ export interface components {
          *     }
          */
         CreateToolset: {
+            /**
+             * @description Derives the toolset from a registered one: its servers, tools and workflows are kept as
+             *     pinned, without listing the servers again; `workflows` adds workflows or pins them again.
+             *     `mcp`, `host` and `http` must then be empty.
+             */
+            base?: string | null;
             credentials?: components["schemas"]["Credentials"] | null;
             /**
              * @description Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
@@ -1064,6 +1112,81 @@ export interface components {
             http?: components["schemas"]["HttpTool"] | null;
             /** @description MCP servers. Their tools are called by Rewind and named `<server>.<tool>`. */
             mcp?: components["schemas"]["McpServer"][];
+            /**
+             * @description The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
+             *     version, `triage@<version>` one version. The versions are pinned: the toolset's scripts
+             *     are checked against them, and start them, for their whole life.
+             */
+            workflows?: string[];
+        };
+        /**
+         * @description `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
+         *     against its toolset and against its own schemas: its default export must take the input and
+         *     return the output, and `signal()` only takes the declared names. Saving the same workflow
+         *     again returns the version saved first (200).
+         * @example {
+         *       "description": "Triage the stale issues of a repository, after approval.",
+         *       "input": {
+         *         "properties": {
+         *           "repo": {
+         *             "type": "string"
+         *           }
+         *         },
+         *         "required": [
+         *           "repo"
+         *         ],
+         *         "type": "object"
+         *       },
+         *       "name": "triage",
+         *       "output": {
+         *         "properties": {
+         *           "closed": {
+         *             "type": "integer"
+         *           }
+         *         },
+         *         "required": [
+         *           "closed"
+         *         ],
+         *         "type": "object"
+         *       },
+         *       "script": "import { signal } from \"rewind\";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal(\"approval\");\n  return { closed: close ? 1 : 0 };\n}\n",
+         *       "signals": {
+         *         "approval": {
+         *           "properties": {
+         *             "close": {
+         *               "type": "boolean"
+         *             }
+         *           },
+         *           "required": [
+         *             "close"
+         *           ],
+         *           "type": "object"
+         *         }
+         *       },
+         *       "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4"
+         *     }
+         */
+        CreateWorkflow: {
+            /** @description Shown to the model in the declarations. */
+            description?: string | null;
+            /** @description JSON Schema of the input of `main`. */
+            input: Record<string, unknown>;
+            /**
+             * @description What scripts import from `rewind:workflows`: an identifier that is not a reserved word of
+             *     JavaScript.
+             */
+            name: string;
+            /** @description JSON Schema of what `main` returns. */
+            output: Record<string, unknown>;
+            /** @description The TypeScript source: a single ES module whose default export is the entry point. */
+            script: string;
+            /**
+             * @description The signals its runs accept, by name, each with the JSON Schema of its payload. Names
+             *     starting with `rewind:` are reserved.
+             */
+            signals?: Record<string, unknown>;
+            /** @description The id of the toolset its runs call, already registered. */
+            toolset: string;
         };
         /**
          * @description `PUT /v1/toolsets/{id}/credentials` and `PUT /v1/runs/{id}/credentials`: secrets injected
@@ -1100,7 +1223,10 @@ export interface components {
         DeclarationFormat: "dts" | "prompt";
         /** @description The toolset's declarations, generated by `rewind-codegen`. */
         Declarations: {
-            /** @description `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc. */
+            /**
+             * @description `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the
+             *     `rewind:workflows` module when the toolset pins workflows.
+             */
             dts: string;
             /** @description The compact rendering for the model's prompt, one line per tool. */
             prompt: string;
@@ -1580,6 +1706,12 @@ export interface components {
              */
             value?: unknown;
         };
+        /** @description A workflow a toolset pins. */
+        PinnedWorkflow: {
+            description?: string | null;
+            name: string;
+            version: string;
+        };
         /**
          * @description An error answered by the API, as `application/problem+json` (RFC 9457).
          * @example {
@@ -1678,6 +1810,7 @@ export interface components {
             quarantine?: components["schemas"]["Quarantine"] | null;
             /** @description Digest of the TypeScript source (`GET /v1/scripts/{digest}`). */
             script: string;
+            startedBy?: components["schemas"]["StartedBy"] | null;
             status: components["schemas"]["RunStatus"];
             /** @description Digest of the pinned toolset. */
             toolset: string;
@@ -1690,6 +1823,7 @@ export interface components {
             updatedAt: string;
             /** @description With `active`: what the run waits for. */
             waitingFor?: components["schemas"]["Waiting"][];
+            workflow?: components["schemas"]["RunWorkflow"] | null;
         };
         /** @description A number of runs per status. */
         RunCounts: {
@@ -1796,6 +1930,8 @@ export interface components {
             script: string;
             /** Format: date-time */
             startedAt: string;
+            /** @description For a run a script started, that run. */
+            startedBy?: string | null;
             status: components["schemas"]["RunStatus"];
             /** Format: int64 */
             toolCalls: number;
@@ -1807,6 +1943,8 @@ export interface components {
              * @description With `active`: when the run wakes by itself, if a timer or a signal's timeout wakes it.
              */
             wakesAt?: string | null;
+            /** @description For a run of a workflow, the workflow's name. */
+            workflow?: string | null;
         };
         /** @description Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`). */
         RunWait: {
@@ -1829,6 +1967,11 @@ export interface components {
              * @description When the wait ends by itself: a timer's due time, a signal's timeout.
              */
             until?: string | null;
+        };
+        /** @description The workflow a run executes. */
+        RunWorkflow: {
+            name: string;
+            version: string;
         };
         /** @description A signal sent during a scenario. */
         ScenarioSignal: {
@@ -1976,8 +2119,11 @@ export interface components {
              *     sees them.
              */
             labels?: components["schemas"]["Labels"];
-            /** @description The TypeScript source: a single ES module whose default export is the entry point. */
-            script: string;
+            /**
+             * @description The TypeScript source: a single ES module whose default export is the entry point.
+             *     Without it, `workflow` names what the run executes.
+             */
+            script?: string;
             /** @description The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty. */
             toolset?: string | null;
             /**
@@ -1988,6 +2134,26 @@ export interface components {
             tracestate?: string | null;
             ttl?: components["schemas"]["Duration"] | null;
             wait?: components["schemas"]["Duration"] | null;
+            /**
+             * @description Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
+             *     or `triage@<version>` (12 hex digits at least) for one version. Its input is checked
+             *     against the workflow's input schema (`invalid-input`); the script is not checked again.
+             */
+            workflow?: string | null;
+        };
+        /** @description The run that started a run, and the call that did. */
+        StartedBy: {
+            /**
+             * @description A detached run lives on its own; otherwise the run that started it does not end before
+             *     it, and cancels it if it fails or is cancelled.
+             */
+            detached: boolean;
+            run: string;
+            /**
+             * Format: int32
+             * @description The `seq` of the call of `workflows.<name>.start`.
+             */
+            seq: number;
         };
         StatusCounts: {
             /** Format: int64 */
@@ -2249,6 +2415,8 @@ export interface components {
             servers: components["schemas"]["ServerSummary"][];
             /** @description Every tool a script of this toolset can call, sorted by name. */
             tools: components["schemas"]["Tool"][];
+            /** @description The workflows its scripts may start, sorted by name. */
+            workflows?: components["schemas"]["PinnedWorkflow"][];
         };
         /** @description `GET /v1/toolsets`: the toolsets registered by the tenant, by id. */
         ToolsetList: {
@@ -2260,6 +2428,8 @@ export interface components {
             servers: components["schemas"]["ServerSummary"][];
             /** @description The names of its tools, sorted. */
             tools: string[];
+            /** @description The names of the workflows it pins, sorted. */
+            workflows?: string[];
         };
         Trace: {
             format: components["schemas"]["TraceFormat"];
@@ -2385,6 +2555,46 @@ export interface components {
          * @enum {string}
          */
         WebhookEventType: "run.completed" | "run.failed" | "run.cancelled" | "run.aborted" | "run.suspended" | "run.quarantined" | "tool.schema_changed" | "credentials.expired";
+        /** @description A version of a workflow: immutable, identified by its digest. */
+        Workflow: {
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * @description How a script that starts it sees it: its declaration in `rewind:workflows`, and its line
+             *     of the prompt rendering.
+             */
+            declarations: components["schemas"]["Declarations"];
+            description?: string | null;
+            input: Record<string, unknown>;
+            /**
+             * @description The labels of the API key that saved it: a key limited to labels only sees the workflows
+             *     carrying them.
+             */
+            labels: components["schemas"]["Labels"];
+            name: string;
+            output: Record<string, unknown>;
+            /** @description Digest of its script (`GET /v1/scripts/{digest}`). */
+            script: string;
+            signals: Record<string, unknown>;
+            /** @description The id of the toolset its runs call. */
+            toolset: string;
+            /**
+             * @description The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
+             *     first 12 digits.
+             */
+            version: string;
+        };
+        /** @description `GET /v1/workflows`: the latest version of each workflow, by name. */
+        WorkflowPage: {
+            /** @description Pass it as `after` to read the next page; absent on the last page. */
+            next?: string | null;
+            workflows: components["schemas"]["Workflow"][];
+        };
+        /** @description `GET /v1/workflows/{name}`: the versions of a workflow, newest first. */
+        WorkflowVersions: {
+            name: string;
+            versions: components["schemas"]["Workflow"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -2807,6 +3017,10 @@ export interface operations {
                 quarantined?: boolean;
                 /** @description Only forks of this run. */
                 parent?: string;
+                /** @description Only runs of this workflow. */
+                workflow?: string;
+                /** @description Only runs this run started. */
+                startedBy?: string;
                 /** @description Only runs started at or after this time. */
                 startedAfter?: string;
                 /** @description Only runs started before this time. */
@@ -2957,7 +3171,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused before any run exists (`invalid-script`), with `diagnostics`. */
+            /** @description The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -4098,6 +4312,15 @@ export interface operations {
             };
             /** @description The payload is too large (`payload-too-large`). */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match (`invalid-signal`). */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5870,6 +6093,249 @@ export interface operations {
             };
             /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listWorkflows: {
+        parameters: {
+            query?: {
+                /** @description The workflows whose name comes after this one: the `next` of the previous page. */
+                after?: string;
+                /** @description At most this many workflows (50 by default, 500 at most). */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of workflows, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowPage"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    createWorkflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWorkflow"];
+            };
+        };
+        responses: {
+            /** @description Saved earlier. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description Saved as a new version. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Workflow"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such toolset. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The script was refused (`invalid-script`, with `diagnostics`), or the name, a signal's name or a schema (`invalid-workflow`). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getWorkflowVersions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workflow's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its versions, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowVersions"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No API key, or an unknown or revoked one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The key's role or allowed labels do not cover this request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

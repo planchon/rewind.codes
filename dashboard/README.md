@@ -10,7 +10,7 @@ as static files by `rewind-server`, and a client of the public API `/v1` only.
 | Runs | Every run the key may read, searched with the query language in one bar: suggestions as you type, the term the server cannot read underlined, facets beside the results (a click asks for a value, a second excludes it, a third removes it), ordered by start, activity or next wake. Saved searches are kept in the browser and listed in the navigation. |
 | Waiting | Every run paused on the outside world, by tab (signals, approvals, timers, tools) and grouped by what it waits for, with the line it is paused on and when it wakes, the soonest first. Polled every 10 s. |
 | Failures | Failed, cancelled and aborted runs of a window grouped by fingerprint: signature, runs, their series, scripts, first and last seen, the line most of them ended at, top labels, the latest run. |
-| Run | The source, with each tool call, timer, signal wait and log next to the line that caused it; the timeline; the journal, the logs and the LLM trace; payloads on demand. Live through the event stream while the run goes on. A time cursor steps through the history (`?step=`): the marks of each line, hovers that show a call's arguments and result or a variable's value at that step, watches, a playhead on the timeline. |
+| Run | The source, with each tool call, timer, signal wait and log next to the line that caused it; the timeline; the journal, the logs and the LLM trace; payloads on demand. For a run of a workflow, its name and version and the run that started it (detached or not); the runs it started, each with how it ended, from its journal: `triage.start(…)`, `run.signal("approval", …)` and the `rewind:ended:` signals read as the script wrote them. Live through the event stream while the run goes on. A time cursor steps through the history (`?step=`): the marks of each line, hovers that show a call's arguments and result or a variable's value at that step, watches, a playhead on the timeline. |
 | Scripts | Every distinct script, with its runs by outcome, its tools and its labels; one script's source and runs. |
 | Tools | Latency (p50, p95, p99, max), error rate by kind and retries per tool, grouped by namespace, over a window, optionally for one toolset. |
 
@@ -73,9 +73,9 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 | Path | Holds |
 | --- | --- |
 | `src/api/` | The client, the event stream, the data hooks (TanStack Query), the DTO names |
-| `src/model/` | Pure code: a run's activities and steps from its journal, callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting |
+| `src/model/` | Pure code: a run's activities and steps from its journal, the runs it started (`workflows.ts`), callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting |
 | `src/views/` | Overview, Runs (with its facets), Waiting, Failures, Run (`run/`, with the time cursor), Scripts, Script, Tools |
 | `src/components/` | Shared pieces: statuses, payloads, the source view, the query bar, charts, tooltips |
 | `src/app/` | Routes, the key gate, the session, settings (theme, time zone), saved searches |
-| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run), a small read model that reads the query language, MSW handlers, the Vite plugin of `dev:mock` |
+| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run, and a run that starts runs of workflows), a small read model that reads the query language, MSW handlers, the Vite plugin of `dev:mock` |
 | `src/styles/` | Tokens for light and dark, and the styles |

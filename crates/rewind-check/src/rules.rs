@@ -92,6 +92,42 @@ pub(crate) fn check(source: &str, http_tool: bool) -> Vec<Finding> {
     rules.findings
 }
 
+/// Where the script's default export is, as byte offsets: what a workflow's `entry.ts` checks.
+pub(crate) fn default_export(source: &str) -> Option<(usize, usize)> {
+    let parsed = parse(source)?;
+    let ProgramRef::Module(module) = parsed.program_ref() else {
+        return None;
+    };
+    let start = parsed.range().start;
+    let offset = |position| {
+        SourcePos::unsafely_from_byte_pos(position)
+            .as_byte_index(start)
+            .min(source.len())
+    };
+    module.body.iter().find_map(|item| {
+        let span = match item {
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultDecl(export)) => export.span,
+            ModuleItem::ModuleDecl(ModuleDecl::ExportDefaultExpr(export)) => export.span,
+            ModuleItem::ModuleDecl(ModuleDecl::ExportNamed(export))
+                if export.specifiers.iter().any(|specifier| {
+                    matches!(
+                        specifier,
+                        deno_ast::swc::ast::ExportSpecifier::Named(named)
+                            if matches!(
+                                named.exported.as_ref().unwrap_or(&named.orig),
+                                ModuleExportName::Ident(ident) if &*ident.sym == "default"
+                            )
+                    )
+                }) =>
+            {
+                export.span
+            }
+            _ => return None,
+        };
+        Some((offset(span.lo), offset(span.hi)))
+    })
+}
+
 fn parse(source: &str) -> Option<ParsedSource> {
     deno_ast::parse_module(ParseParams {
         specifier: ModuleSpecifier::parse("file:///script.ts").ok()?,

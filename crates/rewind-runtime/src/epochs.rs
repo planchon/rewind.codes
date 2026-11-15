@@ -30,6 +30,10 @@ pub(crate) struct Glue {
     pub(crate) tools: fn(&Toolset) -> String,
     /// The names `rewind:tools` exports for a toolset, checked when a script is compiled.
     pub(crate) tool_exports: fn(&Toolset) -> BTreeSet<String>,
+    /// Generates `rewind:workflows` from the run's toolset.
+    pub(crate) workflows: fn(&Toolset) -> String,
+    /// The names `rewind:workflows` exports for a toolset, checked when a script is compiled.
+    pub(crate) workflow_exports: fn(&Toolset) -> BTreeSet<String>,
 }
 
 const EPOCH_1: Glue = Glue {
@@ -41,6 +45,7 @@ const EPOCH_1: Glue = Glue {
     std_exports: &[
         "CancelledError",
         "ToolError",
+        "WorkflowError",
         "run",
         "signal",
         "sleep",
@@ -48,6 +53,8 @@ const EPOCH_1: Glue = Glue {
     ],
     tools: tools_module_v1,
     tool_exports: tool_exports_v1,
+    workflows: workflows_module_v1,
+    workflow_exports: workflow_exports_v1,
 };
 
 /// Every supported epoch, oldest first. New runs start under the last one.
@@ -136,6 +143,33 @@ fn tools_module_v1(toolset: &Toolset) -> String {
             tool.name,
             caller(tool),
             js_string(&tool.name)
+        );
+    }
+    module
+}
+
+/// The names `rewind:workflows` exports in epoch 1: one per pinned workflow.
+fn workflow_exports_v1(toolset: &Toolset) -> BTreeSet<String> {
+    toolset
+        .workflows()
+        .iter()
+        .map(|workflow| workflow.name.clone())
+        .collect()
+}
+
+/// `rewind:workflows` for epoch 1: one frozen handle per pinned workflow, built by the glue
+/// (`start`, `get`). A pinned workflow's name is an identifier (`rewind_core::Toolset`).
+fn workflows_module_v1(toolset: &Toolset) -> String {
+    let mut module = String::from(
+        "import hooks from \"rewind:internal\";\n\
+         const workflow = hooks.workflow;\n",
+    );
+    for workflow in toolset.workflows() {
+        let _ = writeln!(
+            module,
+            "export const {} = workflow({});",
+            workflow.name,
+            js_string(&workflow.name)
         );
     }
     module

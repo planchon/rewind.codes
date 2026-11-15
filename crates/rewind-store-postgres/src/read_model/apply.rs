@@ -328,22 +328,22 @@ pub(super) async fn apply_once(
     let ending = snapshot.ending.as_ref();
     sqlx::query(
         "UPDATE run_summaries SET tenant = $2, script = $3, toolset = $4, headline = $5, \
-             parent = $6, labels = $7::jsonb, \
-             last_activity_at = GREATEST(last_activity_at, $8), \
-             history_len = GREATEST(history_len, $9), started_at = COALESCE($10, started_at), \
-             status = COALESCE($11, status), ended_at = COALESCE($12, ended_at), \
-             tool_calls = CASE WHEN $13 THEN (SELECT count(*) FROM tool_calls \
+             parent = $6, workflow = $7, started_by = $8, labels = $9::jsonb, \
+             last_activity_at = GREATEST(last_activity_at, $10), \
+             history_len = GREATEST(history_len, $11), started_at = COALESCE($12, started_at), \
+             status = COALESCE($13, status), ended_at = COALESCE($14, ended_at), \
+             tool_calls = CASE WHEN $15 THEN (SELECT count(*) FROM tool_calls \
                  WHERE run_id = $1 AND scheduled_at IS NOT NULL) ELSE tool_calls END, \
-             errors = CASE WHEN $13 THEN (SELECT count(*) FROM tool_calls \
+             errors = CASE WHEN $15 THEN (SELECT count(*) FROM tool_calls \
                  WHERE run_id = $1 AND outcome = 'failed') ELSE errors END, \
-             snapshot_len = CASE WHEN $14 THEN $15 ELSE snapshot_len END, \
-             mode = CASE WHEN $14 THEN $16 ELSE mode END, \
-             error = CASE WHEN $14 THEN $17 ELSE error END, \
-             message = CASE WHEN $14 THEN $18 ELSE message END, \
-             line = CASE WHEN $14 THEN $19 ELSE line END, \
-             signature = CASE WHEN $14 THEN $20 ELSE signature END, \
-             fingerprint = CASE WHEN $14 THEN $21 ELSE fingerprint END, \
-             wakes_at = CASE WHEN COALESCE($11, status) = 'active' \
+             snapshot_len = CASE WHEN $16 THEN $17 ELSE snapshot_len END, \
+             mode = CASE WHEN $16 THEN $18 ELSE mode END, \
+             error = CASE WHEN $16 THEN $19 ELSE error END, \
+             message = CASE WHEN $16 THEN $20 ELSE message END, \
+             line = CASE WHEN $16 THEN $21 ELSE line END, \
+             signature = CASE WHEN $16 THEN $22 ELSE signature END, \
+             fingerprint = CASE WHEN $16 THEN $23 ELSE fingerprint END, \
+             wakes_at = CASE WHEN COALESCE($13, status) = 'active' \
                  THEN (SELECT min(until) FROM run_waits WHERE run_id = $1) END \
          WHERE run_id = $1",
     )
@@ -353,6 +353,8 @@ pub(super) async fn apply_once(
     .bind(bytes(run.toolset))
     .bind(&run.headline)
     .bind(run.parent.map(uuid))
+    .bind(run.workflow.as_deref())
+    .bind(run.started_by.map(uuid))
     .bind(encode_labels(&run.labels))
     .bind(ts(last_activity))
     .bind(int(history_len))
@@ -482,6 +484,8 @@ mod tests {
             toolset: Digest::of(b"t"),
             labels: BTreeMap::from([("a".to_owned(), "Triage".to_owned())]),
             parent: None,
+            workflow: None,
+            started_by: None,
         };
         let text = search_text(&run, Some("TypeError"), Some("ΟΔΟΣ"));
         assert_eq!(

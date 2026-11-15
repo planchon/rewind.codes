@@ -28,7 +28,7 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::{Body, Idempotency, OptionalBody, Query};
-use crate::http::{search, toolsets};
+use crate::http::{search, toolsets, workflows};
 
 /// Runs a page of `GET /v1/runs` holds by default, and at most; failure groups likewise.
 const PAGE: u32 = 50;
@@ -44,31 +44,58 @@ pub(super) async fn start(
     caller.allow(Access::Write)?;
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
-    let stored = match &request.toolset {
-        Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
-        None => app.default_toolset(&caller.tenant).await?,
-    };
     let input = request.input;
-    let start = rewind_engine::StartRun {
-        tenant: caller.tenant.clone(),
-        script: Script::new(request.script),
-        toolset: stored.toolset,
-        declarations: stored.declarations,
-        input: input.clone(),
-        mode: RunMode::Live,
-        ttl: request.ttl.map(|ttl| ttl.get()),
-        metadata: RunMetadata {
-            labels,
-            trace_context,
-            parent: None,
-        },
-        idempotency_key: key,
-        credentials: request.credentials.map(toolsets::secrets),
+    let metadata = RunMetadata {
+        labels,
+        trace_context,
+        // What the run's scripts reach: the runs carrying the key's labels.
+        scope: caller.labels.clone(),
+        ..RunMetadata::default()
     };
-    let created = if request.check == Some(false) {
-        app.engine.start_run(start).await?
-    } else {
-        app.engine.start_run_checked(start, &app.checker).await?
+    let created = match request.workflow {
+        Some(reference) => {
+            if !request.script.is_empty() || request.toolset.is_some() {
+                return Err(ApiError::invalid(
+                    "give either a workflow, or a script and its toolset: a run of a workflow                      executes the workflow's script with its toolset",
+                ));
+            }
+            let stored =
+                workflows::resolve(&app, &caller.tenant, &caller.labels, &reference).await?;
+            app.engine
+                .start_workflow(rewind_engine::StartWorkflow {
+                    tenant: caller.tenant.clone(),
+                    version: stored.workflow.version(),
+                    input: input.clone(),
+                    ttl: request.ttl.map(|ttl| ttl.get()),
+                    metadata,
+                    idempotency_key: key,
+                    credentials: request.credentials.map(toolsets::secrets),
+                })
+                .await?
+        }
+        None => {
+            let stored = match &request.toolset {
+                Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
+                None => app.default_toolset(&caller.tenant).await?,
+            };
+            let start = rewind_engine::StartRun {
+                tenant: caller.tenant.clone(),
+                script: Script::new(request.script),
+                toolset: stored.toolset,
+                declarations: stored.declarations,
+                input: input.clone(),
+                mode: RunMode::Live,
+                ttl: request.ttl.map(|ttl| ttl.get()),
+                metadata,
+                idempotency_key: key,
+                credentials: request.credentials.map(toolsets::secrets),
+            };
+            if request.check == Some(false) {
+                app.engine.start_run(start).await?
+            } else {
+                app.engine.start_run_checked(start, &app.checker).await?
+            }
+        }
     };
     app.wake.bump();
     let record = app

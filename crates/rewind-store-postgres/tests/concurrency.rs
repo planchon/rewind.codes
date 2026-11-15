@@ -12,6 +12,11 @@
 //! - every call was answered once, under its tool's concurrency limit of 1 per run, and every
 //!   signal was accepted and delivered once, though sent twice. A run waits for its signals
 //!   before it completes.
+//!
+//! Runs that watch each other also end at once: a run and the run it started, whose ends reach
+//! each other (the child's end to its parent, the parent's cancellation to its child). Their
+//! commits lock both runs in the same order, so no two of them ever wait for each other in a
+//! cycle: Postgres detects no deadlock.
 
 mod support;
 
@@ -22,12 +27,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::future::join_all;
 use rewind_core::{
-    Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle, Payload, RunId, RunMode,
-    RunStarted, RunStatus, Seed, Seq, Timestamp, ToolOutcome, ToolPolicy, ToolRoute,
+    AbortKind, AbortReason, Command, Completion, Digest, Epoch, Event, HistoryEntry, Lifecycle,
+    Payload, RunId, RunMode, RunStarted, RunStatus, Seed, Seq, Timestamp, ToolOutcome, ToolPolicy,
+    ToolRoute,
 };
 use rewind_engine::ports::{
     AcquireRunnable, Activation, Enqueued, JournalStore, NewRun, NewToolTask, RunMetadata, RunRef,
-    StoreError, TaskFilter, TenantId, TenantScope, Trigger,
+    StartedBy, StoreError, TaskFilter, TenantId, TenantScope, Trigger,
 };
 use rewind_store_postgres::PostgresStore;
 use serde_json::json;
@@ -481,5 +487,149 @@ async fn engines_sharing_a_database_lose_and_duplicate_nothing() {
         observed.fenced,
         observed.stalls,
         observed.duplicates
+    );
+}
+
+/// Pairs of a run and the run it started attached, in each round.
+const PAIRS: u128 = 24;
+const ROUNDS: u128 = 4;
+
+/// The run `n` of the watchers' test, in one tenant.
+fn watcher_run(n: u128) -> RunRef {
+    RunRef::new(
+        TenantId::new("acme").expect("tenant"),
+        RunId::from_u128(0x0193_0000_0000_7000_9000_0000_0000_0000 | n),
+    )
+}
+
+/// Creates a run, started by `started_by` when given, and commits its `run_started`.
+async fn start_watched(store: &PostgresStore, run: &RunRef, started_by: Option<StartedBy>) {
+    let new_run = NewRun {
+        run: run.clone(),
+        started: started(),
+        metadata: RunMetadata {
+            started_by,
+            ..RunMetadata::default()
+        },
+        created_at: now(),
+    };
+    store.create_run(new_run, None).await.expect("create_run");
+    let lease = store
+        .acquire_run(run, "setup", now(), LEASE)
+        .await
+        .expect("acquire_run")
+        .expect("a pending run");
+    let consumed = store
+        .take_inbox(&lease)
+        .await
+        .expect("take_inbox")
+        .iter()
+        .map(|item| item.id)
+        .collect();
+    let entry = HistoryEntry {
+        index: 0,
+        recorded_at: now(),
+        event: Event::Lifecycle(Lifecycle::RunStarted(started())),
+    };
+    store
+        .commit_activation(
+            &lease,
+            Activation::new(vec![entry], consumed, RunStatus::Active),
+            now(),
+        )
+        .await
+        .expect("commit");
+    store.release(&lease).await.expect("release");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn runs_that_watch_each_other_end_at_once_without_deadlocks() {
+    let Some(postgres) = Postgres::start("watchers") else {
+        return;
+    };
+    let database = postgres.create_database();
+    let store = postgres.connect_with(&database, 2 * PAIRS as u32).await;
+    for round in 0..ROUNDS {
+        // Half the parents have the lower id of their pair: both orders of locks are tried.
+        let pairs: Vec<(RunRef, RunRef)> = (0..PAIRS)
+            .map(|n| {
+                let low = watcher_run(2 * (round * PAIRS + n));
+                let high = watcher_run(2 * (round * PAIRS + n) + 1);
+                if n % 2 == 0 { (low, high) } else { (high, low) }
+            })
+            .collect();
+        let mut leases = Vec::new();
+        for (parent, child) in &pairs {
+            start_watched(&store, parent, None).await;
+            let started_by = StartedBy {
+                run: parent.id,
+                seq: Seq(1),
+                detached: false,
+            };
+            start_watched(&store, child, Some(started_by)).await;
+            for run in [parent, child] {
+                let lease = store
+                    .acquire_run(run, "ender", now(), LEASE * 100)
+                    .await
+                    .expect("acquire_run")
+                    .expect("an active run");
+                leases.push(lease);
+            }
+        }
+        // Every run ends at the same moment, with an end for its watchers.
+        let barrier = Arc::new(tokio::sync::Barrier::new(leases.len()));
+        let ends = leases.into_iter().map(|lease| {
+            let store = store.clone();
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                let aborted = Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
+                    kind: AbortKind::Internal,
+                    message: "ended with its pair".into(),
+                }));
+                let entry = HistoryEntry {
+                    index: 1,
+                    recorded_at: now(),
+                    event: aborted,
+                };
+                let mut activation = Activation::new(vec![entry], Vec::new(), RunStatus::Aborted);
+                activation.end = Some(json!({ "status": "aborted" }));
+                barrier.wait().await;
+                store.commit_activation(&lease, activation, now()).await
+            })
+        });
+        for ended in join_all(ends).await {
+            ended.expect("task").expect("a terminal commit");
+        }
+        for (parent, child) in &pairs {
+            for run in [parent, child] {
+                let record = store.get_run(run).await.expect("get").expect("the run");
+                assert_eq!(record.status, RunStatus::Aborted, "{run}");
+            }
+        }
+    }
+    // What a run's end enqueued into a run that ended next was cleared with it.
+    assert_eq!(postgres.psql(&database, "SELECT count(*) FROM inbox"), "0");
+
+    // The backends report their deadlocks when they exit.
+    store.close().await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let others = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE datname = '{database}' \
+         AND pid <> pg_backend_pid()"
+    );
+    while postgres.psql(&database, &others) != "0" {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the store's connections close"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        postgres.psql(
+            &database,
+            &format!("SELECT deadlocks FROM pg_stat_database WHERE datname = '{database}'")
+        ),
+        "0",
+        "terminal commits of related runs waited for each other in a cycle"
     );
 }

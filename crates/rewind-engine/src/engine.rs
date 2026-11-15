@@ -190,6 +190,20 @@ impl StartRun {
     }
 }
 
+/// A run to create, its script and toolset already stored and its request checked.
+pub(crate) struct NewRunRequest {
+    pub(crate) tenant: TenantId,
+    pub(crate) script: Digest,
+    pub(crate) toolset: Digest,
+    pub(crate) input: Payload,
+    pub(crate) epoch: Epoch,
+    pub(crate) mode: RunMode,
+    pub(crate) ttl: Duration,
+    pub(crate) metadata: RunMetadata,
+    pub(crate) idempotency_key: Option<String>,
+    pub(crate) credentials: Option<Credentials>,
+}
+
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum StartError {
     /// The script cannot run: it does not compile, imports what does not exist, has no
@@ -216,6 +230,12 @@ pub enum StartError {
     /// The tenant already has its maximum of active runs.
     #[error("the tenant already has {quota} active runs, its maximum")]
     QuotaExceeded { quota: u32 },
+    /// No such workflow version in the tenant.
+    #[error("workflow version {0} not found")]
+    WorkflowNotFound(String),
+    /// The input does not match the workflow's input schema.
+    #[error("{0}")]
+    InvalidInput(String),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error(transparent)]
@@ -256,6 +276,10 @@ pub enum EngineError {
     ScriptNotFound(Digest),
     #[error("toolset {0} not found")]
     ToolsetNotFound(Digest),
+    /// A signal the run does not take: a name Rewind keeps, or, for a run of a workflow, a
+    /// signal its version does not declare or a payload that does not match.
+    #[error("{0}")]
+    SignalRefused(String),
     #[error("the history of run {run_id} is invalid: {error}")]
     CorruptHistory { run_id: RunId, error: HistoryError },
     #[error("the inbox of run {run_id} is invalid: {message}")]
@@ -436,9 +460,26 @@ where
         self.journal
             .put_toolset(&tenant, &request.toolset, &request.declarations)
             .await?;
+        self.create(NewRunRequest {
+            tenant,
+            script: request.script.digest(),
+            toolset: request.toolset.digest(),
+            input,
+            epoch,
+            mode: request.mode,
+            ttl,
+            metadata: request.metadata,
+            idempotency_key: request.idempotency_key,
+            credentials: request.credentials,
+        })
+        .await
+    }
 
+    /// Creates a run of a stored script and toolset, with its own credentials if it has some,
+    /// once the request is checked.
+    pub(crate) async fn create(&self, request: NewRunRequest) -> Result<Created, StartError> {
         let now = self.clock.now();
-        let run_ref = RunRef::new(tenant, self.entropy.run_id());
+        let run_ref = RunRef::new(request.tenant, self.entropy.run_id());
         // Stored before the run exists: a worker may dispatch its first call at once.
         let owner = SecretOwner::Run(run_ref.id);
         if let Some(credentials) = &request.credentials {
@@ -449,12 +490,12 @@ where
         let run = NewRun {
             run: run_ref.clone(),
             started: RunStarted {
-                script: request.script.digest(),
-                toolset: request.toolset.digest(),
-                input,
+                script: request.script,
+                toolset: request.toolset,
+                input: request.input,
                 seed: self.entropy.seed(),
-                epoch,
-                expires_at: now.saturating_add(ttl),
+                epoch: request.epoch,
+                expires_at: now.saturating_add(request.ttl),
                 mode: request.mode,
             },
             metadata: request.metadata,
@@ -481,6 +522,10 @@ where
     }
 
     /// Sends a signal to a run. It lands in the run's mailbox for `name`, first in first out.
+    ///
+    /// Names starting with `rewind:` are Rewind's, and a run of a workflow only takes the
+    /// signals its version declares, with a payload that matches their schema: anything else
+    /// is refused ([`EngineError::SignalRefused`]).
     pub async fn signal(
         &self,
         run: &RunRef,
@@ -488,8 +533,20 @@ where
         payload: JsonValue,
         idempotency_key: Option<String>,
     ) -> Result<Enqueued, EngineError> {
+        let name = name.into();
+        if let Some(record) = self.journal.get_run(run).await? {
+            match self.check_signal(&record, &name, &payload).await {
+                Ok(()) => {}
+                Err(crate::workflows::SignalRefused::Store(error)) => return Err(error.into()),
+                Err(refused) => return Err(EngineError::SignalRefused(refused.to_string())),
+            }
+        } else if rewind_core::is_reserved_signal(&name) {
+            return Err(EngineError::SignalRefused(
+                crate::workflows::SignalRefused::Reserved(name).to_string(),
+            ));
+        }
         let completion = Completion::SignalReceived {
-            name: name.into(),
+            name,
             payload: Payload::Value(payload),
         };
         self.enqueue(run, completion, idempotency_key).await
@@ -599,13 +656,14 @@ where
                 })?;
                 events.push(Event::Lifecycle(Lifecycle::RunStarted(started)));
             }
-            events.push(Event::Lifecycle(Lifecycle::RunAborted(AbortReason {
+            let abort = AbortReason {
                 kind: match quarantine.kind {
                     QuarantineKind::NonDeterminism => AbortKind::NonDeterminism,
                     QuarantineKind::Failures => AbortKind::Internal,
                 },
                 message: quarantine.reason,
-            })));
+            };
+            events.push(Event::Lifecycle(Lifecycle::RunAborted(abort.clone())));
             let mut entries: Vec<HistoryEntry> = (state.history_len()..)
                 .zip(events)
                 .map(|(index, event)| HistoryEntry {
@@ -626,6 +684,7 @@ where
             let consumed = inbox.into_iter().map(|item| item.id).collect();
             let mut activation = Activation::new(entries, consumed, RunStatus::Aborted);
             activation.payloads = payloads;
+            activation.end = Some(rewind_core::RunEnd::Aborted { reason: abort }.to_json());
             self.journal
                 .commit_activation(&lease, activation, self.clock.now())
                 .await?;
@@ -768,6 +827,7 @@ pub(crate) fn refuse_nul_in_metadata(
     idempotency_key: Option<&str>,
 ) -> Result<(), NulCharacter> {
     text::refuse_nul_in_labels(&metadata.labels)?;
+    text::refuse_nul_in_labels(&metadata.scope)?;
     if let Some(trace) = &metadata.trace_context {
         text::refuse_nul_in_trace(trace)?;
     }

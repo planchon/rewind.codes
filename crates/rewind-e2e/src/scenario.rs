@@ -35,6 +35,14 @@ pub struct Scenario {
     /// is a worker that dies with the call.
     #[serde(default)]
     pub host_worker: bool,
+    /// The run is live rather than in mock mode: its tools still answer from `tools`, but the
+    /// engine serves its built-ins itself, so the runs of `workflows` it starts really run.
+    #[serde(default)]
+    pub live: bool,
+    /// Workflows the run's toolset pins, by name. Each is registered with the scenario's tools
+    /// as its toolset, before the run starts (`archi/01-product.md`, "Workflows").
+    #[serde(default)]
+    pub workflows: BTreeMap<String, WorkflowCase>,
     /// The pinned input schema of some tools, by name. The other host and MCP tools accept any
     /// arguments; the built-ins get the schemas of `rewind_mcp::http_tool` and
     /// `rewind_runtime::builtins`.
@@ -67,6 +75,23 @@ pub struct Scenario {
     /// A check of the recorded journal against another script, or a tampered journal.
     #[serde(default)]
     pub replay: Option<ReplayCheck>,
+}
+
+/// A workflow of a case.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowCase {
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Its script, next to `scenario.json`.
+    pub script: String,
+    /// Its JSON Schemas. `{}` (anything) when absent.
+    #[serde(default = "empty_object")]
+    pub input: Value,
+    #[serde(default = "empty_object")]
+    pub output: Value,
+    #[serde(default)]
+    pub signals: BTreeMap<String, Value>,
 }
 
 /// A fork of the case's run (`archi/03-execution.md`, "Forks").
@@ -176,6 +201,8 @@ pub struct Expect {
     /// How many times each tool really answered, across the case: a fork that reuses its
     /// parent's results calls the tools fewer times than its journal schedules calls.
     pub dispatched: Option<BTreeMap<String, usize>>,
+    /// The statuses of the runs of workflows the run started, in the order of its calls.
+    pub children: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

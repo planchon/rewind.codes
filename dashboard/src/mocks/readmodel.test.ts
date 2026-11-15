@@ -18,7 +18,8 @@ function refusal(q: string): { message: string; start: number; end: number } {
 describe("the mocked read model", () => {
   it("reads the query language as the server does", () => {
     const ids = (q: string) => listRuns(world, { q, limit: 500 }, NOW).runs;
-    expect(ids("@agent:triage tool:github.close_issue")).toHaveLength(5);
+    // Four triage runs, the corpus run and the two runs of the workflow triage.
+    expect(ids("@agent:triage tool:github.close_issue")).toHaveLength(7);
     expect(ids("@agent:triage -@env:test tool:github.*").length).toBeGreaterThan(4);
     expect(ids(`"reading 'text'"`)).toHaveLength(1);
     expect(ids("waiting:signal signal:approval")).toHaveLength(1);

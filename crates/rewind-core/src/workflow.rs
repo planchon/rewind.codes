@@ -1,0 +1,676 @@
+//! Workflows: scripts with a name and a typed interface, that scripts start and signal
+//! (`archi/01-product.md`, "Workflows"; `archi/03-execution.md`, "Workflows across runs").
+//!
+//! ```text
+//! Workflow (a version: immutable, content-addressed)
+//! ├── name, description?
+//! ├── script, toolset            digests: what its runs execute
+//! └── schemas                    { input, output, signals: { <name>: schema } }
+//!
+//! PinnedWorkflow (what a toolset pins: the interface, without the script)
+//! └── name, version (the Workflow's digest), description?, schemas
+//! ```
+//!
+//! A script starts and signals runs of a pinned workflow through two built-ins, and the end of
+//! a run comes back to the runs that watch it as the reserved signal `rewind:ended:<run id>`,
+//! whose payload is a [`RunEnd`].
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use serde_json::{Map, Value, json};
+
+use crate::canonical::canonical_json;
+use crate::digest::Digest;
+use crate::event::{
+    AbortKind, AbortReason, CancelReason, ScriptError, ToolFailure, ToolFailureKind, ToolOutcome,
+};
+use crate::ids::RunId;
+use crate::payload::Payload;
+use crate::state::RunOutcome;
+use crate::toolset::{is_identifier, is_reserved};
+
+/// Signal names starting with this prefix are Rewind's: no one else sends them, and no
+/// workflow declares them (`archi/01-product.md`, "Signals").
+pub const RESERVED_SIGNAL_PREFIX: &str = "rewind:";
+
+/// The prefix of the signal that carries a run's end to the runs that watch it.
+const ENDED_PREFIX: &str = "rewind:ended:";
+
+/// The name of the signal that carries the end of `run`: `rewind:ended:<run id>`.
+pub fn end_signal_name(run: RunId) -> String {
+    format!("{ENDED_PREFIX}{run}")
+}
+
+/// The run whose end a signal named `name` carries, if it is such a signal.
+pub fn ended_run(name: &str) -> Option<RunId> {
+    name.strip_prefix(ENDED_PREFIX)?.parse().ok()
+}
+
+/// Why a run is cancelled when the run that started it attached ends
+/// (`archi/03-execution.md`, "Workflows across runs").
+pub fn starter_ended(starter: RunId) -> CancelReason {
+    CancelReason::Requested(Some(format!("the run {starter} that started it ended")))
+}
+
+/// Whether a signal name is reserved for Rewind.
+pub fn is_reserved_signal(name: &str) -> bool {
+    name.starts_with(RESERVED_SIGNAL_PREFIX)
+}
+
+/// The JSON Schemas of a workflow: its input, its output, and each signal it accepts.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkflowSchemas {
+    pub input: Value,
+    pub output: Value,
+    /// By signal name.
+    pub signals: BTreeMap<String, Value>,
+}
+
+impl WorkflowSchemas {
+    fn to_json(&self) -> Value {
+        json!({ "input": self.input, "output": self.output, "signals": self.signals })
+    }
+}
+
+/// A version of a workflow: a script with a name and a typed interface. Immutable and
+/// content-addressed: its [`version`](Self::version) is the digest of its document, the workflow
+/// version document of the stored format v1 (`archi/02-journal.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Workflow {
+    name: String,
+    description: Option<String>,
+    script: Digest,
+    toolset: Digest,
+    schemas: WorkflowSchemas,
+}
+
+/// A workflow that breaks an invariant. The messages are written for whoever registers it, a
+/// harness developer or a model.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum InvalidWorkflow {
+    #[error(
+        "invalid workflow name {0:?}: expected an identifier (letters, digits, _ and $) that is \
+         not a reserved word of JavaScript, since scripts import it from rewind:workflows"
+    )]
+    Name(String),
+    #[error("invalid signal name {0:?}: expected a name without control characters")]
+    SignalName(String),
+    #[error("invalid signal name {0:?}: names starting with \"rewind:\" are reserved")]
+    ReservedSignalName(String),
+    #[error("the {0} schema must be a JSON Schema: an object or a boolean")]
+    Schema(String),
+}
+
+impl Workflow {
+    /// A version of the workflow `name`, whose runs execute `script` with `toolset`.
+    pub fn new(
+        name: impl Into<String>,
+        description: Option<String>,
+        script: Digest,
+        toolset: Digest,
+        schemas: WorkflowSchemas,
+    ) -> Result<Self, InvalidWorkflow> {
+        let name = name.into();
+        check_interface(&name, &schemas)?;
+        Ok(Self {
+            name,
+            description,
+            script,
+            toolset,
+            schemas,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// Digest of the script its runs execute.
+    pub fn script(&self) -> Digest {
+        self.script
+    }
+
+    /// Digest of the toolset its runs call.
+    pub fn toolset(&self) -> Digest {
+        self.toolset
+    }
+
+    pub fn schemas(&self) -> &WorkflowSchemas {
+        &self.schemas
+    }
+
+    /// The version: SHA-256 of the canonical workflow version document, `"v": 1` included. The
+    /// document `rewind-format` writes hashes to it.
+    pub fn version(&self) -> Digest {
+        Digest::of(canonical_json(&self.document()).as_bytes())
+    }
+
+    /// What a toolset pins of this version.
+    pub fn pinned(&self) -> PinnedWorkflow {
+        PinnedWorkflow {
+            name: self.name.clone(),
+            version: self.version(),
+            description: self.description.clone(),
+            schemas: self.schemas.clone(),
+        }
+    }
+
+    /// The workflow version document v1, as a JSON value.
+    fn document(&self) -> Value {
+        let mut object = Map::new();
+        object.insert("v".into(), json!(1));
+        object.insert("name".into(), json!(self.name));
+        if let Some(description) = &self.description {
+            object.insert("description".into(), json!(description));
+        }
+        object.insert("script".into(), json!(self.script.to_hex()));
+        object.insert("toolset".into(), json!(self.toolset.to_hex()));
+        object.insert("schemas".into(), self.schemas.to_json());
+        Value::Object(object)
+    }
+}
+
+impl fmt::Display for Workflow {
+    /// `triage@9f2c4e1a07b3`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.version().short())
+    }
+}
+
+/// A workflow as a toolset pins it: its name, version and interface. Scripts of that toolset
+/// start runs of exactly this version, and are checked against these schemas.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinnedWorkflow {
+    pub name: String,
+    /// The [`Workflow::version`] pinned.
+    pub version: Digest,
+    pub description: Option<String>,
+    pub schemas: WorkflowSchemas,
+}
+
+impl PinnedWorkflow {
+    /// Checks what [`Workflow::new`] checks of the interface.
+    pub(crate) fn check(&self) -> Result<(), InvalidWorkflow> {
+        check_interface(&self.name, &self.schemas)
+    }
+
+    /// The name of its built-in: `workflows.<name>.start` or `workflows.<name>.signal`.
+    pub fn tool_name(&self, op: WorkflowOp) -> String {
+        format!("{WORKFLOWS_NAMESPACE}.{}.{}", self.name, op.as_str())
+    }
+
+    /// Its entry in the pinned toolset document v1.
+    pub(crate) fn document(&self) -> Value {
+        let mut object = Map::new();
+        object.insert("name".into(), json!(self.name));
+        object.insert("version".into(), json!(self.version.to_hex()));
+        if let Some(description) = &self.description {
+            object.insert("description".into(), json!(description));
+        }
+        object.insert("schemas".into(), self.schemas.to_json());
+        Value::Object(object)
+    }
+}
+
+impl fmt::Display for PinnedWorkflow {
+    /// `triage@9f2c4e1a07b3`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}@{}", self.name, self.version.short())
+    }
+}
+
+/// The namespace of the workflows' built-ins, reserved in every toolset.
+pub const WORKFLOWS_NAMESPACE: &str = "workflows";
+
+/// What a workflow's built-in does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum WorkflowOp {
+    /// `workflows.<name>.start`: starts a run, args `{ input, detached?, labels?, ttl? }`,
+    /// result `{ runId }`.
+    Start,
+    /// `workflows.<name>.signal`: signals a run, args `{ run, name, payload }`, result `{}`.
+    Signal,
+}
+
+impl WorkflowOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WorkflowOp::Start => "start",
+            WorkflowOp::Signal => "signal",
+        }
+    }
+
+    /// The workflow and the operation of a workflow's built-in, by its name:
+    /// `workflows.triage.start` is `("triage", Start)`. The namespace is reserved, so no other
+    /// tool has such a name.
+    pub fn of_tool(tool: &str) -> Option<(&str, WorkflowOp)> {
+        let rest = tool.strip_prefix(WORKFLOWS_NAMESPACE)?.strip_prefix('.')?;
+        let (workflow, op) = rest.rsplit_once('.')?;
+        let op = match op {
+            "start" => WorkflowOp::Start,
+            "signal" => WorkflowOp::Signal,
+            _ => return None,
+        };
+        is_identifier(workflow).then_some((workflow, op))
+    }
+}
+
+fn check_interface(name: &str, schemas: &WorkflowSchemas) -> Result<(), InvalidWorkflow> {
+    if !is_identifier(name) || is_reserved(name) {
+        return Err(InvalidWorkflow::Name(name.to_owned()));
+    }
+    let is_schema = |schema: &Value| matches!(schema, Value::Object(_) | Value::Bool(_));
+    if !is_schema(&schemas.input) {
+        return Err(InvalidWorkflow::Schema("input".into()));
+    }
+    if !is_schema(&schemas.output) {
+        return Err(InvalidWorkflow::Schema("output".into()));
+    }
+    for (signal, schema) in &schemas.signals {
+        if signal.is_empty() || signal.chars().any(char::is_control) {
+            return Err(InvalidWorkflow::SignalName(signal.clone()));
+        }
+        if is_reserved_signal(signal) {
+            return Err(InvalidWorkflow::ReservedSignalName(signal.clone()));
+        }
+        if !is_schema(schema) {
+            return Err(InvalidWorkflow::Schema(format!("{signal:?} signal")));
+        }
+    }
+    Ok(())
+}
+
+// -------------------------------------------------------------------------------------------
+// The end of a run, as the runs that watch it receive it
+
+/// How a run ended, as the payload of its `rewind:ended:<run id>` signal:
+/// `{ "status": "completed", "output" }`, `{ "status": "failed" | "cancelled", "error" }` or
+/// `{ "status": "aborted", "reason" }` (`archi/02-journal.md`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum RunEnd {
+    Completed {
+        output: Value,
+    },
+    Failed {
+        error: ScriptError,
+    },
+    /// A failure with `CancelledError`.
+    Cancelled {
+        error: ScriptError,
+    },
+    Aborted {
+        reason: AbortReason,
+    },
+}
+
+impl RunEnd {
+    /// The end of a run that ended so. `None` when its output is held by digest only: the
+    /// caller loads its value first.
+    pub fn from_outcome(outcome: &RunOutcome) -> Option<Self> {
+        Some(match outcome {
+            RunOutcome::Completed { output } => match output {
+                Payload::Value(output) => RunEnd::Completed {
+                    output: output.clone(),
+                },
+                Payload::Digest(_) => return None,
+            },
+            RunOutcome::Failed { error } if error.name == ScriptError::CANCELLED => {
+                RunEnd::Cancelled {
+                    error: error.clone(),
+                }
+            }
+            RunOutcome::Failed { error } => RunEnd::Failed {
+                error: error.clone(),
+            },
+            RunOutcome::Aborted { reason } => RunEnd::Aborted {
+                reason: reason.clone(),
+            },
+        })
+    }
+
+    pub fn status(&self) -> &'static str {
+        match self {
+            RunEnd::Completed { .. } => "completed",
+            RunEnd::Failed { .. } => "failed",
+            RunEnd::Cancelled { .. } => "cancelled",
+            RunEnd::Aborted { .. } => "aborted",
+        }
+    }
+
+    /// The signal's payload.
+    pub fn to_json(&self) -> Value {
+        let error_json = |error: &ScriptError| {
+            let mut object = Map::new();
+            object.insert("name".into(), json!(error.name));
+            object.insert("message".into(), json!(error.message));
+            if let Some(stack) = &error.stack {
+                object.insert("stack".into(), json!(stack));
+            }
+            Value::Object(object)
+        };
+        match self {
+            RunEnd::Completed { output } => json!({ "status": "completed", "output": output }),
+            RunEnd::Failed { error } | RunEnd::Cancelled { error } => {
+                json!({ "status": self.status(), "error": error_json(error) })
+            }
+            RunEnd::Aborted { reason } => json!({
+                "status": "aborted",
+                "reason": { "kind": reason.kind.as_str(), "message": reason.message },
+            }),
+        }
+    }
+
+    /// What a cassette records for the start of a run that ended so, and what mock mode makes
+    /// of it again ([`from_mock`](Self::from_mock)): its output, or a failure that says how it
+    /// ended.
+    pub fn to_mock(&self) -> ToolOutcome {
+        let failure = |message: String| {
+            ToolOutcome::Failure(ToolFailure {
+                kind: ToolFailureKind::Error,
+                message,
+                data: None,
+            })
+        };
+        match self {
+            RunEnd::Completed { output } => ToolOutcome::Result(output.clone()),
+            RunEnd::Failed { error } => failure(format!("{}: {}", error.name, error.message)),
+            RunEnd::Cancelled { error } => {
+                failure(format!("cancelled: {}: {}", error.name, error.message))
+            }
+            RunEnd::Aborted { reason } => failure(format!("aborted: {reason}")),
+        }
+    }
+
+    /// The end of a run that mock mode answered in place of starting it: a result is its
+    /// output, a failure its error (`archi/03-execution.md`, "Workflows across runs").
+    pub fn from_mock(outcome: ToolOutcome) -> Self {
+        match outcome {
+            ToolOutcome::Result(output) => RunEnd::Completed { output },
+            ToolOutcome::Failure(failure) => RunEnd::Failed {
+                error: ScriptError {
+                    name: "Error".into(),
+                    message: failure.message,
+                    stack: None,
+                },
+            },
+        }
+    }
+
+    /// Reads a signal's payload written by [`to_json`](Self::to_json).
+    pub fn from_json(value: &Value) -> Option<Self> {
+        let error = |value: &Value| {
+            Some(ScriptError {
+                name: value.get("name")?.as_str()?.to_owned(),
+                message: value.get("message")?.as_str()?.to_owned(),
+                stack: value
+                    .get("stack")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            })
+        };
+        match value.get("status")?.as_str()? {
+            "completed" => Some(RunEnd::Completed {
+                output: value.get("output")?.clone(),
+            }),
+            "failed" => Some(RunEnd::Failed {
+                error: error(value.get("error")?)?,
+            }),
+            "cancelled" => Some(RunEnd::Cancelled {
+                error: error(value.get("error")?)?,
+            }),
+            "aborted" => {
+                let reason = value.get("reason")?;
+                Some(RunEnd::Aborted {
+                    reason: AbortReason {
+                        kind: AbortKind::parse(reason.get("kind")?.as_str()?)?,
+                        message: reason.get("message")?.as_str()?.to_owned(),
+                    },
+                })
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn schemas() -> WorkflowSchemas {
+        WorkflowSchemas {
+            input: json!({ "type": "object", "properties": { "repo": { "type": "string" } } }),
+            output: json!({ "type": "object" }),
+            signals: BTreeMap::from([("approval".to_owned(), json!({ "type": "object" }))]),
+        }
+    }
+
+    fn triage() -> Workflow {
+        Workflow::new(
+            "triage",
+            Some("Triage the stale issues".into()),
+            Digest::of(b"script"),
+            Digest::of(b"toolset"),
+            schemas(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_version_is_the_digest_of_the_document() {
+        let workflow = triage();
+        let document = format!(
+            concat!(
+                r#"{{"description":"Triage the stale issues","name":"triage","#,
+                r#""schemas":{{"input":{{"properties":{{"repo":{{"type":"string"}}}},"type":"object"}},"#,
+                r#""output":{{"type":"object"}},"signals":{{"approval":{{"type":"object"}}}}}},"#,
+                r#""script":"{}","toolset":"{}","v":1}}"#
+            ),
+            Digest::of(b"script").to_hex(),
+            Digest::of(b"toolset").to_hex(),
+        );
+        assert_eq!(workflow.version(), Digest::of(document.as_bytes()));
+        assert_eq!(
+            workflow.to_string(),
+            format!("triage@{}", workflow.version().short())
+        );
+        let pinned = workflow.pinned();
+        assert_eq!(pinned.version, workflow.version());
+        assert_eq!(
+            pinned.tool_name(WorkflowOp::Start),
+            "workflows.triage.start"
+        );
+    }
+
+    #[test]
+    fn every_field_changes_the_version() {
+        let base = triage().version();
+        let with = |name: &str, description: Option<&str>, script: &[u8], signals: &[&str]| {
+            let mut schemas = schemas();
+            schemas.signals = signals
+                .iter()
+                .map(|name| ((*name).to_owned(), json!({})))
+                .collect();
+            Workflow::new(
+                name,
+                description.map(str::to_owned),
+                Digest::of(script),
+                Digest::of(b"toolset"),
+                schemas,
+            )
+            .unwrap()
+            .version()
+        };
+        let versions = [
+            base,
+            with(
+                "other",
+                Some("Triage the stale issues"),
+                b"script",
+                &["approval"],
+            ),
+            with("triage", None, b"script", &["approval"]),
+            with(
+                "triage",
+                Some("Triage the stale issues"),
+                b"other",
+                &["approval"],
+            ),
+            with("triage", Some("Triage the stale issues"), b"script", &[]),
+        ];
+        let distinct: std::collections::BTreeSet<_> = versions.iter().collect();
+        assert_eq!(distinct.len(), versions.len());
+    }
+
+    #[test]
+    fn names_and_schemas_are_checked() {
+        let workflow = |name: &str, schemas: WorkflowSchemas| {
+            Workflow::new(name, None, Digest::of(b"s"), Digest::of(b"t"), schemas)
+        };
+        for name in ["", "1st", "my-flow", "default", "eval", "a.b"] {
+            assert_eq!(
+                workflow(name, schemas()),
+                Err(InvalidWorkflow::Name(name.into())),
+                "{name}"
+            );
+        }
+        let mut reserved = schemas();
+        reserved.signals.insert("rewind:ended:x".into(), json!({}));
+        assert!(matches!(
+            workflow("triage", reserved),
+            Err(InvalidWorkflow::ReservedSignalName(_))
+        ));
+        let mut control = schemas();
+        control.signals.insert("a\nb".into(), json!({}));
+        assert!(matches!(
+            workflow("triage", control),
+            Err(InvalidWorkflow::SignalName(_))
+        ));
+        let mut not_a_schema = schemas();
+        not_a_schema.output = json!("string");
+        assert_eq!(
+            workflow("triage", not_a_schema),
+            Err(InvalidWorkflow::Schema("output".into()))
+        );
+        let mut any = schemas();
+        any.input = json!(true);
+        assert!(workflow("$flow_2", any).is_ok());
+    }
+
+    #[test]
+    fn builtins_are_found_by_name() {
+        assert_eq!(
+            WorkflowOp::of_tool("workflows.triage.start"),
+            Some(("triage", WorkflowOp::Start))
+        );
+        assert_eq!(
+            WorkflowOp::of_tool("workflows.triage.signal"),
+            Some(("triage", WorkflowOp::Signal))
+        );
+        for tool in [
+            "workflows.triage",
+            "workflows.triage.stop",
+            "workflows.a.b.start",
+            "github.triage.start",
+            "workflows..start",
+        ] {
+            assert_eq!(WorkflowOp::of_tool(tool), None, "{tool}");
+        }
+    }
+
+    #[test]
+    fn mock_outcomes_are_ends() {
+        let end = RunEnd::from_mock(ToolOutcome::Result(json!({ "closed": 1 })));
+        assert_eq!(
+            end,
+            RunEnd::Completed {
+                output: json!({ "closed": 1 })
+            }
+        );
+        assert_eq!(end.to_mock(), ToolOutcome::Result(json!({ "closed": 1 })));
+        let failed = RunEnd::Failed {
+            error: ScriptError {
+                name: "TypeError".into(),
+                message: "x".into(),
+                stack: None,
+            },
+        };
+        let ToolOutcome::Failure(failure) = failed.to_mock() else {
+            panic!("a failed run is a failure");
+        };
+        assert_eq!(failure.message, "TypeError: x");
+        assert_eq!(
+            RunEnd::from_mock(ToolOutcome::Failure(failure)).status(),
+            "failed"
+        );
+    }
+
+    #[test]
+    fn end_signals_name_their_run() {
+        let run: RunId = "0193a5c4-0000-7000-8000-000000000001".parse().unwrap();
+        let name = end_signal_name(run);
+        assert_eq!(name, format!("rewind:ended:{run}"));
+        assert_eq!(ended_run(&name), Some(run));
+        assert_eq!(ended_run("approval"), None);
+        assert_eq!(ended_run("rewind:ended:nope"), None);
+        assert!(is_reserved_signal(&name));
+        assert!(!is_reserved_signal("approval"));
+    }
+
+    #[test]
+    fn ends_round_trip_through_their_payload() {
+        let error = ScriptError {
+            name: "TypeError".into(),
+            message: "x is undefined".into(),
+            stack: Some("at main (script.ts:3:7)".into()),
+        };
+        let cancelled = ScriptError {
+            name: ScriptError::CANCELLED.into(),
+            message: "the run was cancelled".into(),
+            stack: None,
+        };
+        let ends = [
+            RunEnd::Completed {
+                output: json!({ "closed": 3 }),
+            },
+            RunEnd::Failed {
+                error: error.clone(),
+            },
+            RunEnd::Cancelled {
+                error: cancelled.clone(),
+            },
+            RunEnd::Aborted {
+                reason: AbortReason {
+                    kind: AbortKind::LimitExceeded,
+                    message: "cpu".into(),
+                },
+            },
+        ];
+        for end in &ends {
+            assert_eq!(RunEnd::from_json(&end.to_json()).as_ref(), Some(end));
+        }
+        assert_eq!(
+            ends[0].to_json(),
+            json!({ "status": "completed", "output": { "closed": 3 } })
+        );
+        assert_eq!(
+            RunEnd::from_outcome(&RunOutcome::Failed { error: cancelled }).map(|end| end.status()),
+            Some("cancelled")
+        );
+        assert_eq!(
+            RunEnd::from_outcome(&RunOutcome::Failed { error }).map(|end| end.status()),
+            Some("failed")
+        );
+        assert_eq!(
+            RunEnd::from_outcome(&RunOutcome::Completed {
+                output: Payload::Digest(Digest::of(b"x"))
+            }),
+            None
+        );
+        assert_eq!(RunEnd::from_json(&json!({ "status": "lost" })), None);
+    }
+}

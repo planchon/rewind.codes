@@ -233,6 +233,14 @@ impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
         if self.static_tools.contains(&call.tool.name) {
             return self.statics.dispatch(call, credentials).await;
         }
+        // A signal to a mocked run has nowhere to go: it is accepted (`archi/03-execution.md`,
+        // "Workflows across runs").
+        if matches!(
+            rewind_core::WorkflowOp::of_tool(&call.tool.name),
+            Some((_, rewind_core::WorkflowOp::Signal))
+        ) {
+            return Dispatched::Result(serde_json::json!({}));
+        }
         Dispatched::Failed(no_response(&call))
     }
 }

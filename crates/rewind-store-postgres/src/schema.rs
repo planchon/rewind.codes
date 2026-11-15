@@ -15,11 +15,23 @@ use sqlx::migrate::{MigrateError, Migration, MigrationSource, MigrationType, Mig
 use crate::Error;
 
 /// The version of the schema this build writes: its latest migration.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 3;
 
-/// Migration `n` brings the schema to version `n`.
-const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] =
-    [(1, "schema", include_str!("../migrations/0001_schema.sql"))];
+/// Migration `n` brings the schema to version `n`. A migration, once released, never changes: a
+/// change of the schema is a new one.
+const MIGRATIONS: [(i64, &str, &str); SCHEMA_VERSION as usize] = [
+    (1, "schema", include_str!("../migrations/0001_schema.sql")),
+    (
+        2,
+        "workflows",
+        include_str!("../migrations/0002_workflows.sql"),
+    ),
+    (
+        3,
+        "run workflows",
+        include_str!("../migrations/0003_run_workflows.sql"),
+    ),
+];
 
 /// The migrations embedded in this build.
 #[derive(Debug)]

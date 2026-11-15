@@ -6,8 +6,8 @@
 //! code:
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
-//!   table: [`toolsets`], [`scripts`], [`runs`] (with [`events`], the journal entries and the
-//!   event stream), [`tasks`], [`webhooks`], [`reading`] and [`admin`];
+//!   table: [`toolsets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the journal
+//!   entries and the event stream), [`tasks`], [`webhooks`], [`reading`] and [`admin`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
 //! - the query language of the run lists ([`query`]);
 //! - the headers ([`headers`]): the API key, `Idempotency-Key`, the webhook signature;
@@ -43,6 +43,7 @@ pub mod scripts;
 pub mod tasks;
 pub mod toolsets;
 pub mod webhooks;
+pub mod workflows;
 
 pub use client::{Client, EventStream};
 pub use error::Error;

@@ -1,14 +1,21 @@
 //! The schema of `journal.db`, versioned: migrations are embedded in the binary, applied in
 //! order when the database is opened, each in its own transaction with the new version. A
 //! database whose version is above [`SCHEMA_VERSION`] was written by a newer build, and is
-//! refused rather than misread.
+//! refused rather than misread. A migration is never edited once released: a change is a new
+//! migration (version 2 added the workflows, the watchers, and the runs' workflow, starter and
+//! scope; version 3 the workflow and starter of the read model's runs).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
 //! - every key starts with the tenant, except where a run id is enough: run ids are unique
-//!   across tenants, so `runs` is keyed by `id` (and indexed by tenant);
-//! - composite values are spread over columns (a run's quarantine, lease, trace context and
-//!   fork parent; a task's route, policy and state), so that the store can query them;
+//!   across tenants, so `runs` is keyed by `id` (and indexed by tenant), and `run_watchers` by
+//!   the run and its watcher (and indexed by watcher);
+//! - composite values are spread over columns (a run's quarantine, lease, trace context, fork
+//!   parent, workflow and starter; a task's route, policy and state), so that the store can
+//!   query them. A run's `scope`, like its `labels`, is a JSON object;
+//! - `workflows.stored_order` numbers each workflow's versions (by tenant and name) in the
+//!   order they were stored, which breaks the ties of `created_at` when they are listed newest
+//!   first;
 //! - a run keeps its oldest inbox item (`inbox_head`, received at `runnable_at`), and a task
 //!   when it can be claimed (`due_at`): the picks of `acquire_runnable` and `claim_tool_tasks`
 //!   read an index instead of grouping the inbox or scanning the tasks;
@@ -20,10 +27,10 @@
 //! The read model's tables, written only through `ReadModel`:
 //!
 //! - `run_summaries` keeps what the entries give (status, start and end, counts, history
-//!   length), the metadata of the latest `apply` (headline, labels as JSON, parent), and the
-//!   kept snapshot's columns: its length (`snapshot_len`), mode and ending, the ending's
-//!   `fingerprint` among them. `wakes_at` is the earliest `until` of its waits while the run is
-//!   active, kept for the `wakes` order;
+//!   length), the metadata of the latest `apply` (headline, labels as JSON, parent, the
+//!   workflow's name, `started_by`), and the kept snapshot's columns: its length
+//!   (`snapshot_len`), mode and ending, the ending's `fingerprint` among them. `wakes_at` is the
+//!   earliest `until` of its waits while the run is active, kept for the `wakes` order;
 //! - `run_labels` holds one row per label, for equality, prefix and presence;
 //! - `run_waits` holds the kept snapshot's waits by `position`, the snapshot's order, without
 //!   task states;
@@ -40,13 +47,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -335,6 +342,48 @@ CREATE TABLE tool_calls (
 CREATE INDEX tool_calls_by_tool ON tool_calls (tool);
 "#;
 
+/// Workflows and the runs that watch a run's end (`archi/03-execution.md`, "Workflows across
+/// runs"). A run's `workflow` and `workflow_version` are null together, as are `started_by`,
+/// `started_seq` and `detached`.
+const V2: &str = r#"
+ALTER TABLE runs ADD COLUMN workflow TEXT;
+ALTER TABLE runs ADD COLUMN workflow_version TEXT;
+ALTER TABLE runs ADD COLUMN started_by TEXT;
+ALTER TABLE runs ADD COLUMN started_seq INTEGER;
+ALTER TABLE runs ADD COLUMN detached INTEGER;
+ALTER TABLE runs ADD COLUMN scope TEXT NOT NULL DEFAULT '{}';
+
+CREATE TABLE workflows (
+    tenant TEXT NOT NULL,
+    version TEXT NOT NULL,
+    name TEXT NOT NULL,
+    document TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    stored_order INTEGER NOT NULL,
+    PRIMARY KEY (tenant, version)
+) STRICT;
+CREATE INDEX workflows_by_name ON workflows (tenant, name, created_at, stored_order);
+
+CREATE TABLE run_watchers (
+    run_id TEXT NOT NULL,
+    watcher TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    attached INTEGER NOT NULL,
+    PRIMARY KEY (run_id, watcher)
+) STRICT;
+CREATE INDEX run_watchers_by_watcher ON run_watchers (watcher, attached);
+"#;
+
+/// The read model's runs by workflow and by the run that started them
+/// (`archi/05-testing-and-observability.md`, "Query language": `workflow:`, `started_by:`): a
+/// summary keeps the workflow's name and its starter, null for a run of neither, like `parent`.
+/// No index: a query's terms are `CASE` expressions, which an index does not serve.
+const V3: &str = r#"
+ALTER TABLE run_summaries ADD COLUMN workflow TEXT;
+ALTER TABLE run_summaries ADD COLUMN started_by TEXT;
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
     sql::execute(
@@ -414,4 +463,196 @@ pub(crate) fn check_setting_name(name: &str) -> Result<(), Error> {
         return Err(Error::ReservedSetting(name.to_owned()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rewind_core::{Digest, RunId, RunStatus, Seq};
+    use rewind_engine::ports::{
+        JournalStore, Predicate, ProjectedRun, ReadModel, RunMetadata, RunOrder, RunQuery, RunRef,
+        RunSnapshot, TenantId, TextMatch, Watched,
+    };
+
+    use super::*;
+    use crate::{MasterKey, TursoStore};
+
+    #[tokio::test]
+    async fn a_database_of_version_1_is_migrated_with_its_runs() {
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        let run = RunRef::new(TenantId::local(), RunId::from_u128(1));
+        {
+            // The database as a build of version 1 left it, with a run.
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("create the file");
+            let connection = database.connect().expect("connect");
+            sql::execute(
+                &connection,
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
+                Vec::new(),
+            )
+            .await
+            .expect("meta");
+            connection.execute_batch(V1).await.expect("version 1");
+            set_meta(&connection, VERSION_KEY, Some("1"))
+                .await
+                .expect("set the version");
+            sql::execute(
+                &connection,
+                "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
+                 expires_at, expiry_enqueued, failures, attempts, fence, labels, created_at, \
+                 updated_at) VALUES (?, ?, ?, ?, 'pending', 1, 0, 2, 0, 0, 0, 0, \
+                 '{\"agent\":\"triage\"}', 1, 1)",
+                vec![
+                    sql::run_id(run.id),
+                    sql::tenant(&run.tenant),
+                    sql::digest(Digest::of(b"script")),
+                    sql::digest(Digest::of(b"toolset")),
+                ],
+            )
+            .await
+            .expect("a run");
+        }
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("open and migrate");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        let record = store
+            .get_run(&run)
+            .await
+            .expect("get_run")
+            .expect("the run is kept");
+        assert_eq!(
+            record.metadata,
+            RunMetadata {
+                labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
+                ..RunMetadata::default()
+            },
+            "no workflow, no starter, an empty scope"
+        );
+        assert_eq!(
+            store
+                .watch_run(&run, RunId::from_u128(2), Seq(1))
+                .await
+                .expect("watch_run"),
+            Some(Watched { ended: false })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_database_of_version_2_is_migrated_with_its_summaries() {
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        let tenant = TenantId::local();
+        let (starter, started) = (RunId::from_u128(1), RunId::from_u128(2));
+        {
+            // The database as a build of version 2 left it, with a run projected.
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("create the file");
+            let connection = database.connect().expect("connect");
+            sql::execute(
+                &connection,
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT",
+                Vec::new(),
+            )
+            .await
+            .expect("meta");
+            connection.execute_batch(V1).await.expect("version 1");
+            connection.execute_batch(V2).await.expect("version 2");
+            set_meta(&connection, VERSION_KEY, Some("2"))
+                .await
+                .expect("set the version");
+            sql::execute(
+                &connection,
+                "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
+                 labels, last_activity_at, tool_calls, errors, history_len, snapshot_len) \
+                 VALUES (?, ?, ?, 'a run', ?, 'active', '{}', 5, 0, 0, 1, 1)",
+                vec![
+                    sql::run_id(starter),
+                    sql::tenant(&tenant),
+                    sql::digest(Digest::of(b"script")),
+                    sql::digest(Digest::of(b"toolset")),
+                ],
+            )
+            .await
+            .expect("a summary");
+        }
+
+        let store = TursoStore::open(&path, MasterKey::from_bytes([1; 32]))
+            .await
+            .expect("open and migrate");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        let kept = store
+            .search_runs(&RunQuery::new(tenant.clone()), RunOrder::Started, None, 10)
+            .await
+            .expect("search_runs");
+        assert_eq!(
+            kept.iter()
+                .map(|summary| (
+                    summary.run.id,
+                    summary.workflow.as_deref(),
+                    summary.started_by
+                ))
+                .collect::<Vec<_>>(),
+            [(starter, None, None)],
+            "the summary is kept, of no workflow, started by no run"
+        );
+
+        // A run of a workflow, started by the migrated one.
+        store
+            .apply(
+                &ProjectedRun {
+                    run: RunRef::new(tenant.clone(), started),
+                    script: Digest::of(b"script"),
+                    headline: "a run".into(),
+                    toolset: Digest::of(b"toolset"),
+                    labels: BTreeMap::new(),
+                    parent: None,
+                    workflow: Some("triage".into()),
+                    started_by: Some(starter),
+                },
+                &[],
+                &RunSnapshot {
+                    history_len: 0,
+                    status: RunStatus::Active,
+                    mode: None,
+                    waits: Vec::new(),
+                    ending: None,
+                },
+            )
+            .await
+            .expect("apply");
+        let found = |query: RunQuery| {
+            let store = &store;
+            async move {
+                let runs = store
+                    .search_runs(&query, RunOrder::Started, None, 10)
+                    .await
+                    .expect("search_runs");
+                runs.iter()
+                    .map(|summary| summary.run.id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        let any_workflow = || Predicate::Workflow(vec![TextMatch::Any]);
+        assert_eq!(
+            found(RunQuery::new(tenant.clone()).with(any_workflow())).await,
+            [started]
+        );
+        assert_eq!(
+            found(RunQuery::new(tenant.clone()).without(any_workflow())).await,
+            [starter]
+        );
+        assert_eq!(
+            found(RunQuery::new(tenant.clone()).with(Predicate::StartedBy(starter))).await,
+            [started]
+        );
+    }
 }

@@ -94,6 +94,18 @@ fn filter_terms(filter: &RunFilter) -> Result<Vec<Term>, ApiError> {
             .map_err(|_| ApiError::invalid(format!("parent {parent:?}: expected a run id")))?;
         with(Predicate::Parent(parent));
     }
+    if let Some(workflow) = &filter.workflow {
+        refuse_nul_in_filter("workflow", workflow)?;
+        with(Predicate::Workflow(vec![TextMatch::Exact(
+            workflow.clone(),
+        )]));
+    }
+    if let Some(started_by) = &filter.started_by {
+        let started_by = started_by.parse::<RunId>().map_err(|_| {
+            ApiError::invalid(format!("startedBy {started_by:?}: expected a run id"))
+        })?;
+        with(Predicate::StartedBy(started_by));
+    }
     if filter.started_after.is_some() || filter.started_before.is_some() {
         with(Predicate::Started(Range {
             start: filter
@@ -141,6 +153,11 @@ fn term(term: query::Term, now: jiff::Timestamp) -> Term {
         Filter::Parent(parent) => match parent.parse::<RunId>() {
             Ok(parent) => Predicate::Parent(parent),
             Err(_) => Predicate::Id(vec![parent]),
+        },
+        Filter::Workflow(names) => Predicate::Workflow(patterns(names)),
+        Filter::StartedBy(run) => match run.parse::<RunId>() {
+            Ok(run) => Predicate::StartedBy(run),
+            Err(_) => Predicate::Id(vec![run]),
         },
         Filter::Fingerprint(fingerprints) => Predicate::Fingerprint(fingerprints),
         Filter::Quarantined(quarantined) => {
@@ -314,6 +331,8 @@ pub(crate) fn summary(run: &ports::RunSummary) -> rewind_api::runs::RunSummary {
             .collect(),
         wakes_at: run.wakes_at.map(timestamp),
         parent: run.parent.map(|parent| parent.to_string()),
+        workflow: run.workflow.clone(),
+        started_by: run.started_by.map(|run| run.to_string()),
     }
 }
 

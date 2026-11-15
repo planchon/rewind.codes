@@ -6,7 +6,7 @@
 //! converted to versioned DTOs at the edge, and a stored v1 journal must always decode.
 //! A future v2 gets its own module and an explicit migration from v1.
 //!
-//! Four documents are defined (`archi/02-journal.md`, "Stored format v1"):
+//! Five documents are defined (`archi/02-journal.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
@@ -17,8 +17,11 @@
 //!   readable. It replays on its own;
 //! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
-//! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, in its
-//!   canonical form, so that its bytes hash to the toolset's digest.
+//! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, with
+//!   `"workflows":[…]` when it pins workflows, in its canonical form, so that its bytes hash to
+//!   the toolset's digest;
+//! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
+//!   "toolset":…,"v":1}`, in its canonical form, so that its bytes hash to the version.
 //!
 //! In events, payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`; in
 //! cassettes, as plain values. Seeds and digests are lowercase hex, times and durations are
@@ -28,7 +31,9 @@
 
 mod v1;
 
-use rewind_core::{Cassette, Event, JournalDocument, RunId, Script, Toolset, canonical_json};
+use rewind_core::{
+    Cassette, Event, JournalDocument, RunId, Script, Toolset, Workflow, canonical_json,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -55,6 +60,8 @@ pub enum FormatError {
     InvalidCassette(String),
     #[error("invalid pinned toolset: {0}")]
     InvalidToolset(String),
+    #[error("invalid workflow version: {0}")]
+    InvalidWorkflow(String),
 }
 
 /// One event, as stored in a row: `{"v":1,"type":…,…}`.
@@ -180,6 +187,23 @@ pub fn decode_toolset(json: &str) -> Result<Toolset, FormatError> {
     match take_version(&mut object)? {
         Version::V1 => {
             v1::decode_toolset(Value::Object(object)).map_err(FormatError::InvalidToolset)
+        }
+    }
+}
+
+/// The workflow version document, in its canonical form (RFC 8785): its bytes hash to
+/// [`Workflow::version`].
+pub fn encode_workflow(workflow: &Workflow) -> String {
+    canonical_json(&v1::workflow_document(workflow))
+}
+
+/// Decodes a workflow version document, of any supported version. Its invariants are checked
+/// ([`Workflow::new`]).
+pub fn decode_workflow(json: &str) -> Result<Workflow, FormatError> {
+    let mut object = parse_object(json)?;
+    match take_version(&mut object)? {
+        Version::V1 => {
+            v1::decode_workflow(Value::Object(object)).map_err(FormatError::InvalidWorkflow)
         }
     }
 }

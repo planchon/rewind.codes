@@ -1,0 +1,15 @@
+{
+  "description": "A script imports a workflow its toolset does not pin: the start is refused before any run exists.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "script": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "start_error": "\"rewind:workflows\" has no export named \"digest\""
+  }
+}

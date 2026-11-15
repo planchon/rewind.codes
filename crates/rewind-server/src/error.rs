@@ -151,6 +151,7 @@ impl From<EngineError> for ApiError {
             )),
             EngineError::NulCharacter(error) => error.into(),
             EngineError::Store(error) => error.into(),
+            EngineError::SignalRefused(message) => Self::new(ProblemType::InvalidSignal, message),
             other => Self::internal(other),
         }
     }
@@ -191,6 +192,10 @@ impl From<StartError> for ApiError {
             ),
             StartError::Checker(error) => error.into(),
             StartError::Store(error) => error.into(),
+            StartError::WorkflowNotFound(version) => {
+                Self::not_found(format!("no workflow version {version} for this tenant"))
+            }
+            StartError::InvalidInput(message) => Self::new(ProblemType::InvalidInput, message),
             other => Self::internal(other),
         }
     }

@@ -14,6 +14,7 @@ import {
 } from "../components/bits";
 import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../model/format";
+import { fieldTerm, queryLink } from "../model/query";
 
 export interface RunTableProps {
   query: UseInfiniteQueryResult<InfiniteData<RunPage>>;
@@ -99,6 +100,14 @@ export function RunTable({
                   {run.parent && (
                     <Link to={`/runs/${run.parent}`} title={`Forked from ${run.parent}`}>
                       <ForkTag />
+                    </Link>
+                  )}
+                  {run.workflow && (
+                    <Link
+                      to={queryLink("/runs", fieldTerm("workflow", run.workflow))}
+                      title={`A run of the workflow ${run.workflow}${run.startedBy ? `, started by the run ${run.startedBy}` : ""}`}
+                    >
+                      <span className="tag mono">{run.workflow}</span>
                     </Link>
                   )}
                 </span>

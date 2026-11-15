@@ -8,12 +8,13 @@ use std::time::Duration;
 use rewind_core::Script;
 use rewind_engine::ports::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
+    WorkflowDeclarations,
 };
 use tokio::sync::{OnceCell, Semaphore};
 
 use crate::error::CheckError;
 use crate::rules::{self, Finding};
-use crate::sandbox::{self, FETCH, SCRIPT, TOOLS};
+use crate::sandbox::{self, ENTRY, FETCH, SCRIPT, TOOLS, WORKFLOW};
 use crate::source::{SourceText, blank_directives};
 use crate::tsgo::{self, Reported};
 
@@ -23,6 +24,17 @@ pub const HTTP_TOOL_REFERENCE: &str = "/// <reference path=\"fetch.d.ts\" />";
 
 /// The declarations of a toolset without tools: `rewind:tools` exists, and exports nothing.
 const NO_TOOLS: &str = "declare module \"rewind:tools\" {}\n";
+
+/// The declarations of a toolset that pins no workflow: `rewind:workflows` exists, and exports
+/// nothing.
+const NO_WORKFLOWS: &str = "\ndeclare module \"rewind:workflows\" {}\n";
+
+/// What a workflow's own script is also checked against: its signals and its entry.
+#[derive(Clone, Copy)]
+struct Workflow<'a> {
+    signals: &'a str,
+    entry: &'a str,
+}
 
 /// The [`TypeChecker`] of Rewind: tsgo, the native TypeScript 7 compiler, embedded in the
 /// binary and driven as a CLI, and the checker's own rules (`archi/04-tools.md`,
@@ -114,6 +126,31 @@ impl TsgoChecker {
         source: &str,
         declarations: &str,
     ) -> Result<Vec<Diagnostic>, CheckError> {
+        self.check_with(source, declarations, None).await
+    }
+
+    /// Type-checks a workflow's script as [`check_source`](Self::check_source) does, with the
+    /// workflow's own declarations too (`rewind-codegen`'s `workflow_declarations`): its
+    /// signals, which type `signal()` and `webhook()`, and `entry.ts`, whose diagnostics are
+    /// reported at the script's default export: it does not take the workflow's input, or does
+    /// not return its output.
+    pub async fn check_workflow_source(
+        &self,
+        source: &str,
+        declarations: &str,
+        signals: &str,
+        entry: &str,
+    ) -> Result<Vec<Diagnostic>, CheckError> {
+        self.check_with(source, declarations, Some(Workflow { signals, entry }))
+            .await
+    }
+
+    async fn check_with(
+        &self,
+        source: &str,
+        declarations: &str,
+        workflow: Option<Workflow<'_>>,
+    ) -> Result<Vec<Diagnostic>, CheckError> {
         let executable = self.install().await?;
         // Neither the script nor the declarations may add files or libs to the check: the DOM
         // lib would declare what does not exist.
@@ -121,31 +158,65 @@ impl TsgoChecker {
         let http_tool = directives.iter().any(|directive| {
             directive.kind == "path" && matches!(directive.value.as_str(), FETCH | "./fetch.d.ts")
         });
-        let declarations = if declarations.trim().is_empty() {
+        let mut declarations = if declarations.trim().is_empty() {
             Cow::Borrowed(NO_TOOLS)
         } else {
             declarations
         };
+        if !declarations.contains("declare module \"rewind:workflows\"") {
+            declarations.to_mut().push_str(NO_WORKFLOWS);
+        }
         let (script, _) = blank_directives(source);
+        let (signals, entry) = match workflow {
+            Some(workflow) => (
+                Some(blank_directives(workflow.signals).0),
+                Some(workflow.entry),
+            ),
+            None => (None, None),
+        };
+        let extra = |entry: Option<&'_ str>| {
+            let mut files = Vec::new();
+            if let Some(signals) = &signals {
+                files.push((WORKFLOW, signals.to_string()));
+            }
+            if let Some(entry) = entry {
+                files.push((ENTRY, entry.to_owned()));
+            }
+            files
+        };
 
         let findings = rules::check(source, http_tool);
         let reported = self
-            .tsgo(executable, &script, &declarations, http_tool)
+            .tsgo(executable, &script, &declarations, http_tool, extra(entry))
             .await?;
-        let (in_script, elsewhere): (Vec<_>, Vec<_>) = reported.into_iter().partition(
+        let (in_script, rest): (Vec<_>, Vec<_>) = reported.into_iter().partition(
             |reported| matches!(&reported.location, Some((file, _, _)) if file == SCRIPT),
         );
+        let (in_entry, elsewhere): (Vec<_>, Vec<_>) = rest.into_iter().partition(
+            |reported| matches!(&reported.location, Some((file, _, _)) if file == ENTRY),
+        );
         if !elsewhere.is_empty() {
-            // Whether the script caused them: checked again with an empty script, the
-            // declarations must have no diagnostic.
+            // Whether the script caused them: checked again with an empty script, and without
+            // the entry, which needs the script, the declarations must have no diagnostic.
             let alone = self
-                .tsgo(executable, "export {};\n", &declarations, http_tool)
+                .tsgo(
+                    executable,
+                    "export {};\n",
+                    &declarations,
+                    http_tool,
+                    extra(None),
+                )
                 .await?;
             if !alone.is_empty() {
                 return Err(CheckError::Declarations(render(&alone)));
             }
         }
-        Ok(diagnostics(source, &findings, in_script, elsewhere))
+        let mut diagnostics = diagnostics(source, &findings, in_script, elsewhere);
+        diagnostics.extend(entry_diagnostics(source, in_entry));
+        diagnostics.sort_by(|a, b| key(a).cmp(&key(b)));
+        diagnostics.dedup();
+        diagnostics.truncate(Self::MAX_DIAGNOSTICS);
+        Ok(diagnostics)
     }
 
     /// Runs tsgo on a script and declarations, in a directory of their own.
@@ -155,6 +226,7 @@ impl TsgoChecker {
         script: &str,
         declarations: &str,
         http_tool: bool,
+        extra: Vec<(&'static str, String)>,
     ) -> Result<Vec<Reported>, CheckError> {
         let _slot = self.slots.acquire().await.map_err(|_| CheckError::Failed {
             status: "not started".into(),
@@ -168,6 +240,9 @@ impl TsgoChecker {
             .into_iter()
             .chain([(TOOLS, declarations), (SCRIPT, script)]);
         for (name, text) in files {
+            fs::write(dir.path().join(name), text).map_err(CheckError::Files)?;
+        }
+        for (name, text) in extra {
             fs::write(dir.path().join(name), text).map_err(CheckError::Files)?;
         }
         let output = tsgo::run(executable, dir.path(), self.timeout).await?;
@@ -196,6 +271,51 @@ impl TypeChecker for TsgoChecker {
             .check_source(script.source(), &declarations.typescript)
             .await?)
     }
+
+    async fn check_workflow(
+        &self,
+        script: &Script,
+        declarations: &ToolDeclarations,
+        workflow: &WorkflowDeclarations,
+    ) -> Result<Vec<Diagnostic>, CheckerError> {
+        Ok(self
+            .check_workflow_source(
+                script.source(),
+                &declarations.typescript,
+                &workflow.signals,
+                &workflow.entry,
+            )
+            .await?)
+    }
+}
+
+/// What tsgo reported in a workflow's `entry.ts`: the script's default export does not take
+/// the workflow's input or does not return its output. Reported at the default export.
+fn entry_diagnostics(source: &str, in_entry: Vec<Reported>) -> Vec<Diagnostic> {
+    let text = SourceText::new(source);
+    let (start, end) = rules::default_export(source).unwrap_or((0, 0));
+    let (line, column) = text.position(start);
+    in_entry
+        .into_iter()
+        .map(|reported| Diagnostic {
+            line,
+            column,
+            severity: severity(&reported),
+            source: DiagnosticSource::TypeScript {
+                code: reported.code,
+            },
+            message: format!(
+                "the default export does not match the workflow's schemas: {}",
+                reported.message
+            ),
+            hint: Some(
+                "the default export must take the workflow's input and return its output, as \
+                 its input and output schemas declare them"
+                    .into(),
+            ),
+            frame: text.frame(start, end.min(text.token_end(start).max(start))),
+        })
+        .collect()
 }
 
 /// The diagnostics of a check, sorted by position.

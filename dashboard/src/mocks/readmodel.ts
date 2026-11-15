@@ -89,6 +89,8 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
     })),
   };
   if (fixture.parent) run.parent = { run: fixture.parent.run, at: fixture.parent.at ?? null };
+  if (fixture.workflow) run.workflow = fixture.workflow;
+  if (fixture.startedBy) run.startedBy = fixture.startedBy;
   if (fixture.quarantine && status === "active") run.quarantine = fixture.quarantine;
   const end = model.end;
   if (end) run.endedAt = new Date(end.at).toISOString();
@@ -257,6 +259,8 @@ export function summarize(fixture: RunFixture, now: number): MockRun {
   };
   if (run.endedAt) summary.endedAt = run.endedAt;
   if (run.parent) summary.parent = run.parent.run;
+  if (run.workflow) summary.workflow = run.workflow.name;
+  if (run.startedBy) summary.startedBy = run.startedBy.run;
   const ending = run.error
     ? { name: run.error.name, message: run.error.message, stack: run.error.stack ?? "" }
     : run.abort
@@ -336,6 +340,8 @@ export function listRuns(world: World, query: ListRunsQuery, now: number): RunPa
       return false;
     if (query.quarantined !== undefined && s.quarantined !== query.quarantined) return false;
     if (query.parent && s.parent !== query.parent) return false;
+    if (query.workflow && s.workflow !== query.workflow) return false;
+    if (query.startedBy && s.startedBy !== query.startedBy) return false;
     if (after !== null && at < after) return false;
     if (before !== null && at >= before) return false;
     return true;

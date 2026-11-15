@@ -162,6 +162,14 @@ pub enum AbortKind {
 }
 
 impl AbortKind {
+    pub const ALL: [AbortKind; 5] = [
+        AbortKind::LimitExceeded,
+        AbortKind::NonDeterminism,
+        AbortKind::Cancelled,
+        AbortKind::InvalidScript,
+        AbortKind::Internal,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             AbortKind::LimitExceeded => "limit_exceeded",
@@ -170,6 +178,11 @@ impl AbortKind {
             AbortKind::InvalidScript => "invalid_script",
             AbortKind::Internal => "internal",
         }
+    }
+
+    /// The kind [`as_str`](Self::as_str) spells `text`.
+    pub fn parse(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == text)
     }
 }
 

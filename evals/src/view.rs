@@ -105,6 +105,20 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
             run: parent.run.to_string(),
             at: parent.at,
         }),
+        workflow: record.metadata.workflow.as_ref().map(|workflow| {
+            rewind_api::workflows::RunWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+            }
+        }),
+        started_by: record
+            .metadata
+            .started_by
+            .map(|by| rewind_api::workflows::StartedBy {
+                run: by.run.to_string(),
+                seq: by.seq.0,
+                detached: by.detached,
+            }),
         input: started.map(|started| payload(&started.input)),
         output,
         error,
@@ -312,6 +326,12 @@ pub async fn summary(world: &World, run: &RunRef) -> Result<RunSummary, EngineEr
         waiting_for,
         wakes_at: wakes_at.map(timestamp),
         parent: record.metadata.parent.map(|parent| parent.run.to_string()),
+        workflow: record
+            .metadata
+            .workflow
+            .as_ref()
+            .map(|workflow| workflow.name.clone()),
+        started_by: record.metadata.started_by.map(|by| by.run.to_string()),
     })
 }
 

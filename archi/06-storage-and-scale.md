@@ -23,12 +23,15 @@ tenants    (id PK, data_key, active_run_quota, retention)   -- data_key encrypte
 api_keys   (hash PK, tenant, role, allowed_labels, revoked_at)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
+workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
+                                                           index on (tenant, name, created_at)
 runs       (tenant, id, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
             expires_at, quarantine, failures, attempts, lease_owner, lease_until, fence,
             sticky_worker,
-            parent, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
-            archive)
+            parent, workflow, workflow_version, started_by, started_seq, detached, scope,
+            labels, trace_context, idempotency_key, created_at, updated_at, ended_at, archive)
             PK (tenant, id), UNIQUE (tenant, idempotency_key)
+run_watchers (run_id, watcher, seq, attached)               PK (run_id, watcher)
 history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
 inbox      (id, run_id, event, received_at)
 signal_keys (run_id, key)                                  PK (run_id, key)
@@ -52,8 +55,12 @@ tool_calls    (run_id, seq, tool, callsite_line, scheduled_at, completed_at, out
 ```
 
 `event` columns hold the `rewind-format` v1 JSON of the event. `labels`, `trace_context`,
-`idempotency_key` and `parent` are run metadata: stored with the run, never in its events
-([05](05-testing-and-observability.md#run-metadata)).
+`idempotency_key`, `parent`, `workflow`, `workflow_version`, `started_by`, `started_seq`,
+`detached` and `scope` are run metadata: stored with the run, never in its events
+([05](05-testing-and-observability.md#run-metadata)). A `workflows` row holds a
+[workflow version](02-journal.md#stored-format-v1) document. `run_watchers` lists the runs that
+receive a run's end ([workflows](03-execution.md#workflows-across-runs)): the run that started
+it (`attached` unless it was started detached), and the forks that copied that start.
 
 `epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
@@ -103,6 +110,9 @@ retries without knowing.
 | --- | --- | --- | --- |
 | Start a run | Unique per tenant | Returns the existing run | A second run starts and repeats every effect |
 | Send a signal | Unique per run | Is acknowledged and ignored | A second `approval` stays in the mailbox and approves the script's next `signal("approval")` |
+| A script starts a workflow run | `rewind:{run_id}/{seq}`, the call's key | Returns the run already started | |
+| A script signals a run | `rewind:{run_id}/{seq}`, the call's key | Is acknowledged and ignored | |
+| A run ends | `rewind:ended:{run id}`, for each run that watches it | Is ignored | |
 
 - A signal's key is kept in `signal_keys` for the life of the run, not in the inbox. It
   must outlive the delivery of the signal, or a late retry would pass.
@@ -168,6 +178,7 @@ The tenant is part of every storage key:
 | Runs and their metadata | `(tenant, id)` |
 | Idempotency keys of runs | `(tenant, key)` |
 | Scripts, toolsets | `(tenant, digest)` |
+| Workflow versions | `(tenant, version)` |
 | Payloads | `(tenant, digest)`; blobs at `{tenant}/sha256/…` |
 | Read model, secrets, quotas | Per tenant |
 
@@ -175,6 +186,11 @@ The tenant is part of every storage key:
   returns 429.
 - **Fairness**: workers draw a tenant at random among those with runnable work, then take
   that tenant's oldest runnable run. A large tenant cannot starve the others.
+
+A workflow saved with a key limited to labels carries those labels. Such a key only lists,
+reads and pins the workflows carrying its labels, and a run it starts takes them as its
+**scope**: the scripts of that run and of the runs it starts only reach runs carrying them
+([workflows](03-execution.md#workflows-across-runs)).
 
 The embedded server is the exception: one implicit tenant and no key
 ([embedded server](07-code-architecture.md#embedded-server-and-cli)).

@@ -65,6 +65,9 @@ The problem types:
 | `unsupported-media-type` | 415 | A body that is not JSON where JSON is expected |
 | `invalid-script` | 422 | The script was refused before any run exists |
 | `invalid-toolset` | 422 | An invalid schema, a duplicate tool, a transport this server refuses |
+| `invalid-workflow` | 422 | A workflow's name, a signal's name or a schema that cannot be used |
+| `invalid-input` | 422 | The input of a run of a workflow does not match its input schema |
+| `invalid-signal` | 422 | A signal name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match |
 | `quota-exceeded` | 429 | The tenant has its maximum of active runs |
 | `internal` | 500 | A fault of the platform |
 | `toolset-unavailable` | 502 | An MCP server of the toolset cannot be reached |

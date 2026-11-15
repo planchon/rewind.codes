@@ -14,11 +14,13 @@ import { OutcomeGlyph } from "../../components/Status";
 import { formatDuration, formatRelative } from "../../model/format";
 import { type Activity, buildRunModel, type RunModel } from "../../model/run";
 import { gutterMarks, markMeaning, markSymbol } from "../../model/steps";
+import { callName, endedRunOf, readRunEnd } from "../../model/workflows";
 import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
-import { activityOutcome } from "./describe";
+import { activityOutcome, activityTitle } from "./describe";
 import { Inspector, type Selection } from "./Inspector";
 import { JournalPanel } from "./JournalPanel";
 import { RunBanners, RunHeader } from "./RunHeader";
+import { StartedRuns } from "./StartedRuns";
 import { Timeline } from "./Timeline";
 import { buildTargets, sourceIndex } from "./targets";
 
@@ -45,7 +47,9 @@ export function groupNotes(activities: Activity[]): NoteGroup[] {
       a.kind === "tool_call"
         ? `call:${a.tool}`
         : a.kind === "signal"
-          ? `signal:${a.name}`
+          ? endedRunOf(a.name) !== null
+            ? "ended"
+            : `signal:${a.name}`
           : a.kind === "timer"
             ? `timer:${a.idx}`
             : "log";
@@ -87,7 +91,7 @@ function noteText(group: NoteGroup, now: number): ReactNode {
         const end = first.end;
         return (
           <>
-            {first.tool}
+            {callName(first.tool, first.args)}
             <span className="note-meta">
               {end
                 ? end.outcome === "failed"
@@ -100,7 +104,7 @@ function noteText(group: NoteGroup, now: number): ReactNode {
       }
       return (
         <>
-          {first.tool} <span className="note-meta">×{n}</span>
+          {callName(first.tool, first.args)} <span className="note-meta">×{n}</span>
           {failed > 0 && <span className="note-meta tone-critical">{failed} failed</span>}
           {open > 0 && <span className="note-meta">{open} in flight</span>}
         </>
@@ -117,6 +121,7 @@ function noteText(group: NoteGroup, now: number): ReactNode {
         </>
       );
     case "signal": {
+      if (endedRunOf(first.name) !== null) return endedNote(group, now);
       const end = first.end;
       return (
         <>
@@ -144,6 +149,41 @@ function noteText(group: NoteGroup, now: number): ReactNode {
         </>
       );
   }
+}
+
+/** The waits of `run.result()` on a line: the end of each run, or how long it is awaited. */
+function endedNote(group: NoteGroup, now: number): ReactNode {
+  const waits = group.activities.filter((a) => a.kind === "signal");
+  const first = waits[0];
+  if (!first) return null;
+  if (waits.length === 1) {
+    const end = first.end;
+    return (
+      <>
+        {activityTitle(first)}
+        <span className="note-meta">
+          {end === null
+            ? first.timeoutAt
+              ? `gives up ${formatRelative(first.timeoutAt, now)}`
+              : "waiting"
+            : end.outcome === "timed_out"
+              ? "timed out"
+              : `${readRunEnd(end.payload).status ?? "ended"}${end.buffered ? "" : ` after ${formatDuration(end.at - first.at)}`}`}
+        </span>
+      </>
+    );
+  }
+  const ended = waits.filter((w) => w.end?.outcome === "received").length;
+  const failed = waits.filter((w) => activityOutcome(w) === "failed").length;
+  return (
+    <>
+      run.result() <span className="note-meta">×{waits.length}</span>
+      <span className="note-meta">
+        {ended === waits.length ? "all ended" : `${ended} of ${waits.length} ended`}
+      </span>
+      {failed > 0 && <span className="note-meta tone-critical">{failed} failed</span>}
+    </>
+  );
 }
 
 function Notes({
@@ -324,6 +364,13 @@ export function RunView() {
         <ProblemView error={journal.error} title="The journal could not be read" />
       )}
       <RunBanners run={r} model={model} onSelectEntry={selectEntry} onSelectLine={selectLine} />
+      <StartedRuns
+        runId={r.id}
+        model={model}
+        live={live}
+        onSelectEntry={selectEntry}
+        onSelectLine={selectLine}
+      />
       <CursorBar cursor={cursor} live={live} failedStep={failedStep} t0={model.firstAt} />
 
       <section className="panel" aria-label="Timeline">

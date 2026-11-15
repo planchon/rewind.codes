@@ -65,6 +65,36 @@ where
     /// Sets or renews the credentials of a toolset, used by every run of the toolset without
     /// credentials of its own. The calls parked by `credentials.expired` in those runs are
     /// ready again, and sent with the same idempotency key. Returns how many.
+    /// Gives a toolset derived from `base` (`POST /v1/toolsets` with `base`) the credentials of
+    /// `base`, unless it has its own. Returns whether it copied them.
+    pub async fn inherit_toolset_credentials(
+        &self,
+        tenant: &TenantId,
+        base: Digest,
+        derived: Digest,
+    ) -> Result<bool, EngineError> {
+        if base == derived {
+            return Ok(false);
+        }
+        // No run has the nil id: what resolves is a toolset's own credentials.
+        let no_run = rewind_core::RunId::from_u128(0);
+        if self
+            .secrets
+            .resolve(tenant, no_run, derived)
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let Some(credentials) = self.secrets.resolve(tenant, no_run, base).await? else {
+            return Ok(false);
+        };
+        self.secrets
+            .put(tenant, &SecretOwner::Toolset(derived), &credentials)
+            .await?;
+        Ok(true)
+    }
+
     pub async fn set_toolset_credentials(
         &self,
         tenant: &TenantId,

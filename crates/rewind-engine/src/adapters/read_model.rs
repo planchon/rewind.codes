@@ -151,6 +151,8 @@ impl Projected {
             mode: self.snapshot.mode,
             labels: self.run.labels.clone(),
             parent: self.run.parent,
+            workflow: self.run.workflow.clone(),
+            started_by: self.run.started_by,
             started_at,
             ended_at: ended.map(|(_, at)| at),
             last_activity_at: self
@@ -337,6 +339,11 @@ impl Row {
             Predicate::Calls(range) => range.contains(&summary.tool_calls),
             Predicate::Errors(range) => range.contains(&summary.errors),
             Predicate::Parent(parent) => summary.parent == Some(*parent),
+            Predicate::Workflow(matchers) => summary
+                .workflow
+                .as_deref()
+                .is_some_and(|name| matchers.iter().any(|matcher| matcher.matches(name))),
+            Predicate::StartedBy(run) => summary.started_by == Some(*run),
             Predicate::Fingerprint(fingerprints) => summary
                 .ending
                 .as_ref()

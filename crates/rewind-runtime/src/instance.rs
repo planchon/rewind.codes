@@ -32,6 +32,7 @@ impl Instance {
             start.compiled.javascript.clone(),
             start.compiled.source_map.clone().into_bytes(),
             (glue.tools)(&start.toolset),
+            (glue.workflows)(&start.toolset),
         ));
         let state = ExecState::new(
             start.run_id,

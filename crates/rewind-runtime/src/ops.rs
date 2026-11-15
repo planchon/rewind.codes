@@ -13,9 +13,10 @@ use deno_core::{OpState, extension, op2, v8};
 use deno_error::JsErrorBox;
 use rewind_core::{
     Annotation, Builtin, Callsite, Command, LogLevel, Payload, RunId, ScriptError, Seed, Seq,
-    Timestamp, ToolRoute, Toolset, parse_duration,
+    Timestamp, ToolRoute, Toolset, WorkflowOp, parse_duration,
 };
 use rewind_engine::ports::Emitted;
+use rewind_engine::schema::{Refused, Validator};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
@@ -47,6 +48,9 @@ pub(crate) struct ExecState {
     crypto: ChaCha20,
     /// The validators of the tools called so far, compiled from their pinned input schemas.
     validators: BTreeMap<String, Validator>,
+    /// The validators of the pinned workflows' schemas used so far: by workflow, then
+    /// `input`, `output` or `signal:<name>`.
+    workflow_validators: BTreeMap<(String, String), Validator>,
 }
 
 impl ExecState {
@@ -80,6 +84,7 @@ impl ExecState {
             math_random_state,
             crypto: ChaCha20::new(&key.into(), &[0u8; 12].into()),
             validators: BTreeMap::new(),
+            workflow_validators: BTreeMap::new(),
         }
     }
 
@@ -202,11 +207,164 @@ impl ExecState {
                 _ => format!("{tool} is not a tool of this run's toolset"),
             });
         };
+        if let ToolRoute::Builtin(Builtin::Workflow { workflow, op }) = &pinned.route {
+            let (workflow, op) = (workflow.clone(), *op);
+            return match op {
+                WorkflowOp::Start => self.check_start(&workflow, args),
+                WorkflowOp::Signal => self.check_signal(&workflow, args),
+            };
+        }
         let validator = self
             .validators
             .entry(tool.to_owned())
             .or_insert_with(|| Validator::compile(&pinned.input_schema));
-        validator.check(tool, args)
+        check_args(validator, tool, args)
+    }
+
+    /// Checks a value against one schema of a pinned workflow: `input`, `output` or
+    /// `signal:<name>`. `None` when the workflow does not declare that schema.
+    fn check_workflow_value(
+        &mut self,
+        workflow: &str,
+        schema: &str,
+        root: &str,
+        value: &Value,
+    ) -> Option<Result<(), Refused>> {
+        let key = (workflow.to_owned(), schema.to_owned());
+        if !self.workflow_validators.contains_key(&key) {
+            let pinned = self.toolset.workflow(workflow)?;
+            let json = match schema.strip_prefix("signal:") {
+                Some(signal) => pinned.schemas.signals.get(signal)?,
+                None if schema == "input" => &pinned.schemas.input,
+                None => &pinned.schemas.output,
+            };
+            self.workflow_validators
+                .insert(key.clone(), Validator::compile(json));
+        }
+        Some(self.workflow_validators[&key].check(root, value))
+    }
+
+    /// `workflows.<name>.start`: `{ input, detached?, labels?, ttl? }`, the input matching the
+    /// workflow's input schema (`archi/03-execution.md`, "Workflows across runs").
+    fn check_start(&mut self, workflow: &str, args: &Value) -> Result<(), String> {
+        let Value::Object(fields) = args else {
+            return Err(format!("{workflow}.start() takes the run's input"));
+        };
+        if let Some(unknown) = fields
+            .keys()
+            .find(|key| !matches!(key.as_str(), "input" | "detached" | "labels" | "ttl"))
+        {
+            return Err(format!(
+                "{workflow}.start() takes no option {unknown:?}: its options are detached, \
+                 labels and ttl"
+            ));
+        }
+        let input = fields.get("input").unwrap_or(&Value::Null);
+        match self.check_workflow_value(workflow, "input", "input", input) {
+            Some(Ok(())) => {}
+            Some(Err(refused)) => {
+                return Err(refused_value(
+                    &format!("invalid input for workflow {workflow}"),
+                    &format!("the input schema of workflow {workflow}"),
+                    refused,
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "{workflow} is not a workflow of this run's toolset"
+                ));
+            }
+        }
+        if fields
+            .get("detached")
+            .is_some_and(|detached| !detached.is_boolean())
+        {
+            return Err("the option detached is a boolean".into());
+        }
+        if let Some(labels) = fields.get("labels") {
+            let strings = labels
+                .as_object()
+                .is_some_and(|labels| labels.values().all(Value::is_string));
+            if !strings {
+                return Err("the option labels maps names to strings".into());
+            }
+        }
+        if let Some(ttl) = fields.get("ttl") {
+            let valid = match ttl {
+                Value::Number(ms) => ms.as_f64().is_some_and(|ms| ms.is_finite() && ms >= 0.0),
+                Value::String(text) => parse_duration(text).is_ok(),
+                _ => false,
+            };
+            if !valid {
+                return Err(format!(
+                    "invalid ttl {ttl}: a number of milliseconds, or a duration such as \"2d\""
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `workflows.<name>.signal`: `{ run, name, payload }`, the name one the workflow declares
+    /// and the payload matching that signal's schema.
+    fn check_signal(&mut self, workflow: &str, args: &Value) -> Result<(), String> {
+        let run = args.get("run").and_then(Value::as_str).unwrap_or_default();
+        if run.parse::<RunId>().is_err() {
+            return Err(format!("{run:?} is not a run id"));
+        }
+        let name = args.get("name").and_then(Value::as_str).unwrap_or_default();
+        let payload = args.get("payload").unwrap_or(&Value::Null);
+        match self.check_workflow_value(workflow, &format!("signal:{name}"), "payload", payload) {
+            Some(Ok(())) => Ok(()),
+            Some(Err(refused)) => Err(refused_value(
+                &format!("invalid payload for the signal {name:?} of workflow {workflow}"),
+                &format!("the schema of the signal {name:?} of workflow {workflow}"),
+                refused,
+            )),
+            None => {
+                let declared: Vec<String> = self
+                    .toolset
+                    .workflow(workflow)
+                    .map(|pinned| {
+                        pinned
+                            .schemas
+                            .signals
+                            .keys()
+                            .map(|name| format!("{name:?}"))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Err(format!(
+                    "workflow {workflow} declares no signal {name:?} (it declares {})",
+                    if declared.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        declared.join(", ")
+                    }
+                ))
+            }
+        }
+    }
+
+    /// What `result()` checks of a run's output: `""` when the pinned output schema of
+    /// `workflow` takes it, else why not.
+    fn check_output(&mut self, workflow: &str, output: &Value) -> String {
+        match self.check_workflow_value(workflow, "output", "output", output) {
+            Some(Ok(())) | None => String::new(),
+            Some(Err(Refused::Invalid(problems))) => problems,
+            Some(Err(Refused::Unusable(error))) => {
+                format!("the output schema of workflow {workflow} cannot be used: {error}")
+            }
+        }
+    }
+}
+
+/// A value a workflow's schema refused, as the `TypeError` the script sees.
+fn refused_value(invalid: &str, schema: &str, refused: Refused) -> String {
+    match refused {
+        Refused::Invalid(problems) => format!("{invalid}: {problems}"),
+        Refused::Unusable(error) => {
+            format!("{schema} cannot be used, so the value cannot be checked: {error}")
+        }
     }
 }
 
@@ -241,94 +399,17 @@ fn size(bytes: usize) -> String {
     }
 }
 
-/// A tool's pinned input schema, compiled once per instance.
-enum Validator {
-    /// `{}` or `true`: any arguments.
-    Any,
-    Schema(Box<jsonschema::Validator>),
-    /// The schema cannot be used (an invalid schema, a `$ref` outside it): every call of the
-    /// tool is refused with this message, rather than sent unchecked.
-    Unusable(String),
-}
-
-/// At most this many problems are listed in one message.
-const MAX_PROBLEMS: usize = 5;
-
-impl Validator {
-    fn compile(schema: &Value) -> Self {
-        match schema {
-            Value::Bool(true) => return Self::Any,
-            Value::Object(object) if object.is_empty() => return Self::Any,
-            _ => {}
-        }
-        match jsonschema::validator_for(schema) {
-            Ok(validator) => Self::Schema(Box::new(validator)),
-            Err(error) => Self::Unusable(error.to_string()),
-        }
-    }
-
-    /// Every problem, each with its place in the arguments, sorted so that the message does not
-    /// depend on the order the validator walks the schema in.
-    fn check(&self, tool: &str, args: &Value) -> Result<(), String> {
-        let validator = match self {
-            Self::Any => return Ok(()),
-            Self::Unusable(error) => {
-                return Err(format!(
-                    "the pinned input schema of {tool} cannot be used, so the call cannot be \
-                     checked: {error}"
-                ));
-            }
-            Self::Schema(validator) => validator,
-        };
-        let mut problems: Vec<String> = validator
-            .iter_errors(args)
-            .map(|error| format!("{}: {error}", path(args, error.instance_path())))
-            .collect();
-        if problems.is_empty() {
-            return Ok(());
-        }
-        problems.sort();
-        problems.dedup();
-        let more = problems.len().saturating_sub(MAX_PROBLEMS);
-        problems.truncate(MAX_PROBLEMS);
-        let mut message = format!("invalid arguments for {tool}: {}", problems.join("; "));
-        if more > 0 {
-            message.push_str(&format!(" (and {more} more)"));
-        }
-        Err(message)
-    }
-}
-
-/// A place in the arguments as a script writes it: `args`, `args.repo`, `args.labels[0]`,
-/// `args["a-b"]`.
-fn path(args: &Value, location: &jsonschema::paths::Location) -> String {
-    let mut path = String::from("args");
-    let mut value = Some(args);
-    for segment in location.iter() {
-        let key = segment.to_string();
-        match value {
-            Some(Value::Array(items)) => {
-                path.push_str(&format!("[{key}]"));
-                value = key.parse::<usize>().ok().and_then(|index| items.get(index));
-            }
-            _ => {
-                if is_identifier(&key) {
-                    path.push('.');
-                    path.push_str(&key);
-                } else {
-                    path.push_str(&format!("[{}]", Value::String(key.clone())));
-                }
-                value = value.and_then(|value| value.get(&key));
-            }
-        }
-    }
-    path
-}
-
-fn is_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+/// Checks a tool's args, as the `TypeError` the script sees at its call.
+fn check_args(validator: &Validator, tool: &str, args: &Value) -> Result<(), String> {
+    validator
+        .check("args", args)
+        .map_err(|refused| match refused {
+            Refused::Unusable(error) => format!(
+                "the pinned input schema of {tool} cannot be used, so the call cannot be checked: \
+             {error}"
+            ),
+            Refused::Invalid(problems) => format!("invalid arguments for {tool}: {problems}"),
+        })
 }
 
 /// A position from the glue: 0 when the command was not issued from the script's source.
@@ -403,6 +484,20 @@ fn op_rewind_call_tool(
         callsite: callsite(line, column),
     });
     Ok(seq.0)
+}
+
+/// What `result()` checks of the output of a run of `workflow`: `""` when its pinned output
+/// schema takes it, else the problems. Deterministic: the schema is pinned.
+#[op2]
+#[string]
+fn op_rewind_check_workflow_output(
+    state: &mut OpState,
+    #[string] workflow: &str,
+    #[string] output: &str,
+) -> Result<String, JsErrorBox> {
+    let state = state.borrow_mut::<ExecState>();
+    let output = parse_json(output, "the output")?;
+    Ok(state.check_output(workflow, &output))
 }
 
 #[op2(fast)]
@@ -531,6 +626,7 @@ extension!(
         op_rewind_now,
         op_rewind_random_fill,
         op_rewind_call_tool,
+        op_rewind_check_workflow_output,
         op_rewind_start_timer,
         op_rewind_cancel_timer,
         op_rewind_log,
@@ -683,7 +779,7 @@ mod tests {
             .check_call("github.list_issues", &Value::Object(args))
             .unwrap_err();
         assert!(message.ends_with("(and 3 more)"), "{message}");
-        assert_eq!(message.matches("is not of type").count(), MAX_PROBLEMS);
+        assert_eq!(message.matches("is not of type").count(), 5);
     }
 
     #[test]

@@ -39,6 +39,12 @@ Field notes:
   only written when an operator, or the deadline, ends a
   [quarantined](03-execution.md#non-determinism-and-quarantine) run.
 - `signal_awaited.timeout` is the `seq` of the timer that implements the timeout, if any.
+- Signal names starting with `rewind:` are reserved. A `signal_received` named
+  `rewind:ended:<run id>` is the end of a run this run started or watches
+  ([workflows](03-execution.md#workflows-across-runs)). Its payload is
+  `{ "status": "completed", "output" }`, `{ "status": "failed" | "cancelled", "error" }` with the
+  error of its `fail_run`, or `{ "status": "aborted", "reason" }` with the reason of its
+  `run_aborted`.
 
 ## `seq`
 
@@ -102,7 +108,8 @@ JSON, versioned `"v": 1`, every value in its canonical form. It covers four docu
 | Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A row of `history` or `inbox` |
 | Journal document | `v`, `run` (the run id), `script` (the TypeScript source), `toolset` (the pinned toolset document), `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
 | Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `rewind test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
-| Pinned toolset | `v`, `servers[{name, transport, concurrency}]`, `tools[{name, route, description?, schemas, policy}]` | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
+| Pinned toolset | `v`, `servers[{name, transport, concurrency}]`, `tools[{name, route, description?, schemas, policy}]`, and `workflows[{name, version, description?, schemas}]` when it pins workflows | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
+| Workflow version | `v`, `name`, `description?`, `script` and `toolset` (digests), `schemas: { input, output, signals: { <name>: schema } }` | The `workflows` table; its digest is the version ([workflows](01-product.md#workflows)) |
 
 A reader refuses an unknown version, type or field. Every change of the format comes with
 an explicit migration.
@@ -111,6 +118,8 @@ Service state and run metadata stay out of the format. They are table columns: n
 replayed, never exported, never in a cassette.
 
 - labels, idempotency keys, the tenant, the trace context;
+- the workflow and version a run belongs to, the run that started it, the runs that watch its
+  end, and the label scope it inherited ([workflows](03-execution.md#workflows-across-runs));
 - credentials;
 - quarantine, the counts of failed and started activations; lease, fence and sticky worker;
 - the feed;

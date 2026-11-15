@@ -33,20 +33,38 @@ use crate::app::App;
 use crate::auth::{Access, Caller};
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
+use crate::http::workflows;
 use crate::wiring::tools::DiscoveryError;
 
 /// `POST /v1/toolsets`.
 pub(super) async fn create(
     State(app): State<Arc<App>>,
     caller: Caller,
-    Body(request): Body<CreateToolset>,
+    Body(mut request): Body<CreateToolset>,
 ) -> Result<Response, ApiError> {
     caller.allow(Access::Write)?;
     if request.credentials.is_some() {
         refuse_scoped_credentials(&caller)?;
     }
     let credentials = request.credentials.clone();
-    let toolset = pin(&app, &caller.tenant, request).await?;
+    let references = std::mem::take(&mut request.workflows);
+    let mut base_digest = None;
+    let toolset = match request.base.take() {
+        Some(base) => {
+            if !request.mcp.is_empty() || !request.host.is_empty() || request.http.is_some() {
+                return Err(invalid_toolset(
+                    "a toolset derived from a base keeps its servers and tools: give only \
+                     workflows with base",
+                ));
+            }
+            let base = stored(&app, &caller.tenant, &base).await?.toolset;
+            base_digest = Some(base.digest());
+            base
+        }
+        None => pin(&app, &caller.tenant, request).await?,
+    };
+    let toolset =
+        workflows::pin(&app, &caller.tenant, &caller.labels, &references, toolset).await?;
     let names: Vec<String> = toolset
         .tools()
         .iter()
@@ -71,6 +89,11 @@ pub(super) async fn create(
     if let Some(credentials) = credentials {
         app.engine
             .set_toolset_credentials(&caller.tenant, toolset.digest(), &secrets(credentials))
+            .await?;
+    } else if let Some(base) = base_digest {
+        // A derived toolset calls the same servers: it takes the base's credentials.
+        app.engine
+            .inherit_toolset_credentials(&caller.tenant, base, toolset.digest())
             .await?;
     }
     let stored = app
@@ -105,6 +128,12 @@ pub(super) async fn list(
                 .tools()
                 .iter()
                 .map(|tool| tool.name.clone())
+                .collect(),
+            workflows: stored
+                .toolset
+                .workflows()
+                .iter()
+                .map(|workflow| workflow.name.clone())
                 .collect(),
         })
         .collect();
@@ -163,17 +192,29 @@ pub(super) async fn search(
         .iter()
         .map(|tool| (tool.name.as_str(), tool))
         .collect();
-    let mut scored: Vec<(usize, &Tool)> = stored
+    // The tools, and the workflows as `workflows.<name>`, with their descriptions.
+    let candidates: Vec<(String, String)> = stored
         .toolset
         .tools()
         .iter()
         .map(|tool| {
-            let name = tool.name.to_lowercase();
-            let description = tool
-                .description
-                .as_deref()
-                .unwrap_or_default()
-                .to_lowercase();
+            (
+                tool.name.clone(),
+                tool.description.clone().unwrap_or_default(),
+            )
+        })
+        .chain(stored.toolset.workflows().iter().map(|workflow| {
+            (
+                format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name),
+                workflow.description.clone().unwrap_or_default(),
+            )
+        }))
+        .collect();
+    let mut scored: Vec<(usize, &(String, String))> = candidates
+        .iter()
+        .map(|candidate| {
+            let name = candidate.0.to_lowercase();
+            let description = candidate.1.to_lowercase();
             let score = words
                 .iter()
                 .map(|word| {
@@ -181,19 +222,19 @@ pub(super) async fn search(
                         + usize::from(description.contains(word.as_str()))
                 })
                 .sum();
-            (score, tool)
+            (score, candidate)
         })
         .filter(|(score, _)| *score > 0)
         .collect();
-    scored.sort_by(|(a, tool_a), (b, tool_b)| b.cmp(a).then_with(|| tool_a.name.cmp(&tool_b.name)));
+    scored.sort_by(|(a, tool_a), (b, tool_b)| b.cmp(a).then_with(|| tool_a.0.cmp(&tool_b.0)));
     let tools = scored
         .into_iter()
         .take(limit)
-        .map(|(_, tool)| {
-            let declared = declared.get(tool.name.as_str());
+        .map(|(_, (name, description))| {
+            let declared = declared.get(name.as_str());
             ToolMatch {
-                name: tool.name.clone(),
-                description: tool.description.clone().unwrap_or_default(),
+                name: name.clone(),
+                description: description.clone(),
                 prompt: declared.map(|d| d.prompt.clone()).unwrap_or_default(),
                 dts: declared.map(|d| d.typescript.clone()).unwrap_or_default(),
             }
@@ -496,6 +537,15 @@ pub(crate) fn view(stored: &StoredToolset) -> ApiToolset {
                     heartbeat_timeout: Some(tool.policy.heartbeat_timeout.into()),
                     concurrency: Some(tool.policy.concurrency),
                 },
+            })
+            .collect(),
+        workflows: toolset
+            .workflows()
+            .iter()
+            .map(|workflow| rewind_api::workflows::PinnedWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+                description: workflow.description.clone(),
             })
             .collect(),
         declarations: Declarations {

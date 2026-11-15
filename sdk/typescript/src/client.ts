@@ -7,6 +7,7 @@ import { Runs } from "./resources/runs.js";
 import { Scripts } from "./resources/scripts.js";
 import { Tasks } from "./resources/tasks.js";
 import { Toolsets } from "./resources/toolsets.js";
+import { Workflows } from "./resources/workflows.js";
 import type { WebhookEvent } from "./types.js";
 import { verifyWebhook, type WebhookHeaders } from "./webhooks.js";
 import { HostToolWorker, type WorkerOptions } from "./worker.js";
@@ -38,6 +39,7 @@ export interface Webhooks {
  */
 export class Rewind {
   readonly toolsets: Toolsets;
+  readonly workflows: Workflows;
   readonly scripts: Scripts;
   readonly runs: Runs;
   readonly tasks: Tasks;
@@ -58,6 +60,7 @@ export class Rewind {
     }
     this.transport = new Transport({ ...options, url, apiKey: options.apiKey ?? env("REWIND_API_KEY") });
     this.toolsets = new Toolsets(this.transport);
+    this.workflows = new Workflows(this.transport);
     this.scripts = new Scripts(this.transport);
     this.runs = new Runs(this.transport);
     this.tasks = new Tasks(this.transport);

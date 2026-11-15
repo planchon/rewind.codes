@@ -6,6 +6,7 @@ export type { TransportOptions } from "./http.js";
 
 export type { RequestOptions } from "./resources/toolsets.js";
 export { Toolsets } from "./resources/toolsets.js";
+export { Workflows, type ListWorkflowsParams } from "./resources/workflows.js";
 export { Scripts, type CheckParams, type ListScriptsParams } from "./resources/scripts.js";
 export {
   MAX_REQUEST_WAIT_MS,
@@ -15,7 +16,10 @@ export {
   type ForkRunParams,
   type ListRunsParams,
   type RunStatsParams,
+  type ScriptTarget,
+  type StartRunOptions,
   type StartRunParams,
+  type WorkflowTarget,
 } from "./resources/runs.js";
 export { Tasks, type ClaimParams, type TaskFailure } from "./resources/tasks.js";
 export {

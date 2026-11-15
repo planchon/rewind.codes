@@ -5,16 +5,23 @@
 //! signals. It is derived from the run's history, a pure function of it, and replayed in mock
 //! mode: `sequential` hands the calls out in `seq` order, `by_args` by tool and canonical args.
 //! Its stored form is a document of the stored format v1 (`rewind-format`).
+//!
+//! The start of a workflow run is recorded with the outcome of that run, read from the
+//! `rewind:ended:` signal that brought its end, as mock mode answers a start; those signals stay
+//! out of the timeline (`archi/03-execution.md`, "Workflows across runs").
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
 use crate::digest::Digest;
-use crate::event::{Command, Completion, Event, HistoryEntry, ToolOutcome};
+use crate::event::{
+    Command, Completion, Event, HistoryEntry, ToolFailure, ToolFailureKind, ToolOutcome,
+};
 use crate::history::{HistoryError, validate_history};
-use crate::ids::Seq;
+use crate::ids::{RunId, Seq};
 use crate::payload::Payload;
+use crate::workflow::{RunEnd, WorkflowOp, ended_run, is_reserved_signal};
 
 /// The recorded calls and signals of a run.
 #[derive(Clone, Debug, PartialEq)]
@@ -94,6 +101,7 @@ impl Cassette {
         let mut scheduled: BTreeMap<Seq, (String, Value)> = BTreeMap::new();
         let mut outcomes: BTreeMap<Seq, ToolOutcome> = BTreeMap::new();
         let mut signals = Vec::new();
+        let mut ends: BTreeMap<RunId, Value> = BTreeMap::new();
         for entry in history {
             match &entry.event {
                 Event::Command(Command::ScheduleToolCall {
@@ -106,6 +114,13 @@ impl Cassette {
                 }
                 Event::Completion(Completion::ToolCallFailed { seq, error }) => {
                     outcomes.insert(*seq, ToolOutcome::Failure(error.clone()));
+                }
+                Event::Completion(Completion::SignalReceived { name, payload })
+                    if is_reserved_signal(name) =>
+                {
+                    if let Some(run) = ended_run(name) {
+                        ends.insert(run, value(entry.index, payload)?);
+                    }
                 }
                 Event::Completion(Completion::SignalReceived { name, payload }) => {
                     signals.push(RecordedSignal {
@@ -120,7 +135,10 @@ impl Cassette {
         let calls = scheduled
             .into_iter()
             .filter_map(|(seq, (tool, args))| {
-                let outcome = outcomes.remove(&seq)?;
+                let mut outcome = outcomes.remove(&seq)?;
+                if matches!(WorkflowOp::of_tool(&tool), Some((_, WorkflowOp::Start))) {
+                    outcome = started_run_outcome(outcome, &ends);
+                }
                 Some(RecordedCall {
                     tool,
                     args,
@@ -133,6 +151,29 @@ impl Cassette {
             signals,
             matching,
         })
+    }
+}
+
+/// What a cassette records for a workflow's start whose call had `outcome`: the outcome of the
+/// run it started, from its end; a failed start as it failed.
+fn started_run_outcome(outcome: ToolOutcome, ends: &BTreeMap<RunId, Value>) -> ToolOutcome {
+    let ToolOutcome::Result(result) = &outcome else {
+        return outcome;
+    };
+    let Some(run) = result
+        .get("runId")
+        .and_then(Value::as_str)
+        .and_then(|run| run.parse::<RunId>().ok())
+    else {
+        return outcome;
+    };
+    match ends.get(&run).and_then(RunEnd::from_json) {
+        Some(end) => end.to_mock(),
+        None => ToolOutcome::Failure(ToolFailure {
+            kind: ToolFailureKind::Error,
+            message: format!("the run {run} had not ended when the cassette was recorded"),
+            data: None,
+        }),
     }
 }
 
@@ -244,6 +285,54 @@ mod tests {
                 }],
                 matching: Matching::ByArgs,
             }
+        );
+    }
+
+    #[test]
+    fn a_workflow_start_is_recorded_with_the_outcome_of_its_run() {
+        let child: RunId = "0193a5c4-0000-7000-8000-000000000001".parse().unwrap();
+        let lost: RunId = "0193a5c4-0000-7000-8000-000000000002".parse().unwrap();
+        let start = |seq: u32, repo: &str| {
+            call(
+                seq,
+                "workflows.triage.start",
+                json!({ "input": { "repo": repo } }),
+            )
+        };
+        let resolved = |seq: u32, run: RunId| {
+            Event::Completion(Completion::ToolCallCompleted {
+                seq: Seq(seq),
+                result: json!({ "runId": run.to_string() }).into(),
+            })
+        };
+        let history = vec![
+            entry(0, 0, started()),
+            entry(1, 0, start(1, "a")),
+            entry(2, 0, start(2, "b")),
+            entry(3, 10, resolved(1, child)),
+            entry(4, 10, resolved(2, lost)),
+            entry(
+                5,
+                20,
+                Event::Completion(Completion::SignalReceived {
+                    name: crate::end_signal_name(child),
+                    payload: json!({ "status": "completed", "output": { "closed": 2 } }).into(),
+                }),
+            ),
+        ];
+        let cassette = Cassette::from_history(&history, Matching::Sequential).unwrap();
+        assert_eq!(cassette.signals, []);
+        assert_eq!(
+            cassette.calls[0].outcome,
+            ToolOutcome::Result(json!({ "closed": 2 }))
+        );
+        let ToolOutcome::Failure(failure) = &cassette.calls[1].outcome else {
+            panic!("a run that had not ended is a failure");
+        };
+        assert!(
+            failure.message.contains("had not ended"),
+            "{}",
+            failure.message
         );
     }
 

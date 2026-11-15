@@ -30,11 +30,30 @@ export const MAX_REQUEST_WAIT_MS = 50_000;
 
 const MIN_REPOLL_MS = 1_000;
 
-export interface StartRunParams extends RequestOptions {
+/** What a run executes: a script and its toolset. */
+export interface ScriptTarget {
   /** The TypeScript source: a single ES module whose default export is the entry point. */
   script: string;
   /** The toolset the script imports from `rewind:tools`. */
   toolset?: string | undefined;
+  workflow?: undefined;
+}
+
+/** What a run executes: a version of a workflow, with its script and its toolset. */
+export interface WorkflowTarget {
+  /**
+   * The workflow: `triage` for its latest version, `triage@<version>` (12 hex digits at least)
+   * for one version. The input is checked against its input schema (`invalid-input`).
+   */
+  workflow: string;
+  script?: undefined;
+  toolset?: undefined;
+}
+
+/** `runs.start`: a script and its toolset, or a workflow; and how the run starts. */
+export type StartRunParams = (ScriptTarget | WorkflowTarget) & StartRunOptions;
+
+export interface StartRunOptions extends RequestOptions {
   /** The input of `main`. `{}` when absent. */
   input?: unknown;
   /**
@@ -51,7 +70,7 @@ export interface StartRunParams extends RequestOptions {
   tracestate?: string | undefined;
   /** The run's time to live: it is cancelled after it. 30 days by default. */
   ttl?: Duration | undefined;
-  /** Type-check the script before starting it. `true` by default. */
+  /** Type-check the script before starting it. `true` by default. A workflow's is not checked again. */
   check?: boolean | undefined;
   /** The run's own credentials, used instead of the toolset's. */
   credentials?: Credentials | undefined;
@@ -96,6 +115,10 @@ export interface ListRunsParams extends RequestOptions {
   quarantined?: boolean | undefined;
   /** Only forks of this run. */
   parent?: string | undefined;
+  /** Only runs of this workflow, by name. */
+  workflow?: string | undefined;
+  /** Only runs this run started (`triage.start(…)` in its script). */
+  startedBy?: string | undefined;
   startedAfter?: Date | string | undefined;
   startedBefore?: Date | string | undefined;
   /** At most this many runs (50 by default, 500 at most). */
@@ -143,9 +166,11 @@ export class Runs {
   constructor(private readonly transport: Transport) {}
 
   /**
-   * Starts a run. The script is compiled, checked and type-checked first: a script that cannot
-   * run is refused with `invalid-script` (a `RewindApiError` with `diagnostics`) before any run
-   * exists. With `wait`, answers when the run ends or `wait` passes, whichever comes first.
+   * Starts a run of a script, or of a workflow. A script is compiled, checked and type-checked
+   * first: a script that cannot run is refused with `invalid-script` (a `RewindApiError` with
+   * `diagnostics`) before any run exists. A workflow's input that does not match its schema is
+   * refused with `invalid-input`. With `wait`, answers when the run ends or `wait` passes,
+   * whichever comes first.
    */
   async start(params: StartRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;
@@ -189,6 +214,8 @@ export class Runs {
               error: params.error,
               quarantined: params.quarantined,
               parent: params.parent,
+              workflow: params.workflow,
+              startedBy: params.startedBy,
               startedAfter: timeParam(params.startedAfter),
               startedBefore: timeParam(params.startedBefore),
               limit: params.limit,
@@ -260,7 +287,9 @@ export class Runs {
   /**
    * Sends a signal: it resolves the script's `signal(name)`, now or the next time the script
    * waits for that name. With an idempotency key, the same key sent twice delivers one signal.
-   * A run that has ended refuses it (`run-ended`).
+   * A run that has ended refuses it (`run-ended`). A name starting with `rewind:` is refused with
+   * `invalid-signal`, and so are, for a run of a workflow, a signal it does not declare and a
+   * payload that does not match its schema.
    */
   signal(
     id: string,

@@ -43,6 +43,16 @@ pub struct CreateToolset {
     /// toolset's id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credentials: Option<Credentials>,
+    /// The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
+    /// version, `triage@<version>` one version. The versions are pinned: the toolset's scripts
+    /// are checked against them, and start them, for their whole life.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<String>,
+    /// Derives the toolset from a registered one: its servers, tools and workflows are kept as
+    /// pinned, without listing the servers again; `workflows` adds workflows or pins them again.
+    /// `mcp`, `host` and `http` must then be empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
 }
 
 /// An MCP server: exactly one of `url` (streamable HTTP) and `command` (stdio).
@@ -149,6 +159,9 @@ pub struct Toolset {
     pub servers: Vec<ServerSummary>,
     /// Every tool a script of this toolset can call, sorted by name.
     pub tools: Vec<Tool>,
+    /// The workflows its scripts may start, sorted by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<crate::workflows::PinnedWorkflow>,
     pub declarations: Declarations,
 }
 
@@ -167,6 +180,9 @@ pub struct ToolsetSummary {
     pub servers: Vec<ServerSummary>,
     /// The names of its tools, sorted.
     pub tools: Vec<String>,
+    /// The names of the workflows it pins, sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workflows: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -221,7 +237,8 @@ pub enum Route {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Declarations {
-    /// `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc.
+    /// `rewind-tools.d.ts`: the `rewind:tools` module, with tool descriptions as JSDoc, and the
+    /// `rewind:workflows` module when the toolset pins workflows.
     pub dts: String,
     /// The compact rendering for the model's prompt, one line per tool.
     pub prompt: String,

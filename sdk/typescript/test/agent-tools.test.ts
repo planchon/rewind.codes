@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AGENT_TOOL_NAMES, Rewind, RewindApiError, RewindError, type AgentTools, type Run } from "../src/index.js";
-import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
+import { RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
 import { MockServer, json, problem, type MockHandler } from "./mock-server.js";
 
 const LABELS = { conversation: "c-42" };
@@ -51,8 +51,10 @@ describe("the agent tools' definitions", () => {
     expect(tools.definitions.map((d) => d.name)).toEqual([...AGENT_TOOL_NAMES]);
     const withoutToolset = rewind.agentTools({ labels: LABELS });
     expect(withoutToolset.has("search_tools")).toBe(false);
+    expect(withoutToolset.has("save_workflow")).toBe(false);
     expect(withoutToolset.has("run_script")).toBe(true);
     expect(() => rewind.agentTools({ tools: ["search_tools"] })).toThrow(TypeError);
+    expect(() => rewind.agentTools({ tools: ["save_workflow"] })).toThrow("save_workflow needs a toolset");
     expect(() => rewind.agentTools({ tools: ["nope" as never] })).toThrow(TypeError);
     expect(rewind.agentTools({ tools: ["run_script", "get_run"] }).definitions.map((d) => d.name)).toEqual([
       "run_script",
@@ -529,6 +531,38 @@ describe("the tools that take a run id", () => {
     expect(signals[1]?.rawBody).toBe("null");
   });
 
+  it("signal_run: a run of a workflow refuses a signal it does not declare", async () => {
+    serveRun(run({ status: "active", workflow: { name: "triage", version: VERSION } }));
+    server.on(
+      "POST",
+      "/v1/runs/{id}/signals/{name}",
+      problem(
+        422,
+        "invalid-signal",
+        `run ${RUN_ID} is a run of triage, which does not declare the signal "ping" (it declares approval)`,
+      ),
+    );
+    const result = await tools.handle("signal_run", { run_id: RUN_ID, name: "ping" });
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe(
+      `Run ${RUN_ID} refused the signal "ping": run ${RUN_ID} is a run of triage, which does not declare the signal "ping" (it declares approval)`,
+    );
+  });
+
+  it("get_run: says which workflow a run executes, and which run started it", async () => {
+    serveRun(
+      run({
+        workflow: { name: "triage", version: VERSION },
+        startedBy: { run: "parent-1", seq: 2, detached: true },
+        output: payload({ closed: 1 }),
+      }),
+    );
+    const result = await tools.handle("get_run", { run_id: RUN_ID });
+    expect(result.content.split("\n")[0]).toBe(
+      `Run ${RUN_ID} (a run of the workflow triage@4be1c07a9d3e, started by run parent-1, detached) completed.`,
+    );
+  });
+
   it("signal_run: a run that has ended refuses it", async () => {
     serveRun(run());
     server.on("POST", "/v1/runs/{id}/signals/{name}", problem(409, "run-ended", `run ${RUN_ID} has ended (completed)`));
@@ -598,6 +632,39 @@ describe("the other tools", () => {
     expect(request?.query.getAll("label")).toEqual(["conversation:c-42"]);
     expect(request?.query.get("status")).toBe("failed");
     expect((await tools.handle("list_runs", { status: "done" })).isError).toBe(true);
+  });
+
+  it("list_runs: says which workflow a run executes, and which run started it", async () => {
+    server.on(
+      "GET",
+      "/v1/runs",
+      json({
+        runs: [
+          {
+            id: "r2",
+            status: "active",
+            errors: 0,
+            historyLen: 3,
+            labels: LABELS,
+            lastActivityAt: "t",
+            quarantined: false,
+            script: "s",
+            startedAt: "2026-11-12T10:00:00Z",
+            toolCalls: 1,
+            toolset: TOOLSET,
+            workflow: "triage",
+            startedBy: "r1",
+          },
+        ],
+      }),
+    );
+    const result = await tools.handle("list_runs", {});
+    expect(result.content).toBe(
+      [
+        "1 run, most recent first:",
+        "- r2: active, started 2026-11-12T10:00:00Z, 1 tool call, a run of the workflow triage, started by r1",
+      ].join("\n"),
+    );
   });
 
   it("check_script: the diagnostics", async () => {
@@ -704,6 +771,187 @@ describe("the other tools", () => {
     const result = await tools.handle("search_tools", { query: "close" });
     expect(result.content).toBe('1 tool matches "close":\n\nclose_issue(args: { number: number }): Promise<void>;');
     expect(server.requests[0]?.query.get("query")).toBe("close");
+  });
+});
+
+describe("save_workflow", () => {
+  const DERIVED = "de".repeat(32);
+  const source =
+    'import { signal } from "rewind";\nexport default async function main(input: { repo: string }) {\n  const { close } = await signal("approval");\n  return { closed: close ? 1 : 0 };\n}\n';
+  const saved = workflow();
+  const definition = {
+    name: "triage",
+    description: saved.description,
+    code: source,
+    input: saved.input,
+    output: saved.output,
+    signals: saved.signals,
+  };
+
+  /** Toolsets as the server derives them: each one a new id, numbered. */
+  function deriveToolsets(): void {
+    let derived = 0;
+    server.on("POST", "/v1/toolsets", () => {
+      derived += 1;
+      return json(toolset(derived === 1 ? DERIVED : `${DERIVED.slice(0, -1)}${derived}`, [saved]), 201);
+    });
+  }
+
+  it("saves the workflow with the agent's toolset, and tells the model how to import it", async () => {
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    deriveToolsets();
+    const result = await tools.handle("save_workflow", definition, { toolCallId: "call_1" });
+    expect(result.isError).toBe(false);
+    expect(result.workflow).toEqual(saved);
+    expect(result.toolset?.id).toBe(DERIVED);
+    expect(result.content).toBe(
+      [
+        "Saved the workflow triage@4be1c07a9d3e. Your next scripts can import it:",
+        'import { triage } from "rewind:workflows";',
+        saved.declarations.prompt,
+        "Its declaration:",
+        saved.declarations.dts,
+      ].join("\n"),
+    );
+    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual({
+      name: "triage",
+      description: saved.description,
+      toolset: TOOLSET,
+      script: source,
+      input: saved.input,
+      output: saved.output,
+      signals: saved.signals,
+    });
+    // The toolset derived from the agent's pins this very version.
+    expect(server.calls("POST", "/v1/toolsets")[0]?.body).toEqual({
+      base: TOOLSET,
+      workflows: [`triage@${VERSION}`],
+    });
+    expect(tools.toolset).toBe(DERIVED);
+  });
+
+  it("makes the later scripts run, check, test and search with the derived toolset", async () => {
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    deriveToolsets();
+    server.on("POST", "/v1/runs", started({ output: payload({ closed: 1 }) }));
+    server.on("POST", "/v1/check", json({ ok: true, diagnostics: [] }));
+    server.on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }));
+    server.on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }));
+
+    await tools.handle("save_workflow", definition);
+    const code =
+      'import { triage } from "rewind:workflows";\nexport default async () => (await triage.start({ repo: "a" })).result();';
+    const ran = await tools.handle("run_script", { code });
+    expect(ran.content).toBe(`Run ${RUN_ID} completed.\nOutput:\n{"closed":1}`);
+    await tools.handle("check_script", { code });
+    await tools.handle("test_script", { code, scenario: {} });
+    await tools.handle("search_tools", { query: "triage" });
+
+    expect(server.calls("POST", "/v1/runs")[0]?.body).toMatchObject({ script: code, toolset: DERIVED });
+    expect(server.calls("POST", "/v1/check")[0]?.body).toEqual({ script: code, toolset: DERIVED });
+    expect(server.calls("POST", "/v1/test")[0]?.body).toMatchObject({ script: code, toolset: DERIVED });
+    expect(server.calls("GET", `/v1/toolsets/${DERIVED}/search`)).toHaveLength(1);
+    // Other agent tools keep their own toolset.
+    expect(rewind.agentTools({ toolset: TOOLSET, labels: LABELS }).toolset).toBe(TOOLSET);
+  });
+
+  it("derives each toolset from the previous one, when the model saves several at once", async () => {
+    server.on("POST", "/v1/workflows", (request) => {
+      const name = (request.body as { name: string }).name;
+      return json(workflow({ name, version: name === "triage" ? VERSION : "77".repeat(32) }), 201);
+    });
+    deriveToolsets();
+    const [first, second] = await Promise.all([
+      tools.handle("save_workflow", definition),
+      tools.handle("save_workflow", { ...definition, name: "digest" }),
+    ]);
+    expect(first?.isError).toBe(false);
+    expect(second?.isError).toBe(false);
+    const derivations = server.calls("POST", "/v1/toolsets").map((r) => r.body as { base: string });
+    expect(derivations.map((body) => body.base)).toEqual([TOOLSET, DERIVED]);
+    expect(tools.toolset).toBe(`${DERIVED.slice(0, -1)}2`);
+  });
+
+  it("returns the diagnostics of a refused script, and keeps the toolset", async () => {
+    server.on(
+      "POST",
+      "/v1/workflows",
+      problem(422, "invalid-script", "the script does not type-check", {
+        diagnostics: [
+          {
+            code: "TS2345",
+            message: "Argument of type '\"aproval\"' is not assignable to parameter of type '\"approval\"'.",
+            severity: "error",
+            location: { line: 3, column: 34 },
+            frame: '3 |   const { close } = await signal("aproval");\n  |                                  ^^^^^^^^^',
+          },
+        ],
+      }),
+    );
+    const result = await tools.handle("save_workflow", definition);
+    expect(result).toEqual({
+      content: [
+        "The workflow was not saved: the script does not type-check",
+        "script.ts:3:34 error TS2345: Argument of type '\"aproval\"' is not assignable to parameter of type '\"approval\"'.",
+        '3 |   const { close } = await signal("aproval");\n  |                                  ^^^^^^^^^',
+      ].join("\n"),
+      isError: true,
+    });
+    expect(server.calls("POST", "/v1/toolsets")).toHaveLength(0);
+    expect(tools.toolset).toBe(TOOLSET);
+
+    server.on("POST", "/v1/runs", started());
+    await tools.handle("run_script", { code: "x" });
+    expect(server.calls("POST", "/v1/runs")[0]?.body).toMatchObject({ toolset: TOOLSET });
+  });
+
+  it("returns why a name or a schema cannot be used", async () => {
+    server.on(
+      "POST",
+      "/v1/workflows",
+      problem(422, "invalid-workflow", 'the workflow name "class" is a reserved word of JavaScript'),
+    );
+    const result = await tools.handle("save_workflow", { ...definition, name: "class" });
+    expect(result).toEqual({
+      content: 'The workflow was not saved: the workflow name "class" is a reserved word of JavaScript',
+      isError: true,
+    });
+    expect(tools.toolset).toBe(TOOLSET);
+  });
+
+  it("says when the workflow was saved but could not be added to the toolset", async () => {
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    server.on("POST", "/v1/toolsets", problem(422, "invalid-toolset", "a toolset pins 64 workflows at most"));
+    const result = await tools.handle("save_workflow", definition);
+    expect(result).toMatchObject({
+      content:
+        "The workflow triage was saved, but your scripts cannot start it yet: adding it to your tools failed: a toolset pins 64 workflows at most",
+      isError: true,
+      workflow: saved,
+    });
+    expect(tools.toolset).toBe(TOOLSET);
+  });
+
+  it("tells the model what is wrong with its arguments", async () => {
+    expect((await tools.handle("save_workflow", { ...definition, input: "string" })).content).toBe(
+      "save_workflow: `input` must be a JSON Schema: an object.",
+    );
+    expect((await tools.handle("save_workflow", { ...definition, signals: [] })).content).toBe(
+      "save_workflow: `signals` must be an object of JSON Schemas by signal name.",
+    );
+    expect((await tools.handle("save_workflow", { ...definition, name: "" })).content).toBe(
+      "save_workflow: `name` must be a non-empty string.",
+    );
+    expect(server.requests).toHaveLength(0);
+  });
+
+  it("stays bounded whatever the declaration", async () => {
+    const huge = "x".repeat(3_000_000);
+    server.on("POST", "/v1/workflows", json(workflow({ declarations: { dts: huge, prompt: huge } }), 201));
+    deriveToolsets();
+    const result = await tools.handle("save_workflow", definition);
+    expect(Buffer.byteLength(result.content)).toBeLessThan(512 * 1024);
+    expect(result.content).toContain('import { triage } from "rewind:workflows";');
   });
 });
 

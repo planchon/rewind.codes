@@ -39,6 +39,7 @@ mod webhooks;
 pub use blob::{BlobError, BlobStore};
 pub use checker::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
+    WorkflowDeclarations,
 };
 pub use clock::{Clock, Entropy, VirtualTime};
 pub use dispatcher::{Dispatched, ToolCall, ToolDispatcher};
@@ -51,9 +52,9 @@ pub use journal::{
     Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore, Lease, NewRun, NewTimer,
     NewToolTask, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata,
-    RunRecord, STICKY_GRACE, StoreError, StoredScript, StoredToolset, TaskFilter, TaskRef,
-    TaskState, TaskToken, TaskUpdate, ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken,
-    deferred_timeout_failure,
+    RunRecord, RunWorkflow, STICKY_GRACE, StartedBy, StoreError, StoredScript, StoredToolset,
+    StoredWorkflow, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, ToolTask, TraceContext,
+    Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 pub use read_model::{
     Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,

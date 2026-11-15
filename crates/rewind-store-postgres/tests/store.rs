@@ -617,6 +617,8 @@ fn projected_run(n: u128) -> ProjectedRun {
         toolset: Digest::of(b"toolset"),
         labels: BTreeMap::from([("agent".to_owned(), "triage".to_owned())]),
         parent: None,
+        workflow: None,
+        started_by: None,
     }
 }
 

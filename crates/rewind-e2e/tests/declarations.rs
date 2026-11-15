@@ -322,3 +322,130 @@ async fn names_that_are_not_reserved_words_check_and_start() {
         }
     }
 }
+
+// -------------------------------------------------------------------------------------------
+// Workflows: `rewind:workflows` as codegen declares it, and a workflow's own declarations
+
+fn triage() -> rewind_core::Workflow {
+    rewind_core::Workflow::new(
+        "triage",
+        Some("Triage the stale issues of a repository.".into()),
+        Script::new(TRIAGE).digest(),
+        toolset(false).digest(),
+        rewind_core::WorkflowSchemas {
+            input: json!({
+                "type": "object",
+                "properties": { "repo": { "type": "string" } },
+                "required": ["repo"],
+            }),
+            output: json!({
+                "type": "object",
+                "properties": { "closed": { "type": "integer" } },
+                "required": ["closed"],
+            }),
+            signals: BTreeMap::from([(
+                "approval".to_owned(),
+                json!({
+                    "type": "object",
+                    "properties": { "close": { "type": "boolean" } },
+                    "required": ["close"],
+                }),
+            )]),
+        },
+    )
+    .unwrap()
+}
+
+const TRIAGE: &str = r#"import { crm } from "rewind:tools";
+import { signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const { score } = await crm.score({ id: input.repo });
+  const approval = await signal("approval");
+  return { closed: approval.close ? Math.round(score) : 0 };
+}
+"#;
+
+const PARENT: &str = r#"import { triage } from "rewind:workflows";
+import { WorkflowError } from "rewind";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo }, { detached: false })));
+  for (const run of runs) await run.signal("approval", { close: true });
+  try {
+    const results = await Promise.all(runs.map((run) => run.result({ timeout: "1d" })));
+    return results.map((result) => result?.closed ?? 0);
+  } catch (error) {
+    if (error instanceof WorkflowError) return [error.status];
+    throw error;
+  }
+}
+"#;
+
+#[tokio::test]
+async fn a_script_that_starts_a_pinned_workflow_checks_and_starts() {
+    let toolset = toolset(false).with_workflows([triage().pinned()]).unwrap();
+    assert_eq!(summary(&check(PARENT, &toolset).await), []);
+    assert_eq!(compile(PARENT, &toolset), Ok(()));
+
+    let wrong = PARENT.replace("triage.start({ repo }", "triage.start({ repo: 1 }");
+    assert_eq!(
+        summary(&check(&wrong, &toolset).await),
+        [(
+            "TS2322".into(),
+            "Type 'number' is not assignable to type 'string'.".into()
+        )]
+    );
+}
+
+#[tokio::test]
+async fn a_workflow_the_toolset_does_not_pin_is_refused_by_both() {
+    let toolset = toolset(false);
+    let diagnostics = summary(&check(PARENT, &toolset).await);
+    assert_eq!(
+        diagnostics[0],
+        (
+            "TS2305".into(),
+            "Module '\"rewind:workflows\"' has no exported member 'triage'.".into()
+        )
+    );
+    let refused = compile(PARENT, &toolset).unwrap_err();
+    assert!(
+        refused.starts_with("\"rewind:workflows\" has no export named \"triage\""),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_workflow_s_script_is_checked_against_its_own_schemas() {
+    let workflow = triage();
+    let own = rewind_codegen::workflow_declarations("triage", workflow.schemas());
+    let declarations = rewind_codegen::generate(&toolset(false), &BTreeMap::new());
+    let check_workflow = |source: String| {
+        let own = own.clone();
+        let declarations = declarations.typescript.clone();
+        async move {
+            CHECKER
+                .check_workflow_source(&source, &declarations, &own.signals, &own.entry)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(summary(&check_workflow(TRIAGE.into()).await), []);
+    let undeclared = summary(&check_workflow(TRIAGE.replace("\"approval\"", "\"aproval\"")).await);
+    assert!(
+        undeclared
+            .iter()
+            .any(|(_, message)| message.contains("\"aproval\"")),
+        "{undeclared:?}"
+    );
+    let mismatched = check_workflow(TRIAGE.replace("return { closed:", "return { count:")).await;
+    assert!(
+        mismatched.iter().any(|diagnostic| diagnostic.line == 4
+            && diagnostic
+                .message
+                .starts_with("the default export does not match the workflow's schemas")),
+        "{:?}",
+        summary(&mismatched)
+    );
+}

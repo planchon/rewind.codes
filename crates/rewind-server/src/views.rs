@@ -351,6 +351,20 @@ impl Views<'_> {
                 run: parent.run.to_string(),
                 at: parent.at,
             }),
+            workflow: record.metadata.workflow.as_ref().map(|workflow| {
+                rewind_api::workflows::RunWorkflow {
+                    name: workflow.name.clone(),
+                    version: workflow.version.to_hex(),
+                }
+            }),
+            started_by: record
+                .metadata
+                .started_by
+                .map(|by| rewind_api::workflows::StartedBy {
+                    run: by.run.to_string(),
+                    seq: by.seq.0,
+                    detached: by.detached,
+                }),
             input: started.map(|started| payload(&started.input)),
             output,
             error,

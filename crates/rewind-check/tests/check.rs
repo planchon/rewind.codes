@@ -640,3 +640,177 @@ async fn the_diagnostics_of_a_script_are_bounded() {
         &diagnostics[..2]
     );
 }
+
+// -------------------------------------------------------------------------------------------
+// Workflows: the declarations `rewind-codegen` writes for them
+
+/// `rewind:workflows` for a toolset that pins `triage`.
+const WORKFLOWS: &str = r##"
+declare module "rewind:workflows" {
+  import type { Workflow } from "rewind";
+
+  /** Triage the stale issues of a repository. */
+  export const triage: Workflow<
+    { repo: string },
+    { closed: number },
+    { approval: { close: boolean }; "pr merged": unknown }
+  >;
+}
+"##;
+
+const PARENT: &str = r##"import { triage } from "rewind:workflows";
+import { WorkflowError } from "rewind";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo }, { ttl: "2d" })));
+  await Promise.all(runs.map((run) => run.signal("approval", { close: true })));
+  let closed = 0;
+  for (const run of runs) {
+    try {
+      const result = await run.result();
+      closed += result.closed;
+    } catch (error) {
+      if (error instanceof WorkflowError && error.status === "failed") continue;
+      throw error;
+    }
+  }
+  const later = await runs[0].result({ timeout: "1h" });
+  await triage.get(runs[0].id).signal("pr merged", { any: "thing" });
+  return { closed, later: later?.closed };
+}
+"##;
+
+#[tokio::test]
+async fn a_script_starts_and_signals_workflows_with_types() {
+    let declarations = format!("{TOOLS}{WORKFLOWS}");
+    assert_eq!(check_with(PARENT, &declarations).await, []);
+
+    let wrong = PARENT
+        .replace("triage.start({ repo }", "triage.start({ repo: 42 }")
+        .replace(
+            "run.signal(\"approval\", { close: true })",
+            "run.signal(\"aproval\", {})",
+        );
+    let found = summary(&check_with(&wrong, &declarations).await);
+    let messages: Vec<&str> = found
+        .iter()
+        .map(|(_, _, _, message)| message.as_str())
+        .collect();
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Type 'number' is not assignable to type 'string'")),
+        "{found:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("\"aproval\"")),
+        "{found:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_toolset_without_workflows_declares_an_empty_module() {
+    let found = summary(&check(PARENT).await);
+    assert!(
+        found
+            .iter()
+            .any(|(line, _, _, message)| *line == 1 && message.contains("triage")),
+        "{found:?}"
+    );
+    assert!(
+        !found
+            .iter()
+            .any(|(_, _, _, message)| message.contains("Cannot find module")),
+        "{found:?}"
+    );
+}
+
+/// What `rewind-codegen` writes for `triage`'s own script.
+const SIGNALS: &str = r##"declare module "rewind" {
+  export interface Signals {
+    approval: { close: boolean };
+    "pr merged": unknown;
+  }
+}
+"##;
+
+const ENTRY: &str = r##"import main from "./script";
+
+type Input = { repo: string };
+type Output = { closed: number };
+
+const entry: (input: Input) => Output | Promise<Output> = main;
+export { entry };
+"##;
+
+const TRIAGE: &str = r##"import { github } from "rewind:tools";
+import { signal, webhook } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo });
+  const hook = await webhook("pr merged");
+  const approval = await signal("approval");
+  const close: boolean = approval.close;
+  const merged = await signal("pr merged", { timeout: "1d" });
+  return { closed: close ? issues.length : 0, hook: hook.url, merged: merged !== undefined };
+}
+"##;
+
+async fn check_workflow(source: &str) -> Vec<(u32, u32, String, String)> {
+    let diagnostics = CHECKER
+        .check_workflow_source(source, TOOLS, SIGNALS, ENTRY)
+        .await
+        .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    summary(&diagnostics)
+}
+
+#[tokio::test]
+async fn a_workflow_s_signals_are_typed_and_closed() {
+    assert_eq!(check_workflow(TRIAGE).await, []);
+    let undeclared =
+        check_workflow(&TRIAGE.replace("signal(\"approval\")", "signal(\"aproval\")")).await;
+    assert!(
+        undeclared
+            .iter()
+            .any(|(line, _, _, message)| *line == 7 && message.contains("\"aproval\"")),
+        "{undeclared:?}"
+    );
+    let typed =
+        check_workflow(&TRIAGE.replace("const close: boolean", "const close: string")).await;
+    assert!(
+        typed.iter().any(|(line, _, _, message)| *line == 8
+            && message.contains("'boolean' is not assignable to type 'string'")),
+        "{typed:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_default_export_that_does_not_match_the_schemas_is_reported_at_it() {
+    let input = check_workflow(&TRIAGE.replace(
+        "main(input: { repo: string })",
+        "main(input: { repo: number })",
+    ))
+    .await;
+    // The script also passes `repo` on as a string, which it no longer is.
+    let (line, column, source, message) = input
+        .iter()
+        .find(|(_, _, _, message)| message.starts_with("the default export"))
+        .unwrap_or_else(|| panic!("{input:?}"));
+    assert_eq!((*line, *column, source.as_str()), (4, 1, "TS2322"));
+    assert!(
+        message.contains("Types of property 'repo' are incompatible."),
+        "{message}"
+    );
+    let output = check_workflow(&TRIAGE.replace(
+        "return { closed: close ? issues.length : 0,",
+        "return { closed: \"none\",",
+    ))
+    .await;
+    assert!(
+        output.iter().any(|(line, _, _, message)| *line == 4
+            && message.starts_with("the default export does not match")),
+        "{output:?}"
+    );
+}

@@ -5,13 +5,16 @@ mod activation;
 mod feed;
 mod runs;
 mod tasks;
+mod workflows;
 
 use std::future::Future;
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use rewind_core::{
-    Completion, Digest, Epoch, HistoryEntry, RunId, Script, Timestamp, ToolFailure, ToolOutcome,
-    Toolset,
+    Completion, Digest, Epoch, HistoryEntry, RunId, Script, Seq, Timestamp, ToolFailure,
+    ToolOutcome, Toolset, Workflow,
 };
 
 pub use activation::{
@@ -28,6 +31,7 @@ pub use tasks::{
     ClaimedTask, ParkKind, ParkReason, ParkedScope, TaskFilter, TaskRef, TaskState, TaskToken,
     TaskUpdate, ToolTask, deferred_timeout_failure,
 };
+pub use workflows::{RunWorkflow, StartedBy, StoredWorkflow, Watched, WorkflowFilter};
 
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
@@ -101,6 +105,12 @@ pub enum StoreError {
 ///   existing run; `enqueue` with a key already seen for the run does nothing.
 /// - **Terminal runs.** A terminal commit clears the run's timers, tool tasks, inbox and
 ///   webhook tokens, and nothing is enqueued for a terminal run any more.
+/// - **Watchers.** A run started by a script is watched by its starter (attached unless it is
+///   detached), and by the forks that copied its start (`watch_run`). A terminal commit, in its
+///   transaction, enqueues the run's end (`Activation::end`) as the signal
+///   `rewind:ended:<run>` for each watcher that has not ended, under that name as idempotency
+///   key, and `cancel_requested` for each run the ending run watches attached and that has not
+///   ended.
 /// - **Time.** Stores never read a clock: every method that depends on time takes `now`, and
 ///   every method that needs randomness for ordering takes it too. Tokens are the only values
 ///   a store draws from a CSPRNG.
@@ -145,6 +155,42 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<StoredToolset>, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
+    // Workflows
+
+    /// Stores a workflow version, with the labels of the key that saved it, and returns it as
+    /// stored. Idempotent by version: a second put changes nothing and returns the first.
+    fn put_workflow(
+        &self,
+        tenant: &TenantId,
+        workflow: &Workflow,
+        labels: &BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<StoredWorkflow, StoreError>> + Send;
+
+    fn get_workflow(
+        &self,
+        tenant: &TenantId,
+        version: Digest,
+    ) -> impl Future<Output = Result<Option<StoredWorkflow>, StoreError>> + Send;
+
+    /// The versions of the workflow `name` that carry all of `labels`, newest first (the
+    /// version created last first, ties in the order they were stored, last first). The first
+    /// is the workflow's latest version.
+    fn workflow_versions(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> impl Future<Output = Result<Vec<StoredWorkflow>, StoreError>> + Send;
+
+    /// The latest version of each workflow of the tenant, among the versions that carry all of
+    /// the filter's labels, sorted by name.
+    fn latest_workflows(
+        &self,
+        filter: &WorkflowFilter,
+    ) -> impl Future<Output = Result<Vec<StoredWorkflow>, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
     // The way in
 
     /// Creates a run and enqueues its `run_started`. With an idempotency key already used in
@@ -171,6 +217,18 @@ pub trait JournalStore: Send + Sync {
         &self,
         run: &RunRef,
     ) -> impl Future<Output = Result<Option<RunRecord>, StoreError>> + Send;
+
+    /// Makes `watcher`, which copied the call `seq` that started `run`, a watcher of `run`, never
+    /// attached: a fork receives the end of the runs its copied history started
+    /// (`archi/03-execution.md`, "Forks"). Says whether `run` has already ended: its end is then
+    /// not enqueued for the watcher, and the caller enqueues it under the same key. `None` when
+    /// `run` does not exist. Watching a run twice changes nothing.
+    fn watch_run(
+        &self,
+        run: &RunRef,
+        watcher: RunId,
+        seq: Seq,
+    ) -> impl Future<Output = Result<Option<Watched>, StoreError>> + Send;
 
     /// Runs of one tenant matching the filter, oldest first (`created_at`, then id).
     fn list_runs(

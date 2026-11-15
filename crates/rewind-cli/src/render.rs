@@ -314,6 +314,8 @@ mod tests {
             labels: Labels::new(),
             trace_id: "0".repeat(32),
             parent: None,
+            workflow: None,
+            started_by: None,
             input: Some(Payload::of(json!({}), 1024)),
             output: None,
             error: None,

@@ -14,6 +14,7 @@ mod search;
 mod subscriptions;
 mod tasks;
 mod toolsets;
+mod workflows;
 
 use std::sync::Arc;
 
@@ -42,6 +43,11 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::TOOLSET_DECLARATIONS, get(toolsets::declarations))
         .route(routes::TOOLSET_SEARCH, get(toolsets::search))
         .route(routes::TOOLSET_CREDENTIALS, put(toolsets::credentials))
+        .route(
+            routes::WORKFLOWS,
+            post(workflows::create).get(workflows::list),
+        )
+        .route(routes::WORKFLOW, get(workflows::versions))
         .route(routes::CHECK, post(scripts::check))
         .route(routes::TEST, post(scripts::test))
         .route(routes::SCRIPTS, get(reading::scripts))

@@ -6,7 +6,8 @@
 //!   │
 //!   ▼ prepare: the pinned tool, its args, the run's or the toolset's credentials (MCP only)
 //!   │           (a failure here puts the task back with backoff: the call was not sent)
-//!   ▼ dispatch, the claim heartbeated meanwhile (or the `webhook` built-in, in the engine)
+//!   ▼ dispatch, the claim heartbeated meanwhile (or, in the engine, the `webhook` built-in and
+//!   │  the workflows' built-ins)
 //!   │
 //!   ├─ Result, Failed ──────────────────────────────────────────────► done
 //!   ├─ Transient ── retry and attempts left ── ready after backoff; else done with the failure
@@ -20,7 +21,7 @@ use tracing::Instrument as _;
 
 use rewind_core::{
     Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp,
-    ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute,
+    ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
 };
 use serde_json::json;
 
@@ -40,8 +41,19 @@ struct Prepared {
     record: RunRecord,
     call: ToolCall,
     credentials: Option<Credentials>,
-    /// The engine answers the call itself: the `webhook` built-in of a live run.
-    engine_webhook: bool,
+    /// The engine answers the call itself, or turns the dispatcher's answer into its own.
+    served: Option<Served>,
+}
+
+/// A call the engine serves: it needs the store, which no dispatcher holds.
+enum Served {
+    /// The `webhook` built-in of a live run.
+    Webhook,
+    /// A workflow's built-in in a live run: the engine starts or signals the run.
+    Workflow { workflow: String, op: WorkflowOp },
+    /// A workflow's start in mock mode: the mocks answer with the child's end, which the engine
+    /// turns into a start and an end.
+    MockStart,
 }
 
 impl<J, B, X, D, C, E, S, W> Engine<J, B, X, D, C, E, S, W>
@@ -116,7 +128,7 @@ where
             record,
             call,
             credentials,
-            engine_webhook,
+            served,
         } = prepared;
         // The attempt span: a child of the tool call span, through the call's trace context.
         let attempt = tracing::info_span!(
@@ -128,27 +140,48 @@ where
             rewind.tool = task.tool.as_str(),
             rewind.outcome = tracing::field::Empty,
         );
+        // In mock mode, the end of the child a start stands for follows the start's result.
+        let mut mock_end = None;
+        let caller = call.run.clone();
         let dispatched = async {
-            if engine_webhook {
-                self.webhook_builtin(&call).await
-            } else {
-                let in_flight = InFlight {
-                    heartbeat_timeout: task.policy.heartbeat_timeout,
-                    renewed_at: now,
-                    deadline: task
-                        .policy
-                        .execution_timeout
-                        .map(|timeout| now.saturating_add(timeout)),
-                };
-                let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
-                self.dispatcher.dispatch(call, credentials).await
+            match &served {
+                Some(Served::Webhook) => return self.webhook_builtin(&call).await,
+                Some(Served::Workflow {
+                    workflow,
+                    op: WorkflowOp::Start,
+                }) => return self.start_child(&call, &record, workflow).await,
+                Some(Served::Workflow {
+                    workflow,
+                    op: WorkflowOp::Signal,
+                }) => return self.signal_run(&call, &record, workflow).await,
+                Some(Served::MockStart) | None => {}
             }
+            let in_flight = InFlight {
+                heartbeat_timeout: task.policy.heartbeat_timeout,
+                renewed_at: now,
+                deadline: task
+                    .policy
+                    .execution_timeout
+                    .map(|timeout| now.saturating_add(timeout)),
+            };
+            let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
+            if matches!(served, Some(Served::MockStart)) {
+                let answered = self.dispatcher.dispatch(call.clone(), credentials).await;
+                let (dispatched, end) = self.mock_start(answered);
+                mock_end = end;
+                return dispatched;
+            }
+            self.dispatcher.dispatch(call, credentials).await
         }
         .instrument(attempt.clone())
         .await;
         attempt.record(metrics::OUTCOME, metrics::attempt_outcome(&dispatched));
         drop(attempt);
-        self.settle(&task, &token, &record, dispatched).await
+        let progress = self.settle(&task, &token, &record, dispatched).await?;
+        if let Some((child, end)) = mock_end {
+            self.enqueue_mock_end(&caller, child, end).await?;
+        }
+        Ok(progress)
     }
 
     /// Claims up to `limit` tool tasks and runs them in order. Returns how many ran.
@@ -387,32 +420,47 @@ where
             token: token.clone(),
             trace_context: self.call_trace_context(&record, task.task.seq),
         };
-        let engine_webhook = self.is_engine_webhook(task, &call).await?;
+        let served = self.served(task, &call).await?;
         Ok(Some(Prepared {
             record,
             call,
             credentials,
-            engine_webhook,
+            served,
         }))
     }
 
-    /// Whether the engine answers the call itself: the `webhook` built-in of a live run. It
-    /// needs the store's webhook tokens, which no dispatcher holds. In mock mode, the mocks
-    /// answer it like every other call.
-    async fn is_engine_webhook(
+    /// Whether the engine serves the call itself: the `webhook` built-in and the workflows'
+    /// built-ins of a live run, which need the store. In mock mode, the mocks answer them like
+    /// every other call, and the engine turns a workflow's start into a start and an end.
+    async fn served(
         &self,
         task: &ToolTask,
         call: &ToolCall,
-    ) -> Result<bool, EngineError> {
-        if call.tool.route != ToolRoute::Builtin(Builtin::Webhook) {
-            return Ok(false);
-        }
+    ) -> Result<Option<Served>, EngineError> {
+        let served = match &call.tool.route {
+            ToolRoute::Builtin(Builtin::Webhook) => Served::Webhook,
+            ToolRoute::Builtin(Builtin::Workflow { workflow, op }) => Served::Workflow {
+                workflow: workflow.clone(),
+                op: *op,
+            },
+            _ => return Ok(None),
+        };
         let history = self.journal.load_history(&task.task.run, 0).await?;
         let mode = history.first().and_then(|entry| match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
             _ => None,
         });
-        Ok(mode == Some(RunMode::Live))
+        Ok(match (mode, served) {
+            (Some(RunMode::Live), served) => Some(served),
+            (
+                _,
+                Served::Workflow {
+                    op: WorkflowOp::Start,
+                    ..
+                },
+            ) => Some(Served::MockStart),
+            _ => None,
+        })
     }
 
     /// `webhook(name)`: a URL bound to the run and the signal name, the same for the same

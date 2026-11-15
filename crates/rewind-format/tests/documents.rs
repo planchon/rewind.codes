@@ -1,6 +1,6 @@
-//! The cassette and pinned toolset documents v1 are frozen like events: these fixtures were
-//! written once and must decode forever, to the same domain values, and re-encode to the same
-//! bytes.
+//! The cassette, pinned toolset and workflow version documents v1 are frozen like events: these
+//! fixtures were written once and must decode forever, to the same domain values, and re-encode
+//! to the same bytes.
 
 #![allow(clippy::unwrap_used)]
 
@@ -10,10 +10,11 @@ use std::time::Duration;
 use rewind_core::{
     Builtin, Cassette, Digest, Interruption, Matching, McpServer, McpTransport, RecordedCall,
     RecordedSignal, Tool, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute,
-    Toolset,
+    Toolset, Workflow, WorkflowSchemas,
 };
 use rewind_format::{
-    FormatError, decode_cassette, decode_toolset, encode_cassette, encode_toolset,
+    FormatError, decode_cassette, decode_toolset, decode_workflow, encode_cassette, encode_toolset,
+    encode_workflow,
 };
 use serde_json::json;
 
@@ -273,4 +274,127 @@ fn rejects_what_v1_does_not_define() {
 fn print_fixtures() {
     println!("{}", encode_toolset(&toolset()));
     print!("{}", encode_cassette(&cassette()));
+}
+
+const WORKFLOW: &str = include_str!("fixtures/workflow.v1.json");
+const TOOLSET_WITH_WORKFLOWS: &str = include_str!("fixtures/toolset-workflows.v1.json");
+
+/// Every field of a workflow version.
+fn workflow() -> Workflow {
+    Workflow::new(
+        "triage",
+        Some("Triage the stale issues of a repository, after approval.".into()),
+        digest_of("script"),
+        toolset().digest(),
+        WorkflowSchemas {
+            input: json!({
+                "type": "object",
+                "properties": { "repo": { "type": "string" } },
+                "required": ["repo"],
+            }),
+            output: json!({ "type": "object", "properties": { "closed": { "type": "integer" } } }),
+            signals: BTreeMap::from([
+                (
+                    "approval".to_owned(),
+                    json!({ "type": "object", "properties": { "close": { "type": "boolean" } } }),
+                ),
+                ("pr merged".to_owned(), json!(true)),
+            ]),
+        },
+    )
+    .unwrap()
+}
+
+fn digest_of(text: &str) -> Digest {
+    Digest::of(text.as_bytes())
+}
+
+/// A toolset pinning two workflows, one without a description or signals.
+fn toolset_with_workflows() -> Toolset {
+    let digest = Workflow::new(
+        "digest",
+        None,
+        digest_of("digest"),
+        Toolset::empty().digest(),
+        WorkflowSchemas {
+            input: json!({}),
+            output: json!({ "type": "string" }),
+            signals: BTreeMap::new(),
+        },
+    )
+    .unwrap();
+    Toolset::from_host_tools(["notify"])
+        .unwrap()
+        .with_workflows([workflow().pinned(), digest.pinned()])
+        .unwrap()
+}
+
+#[test]
+fn the_workflow_fixture_decodes_re_encodes_and_hashes_to_its_version() {
+    let decoded = decode_workflow(WORKFLOW).unwrap();
+    assert_eq!(decoded, workflow());
+    assert_eq!(encode_workflow(&decoded), WORKFLOW);
+    assert_eq!(Digest::of(WORKFLOW.as_bytes()), workflow().version());
+}
+
+#[test]
+fn the_toolset_with_workflows_fixture_decodes_and_hashes_to_its_digest() {
+    let decoded = decode_toolset(TOOLSET_WITH_WORKFLOWS).unwrap();
+    assert_eq!(decoded, toolset_with_workflows());
+    assert_eq!(encode_toolset(&decoded), TOOLSET_WITH_WORKFLOWS);
+    assert_eq!(
+        Digest::of(TOOLSET_WITH_WORKFLOWS.as_bytes()),
+        toolset_with_workflows().digest()
+    );
+    assert!(decoded.contains("workflows.triage.signal"));
+}
+
+#[test]
+fn rejects_workflows_v1_does_not_define() {
+    let schemas = r#""schemas":{"input":{},"output":{},"signals":{}}"#;
+    let digest = "0".repeat(64);
+    let document = |fields: &str| format!(r#"{{"v":1,{fields}}}"#);
+    assert!(
+        decode_workflow(&document(&format!(
+            r#""name":"triage","script":"{digest}","toolset":"{digest}",{schemas}"#
+        )))
+        .is_ok()
+    );
+    let invalid = [
+        document(&format!(
+            r#""name":"triage","script":"{digest}","toolset":"{digest}",{schemas},"x":1"#
+        )),
+        document(&format!(r#""name":"triage","script":"{digest}",{schemas}"#)),
+        document(&format!(
+            r#""name":"triage","script":"abc","toolset":"{digest}",{schemas}"#
+        )),
+        document(&format!(
+            r#""name":"default","script":"{digest}","toolset":"{digest}",{schemas}"#
+        )),
+        document(&format!(
+            r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{"rewind:x":{{}}}}}}"#
+        )),
+        document(&format!(
+            r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}}}}"#
+        )),
+    ];
+    for json in &invalid {
+        assert!(
+            matches!(decode_workflow(json), Err(FormatError::InvalidWorkflow(_))),
+            "{json} must be rejected, got {:?}",
+            decode_workflow(json)
+        );
+    }
+    assert_eq!(
+        decode_workflow(r#"{"v":2}"#),
+        Err(FormatError::UnsupportedVersion(json!(2)))
+    );
+    let pinned_twice = format!(
+        r#"{{"v":1,"servers":[],"tools":[],"workflows":[{w},{w}]}}"#,
+        w = format_args!(r#"{{"name":"a","version":"{digest}",{schemas}}}"#)
+    );
+    assert!(matches!(
+        decode_toolset(&pinned_twice),
+        Err(FormatError::InvalidToolset(_))
+    ));
 }

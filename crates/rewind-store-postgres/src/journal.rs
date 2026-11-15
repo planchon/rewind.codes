@@ -10,7 +10,8 @@
 //!   written under the run's row lock, taken first. The lock orders those writes: an item
 //!   enqueued while a commit consumes the inbox is never lost, and nothing is enqueued for a run
 //!   that a concurrent commit ends. Callers that lock several runs lock them by id; payload rows
-//!   are locked by digest, after the run.
+//!   are locked by digest, after the run. A terminal commit enqueues into the runs its end
+//!   reaches (`run_watchers`): it locks them with its run, all by id, before anything else.
 //! - The concurrency limits of tool tasks hold across claimers: a claim decides for a run's tool
 //!   (or a worker's MCP server) only while it holds a transaction-scoped advisory lock on it.
 
@@ -18,17 +19,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, RunId, RunStatus, Script, Seq,
-    Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
+    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    end_signal_name, starter_ended,
 };
 use rewind_engine::ports::{
     AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, Secret, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
-    ToolTask, TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
+    RunRecord, RunRef, RunWorkflow, Secret, StartedBy, StoreError, StoredScript, StoredToolset,
+    StoredWorkflow, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
+    TenantId, TenantScope, ToolDeclarations, ToolTask, TraceContext, Trigger, Watched,
+    WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
@@ -77,7 +80,15 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels::text, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at, attempts"
+         ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
+         workflow_version, started_by, started_seq, detached, scope::text"
+    };
+}
+
+/// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
+macro_rules! workflow_columns {
+    () => {
+        "version, document, labels::text, created_at"
     };
 }
 
@@ -168,6 +179,26 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
                     })
                 })
                 .transpose()?,
+            workflow: row
+                .opt_text(26)?
+                .map(|name| -> Result<RunWorkflow, Error> {
+                    Ok(RunWorkflow {
+                        name,
+                        version: row.digest(27)?,
+                    })
+                })
+                .transpose()?,
+            started_by: row
+                .opt_run_id(28)?
+                .map(|run| -> Result<StartedBy, Error> {
+                    Ok(StartedBy {
+                        run,
+                        seq: Seq(row.u32(29)?),
+                        detached: row.boolean(30)?,
+                    })
+                })
+                .transpose()?,
+            scope: decode_labels(&row.text(31)?)?,
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -229,6 +260,22 @@ fn task_from_row(row: &PgRow) -> Result<TaskRow, Error> {
         server_concurrency: row.opt_u32(21)?,
         mcp_server: row.opt_text(22)?,
         due_at: row.opt_i64(24)?,
+    })
+}
+
+fn workflow_from_row(row: &PgRow) -> Result<StoredWorkflow, Error> {
+    let version = row.digest(0)?;
+    let workflow = rewind_format::decode_workflow(&row.text(1)?)
+        .map_err(|err| Error::Corrupt(format!("workflow {version}: {err}")))?;
+    if workflow.version() != version {
+        return Err(Error::Corrupt(format!(
+            "workflow {version} does not hash to its key"
+        )));
+    }
+    Ok(StoredWorkflow {
+        workflow,
+        labels: decode_labels(&row.text(2)?)?,
+        created_at: row.ts(3)?,
     })
 }
 
@@ -375,6 +422,111 @@ async fn push_inbox(
     .execute(&mut *conn)
     .await?;
     Ok(())
+}
+
+/// The runs a run's end reaches, among those that have not ended.
+#[derive(Default)]
+struct Reach {
+    /// The run's watchers, which receive its end.
+    watchers: BTreeSet<Uuid>,
+    /// The runs the run watches attached, which its end cancels.
+    attached: BTreeSet<Uuid>,
+}
+
+impl Reach {
+    fn runs(&self) -> BTreeSet<Uuid> {
+        self.watchers.union(&self.attached).copied().collect()
+    }
+}
+
+/// The runs the end of `run` reaches and that have not ended: its watchers when it has an end to
+/// give them, and the runs it watches attached. Read without locks: a status read is only stable
+/// for a run the transaction has locked.
+async fn reach_of_end(
+    conn: &mut PgConnection,
+    run: Uuid,
+    with_watchers: bool,
+) -> Result<Reach, Error> {
+    let rows = sqlx::query(concat!(
+        "SELECT w.watcher, false FROM run_watchers w JOIN runs r ON r.id = w.watcher \
+         WHERE w.run_id = $1 AND $2::boolean AND r.status NOT IN ",
+        terminal!(),
+        " UNION ALL \
+         SELECT w.run_id, true FROM run_watchers w JOIN runs r ON r.id = w.run_id \
+         WHERE w.watcher = $1 AND w.attached AND r.status NOT IN ",
+        terminal!()
+    ))
+    .bind(run)
+    .bind(with_watchers)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut reach = Reach::default();
+    for row in &rows {
+        let id = uuid(row.run_id(0)?);
+        if row.boolean(1)? {
+            reach.attached.insert(id);
+        } else {
+            reach.watchers.insert(id);
+        }
+    }
+    Ok(reach)
+}
+
+/// What the end of a run does to the runs around it, in its terminal commit: the end (when it
+/// has one) to each of its watchers that has not ended, as the signal `rewind:ended:<run>` under
+/// that name as idempotency key, and a cancellation to each run it watches attached that has not
+/// ended. `locked` are the runs the commit locked with its run; a run watched since then (started
+/// by this run meanwhile) is locked now, out of id order: a deadlock this rare race may cause is
+/// retried.
+async fn propagate_end(
+    conn: &mut PgConnection,
+    run_id: RunId,
+    end: Option<&JsonValue>,
+    mut locked: BTreeSet<Uuid>,
+    now: Timestamp,
+) -> Result<(), Error> {
+    let id = uuid(run_id);
+    let reach = loop {
+        let reach = reach_of_end(conn, id, end.is_some()).await?;
+        let unlocked: BTreeSet<Uuid> = reach.runs().difference(&locked).copied().collect();
+        if unlocked.is_empty() {
+            break reach;
+        }
+        // Their status is read again once they are locked.
+        lock_runs(conn, &unlocked).await?;
+        locked.extend(unlocked);
+    };
+    let mut items: Vec<(RunId, Trigger)> = Vec::new();
+    if let Some(end) = end
+        && !reach.watchers.is_empty()
+    {
+        let name = end_signal_name(run_id);
+        // A watcher whose inbox already received this end (its key is known) does not again.
+        let mut fresh: Vec<Uuid> = sqlx::query_scalar(
+            "INSERT INTO signal_keys (run_id, key) \
+             SELECT watcher, $2 FROM unnest($1::uuid[]) AS w(watcher) \
+             ON CONFLICT DO NOTHING RETURNING run_id",
+        )
+        .bind(reach.watchers.iter().copied().collect::<Vec<_>>())
+        .bind(name.as_str())
+        .fetch_all(&mut *conn)
+        .await?;
+        fresh.sort_unstable();
+        for watcher in fresh {
+            let ended = Completion::SignalReceived {
+                name: name.clone(),
+                payload: Payload::Value(end.clone()),
+            };
+            items.push((RunId::from_uuid(watcher), Trigger::Completion(ended)));
+        }
+    }
+    for attached in &reach.attached {
+        let cancel = Completion::CancelRequested {
+            reason: starter_ended(run_id),
+        };
+        items.push((RunId::from_uuid(*attached), Trigger::Completion(cancel)));
+    }
+    push_inbox(conn, &items, now).await
 }
 
 /// The task holding `token`: a claimed task, or a deferred one.
@@ -588,11 +740,15 @@ impl PostgresStore {
         }
         let trace = run.metadata.trace_context.as_ref();
         let parent = run.metadata.parent;
+        let workflow = run.metadata.workflow.as_ref();
+        let started_by = run.metadata.started_by;
         // A run id already used, in any tenant, violates `runs`' keys: a conflict.
         let inserted: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
-             traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13) \
+             traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
+             workflow, workflow_version, started_by, started_seq, detached, scope) \
+             VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13, \
+                 $14, $15, $16, $17, $18, $19::jsonb) \
              ON CONFLICT (tenant, idempotency_key) DO NOTHING RETURNING id",
         )
         .bind(tenant(tenant_id))
@@ -608,6 +764,12 @@ impl PostgresStore {
         .bind(parent.and_then(|parent| parent.at).map(int))
         .bind(idempotency_key)
         .bind(ts(run.created_at))
+        .bind(workflow.map(|workflow| workflow.name.as_str()))
+        .bind(workflow.map(|workflow| bytes(workflow.version)))
+        .bind(started_by.map(|started_by| uuid(started_by.run)))
+        .bind(started_by.map(|started_by| seq(started_by.seq)))
+        .bind(started_by.map(|started_by| started_by.detached))
+        .bind(encode_labels(&run.metadata.scope))
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {
@@ -620,6 +782,19 @@ impl PostgresStore {
             .fetch_one(&mut *tx)
             .await?;
             return Ok(existing(id));
+        }
+        // The run that started this one watches it: it receives its end, and cancels it when it
+        // ends first unless it started it detached.
+        if let Some(started_by) = started_by {
+            sqlx::query(
+                "INSERT INTO run_watchers (run_id, watcher, seq, attached) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(uuid(run.run.id))
+            .bind(uuid(started_by.run))
+            .bind(seq(started_by.seq))
+            .bind(!started_by.detached)
+            .execute(&mut *tx)
+            .await?;
         }
         let started = Trigger::RunStarted(run.started.clone());
         push_inbox(&mut tx, &[(run.run.id, started)], run.created_at).await?;
@@ -662,6 +837,33 @@ impl PostgresStore {
         Ok(Enqueued::Accepted)
     }
 
+    async fn watch_run_once(
+        &self,
+        run: &RunRef,
+        watcher: RunId,
+        seq_started: Seq,
+    ) -> Result<Option<Watched>, Fail> {
+        let mut tx = self.pool.begin().await?;
+        // The run's lock orders the watch with its terminal commit: a watcher added before it
+        // receives the end, one added after learns that the run has ended.
+        let Some(locked) = lock_run(&mut tx, run).await? else {
+            return Ok(None);
+        };
+        sqlx::query(
+            "INSERT INTO run_watchers (run_id, watcher, seq, attached) \
+             VALUES ($1, $2, $3, false) ON CONFLICT DO NOTHING",
+        )
+        .bind(uuid(run.id))
+        .bind(uuid(watcher))
+        .bind(seq(seq_started))
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(Some(Watched {
+            ended: locked.status.is_terminal(),
+        }))
+    }
+
     async fn commit_once(
         &self,
         lease: &Lease,
@@ -670,6 +872,20 @@ impl PostgresStore {
     ) -> Result<(), Fail> {
         let mut tx = self.pool.begin().await?;
         let id = uuid(lease.run.id);
+        let terminal = activation.status.is_terminal();
+        // A terminal commit enqueues into the runs its end reaches: they are locked with the run,
+        // all by id, so that two related runs ending at once never wait for each other in a
+        // cycle. A run already ended is not locked: it receives nothing.
+        let mut locked = BTreeSet::new();
+        if terminal {
+            locked = reach_of_end(&mut tx, id, activation.end.is_some())
+                .await?
+                .runs();
+            if !locked.is_empty() {
+                locked.insert(id);
+                lock_runs(&mut tx, &locked).await?;
+            }
+        }
         let Some(run) = lock_run(&mut tx, &lease.run).await? else {
             return Err(StoreError::RunNotFound(lease.run.id).into());
         };
@@ -696,7 +912,6 @@ impl PostgresStore {
             check_reserved(&mut tx, &lease.run, &activation.payloads).await?;
         }
         let to_idx = from_idx + activation.entries.len() as u64;
-        let terminal = activation.status.is_terminal();
         let last = activation.entries.last().map(|entry| entry.recorded_at);
 
         // The entries, the feed items, the consumed inbox items and the run, at once.
@@ -799,6 +1014,7 @@ impl PostgresStore {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+            propagate_end(&mut tx, lease.run.id, activation.end.as_ref(), locked, now).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -1674,7 +1890,8 @@ impl PostgresStore {
              timers_gone AS (DELETE FROM timers WHERE run_id = $1), \
              tasks_gone AS (DELETE FROM tool_tasks WHERE run_id = $1), \
              tokens_gone AS (DELETE FROM webhook_tokens WHERE run_id = $1), \
-             feed_gone AS (DELETE FROM feed WHERE run_id = $1) \
+             feed_gone AS (DELETE FROM feed WHERE run_id = $1), \
+             watchers_gone AS (DELETE FROM run_watchers WHERE run_id = $1 OR watcher = $1) \
              DELETE FROM runs WHERE id = $1",
         )
         .bind(id)
@@ -2003,6 +2220,107 @@ impl JournalStore for PostgresStore {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Workflows
+
+    async fn put_workflow(
+        &self,
+        tenant_id: &TenantId,
+        workflow: &Workflow,
+        labels: &BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> Result<StoredWorkflow, StoreError> {
+        let version = workflow.version();
+        let inserted = sqlx::query(concat!(
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING RETURNING ",
+            workflow_columns!()
+        ))
+        .bind(tenant(tenant_id))
+        .bind(bytes(version))
+        .bind(workflow.name())
+        .bind(rewind_format::encode_workflow(workflow))
+        .bind(encode_labels(labels))
+        .bind(ts(now))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        if let Some(row) = inserted {
+            return Ok(workflow_from_row(&row)?);
+        }
+        // Stored before: the version as it was stored first.
+        let stored = self.get_workflow(tenant_id, version).await?;
+        stored.ok_or_else(|| {
+            StoreError::Backend(format!("workflow {version} was neither stored nor found"))
+        })
+    }
+
+    async fn get_workflow(
+        &self,
+        tenant_id: &TenantId,
+        version: Digest,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let row = sqlx::query(concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND version = $2"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(bytes(version))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_versions(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let rows = sqlx::query(concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND name = $2 AND labels @> $3::jsonb \
+             ORDER BY created_at DESC, ordinal DESC"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(name)
+        .bind(encode_labels(labels))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(workflow_from_row)
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn latest_workflows(
+        &self,
+        filter: &WorkflowFilter,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let rows = sqlx::query(concat!(
+            "SELECT DISTINCT ON (name) ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND labels @> $2::jsonb \
+             AND ($3::text IS NULL OR name > $3) \
+             ORDER BY name, created_at DESC, ordinal DESC LIMIT $4"
+        ))
+        .bind(tenant(&filter.tenant))
+        .bind(encode_labels(&filter.labels))
+        .bind(filter.after.as_deref())
+        .bind(filter.limit.map(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(workflow_from_row)
+            .collect::<Result<_, Error>>()?)
+    }
+
+    // ---------------------------------------------------------------------------------------
     // The way in
 
     async fn create_run(
@@ -2037,6 +2355,15 @@ impl JournalStore for PostgresStore {
         .await
         .map_err(Error::from)?;
         Ok(row.map(|row| record_from_row(&row)).transpose()?)
+    }
+
+    async fn watch_run(
+        &self,
+        run: &RunRef,
+        watcher: RunId,
+        seq: Seq,
+    ) -> Result<Option<Watched>, StoreError> {
+        Ok(retrying(|| self.watch_run_once(run, watcher, seq)).await?)
     }
 
     async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, StoreError> {

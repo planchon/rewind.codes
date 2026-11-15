@@ -401,6 +401,9 @@ where
         heartbeat.beat().await?;
         let (mut activation, state) = batch.into_parts();
         let status = state.status();
+        if state.is_terminal() {
+            activation.end = self.end_of(tenant, &state).await?;
+        }
         activation.payloads = payloads::offload(
             &self.journal,
             &self.blobs,

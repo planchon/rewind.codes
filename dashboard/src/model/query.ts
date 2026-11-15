@@ -28,6 +28,8 @@ export const FIELDS: readonly FieldSpec[] = [
   { name: "toolset", doc: "a toolset digest, 8 hex digits at least" },
   { name: "id", doc: "a run id prefix, 8 hex digits at least" },
   { name: "parent", doc: "forks of this run" },
+  { name: "workflow", doc: "runs of a workflow: workflow:triage" },
+  { name: "started_by", doc: "the runs this run started" },
   { name: "fingerprint", doc: "a failure group" },
   { name: "quarantined", doc: "quarantined:yes or no" },
   { name: "mode", doc: "mode:live or mock" },

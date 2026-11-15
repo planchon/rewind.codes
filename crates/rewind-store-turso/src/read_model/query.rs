@@ -6,12 +6,12 @@
 //!   has not ended, `s.mode` before `run_started`) is NULL in SQL: the `CASE` counts it as
 //!   false, so the run matches the negation, where `NOT (…)` would be NULL and drop it. Lists
 //!   are "any of": an empty one matches nothing.
-//! - **Literal matches.** A prefix (of an id, a digest, a label's value, a tool, a signal) is
-//!   `instr(column, prefix) = 1`, and free text `instr(text, needle) > 0` over `run_texts`,
-//!   lowercase on both sides: Turso's `instr` searches the whole strings as they are, so these
-//!   are `str::starts_with` and `str::contains`. `%`, `_` and `\` are plain characters. Turso's
-//!   `LIKE` would fold ASCII case (prefixes are case-sensitive), stop at the first NUL of the
-//!   text or the pattern, and refuse a pattern over 50,000 bytes.
+//! - **Literal matches.** A prefix (of an id, a digest, a label's value, a tool, a signal, a
+//!   workflow's name) is `instr(column, prefix) = 1`, and free text `instr(text, needle) > 0`
+//!   over `run_texts`, lowercase on both sides: Turso's `instr` searches the whole strings as
+//!   they are, so these are `str::starts_with` and `str::contains`. `%`, `_` and `\` are plain
+//!   characters. Turso's `LIKE` would fold ASCII case (prefixes are case-sensitive), stop at
+//!   the first NUL of the text or the pattern, and refuse a pattern over 50,000 bytes.
 //! - **Orders.** Run ids are hyphenated lowercase UUIDs and digests lowercase hex, so text
 //!   order is their order (`crate::sql`). A cursor is a position in the order, not a run: the
 //!   page starts after it whether or not the run still matches.
@@ -185,6 +185,14 @@ fn predicate(sql: &mut Sql, predicate: &Predicate) {
         Predicate::Errors(range) => within(sql, "s.errors", range, int),
         Predicate::Parent(parent) => {
             sql.push("s.parent = ").bind(run_id(*parent));
+        }
+        // `any` too needs a workflow.
+        Predicate::Workflow(matchers) => {
+            sql.push("s.workflow IS NOT NULL AND ");
+            any_match(sql, "s.workflow", matchers);
+        }
+        Predicate::StartedBy(starter) => {
+            sql.push("s.started_by = ").bind(run_id(*starter));
         }
         Predicate::Fingerprint(fingerprints) => one_of(
             sql,

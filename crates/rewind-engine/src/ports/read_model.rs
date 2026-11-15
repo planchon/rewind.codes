@@ -21,6 +21,10 @@ pub struct ProjectedRun {
     pub labels: BTreeMap<String, String>,
     /// For a fork, the run it was forked from.
     pub parent: Option<RunId>,
+    /// For a run of a workflow, the workflow's name.
+    pub workflow: Option<String>,
+    /// For a run a script started, that run.
+    pub started_by: Option<RunId>,
 }
 
 /// The run as a whole, folded by the projector from its history up to the last entry it
@@ -212,6 +216,10 @@ pub struct RunSummary {
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
     pub parent: Option<RunId>,
+    /// For a run of a workflow, the workflow's name.
+    pub workflow: Option<String>,
+    /// For a run a script started, that run.
+    pub started_by: Option<RunId>,
     /// `recorded_at` of `run_started`, once projected.
     pub started_at: Option<Timestamp>,
     /// `recorded_at` of the terminal entry.
@@ -332,6 +340,10 @@ pub enum Predicate {
     Errors(Range<u64>),
     /// Forks of this run.
     Parent(RunId),
+    /// Runs of a workflow whose name one of these matches.
+    Workflow(Vec<TextMatch>),
+    /// Runs this run started.
+    StartedBy(RunId),
     /// The run's ending has one of these fingerprints.
     Fingerprint(Vec<String>),
     /// The run is quarantined.

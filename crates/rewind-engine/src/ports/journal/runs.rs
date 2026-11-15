@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 
 use rewind_core::{Digest, Epoch, RunId, RunStarted, RunStatus, Timestamp};
 
+use super::workflows::{RunWorkflow, StartedBy};
 use crate::ports::tenancy::{RunRef, TenantId};
 
 /// Given by the harness when it starts a run, and stored with the run. The script never sees
@@ -20,6 +21,15 @@ pub struct RunMetadata {
     /// For a fork, the run it was forked from, in the same tenant, and where it was forced live
     /// (`archi/03-execution.md`, "Forks").
     pub parent: Option<ForkParent>,
+    /// For a run of a workflow, the workflow and the version it executes.
+    pub workflow: Option<RunWorkflow>,
+    /// For a run a script started, that run and the call (`archi/03-execution.md`, "Workflows
+    /// across runs"). `create_run` makes the starter its first watcher.
+    pub started_by: Option<StartedBy>,
+    /// The labels every run this run's scripts reach carries: the allowed labels of the API key
+    /// that started the first run of its tree, inherited by every run it starts. Empty: any run
+    /// of the tenant.
+    pub scope: BTreeMap<String, String>,
 }
 
 /// The run a fork was started from. The fork's first activation copies the parent's history

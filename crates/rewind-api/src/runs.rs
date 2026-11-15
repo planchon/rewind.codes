@@ -17,6 +17,7 @@ use crate::common::{
 pub use crate::query::WaitKind;
 use crate::tasks::{ParkedReason, TaskState};
 use crate::toolsets::Credentials;
+use crate::workflows::{RunWorkflow, StartedBy};
 
 /// `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
 /// script that cannot run is refused (`invalid-script`) before any run exists.
@@ -34,10 +35,17 @@ use crate::toolsets::Credentials;
 }))]
 pub struct StartRun {
     /// The TypeScript source: a single ES module whose default export is the entry point.
+    /// Without it, `workflow` names what the run executes.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub script: String,
     /// The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolset: Option<String>,
+    /// Instead of `script` and `toolset`: a run of this workflow, `triage` for its latest version
+    /// or `triage@<version>` (12 hex digits at least) for one version. Its input is checked
+    /// against the workflow's input schema (`invalid-input`); the script is not checked again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
     /// The input of `main`. `{}` when absent.
     #[serde(default = "empty_object")]
     pub input: Value,
@@ -72,6 +80,7 @@ impl StartRun {
         Self {
             script: script.into(),
             toolset: None,
+            workflow: None,
             input: empty_object(),
             wait: None,
             labels: Labels::new(),
@@ -113,6 +122,12 @@ pub struct Run {
     /// For a fork, the run it was forked from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ForkParent>,
+    /// For a run of a workflow, the workflow and its version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<RunWorkflow>,
+    /// For a run a script started, that run and the call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<StartedBy>,
     /// The input of `main`. Absent while the run is `pending`: its `run_started` waits in its
     /// inbox for the first activation, which commits it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -323,6 +338,12 @@ pub struct RunFilter {
     /// Only forks of this run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// Only runs of this workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    /// Only runs this run started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<String>,
     /// Only runs started at or after this time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
@@ -412,6 +433,12 @@ pub struct RunSummary {
     pub wakes_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// For a run of a workflow, the workflow's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    /// For a run a script started, that run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<String>,
 }
 
 /// Something a run in a list waits for. `GET /v1/runs/{id}` has the details (`waitingFor`).

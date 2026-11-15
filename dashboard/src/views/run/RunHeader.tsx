@@ -1,6 +1,6 @@
 // The run's header (status, ids, metadata, labels, exports) and its banners: how it failed, why
 // it is quarantined, what it waits for.
-import { Download } from "lucide-react";
+import { Download, Workflow } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { JournalState } from "../../api/queries";
@@ -14,9 +14,10 @@ import {
   QuarantineTag,
   StatusBadge,
 } from "../../components/Status";
-import { formatCount, formatDuration, formatRelative } from "../../model/format";
-import { labelTerm, queryLink } from "../../model/query";
+import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
+import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
+import { endedRunOf, workflowRef } from "../../model/workflows";
 
 function LiveState({ state }: { state: JournalState }) {
   const text = {
@@ -102,6 +103,24 @@ export function RunHeader({
             <ForkTag>fork of {run.parent.run.slice(0, 8)}…</ForkTag>
           </Link>
         )}
+        {run.startedBy && (
+          <Link
+            to={`/runs/${run.startedBy.run}`}
+            title={`Started by the run ${run.startedBy.run}, at its call #${run.startedBy.seq}${
+              run.startedBy.detached
+                ? ": detached, it lives on its own"
+                : ": that run does not end before this one, and cancels it if it fails"
+            }`}
+          >
+            <span className="tag">
+              <span className="glyph" aria-hidden="true">
+                <Workflow size={11} strokeWidth={2.5} />
+              </span>
+              started by {shortRunId(run.startedBy.run)}
+              {run.startedBy.detached && " · detached"}
+            </span>
+          </Link>
+        )}
         {run.quarantine && <QuarantineTag />}
         <span className="run-title-end">
           <LiveState state={state} />
@@ -117,6 +136,20 @@ export function RunHeader({
         </span>
       </div>
       <dl className="run-meta">
+        {run.workflow && (
+          <div>
+            <dt>workflow</dt>
+            <dd>
+              <Link
+                to={queryLink("/runs", fieldTerm("workflow", run.workflow.name))}
+                className="mono"
+                title={`Version ${run.workflow.version}. The runs of this workflow`}
+              >
+                {workflowRef(run.workflow)}
+              </Link>
+            </dd>
+          </div>
+        )}
         <div>
           <dt>script</dt>
           <dd>
@@ -215,8 +248,12 @@ function waitingText(w: Waiting, now: number): string {
     }
     case "timer":
       return `timer #${w.seq} fires ${formatRelative(Date.parse(w.fireAt), now)}`;
-    case "signal":
-      return `signal "${w.name}"${w.timeoutAt ? `, gives up ${formatRelative(Date.parse(w.timeoutAt), now)}` : ", no timeout"}`;
+    case "signal": {
+      const ended = endedRunOf(w.name);
+      const what =
+        ended === null ? `signal "${w.name}"` : `the end of run ${shortRunId(ended)} (result())`;
+      return `${what}${w.timeoutAt ? `, gives up ${formatRelative(Date.parse(w.timeoutAt), now)}` : ", no timeout"}`;
+    }
   }
 }
 
@@ -227,6 +264,7 @@ function waitingHint(w: Waiting): string | null {
     return `The tool no longer matches its pinned schema: approve or reject task ${w.taskId}, fork or cancel the run.`;
   if (w.kind === "tool_call" && w.parked === "credentials_expired")
     return "The server refused the credentials: renew them with PUT /v1/runs/{id}/credentials.";
+  if (w.kind === "signal" && endedRunOf(w.name) !== null) return null;
   if (w.kind === "signal") return `Send it: POST /v1/runs/{id}/signals/${w.name}`;
   return null;
 }
