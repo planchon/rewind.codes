@@ -35,7 +35,7 @@ pub use workflows::{RunWorkflow, StartedBy, StoredWorkflow, Watched, WorkflowFil
 
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
-use super::tenancy::{ApiKey, RunRef, Tenant, TenantId, TenantScope};
+use super::tenancy::{RunRef, Tenant, TenantId, TenantScope};
 use super::webhooks::Subscription;
 
 /// A script as stored: only scripts that compile are stored.
@@ -89,8 +89,8 @@ pub enum StoreError {
 }
 
 /// Scripts and toolsets; runs, histories, inboxes, timers and tool tasks; leases, fencing,
-/// failure counts and quarantine; the feed; webhook tokens and subscriptions; tenants and API
-/// keys; sticky affinity; payload metadata and references; retention.
+/// failure counts and quarantine; the feed; webhook tokens and subscriptions; tenants; sticky
+/// affinity; payload metadata and references; retention. API keys are the `AccessStore`'s.
 ///
 /// The contract, checked by the conformance suite (feature `conformance`, module
 /// `conformance::journal`):
@@ -631,7 +631,7 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
-    // Tenants and API keys
+    // Tenants
 
     /// Stores or replaces a tenant's settings.
     fn put_tenant(&self, tenant: &Tenant) -> impl Future<Output = Result<(), StoreError>> + Send;
@@ -643,22 +643,6 @@ pub trait JournalStore: Send + Sync {
 
     /// The tenants with a record, by id.
     fn list_tenants(&self) -> impl Future<Output = Result<Vec<Tenant>, StoreError>> + Send;
-
-    /// Stores an API key. A hash already stored is a `Conflict`.
-    fn put_api_key(&self, key: &ApiKey) -> impl Future<Output = Result<(), StoreError>> + Send;
-
-    /// The key with this hash, revoked or not: the caller refuses a revoked key.
-    fn find_api_key(
-        &self,
-        hash: Digest,
-    ) -> impl Future<Output = Result<Option<ApiKey>, StoreError>> + Send;
-
-    /// Revokes a key at `now`. Returns `false` for an unknown or already revoked key.
-    fn revoke_api_key(
-        &self,
-        hash: Digest,
-        now: Timestamp,
-    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
     // The feed

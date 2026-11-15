@@ -29,23 +29,29 @@ parallel against them. 0.1 is done when the [acceptance criteria](#01-is-done-wh
 ## Current state of the code
 
 Every workstream is built and integrated on `main`, and every part was reviewed and its
-findings fixed. On November 12, 2026: `cargo fmt --check`, `cargo clippy --workspace
---all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors and
-`cargo test --workspace` (795 tests, Postgres, MinIO and a Collector in Docker) pass, the
-SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the seven criteria of
-[0.1 is done when](#01-is-done-when). Not yet done: the evals with real models (they need
-API keys), a run of the CI workflow on GitHub, and the gVisor profile on a Linux host.
+findings fixed. Accounts, organizations and access
+([06](06-storage-and-scale.md#tenancy-identity-and-access)), designed on November 14, 2026, are
+built too: `rewind-workos`, `AccessStore` on both stores, a permission on every endpoint, `/auth`
+and the organization endpoints in `rewind-server`, the dashboard's sign-in and Organization views.
+On November 14, 2026: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo doc --workspace --no-deps` with warnings as errors and `cargo test --workspace`
+(903 tests, Postgres, MinIO and a Collector in Docker; `rewind-workos` also against WorkOS
+Staging) pass, the SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the eight
+criteria of [0.1 is done when](#01-is-done-when), the eighth against WorkOS Staging. Not yet
+done: the evals with real models (they need API keys), a run of the CI workflow on GitHub, and
+the gVisor profile on a Linux host.
 
 On November 14, 2026, [workflows across runs](03-execution.md#workflows-across-runs) were built
 through every layer: the workflow version and its pinning in toolsets (`rewind-core`, format v1),
-the store's workflows and watchers (both stores, schema version 3, the conformance suites), the
+the store's workflows and watchers (both stores, schema version 4, the conformance suites), the
 engine's registration, starts of workflow runs, built-ins and ends (live, forks, mock mode and
 cassettes), the glue of `rewind:workflows` in epoch 1, codegen and the checker's
 `check_workflow`, `/v1/workflows` and the `workflow:` and `started_by:` terms, the SDK's
 `workflows` resource and `save_workflow`, and the dashboard's links between runs. Eight cases
 joined the corpus. `cargo fmt --check`, clippy, `cargo doc` with warnings as errors and
-`cargo test --workspace` (891 tests, Postgres, MinIO and a Collector in Docker) pass, and so do
-the SDK's and the dashboard's checks.
+`cargo test --workspace` (961 tests once merged with access, Postgres, MinIO and a Collector in
+Docker) pass, and so do the SDK's and the dashboard's checks. The workflow endpoints take the
+permissions `toolsets:read` and `toolsets:write`.
 
 | Crate | State |
 | --- | --- |
@@ -56,6 +62,7 @@ the SDK's and the dashboard's checks.
 | `rewind-store-turso` | `JournalStore`, `ReadModel` and `SecretStore` on Turso Database (`turso` 0.8.3): the tables of 06, events in format v1, schema version 1 with migrations embedded and a newer schema refused, settings and virtual time in `meta`, secrets encrypted with a data key per tenant under the master key; the read model's labels, waits, task states, quarantine and texts, searched with `instr`, and statistics counted in Rust. Passes the three conformance suites, each check on a new database file; `examples/load.rs` measures commit latency and throughput ([08](08-decisions.md#taken-while-building-the-embedded-store-november-2026)). |
 | `rewind-store-postgres` | `JournalStore`, `ReadModel` and `SecretStore` on Postgres with sqlx 0.8: `FOR UPDATE SKIP LOCKED`, fencing, tenant in every key, fair `acquire_runnable`, advisory locks for the claim limits, embedded migrations run under a lock; `history` and `inbox` keyed by `run_id` and tested hash-partitioned; the read model's query as SQL over indexes scoped by tenant, text through `pg_trgm`, statistics and failure groups as single statements. Passes the conformance suites against Postgres 17 in Docker, and a concurrency test with 3 engines × 4 workers on one database; about 830 activations/s with 4 × 4 on a laptop (`cargo run --release -p rewind-store-postgres --example postgres_load`). |
 | `rewind-blob` | `BlobStore` on local files (`FileBlobs`: atomic writes, staged, synced and renamed, under `{tenant}/sha256/`) and on S3 or any S3-compatible service (`S3Blobs`, through `object_store`, with conditional puts); `CachedBlobs`, the workers' cache in memory, bounded in bytes, in front of either. Digests checked on every put and get. Passes the conformance suite of `BlobStore` on files and on MinIO in Docker ([08](08-decisions.md#taken-while-building-the-blob-stores-november-2026)). |
+| `rewind-workos` | `WorkOs`, the `IdentityProvider` port on WorkOS through its SDK `workos` 3.7: GitHub's authorization URL and code, Magic Auth, email verification, the choice of an organization, refreshes onto an organization, each with the browser's IP address and user agent and the invitation's token; WorkOS's steps and a closed sign-up as answers; access tokens checked locally against the JWKS (RS256, issuer, `client_id`, expiry with 30 s of leeway); organizations, users, active memberships and invitations without roles, the waitlist; WorkOS's messages passed on without the secrets sent. Tested against a fake WorkOS (wiremock, test RSA keys, a rotation of keys) and against WorkOS Staging when its variables are set ([08](08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)). |
 | `rewind-architecture-tests` | The dependency rules, telemetry and `anyhow` included, each with a test proving it catches its violation. |
 | `rewind-e2e` | The epoch-1 corpus: 30 blue and 31 red cases, forks, tool policies, MCP content and the `http` tool's format included, recorded and replayed from their journal documents; tests proving the harness cannot pass silently; the contract test of codegen, the checker and the runtime (`tests/declarations.rs`); `cargo run -p rewind-e2e -- replay <case> [--script file.ts]`. |
 | `rewind-api` | The HTTP API `/v1` as a contract: the DTOs of every endpoint, problem+json errors, the query language of the run lists (parsed with `winnow`, errors with the span of the term at fault), `Idempotency-Key`, the event stream, webhook payloads signed following Standard Webhooks and their verification, the OpenAPI 3.1 document committed at `api/openapi.json` (a test fails when it is stale), and an async client over HTTP(S) and over the embedded server's unix socket. |
@@ -65,11 +72,11 @@ the SDK's and the dashboard's checks.
 | `rewind-otel` | OpenTelemetry 0.33, OTLP over gRPC or HTTP with protobuf, both with TLS, configured or from the `OTEL_*` variables. `OtelSpanExporter`, the `SpanExporter` port: run telemetry exported with the projector's ids, under the scope `rewind.run`. `install`: the process's `tracing` subscriber, logs on stderr, and `ServiceTelemetry`, its own layer that turns `tracing` spans into OpenTelemetry spans joined to a run's trace by their fields, events into log records, and measurements into metrics exported periodically; sampled per run like run telemetry. Passes the conformance suite of `SpanExporter` on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; the engine is driven under the subscriber to test its spans and metrics ([08](08-decisions.md#taken-while-building-opentelemetry-november-2026), [08](08-decisions.md#taken-while-finishing-service-telemetry-november-2026)). |
 | `rewind-cli` | The client commands of the `rewind` binary over `rewind-api`: `run`, `status`, `signal`, `cancel`, `fork`, `trace`, `runs`, `release`, `export`, `toolsets`, with `--json` and the exit codes of 07; the remote server of `REWIND_URL`, or the embedded server of `.rewind/`, started on demand (lock check, detached start, socket wait, version handshake, replacement of another version). In the process: `check` (the checks at start, tsgo and the checker's rules), `test` (scenarios in mock mode with a cassette, TypeScript mocks and `rewind.tools.json`, in virtual time), `replay` of a run or a journal file, with the compatibility report of a corrected script. Ctrl-C finishes the call in flight; `rewind-otel`'s subscriber installed. Tested against a stub embedded server, a stand-in API, and the e2e corpus (every journal replayed, the cases a scenario expresses run through `rewind test`); end to end through the `rewind` binary (`crates/rewind/tests/cli.rs`): a run that sleeps, is interrupted and resumes in another process, a signal from another process, `kill -9` of the server mid-activation, the corpus live on the embedded server with the test as host-tool worker, `rewind test` on a recorded cassette and `rewind fork` of a failed run. |
 | Sandbox lib | `crates/rewind-runtime/lib/`: `rewind.d.ts`, `globals.d.ts`, `fetch.d.ts`, tsgo's `tsconfig.json` and `globals.json`, checked with TypeScript 7.0.2. A test checks that the isolate's globals are exactly the declared ones, with and without the `http` tool. |
-| `dashboard` | Overview (the home page), Waiting, Failures, Runs, Run, Scripts and Tools views over the API `/v1`, with types generated from `api/openapi.json`: one query bar with suggestions and facets, kept in the URL and followed between views, saved searches in the browser; runs by outcome over time, the runs that wait and what for, failures grouped by fingerprint, as SVG charts; the source with each call, timer, signal wait and log next to its line, and a time cursor that steps through the run, with hovers and watches of the values that crossed the journal; a timeline that compresses idle gaps, with a playhead; payloads on demand, live through the event stream, light and dark themes. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `rewind-server` embeds ([07](07-code-architecture.md#dashboard)). |
-| `rewind-server` | The engine host. Every endpoint of `rewind-api` with axum: API keys hashed in the store, roles and label scopes, tenants and their quotas (429), `Idempotency-Key`, problem+json; runs searched with the query language, their statistics and failure groups, from the read model, where task states and quarantine are recorded by whoever changes them; the event stream of a run; host-tool tasks long-polled; inbound webhooks; outbound webhooks signed following Standard Webhooks (passes the `WebhookSender` suite). The worker role: activations, tool dispatch with its claims' heartbeats, the scheduler, the projector (`run.quarantined` included), retention, the retry of quarantined runs, virtual time kept in the store. The embedded server of a `.rewind/` directory: its lock, its socket, its idle stop. The dashboard's build embedded and served. Adapters wired by configuration: Turso or Postgres, files or S3, `rewind-mcp`, `rewind-codegen`, `rewind-check`, `rewind-otel`; the deployment's TTLs, the workers' cache bounds, and the retention of the tenants it creates. Tested over HTTP on Turso and on Postgres (an api server and two workers), and through the `rewind` binary (lock, socket, idle stop, `kill -9` and restart, virtual time). |
+| `dashboard` | Overview (the home page), Waiting, Failures, Runs, Run, Scripts and Tools views over the API `/v1`, with types generated from `api/openapi.json`: one query bar with suggestions and facets, kept in the URL and followed between views, saved searches in the browser; runs by outcome over time, the runs that wait and what for, failures grouped by fingerprint, as SVG charts; the source with each call, timer, signal wait and log next to its line, and a time cursor that steps through the run, with hovers and watches of the values that crossed the journal; a timeline that compresses idle gaps, with a playhead; payloads on demand, live through the event stream, light and dark themes. With WorkOS, the sign-in on its own pages (GitHub, a code by email, WorkOS's steps, the waitlist), the onboarding (create an organization, accept an invitation), the organization picker and the Organization views (members, invitations, roles, API keys, settings); every view following the permissions `whoami` answers; without WorkOS, an API key. Tested with vitest against a mocked API; built to `dashboard/dist/`, which `rewind-server` embeds ([07](07-code-architecture.md#dashboard)). |
+| `rewind-server` | The engine host. Every endpoint of `rewind-api` with axum: API keys hashed in the store and members' access tokens checked by the identity provider, grants, roles and label scopes, no one giving more than they hold, organizations, members and invitations with their first grants (an invitation's, else the default role), tenants and their quotas (429), `Idempotency-Key`, problem+json; runs searched with the query language, their statistics and failure groups, from the read model, where task states and quarantine are recorded by whoever changes them; the event stream of a run; host-tool tasks long-polled; inbound webhooks; outbound webhooks signed following Standard Webhooks (passes the `WebhookSender` suite). The worker role: activations, tool dispatch with its claims' heartbeats, the scheduler, the projector (`run.quarantined` included), retention, the retry of quarantined runs, virtual time kept in the store. The dashboard's sign-in `/auth` on the api role (GitHub, codes by email, WorkOS's steps, the waitlist, refreshes and switches), its cookies sealed with `rewind-workos`'s `CookieSeal`; an event stream of an access token closed at its expiry. The embedded server of a `.rewind/` directory: its lock, its socket, its idle stop. The dashboard's build embedded and served. Adapters wired by configuration: Turso or Postgres, files or S3, WorkOS (`rewind-workos`, the four `WORKOS_*`), `rewind-mcp`, `rewind-codegen`, `rewind-check`, `rewind-otel`; the deployment's TTLs, the workers' cache bounds, and the retention of the tenants it creates. Tested over HTTP on Turso and on Postgres (an api server and two workers), the sign-in with a cookie jar and the engine's fake of WorkOS, and through the `rewind` binary (lock, socket, idle stop, `kill -9` and restart, virtual time). |
 | `rewind` | The `rewind` binary: it restarts itself with `TZ=UTC`, then hands `rewind server …` to `rewind-server` and everything else to `rewind-cli`. |
 | `evals` | 22 tasks from easy to hard (fan-out, pagination, `ToolError`, signals with and without timeout, sleeping and polling, webhooks, idempotent retries under a rate limit, outputs above 256 KB, `retry_run`, `cancel_run`) over six deterministic fake MCP servers built with `rmcp`; the engine wired in process in virtual time; the SDK's agent tools ported on `rewind-api`'s DTOs; Claude (Messages API) and OpenAI (Responses API) clients and a scripted model; reports per model and prompt rendering (`compact`, `dts`, `search`) in JSON and Markdown. Every task's reference solution passes through the scripted model in `cargo test` ([08](08-decisions.md#taken-while-building-the-evals-november-2026)). |
-| `acceptance` | The acceptance suite of 0.1, one command (`acceptance/run.sh`): Playwright specs against the real `rewind` binary, Postgres, MinIO and an OpenTelemetry Collector in Docker, `@modelcontextprotocol/server-everything` through `npx`, and the embedded dashboard in Chromium; it also runs `crates/rewind/tests/cli.rs` and the operations' load and limit tests, and writes the status of each criterion to `acceptance/results/summary.md` ([its README](../acceptance/README.md)). |
+| `acceptance` | The acceptance suite of 0.1, one command (`acceptance/run.sh`): Playwright specs against the real `rewind` binary, Postgres, MinIO and an OpenTelemetry Collector in Docker, `@modelcontextprotocol/server-everything` through `npx`, the embedded dashboard in Chromium, and WorkOS Staging for the sign-in; it also runs `crates/rewind/tests/cli.rs` and the operations' load and limit tests, and writes the status of each criterion to `acceptance/results/summary.md` ([its README](../acceptance/README.md)). |
 | `rewind-load` | The load generator: drives a deployment's API with many concurrent runs that call its fake MCP server and its host tool, sleep and read signals; reports throughput, latencies and errors, and checks that every run ends as expected and no call is sent beyond its attempts ([numbers](#load-tests)). |
 | Operations | The image (`Dockerfile`: distroless, non-root, one image for every role); the reference deployment (`deploy/`: Compose with Postgres, MinIO, a Collector, an edge, an api and two workers whose only way out is an egress gateway, gVisor and previous-epoch pools as profiles, `check-walls.sh`); CI (`.github/workflows/ci.yml`: Rust, SDK, dashboard, image, the deployment under load with runc and gVisor); the limits tested through the API (`rewind-server/tests/limits.rs`, the SDK's `test/live.test.ts`). |
 
@@ -82,9 +89,10 @@ the SDK's and the dashboard's checks.
 | Pinned toolset (schemas, policies, declarations) | [04](04-tools.md#toolsets-and-code-generation) | `rewind-codegen` | The runtime (`rewind:tools`), the checker, the dispatcher, the SDK, the model's prompt |
 | HTTP API `/v1` (OpenAPI) | [07](07-code-architecture.md#http-api-v1) | `rewind-api` (DTOs, OpenAPI document, Rust client), `rewind-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
 | Sandbox lib (`rewind.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `rewind-runtime` (the globals that exist) | `rewind-check`, the prompt |
+| Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
-The five were approved in November 2026.
+The six were approved in November 2026, access and identity on the 14th.
 
 ## Workstreams
 
@@ -93,17 +101,18 @@ The five were approved in November 2026.
 | Domain and format | `rewind-core`, `rewind-format` | Nothing beyond what the other workstreams need | Stored format v1, pinned toolset |
 | Engine | `rewind-engine` | Nothing beyond what `rewind-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset |
 | Runtime (V8) | `rewind-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib |
-| Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing: both pass every conformance suite | Engine ports, stored format v1 |
+| Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing | Engine ports, stored format v1, access and identity |
+| Identity | `rewind-workos` | Confirming WorkOS's code for a closed sign-up, and that an invited person's code is sent without the invitation's token, once the Waitlist is enabled on WorkOS Staging ([08](08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)) | Access and identity |
 | Blobs | `rewind-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `rewind-codegen`, `rewind-mcp` | `rewind-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `rewind-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `rewind-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |
 | Observability | `rewind-otel` | Nothing beyond what `rewind-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
-| Server | `rewind-server`, `rewind-api` | Nothing | Engine ports, HTTP API `/v1` |
+| Server | `rewind-server`, `rewind-api` | Nothing | Engine ports, HTTP API `/v1`, access and identity |
 | CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset |
-| Dashboard | `dashboard` | Nothing | HTTP API `/v1` |
+| Dashboard | `dashboard` | Nothing | HTTP API `/v1`, access and identity |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
-| Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Nothing | Engine ports, HTTP API `/v1` |
+| Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Setting WorkOS's variables on Railway's api service, and deploying the dashboard with its `/auth` rewrite | Engine ports, HTTP API `/v1`, access and identity |
 
 ## Designs settled (November 2026)
 
@@ -119,7 +128,9 @@ specified.
 - **Tool task lifecycle**: host tools that last days, the `approval` policy, tool
   concurrency, toolset change during a run ([04](04-tools.md#tool-task-lifecycle)).
 - **Credentials** resolved at dispatch ([04](04-tools.md#credentials)).
-- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-and-authentication)).
+- **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
+- **Accounts, organizations and access**: WorkOS for identity only, Rewind's permissions, roles and
+  grants, sign-in on the dashboard's pages ([06](06-storage-and-scale.md#tenancy-identity-and-access)).
 - **Egress of the `http` tool** ([04](04-tools.md#the-http-tool-and-egress)), and of MCP
   servers ([04](04-tools.md#where-mcp-servers-may-be)).
 - **Retention and deletion** (was question 11)
@@ -161,6 +172,9 @@ specified.
 - An operator finds any run by label, tool or error in the dashboard, and sees its code next
   to its trace. They step through a run, see the runs that wait and what for, and the
   failures grouped by cause.
+- Someone signs in to the dashboard with a code by email, creates an organization, invites a
+  member with a role, and creates an API key; each endpoint refuses a caller without its
+  permission.
 
 ### Acceptance status (November 2026)
 
@@ -176,6 +190,7 @@ does is in [acceptance/README.md](../acceptance/README.md).
 | `rewind test` of a recorded real run; `rewind fork` without repeating calls | Passes | `acceptance/tests/c3-c5-mcp-test-fork.spec.ts`, checked against the MCP server's own log of the calls it received |
 | Load tests and limit tests | Passes | `deploy/acceptance.sh`: the limits through the API, then the reference deployment loaded by `rewind-load` with the thresholds of [Load tests](#load-tests), and the agent tools' bound against it |
 | The dashboard: find by label, tool or error; code next to the trace | Passes | `acceptance/tests/c7-dashboard.spec.ts`, in Chromium against the dashboard `rewind server` serves |
+| Sign-in with a code by email, an organization, an invitation with a role, an API key; each endpoint refuses a caller without its permission | Passes against WorkOS Staging; not run without its credentials (`WORKOS_API_KEY`, `WORKOS_CLIENT_ID`) | `acceptance/tests/c8-accounts.spec.ts`, in Chromium against the dashboard `rewind server` serves with Staging's `WORKOS_*`: someone new signs in with a code, creates an organization in the onboarding, invites a second person as `reader` and creates a `harness` key; one request per permission of the catalog for the key and for the invitee, each refused (403, naming it) outside their role and answered within it; the invitee joins through the invitation's link and a code; removed by the owner, their next request is refused. Everything it created in WorkOS is removed |
 
 ## Load tests
 

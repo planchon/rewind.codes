@@ -13,7 +13,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 use futures_util::StreamExt;
-use rewind_api::admin::Role;
+use rewind_api::access::BuiltInRole;
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::{Event, EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
@@ -95,7 +95,7 @@ fn ask_toolset(policy: ToolPolicy) -> CreateToolset {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_starts_waits_and_is_read_back() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let mut request = start(SLEEP);
     request.input = json!({ "ms": 50 });
     request.wait = wait("20s");
@@ -176,7 +176,7 @@ async fn a_run_starts_waits_and_is_read_back() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skipped() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let script = "export default function main() {\n  const n: string = 42;\n  return n;\n}\n";
     let refused = problem(harness.start_run(&start(script), None).await.unwrap_err());
     assert_eq!(refused.kind(), Some(ProblemType::InvalidScript));
@@ -218,8 +218,8 @@ async fn a_script_that_does_not_type_check_is_refused_unless_the_check_is_skippe
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_tools_are_long_polled_heartbeated_and_answered() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
-    let worker = server.key(Role::Worker, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let worker = server.key(BuiltInRole::Worker, &[]).await;
     let toolset = harness
         .create_toolset(&ask_toolset(ToolPolicy {
             heartbeat_timeout: Some("5s".parse().unwrap()),
@@ -352,8 +352,8 @@ async fn host_tools_are_long_polled_heartbeated_and_answered() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_failed_by_an_uncaught_tool_error_names_the_call() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
-    let worker = server.key(Role::Worker, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let worker = server.key(BuiltInRole::Worker, &[]).await;
     let toolset = harness
         .create_toolset(&ask_toolset(ToolPolicy::default()))
         .await
@@ -408,7 +408,7 @@ export default async function main() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let toolset = harness
         .create_toolset(&ask_toolset(ToolPolicy {
             approval: Some(true),
@@ -503,7 +503,7 @@ async fn a_call_under_approval_waits_for_the_harness_with_its_arguments() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn signals_are_delivered_once_per_key_and_refused_after_the_end() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness.start_run(&start(SIGNAL), None).await.unwrap();
     let key = IdempotencyKey::new("approval-1").unwrap();
     let first = harness
@@ -562,7 +562,7 @@ async fn signals_are_delivered_once_per_key_and_refused_after_the_end() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_script_gets_a_webhook_url_and_whatever_is_posted_there_is_a_signal() {
     let server = TestServer::start(&["--public-url", "https://rewind.example.com"]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness.start_run(&start(HOOK), None).await.unwrap();
     let url = eventually(|| async {
         let state = harness.get_run(&run.id, None).await.unwrap();
@@ -651,7 +651,7 @@ async fn silent_receiver() -> (String, Arc<Mutex<usize>>) {
 async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
     // The receivers listen on 127.0.0.1.
     let server = TestServer::start(&["--allow-private-webhooks"]).await;
-    let stranger = server.key_of("other", Role::Harness, &[]).await;
+    let stranger = server.key_of("other", BuiltInRole::Harness, &[]).await;
     let (url, accepted) = silent_receiver().await;
     stranger
         .create_subscription(&CreateSubscription {
@@ -669,7 +669,7 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
 
     // While its lifecycle event waits for the silent receiver, the runs of another tenant are
     // still projected: listed, and counted in the scripts' statistics.
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness.start_run(&quick, None).await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -695,7 +695,7 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
 async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
     // The receivers listen on 127.0.0.1.
     let server = TestServer::start(&["--allow-private-webhooks"]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let (url, received) = receiver().await;
     let subscription = harness
         .create_subscription(&CreateSubscription {
@@ -754,8 +754,8 @@ async fn lifecycle_webhooks_are_signed_and_filtered_by_labels() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_event_stream_follows_a_run_until_it_ends() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Reader, &[]).await;
-    let starter = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Reader, &[]).await;
+    let starter = server.key(BuiltInRole::Harness, &[]).await;
     let mut request = start(SLEEP);
     request.input = json!({ "ms": 300 });
     let run = starter.start_run(&request, None).await.unwrap();
@@ -829,7 +829,7 @@ async fn the_event_stream_follows_a_run_until_it_ends() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_tenant_above_its_quota_is_refused_with_429() {
     let server = TestServer::start(&["--run-quota", "1"]).await;
-    let harness = server.key_of("small", Role::Harness, &[]).await;
+    let harness = server.key_of("small", BuiltInRole::Harness, &[]).await;
     let key = IdempotencyKey::new("first").unwrap();
     let first = harness.start_run(&start(SIGNAL), Some(&key)).await.unwrap();
     let refused = problem(harness.start_run(&start(SIGNAL), None).await.unwrap_err());
@@ -861,11 +861,13 @@ async fn a_tenant_above_its_quota_is_refused_with_429() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn keys_have_a_tenant_a_role_and_label_scopes() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
-    let reader = server.key(Role::Reader, &[]).await;
-    let worker = server.key(Role::Worker, &[]).await;
-    let scoped = server.key(Role::Harness, &[("conversation", "c-1")]).await;
-    let stranger = server.key_of("other", Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let reader = server.key(BuiltInRole::Reader, &[]).await;
+    let worker = server.key(BuiltInRole::Worker, &[]).await;
+    let scoped = server
+        .key(BuiltInRole::Harness, &[("conversation", "c-1")])
+        .await;
+    let stranger = server.key_of("other", BuiltInRole::Harness, &[]).await;
 
     let unknown = rewind_api::Client::remote(&server.url, Some("rewind_sk_unknown")).unwrap();
     assert_eq!(
@@ -894,9 +896,13 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
         Some(ProblemType::Forbidden)
     );
     let me = scoped.whoami().await.unwrap();
-    assert_eq!((me.tenant.as_str(), me.role), ("acme", Role::Harness));
+    let grant = me.grant.unwrap();
     assert_eq!(
-        me.allowed_labels,
+        (me.tenant.as_deref(), grant.role.as_str()),
+        (Some("acme"), "harness")
+    );
+    assert_eq!(
+        grant.allowed_labels,
         Labels::from_iter([("conversation", "c-1")])
     );
 
@@ -936,11 +942,11 @@ async fn keys_have_a_tenant_a_role_and_label_scopes() {
     // A revoked key is refused.
     let made = server
         .admin
-        .create_api_key(&rewind_api::admin::CreateApiKey {
-            tenant: "acme".into(),
-            role: Role::Reader,
+        .create_api_key(&rewind_api::access::CreateApiKey {
+            tenant: Some("acme".into()),
+            name: "revoked".into(),
+            role: BuiltInRole::Reader.as_str().into(),
             allowed_labels: Labels::new(),
-            name: None,
         })
         .await
         .unwrap();
@@ -983,7 +989,7 @@ async fn the_server_serves_its_dashboard_and_says_what_it_is() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_http_tool_is_pinned_with_its_allow_list_only() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let toolset = harness
         .create_toolset(&CreateToolset {
             http: Some(rewind_api::toolsets::HttpTool {
@@ -1049,9 +1055,11 @@ fn waiting_run(marker: &str, text: &str) -> StartRun {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
-    let reader = server.key(Role::Reader, &[]).await;
-    let scoped = server.key(Role::Harness, &[("conversation", "c-1")]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
+    let reader = server.key(BuiltInRole::Reader, &[]).await;
+    let scoped = server
+        .key(BuiltInRole::Harness, &[("conversation", "c-1")])
+        .await;
 
     // Inputs above 1 KiB are held by their digest, in the payloads table.
     let mut theirs = waiting_run("theirs", &"t".repeat(2048));
@@ -1175,7 +1183,7 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_tool_failures_are_bounded_like_results() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let toolset = harness
         .create_toolset(&ask_toolset(ToolPolicy::default()))
         .await
@@ -1294,7 +1302,7 @@ async fn host_tool_failures_are_bounded_like_results() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let subscribe = |url: &str| {
         let harness = harness.clone();
         let request = CreateSubscription {
@@ -1337,7 +1345,7 @@ async fn a_deployed_server_sends_no_webhook_to_the_private_network() {
 
     // An operator may allow them, on a trusted network.
     let trusted = TestServer::start(&["--allow-private-webhooks"]).await;
-    let harness = trusted.key(Role::Harness, &[]).await;
+    let harness = trusted.key(BuiltInRole::Harness, &[]).await;
     harness
         .create_subscription(&CreateSubscription {
             url: "http://127.0.0.1:8080/hook".into(),
@@ -1359,7 +1367,7 @@ async fn lookups_with_a_nul_character_match_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn text_with_a_nul_character_is_refused_with_400() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let invalid = |error: rewind_api::Error| {
         let problem = problem(error);
         assert_eq!(
@@ -1436,7 +1444,7 @@ fn sorted(mut ids: Vec<String>) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runs_are_searched_counted_and_grouped_by_failure() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let labelled = |script: &str, labels: &[(&str, &str)]| {
         let mut request = start(script);
         request.labels = labels.iter().copied().collect();
@@ -1614,7 +1622,9 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
     assert!(failed.contains(&group.latest.id));
 
     // A key limited to labels searches within them.
-    let support = server.key(Role::Reader, &[("agent", "support")]).await;
+    let support = server
+        .key(BuiltInRole::Reader, &[("agent", "support")])
+        .await;
     assert_eq!(found(&support, "").await, vec![done.id.clone()]);
     assert!(found(&support, "@agent:triage").await.is_empty());
     let stats = support.run_stats(&RunStatsQuery::default()).await.unwrap();

@@ -24,6 +24,7 @@ rewind-otel.workspace = true
 rewind-runtime.workspace = true
 rewind-store-postgres.workspace = true
 rewind-store-turso.workspace = true
+rewind-workos.workspace = true
 axum.workspace = true
 base64.workspace = true
 clap = { workspace = true }

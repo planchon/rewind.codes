@@ -41,6 +41,7 @@ pub fn layer(name: &str) -> Option<Layer> {
         | "rewind-store-turso"
         | "rewind-store-postgres"
         | "rewind-blob"
+        | "rewind-workos"
         | "rewind-mcp"
         | "rewind-check"
         | "rewind-otel" => Layer::Adapter,

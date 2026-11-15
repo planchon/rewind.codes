@@ -375,8 +375,9 @@ Ends:
 - A fork watches the children its copied history started: it receives their ends, and never
   cancels them ([forks](#forks)).
 
-A script reaches only the runs of its tenant within its **scope**: the labels of the API key
-that started the first run of its tree, none for a key without labels. Children inherit the
+A script reaches only the runs of its tenant within its **scope**: the allowed labels of the
+grant that started the first run of its tree (an API key's or a member's), none for a grant
+without labels. Children inherit the
 scope, and their labels always include it. Versions are content-addressed and a toolset pins a
 version, so a workflow cannot start itself, or a workflow that starts it.
 

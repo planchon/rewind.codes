@@ -1,5 +1,6 @@
-//! A thin async client of the API: one method per operation, nothing else. Used by `rewind-cli`,
-//! against a remote server with an API key, or the embedded server's unix socket without one.
+//! A thin async client of the API `/v1`: one method per operation, nothing else. Used by
+//! `rewind-cli`, against a remote server with a Bearer token, or the embedded server's unix
+//! socket without one. The dashboard's sign-in (`/auth`) is for a browser, not for this client.
 
 use std::fmt;
 use std::pin::Pin;
@@ -14,10 +15,17 @@ use serde_json::Value;
 use sse_stream::SseByteStream;
 
 use crate::Error;
-use crate::admin::{ApiKey, CreateApiKey, Identity, ServerInfo};
+use crate::access::{
+    ApiKey, ApiKeyList, CreateApiKey, Grant, PermissionList, PutRole, Role, RoleList, SetGrant,
+};
+use crate::admin::ServerInfo;
 use crate::common::Duration;
 use crate::events::{Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey};
+use crate::organization::{
+    CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
+    Organization, OrganizationSettings, UpdateOrganization,
+};
 use crate::problem::Problem;
 use crate::reading::{PayloadQuery, ToolStatsFilter, ToolStatsPage};
 use crate::routes;
@@ -490,7 +498,134 @@ impl Client {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Administration
+    // Organization
+
+    /// `GET /v1/whoami`.
+    pub async fn whoami(&self) -> Result<Identity, Error> {
+        let request = self.request(Method::GET, routes::WHOAMI, &[])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/organizations`.
+    pub async fn create_organization(
+        &self,
+        organization: &CreateOrganization,
+    ) -> Result<Organization, Error> {
+        let request = self
+            .request(Method::POST, routes::ORGANIZATIONS, &[])?
+            .json(organization);
+        self.json(request).await
+    }
+
+    /// `PATCH /v1/organization`.
+    pub async fn update_organization(
+        &self,
+        update: &UpdateOrganization,
+    ) -> Result<OrganizationSettings, Error> {
+        let request = self
+            .request(Method::PATCH, routes::ORGANIZATION, &[])?
+            .json(update);
+        self.json(request).await
+    }
+
+    /// `GET /v1/invitations`: the pending invitations sent to the caller.
+    pub async fn my_invitations(&self) -> Result<InvitationList, Error> {
+        let request = self.request(Method::GET, routes::INVITATIONS, &[])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/invitations/{id}/accept`.
+    pub async fn accept_invitation(&self, invitation: &str) -> Result<Invitation, Error> {
+        let request = self.request(Method::POST, routes::INVITATION_ACCEPT, &[invitation])?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/organization/members`.
+    pub async fn list_members(&self) -> Result<MemberList, Error> {
+        let request = self.request(Method::GET, routes::MEMBERS, &[])?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/organization/members/{user}/grant`.
+    pub async fn set_member_grant(&self, user: &str, grant: &SetGrant) -> Result<Grant, Error> {
+        let request = self
+            .request(Method::PUT, routes::MEMBER_GRANT, &[user])?
+            .json(grant);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/organization/members/{user}`.
+    pub async fn remove_member(&self, user: &str) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::MEMBER, &[user])?;
+        self.empty(request).await
+    }
+
+    /// `GET /v1/organization/invitations`.
+    pub async fn list_invitations(&self) -> Result<InvitationList, Error> {
+        let request = self.request(Method::GET, routes::ORGANIZATION_INVITATIONS, &[])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/organization/invitations`.
+    pub async fn invite(&self, invitation: &CreateInvitation) -> Result<Invitation, Error> {
+        let request = self
+            .request(Method::POST, routes::ORGANIZATION_INVITATIONS, &[])?
+            .json(invitation);
+        self.json(request).await
+    }
+
+    /// `POST /v1/organization/invitations/{id}/resend`.
+    pub async fn resend_invitation(&self, invitation: &str) -> Result<Invitation, Error> {
+        let request = self.request(
+            Method::POST,
+            routes::ORGANIZATION_INVITATION_RESEND,
+            &[invitation],
+        )?;
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/organization/invitations/{id}`.
+    pub async fn revoke_invitation(&self, invitation: &str) -> Result<(), Error> {
+        let request = self.request(
+            Method::DELETE,
+            routes::ORGANIZATION_INVITATION,
+            &[invitation],
+        )?;
+        self.empty(request).await
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Access
+
+    /// `GET /v1/permissions`.
+    pub async fn list_permissions(&self) -> Result<PermissionList, Error> {
+        let request = self.request(Method::GET, routes::PERMISSIONS, &[])?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/roles`.
+    pub async fn list_roles(&self) -> Result<RoleList, Error> {
+        let request = self.request(Method::GET, routes::ROLES, &[])?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/roles/{name}`.
+    pub async fn put_role(&self, name: &str, role: &PutRole) -> Result<Role, Error> {
+        let request = self.request(Method::PUT, routes::ROLE, &[name])?.json(role);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/roles/{name}`.
+    pub async fn delete_role(&self, name: &str) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::ROLE, &[name])?;
+        self.empty(request).await
+    }
+
+    /// `GET /v1/api-keys`.
+    pub async fn list_api_keys(&self) -> Result<ApiKeyList, Error> {
+        let request = self.request(Method::GET, routes::API_KEYS, &[])?;
+        self.json(request).await
+    }
 
     /// `POST /v1/api-keys`.
     pub async fn create_api_key(&self, key: &CreateApiKey) -> Result<ApiKey, Error> {
@@ -504,11 +639,8 @@ impl Client {
         self.empty(request).await
     }
 
-    /// `GET /v1/whoami`.
-    pub async fn whoami(&self) -> Result<Identity, Error> {
-        let request = self.request(Method::GET, routes::WHOAMI, &[])?;
-        self.json(request).await
-    }
+    // ---------------------------------------------------------------------------------------
+    // Server
 
     /// `GET /v1/server`.
     pub async fn server_info(&self) -> Result<ServerInfo, Error> {

@@ -1,6 +1,7 @@
 // Follows a run's journal through `GET /v1/runs/{id}/events?follow=1` (server-sent events).
 // `EventSource` cannot send the Authorization header, so the stream is read with `fetch` and
-// parsed with eventsource-parser. A dropped stream is resumed from the next entry.
+// parsed with eventsource-parser. A dropped stream is resumed from the next entry, with the
+// current token: the server closes a stream opened with an access token when the token expires.
 import { createParser } from "eventsource-parser";
 import { type Api, ApiError } from "./client";
 import type { Entry, RunStatus, StreamEvent } from "./types";
@@ -103,7 +104,10 @@ export async function followRun(
         handlers.onEnd(ended);
         return;
       }
-      // The stream closed before the end of the run: reconnect from the next entry.
+      // The server closed the stream before the end of the run: at the expiry of the access
+      // token it was opened with, or a proxy's timeout. Reconnect from the next entry, with the
+      // token the session holds now, after the shortest wait.
+      attempt = 0;
     } catch (error) {
       if (signal.aborted) return;
       if (isFatal(error)) throw error;

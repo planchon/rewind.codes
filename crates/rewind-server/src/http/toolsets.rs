@@ -15,6 +15,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
+use rewind_api::access::Permission;
 use rewind_api::toolsets::{
     CreateToolset, Credentials, DeclarationFormat, Declarations, DeclarationsQuery,
     DeclarationsText, McpTransport as ApiTransport, OnInterruption, Route, SearchQuery,
@@ -30,7 +31,7 @@ use rewind_engine::ports::{
 use rewind_engine::text::{TOOLSET_TEXT, refuse_nul};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
 use crate::http::workflows;
@@ -42,7 +43,7 @@ pub(super) async fn create(
     caller: Caller,
     Body(mut request): Body<CreateToolset>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::ToolsetsWrite)?;
     if request.credentials.is_some() {
         refuse_scoped_credentials(&caller)?;
     }
@@ -114,7 +115,7 @@ pub(super) async fn list(
     State(app): State<Arc<App>>,
     caller: Caller,
 ) -> Result<Json<ToolsetList>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::ToolsetsRead)?;
     let toolsets = app
         .store
         .list_toolsets(&caller.tenant)
@@ -147,7 +148,7 @@ pub(super) async fn declarations(
     Path(id): Path<String>,
     Query(query): Query<DeclarationsQuery>,
 ) -> Result<Json<DeclarationsText>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::ToolsetsRead)?;
     let stored = stored(&app, &caller.tenant, &id).await?;
     let format = query.format.unwrap_or_default();
     let text = match format {
@@ -165,7 +166,7 @@ pub(super) async fn search(
     Path(id): Path<String>,
     Query(query): Query<SearchQuery>,
 ) -> Result<Json<ToolSearchResults>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::ToolsetsRead)?;
     let stored = stored(&app, &caller.tenant, &id).await?;
     let limit = usize::try_from(query.limit.unwrap_or(10).clamp(1, 100)).unwrap_or(10);
     let words: Vec<String> = query
@@ -250,7 +251,7 @@ pub(super) async fn credentials(
     Path(id): Path<String>,
     Body(credentials): Body<Credentials>,
 ) -> Result<StatusCode, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::CredentialsWrite)?;
     refuse_scoped_credentials(&caller)?;
     let digest = parse_digest(&id)?;
     app.engine

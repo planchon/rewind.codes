@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use clap::Parser;
-use rewind_api::admin::Role;
+use rewind_api::access::BuiltInRole;
 use rewind_api::toolsets::{CreateToolset, McpServer};
 use rewind_api::{Client, ProblemType};
 use rewind_server::ServerArgs;
@@ -107,7 +107,7 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
     let finder = Finder::default();
     let (url, _) = serve(finder.clone()).await;
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
 
     let refused = problem(harness.create_toolset(&toolset(&url)).await.unwrap_err());
     assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
@@ -138,7 +138,7 @@ async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
     let finder = Finder::default();
     let (url, admin) = serve(finder.clone()).await;
     let server = TestServer::start(&["--allow-internal-mcp", "127.0.0.1"]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
 
     let registered = harness.create_toolset(&toolset(&url)).await.unwrap();
     let names: Vec<&str> = registered

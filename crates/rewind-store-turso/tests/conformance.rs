@@ -1,5 +1,5 @@
-//! The embedded store passes the conformance suites of `JournalStore`, `ReadModel` and
-//! `SecretStore`, each check on a new database file.
+//! The embedded store passes the conformance suites of `JournalStore`, `AccessStore`,
+//! `ReadModel` and `SecretStore`, each check on a new database file.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,6 +29,12 @@ fn stores(dir: &TempDir) -> impl Fn() -> TursoStore + '_ {
 async fn the_journal_conforms() {
     let dir = TempDir::new().expect("temporary directory");
     conformance::journal::run_all(stores(&dir)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_access_store_conforms() {
+    let dir = TempDir::new().expect("temporary directory");
+    conformance::access::run_all(stores(&dir)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

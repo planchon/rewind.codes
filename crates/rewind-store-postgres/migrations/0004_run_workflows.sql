@@ -1,4 +1,4 @@
--- Version 3: the workflow metadata of runs in the read model (`archi/05-testing-and-observability.md`,
+-- Version 4: the workflow metadata of runs in the read model (`archi/05-testing-and-observability.md`,
 -- "Read model" and "Query language": `workflow:triage`, `started_by:<run id>`).
 
 -- For a run of a workflow, the workflow's name; for a run a script started, that run. Like the

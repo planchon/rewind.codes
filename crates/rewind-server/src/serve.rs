@@ -6,15 +6,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rewind_api::access::OPERATOR;
 use rewind_api::admin::ServerRole;
-use rewind_engine::adapters::{SystemClock, SystemEntropy, VirtualClock};
-use rewind_engine::ports::{ApiKey, Clock, JournalStore, TaskFilter};
+use rewind_engine::adapters::{MemoryIdentity, SystemClock, SystemEntropy, VirtualClock};
+use rewind_engine::ports::{AccessStore, ApiKey, Clock, Grant, Principal, StoreError, TaskFilter};
 use rewind_engine::projector::ProjectorConfig;
 use rewind_engine::{Adapters, Engine, EngineConfig};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use tokio::task::JoinHandle;
 
-use crate::app::{App, Settings};
+use crate::app::{App, Settings, SignIn};
 use crate::auth::key_hash;
 use crate::config::{Config, Listen, ServerArgs};
 use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
@@ -22,6 +23,7 @@ use crate::embedded::Directory;
 use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
+use crate::wiring::identity::Identity;
 use crate::wiring::store::Store;
 use crate::wiring::telemetry::{self, Exporter};
 use crate::wiring::tools::Tools;
@@ -121,7 +123,48 @@ impl Running {
 
 /// Starts a server in this process.
 pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
+    start_wired(args, None).await
+}
+
+/// Starts a server in this process whose identity provider is `identity`, the engine's fake of
+/// WorkOS, instead of WorkOS: the server's tests. The four `WORKOS_*` are still required for
+/// the sign-in to exist (the cookie password and the redirect URI are used; the client id and
+/// API key are not), and only the api role uses it.
+pub async fn start_with_identity(
+    args: ServerArgs,
+    identity: MemoryIdentity,
+) -> Result<Running, StartupError> {
+    start_wired(args, Some(identity)).await
+}
+
+/// The dashboard's sign-in, when the configuration has WorkOS (on the api role).
+fn sign_in(
+    config: &Config,
+    memory: Option<MemoryIdentity>,
+) -> Result<Option<SignIn>, StartupError> {
+    let Some(workos) = &config.workos else {
+        return Ok(None);
+    };
+    let identity = match memory {
+        Some(memory) => Identity::Memory(memory),
+        None => Identity::WorkOs(
+            rewind_workos::WorkOs::new(&workos.client_id, &workos.api_key)
+                .map_err(|error| StartupError::Config(format!("WorkOS: {error}")))?,
+        ),
+    };
+    Ok(Some(SignIn {
+        identity,
+        seal: workos.cookie_seal.clone(),
+        redirect_uri: workos.redirect_uri.clone(),
+    }))
+}
+
+async fn start_wired(
+    args: ServerArgs,
+    memory: Option<MemoryIdentity>,
+) -> Result<Running, StartupError> {
     let config = args.resolve()?;
+    let sign_in = sign_in(&config, memory)?;
     let directory = match &config.listen {
         Listen::Embedded { dir } => Some(Directory::open(dir)?),
         Listen::Tcp(_) => None,
@@ -213,6 +256,7 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
         exporter,
         deliveries,
         settings,
+        sign_in,
     ));
     register_admin_key(&app, &config).await?;
 
@@ -263,39 +307,60 @@ async fn clock(config: &Config, store: &Store) -> Result<ServerClock, StartupErr
     })
 }
 
-/// Registers `--admin-key`, the first key of a deployment.
+/// The name of the key given with `--admin-key`.
+const ADMIN_KEY_NAME: &str = "operator key (--admin-key)";
+
+/// Registers `--admin-key`, the first key of a deployment: the key, and its grant of the role
+/// `operator`, written again if it was changed.
 async fn register_admin_key(app: &App, config: &Config) -> Result<(), StartupError> {
     let Some(key) = &config.admin_key else {
         return Ok(());
     };
     let setup = |error: crate::error::ApiError| StartupError::Setup(error.0.detail.clone());
+    let store = |error: StoreError| StartupError::Setup(error.to_string());
     let hash = key_hash(key);
-    let existing = app
-        .store
-        .find_api_key(hash)
-        .await
-        .map_err(|error| StartupError::Setup(error.to_string()))?;
-    match existing {
+    let tenant = match app.store.find_key(hash).await.map_err(store)? {
         Some(existing) if existing.revoked_at.is_some() => {
             tracing::warn!("--admin-key was revoked: it is not registered again");
+            return Ok(());
         }
-        Some(_) => {}
+        Some(existing) => existing.tenant,
         None => {
-            crate::http::ensure_tenant(app, &config.admin_tenant)
+            app.ensure_tenant(&config.admin_tenant)
                 .await
                 .map_err(setup)?;
             app.store
-                .put_api_key(&ApiKey {
+                .put_key(&ApiKey {
                     hash,
                     tenant: config.admin_tenant.clone(),
-                    role: rewind_api::admin::Role::Admin.as_str().to_owned(),
-                    allowed_labels: std::collections::BTreeMap::new(),
+                    name: ADMIN_KEY_NAME.to_owned(),
+                    created_by: None,
                     created_at: app.now(),
                     revoked_at: None,
                 })
                 .await
-                .map_err(|error| StartupError::Setup(error.to_string()))?;
+                .map_err(store)?;
+            config.admin_tenant.clone()
         }
+    };
+    let principal = Principal::Key(hash);
+    let granted = app.store.grant(&tenant, &principal).await.map_err(store)?;
+    let operator = |grant: &Grant| grant.role == OPERATOR && grant.allowed_labels.is_empty();
+    if !granted.as_ref().is_some_and(operator) {
+        app.store
+            .put_grant(
+                &Grant {
+                    tenant,
+                    principal,
+                    role: OPERATOR.to_owned(),
+                    allowed_labels: std::collections::BTreeMap::new(),
+                    granted_by: None,
+                    granted_at: app.now(),
+                },
+                None,
+            )
+            .await
+            .map_err(store)?;
     }
     Ok(())
 }
@@ -340,7 +405,9 @@ async fn listen(
                 .map_err(|error| StartupError::Io(error.to_string()))?;
             let router = http::router(app.clone(), false);
             let handle = tokio::spawn(async move {
-                if let Err(error) = axum::serve(listener, router)
+                // The peer's address: the sign-in passes a browser's to the identity provider.
+                let service = router.into_make_service_with_connect_info::<SocketAddr>();
+                if let Err(error) = axum::serve(listener, service)
                     .with_graceful_shutdown(shutdown)
                     .await
                 {

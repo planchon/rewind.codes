@@ -5,37 +5,49 @@
 use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures_util::Stream;
+use rewind_api::access::Permission;
 use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::LAST_EVENT_ID;
-use rewind_engine::ports::{JournalStore, RunRef};
+use rewind_engine::adapters::SystemClock;
+use rewind_engine::ports::{Clock, JournalStore, RunRef};
 use tokio::sync::watch;
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::{Caller, TokenExpiry};
 use crate::error::ApiError;
 use crate::extract::Query;
 use crate::wake::{Busy, POLL, wait};
 
-/// `GET /v1/runs/{id}/events?follow=1&from=…`.
+/// `GET /v1/runs/{id}/events?follow=1&from=…`. A stream opened with a member's access token is
+/// closed at the token's expiry: the dashboard resumes it with a new token and `from`.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
+    TokenExpiry(expiry): TokenExpiry,
     Path(id): Path<String>,
     Query(query): Query<EventsQuery>,
     headers: HeaderMap,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::RunsRead)?;
     let record = app.run(&caller, &id).await?;
     let resumed = headers
         .get(LAST_EVENT_ID)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(|last| last.saturating_add(1));
+    // Tokens expire in the world's time, whatever the server's clock.
+    let deadline = expiry.map(|expires_at| {
+        let left = expires_at
+            .as_millis()
+            .saturating_sub(SystemClock.now().as_millis());
+        tokio::time::Instant::now() + Duration::from_millis(left)
+    });
     let tail = Tail {
         changes: app.wake.subscribe(),
         busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),
@@ -45,6 +57,7 @@ pub(super) async fn stream(
         follow: query.follow.unwrap_or(false),
         pending: VecDeque::new(),
         done: false,
+        deadline,
     };
     let events = futures_util::stream::unfold(tail, |mut tail| async move {
         tail.next_event().await.map(|event| (Ok(event), tail))
@@ -65,11 +78,19 @@ struct Tail {
     /// A followed stream keeps the embedded server from stopping on idle.
     #[allow(dead_code)]
     busy: Option<Busy>,
+    /// The expiry of the access token that opened the stream, which ends it.
+    deadline: Option<tokio::time::Instant>,
 }
 
 impl Tail {
     async fn next_event(&mut self) -> Option<Event> {
         loop {
+            if self
+                .deadline
+                .is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+            {
+                return None;
+            }
             if let Some(event) = self.pending.pop_front() {
                 return Some(event);
             }
@@ -78,7 +99,7 @@ impl Tail {
             }
             match self.read().await {
                 Ok(true) => {}
-                Ok(false) => wait(&mut self.changes, POLL, None).await,
+                Ok(false) => wait(&mut self.changes, POLL, self.deadline).await,
                 Err(error) => {
                     tracing::warn!(run = %self.run, detail = %error.0.detail, "the event stream stops");
                     return None;

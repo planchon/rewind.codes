@@ -1,5 +1,5 @@
-//! The store: `JournalStore`, `ReadModel` and `SecretStore` on one backend, chosen by the
-//! configuration (`archi/06-storage-and-scale.md`, "Backends"):
+//! The store: `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` on one backend, chosen
+//! by the configuration (`archi/06-storage-and-scale.md`, "Backends"):
 //!
 //! | `--store` | Backend |
 //! | --- | --- |
@@ -18,10 +18,11 @@ use rewind_core::{
     ToolOutcome, Toolset,
 };
 use rewind_engine::ports::{
-    AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun, Credentials,
-    Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer, FeedItem,
-    InboxItem, JournalStore, Lease, NewRun, ParkReason, ParkedScope, PayloadRecord, ProjectedRun,
-    QuarantineKind, QuarantineNote, ReadModel, ReadModelError, RunFilter, RunOrder, RunQuery,
+    AccessStore, AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun,
+    Credentials, Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer,
+    FeedItem, Grant, GrantClaim, GrantDeletion, GrantWrite, InboxItem, JournalStore, Lease, NewRun,
+    ParkReason, ParkedScope, PayloadRecord, Principal, ProjectedRun, QuarantineKind,
+    QuarantineNote, ReadModel, ReadModelError, Role, RoleDeletion, RunFilter, RunOrder, RunQuery,
     RunRecord, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
     SearchCursor, SecretError, SecretOwner, SecretStore, StatsWindow, StoreError, StoredScript,
     StoredToolset, Subscription, TaskFilter, TaskProgress, TaskRef, TaskToken, TaskUpdate, Tenant,
@@ -565,18 +566,6 @@ impl JournalStore for Store {
         each!(self, store => store.list_tenants().await)
     }
 
-    async fn put_api_key(&self, key: &ApiKey) -> Result<(), StoreError> {
-        each!(self, store => store.put_api_key(key).await)
-    }
-
-    async fn find_api_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
-        each!(self, store => store.find_api_key(hash).await)
-    }
-
-    async fn revoke_api_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        each!(self, store => store.revoke_api_key(hash, now).await)
-    }
-
     async fn claim_feed(
         &self,
         consumer: FeedConsumer,
@@ -590,6 +579,82 @@ impl JournalStore for Store {
 
     async fn ack_feed(&self, ids: &[u64]) -> Result<(), StoreError> {
         each!(self, store => store.ack_feed(ids).await)
+    }
+}
+
+impl AccessStore for Store {
+    async fn put_key(&self, key: &ApiKey) -> Result<(), StoreError> {
+        each!(self, store => store.put_key(key).await)
+    }
+
+    async fn find_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
+        each!(self, store => store.find_key(hash).await)
+    }
+
+    async fn list_keys(&self, tenant: &TenantId) -> Result<Vec<ApiKey>, StoreError> {
+        each!(self, store => store.list_keys(tenant).await)
+    }
+
+    async fn revoke_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
+        each!(self, store => store.revoke_key(hash, now).await)
+    }
+
+    async fn put_role(&self, role: &Role) -> Result<(), StoreError> {
+        each!(self, store => store.put_role(role).await)
+    }
+
+    async fn get_role(&self, tenant: &TenantId, name: &str) -> Result<Option<Role>, StoreError> {
+        each!(self, store => store.get_role(tenant, name).await)
+    }
+
+    async fn list_roles(&self, tenant: &TenantId) -> Result<Vec<Role>, StoreError> {
+        each!(self, store => store.list_roles(tenant).await)
+    }
+
+    async fn delete_role(&self, tenant: &TenantId, name: &str) -> Result<RoleDeletion, StoreError> {
+        each!(self, store => store.delete_role(tenant, name).await)
+    }
+
+    async fn put_grant(&self, grant: &Grant, keep: Option<&str>) -> Result<GrantWrite, StoreError> {
+        each!(self, store => store.put_grant(grant, keep).await)
+    }
+
+    async fn grant(
+        &self,
+        tenant: &TenantId,
+        principal: &Principal,
+    ) -> Result<Option<Grant>, StoreError> {
+        each!(self, store => store.grant(tenant, principal).await)
+    }
+
+    async fn list_grants(&self, tenant: &TenantId) -> Result<Vec<Grant>, StoreError> {
+        each!(self, store => store.list_grants(tenant).await)
+    }
+
+    async fn delete_grant(
+        &self,
+        tenant: &TenantId,
+        principal: &Principal,
+        keep: Option<&str>,
+    ) -> Result<GrantDeletion, StoreError> {
+        each!(self, store => store.delete_grant(tenant, principal, keep).await)
+    }
+
+    async fn claim_grant(
+        &self,
+        tenant: &TenantId,
+        invitation: &Principal,
+        user: &Principal,
+    ) -> Result<GrantClaim, StoreError> {
+        each!(self, store => store.claim_grant(tenant, invitation, user).await)
+    }
+
+    async fn set_default_role(&self, tenant: &TenantId, role: &str) -> Result<(), StoreError> {
+        each!(self, store => store.set_default_role(tenant, role).await)
+    }
+
+    async fn default_role(&self, tenant: &TenantId) -> Result<Option<String>, StoreError> {
+        each!(self, store => store.default_role(tenant).await)
     }
 }
 

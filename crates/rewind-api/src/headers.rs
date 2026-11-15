@@ -6,8 +6,9 @@ use std::fmt;
 
 use crate::Error;
 
-/// `Authorization: Bearer rewind_sk_…` on every request, except over the embedded server's
-/// socket and to `POST /hooks/{token}`.
+/// `Authorization: Bearer <token>` on every request to `/v1`, except over the embedded server's
+/// socket: an API key `rewind_sk_…`, or a member's access token from `/auth`. None to
+/// `POST /hooks/{token}`.
 pub const AUTHORIZATION: &str = "Authorization";
 
 /// The prefix of every API key.

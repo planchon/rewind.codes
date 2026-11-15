@@ -22,12 +22,14 @@ pub enum ProblemType {
     InvalidRequest,
     /// 400: a query (`q`) cannot be read; `query` says where the term at fault is.
     InvalidQuery,
-    /// 401: no API key, or an unknown or revoked one.
+    /// 401: no token, or an unknown, revoked or expired one; on `/auth`, no session.
     Unauthorized,
-    /// 403: the key's role or its allowed labels do not cover this request.
+    /// 403: the caller's grant does not hold the permission this request needs (the message
+    /// names it), or its allowed labels do not cover the request; a member without a grant in
+    /// the organization.
     Forbidden,
-    /// 404: no such run, toolset, script, task, payload, subscription or API key (for this
-    /// tenant).
+    /// 404: no such run, toolset, workflow, script, task, payload, subscription, API key, role,
+    /// member or invitation (for this tenant).
     NotFound,
     /// 409: a signal or a cancellation sent to a run that has ended.
     RunEnded,
@@ -35,6 +37,10 @@ pub enum ProblemType {
     NotQuarantined,
     /// 409: approving or rejecting a task that does not wait for the harness.
     TaskNotWaiting,
+    /// 409: deleting a role that a grant still points to.
+    RoleInUse,
+    /// 409: a change that would leave the organization without an `owner`.
+    LastOwner,
     /// 410: the task no longer exists: its run ended, it was completed, or its claim expired
     /// and another worker took it.
     TaskGone,
@@ -61,12 +67,14 @@ pub enum ProblemType {
     Internal,
     /// 502: an MCP server of the toolset cannot be reached, or answered with an error.
     ToolsetUnavailable,
+    /// 502: the identity provider (WorkOS) cannot be reached, or answered with an error.
+    IdentityUnavailable,
     /// 503: the server cannot serve the request now (stopping, or its store is unreachable).
     Unavailable,
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 20] = [
+    pub const ALL: [ProblemType; 23] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -75,6 +83,8 @@ impl ProblemType {
         ProblemType::RunEnded,
         ProblemType::NotQuarantined,
         ProblemType::TaskNotWaiting,
+        ProblemType::RoleInUse,
+        ProblemType::LastOwner,
         ProblemType::TaskGone,
         ProblemType::PayloadTooLarge,
         ProblemType::UnsupportedMediaType,
@@ -86,6 +96,7 @@ impl ProblemType {
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
         ProblemType::ToolsetUnavailable,
+        ProblemType::IdentityUnavailable,
         ProblemType::Unavailable,
     ];
 
@@ -100,6 +111,8 @@ impl ProblemType {
             ProblemType::RunEnded => "urn:rewind:problem:run-ended",
             ProblemType::NotQuarantined => "urn:rewind:problem:not-quarantined",
             ProblemType::TaskNotWaiting => "urn:rewind:problem:task-not-waiting",
+            ProblemType::RoleInUse => "urn:rewind:problem:role-in-use",
+            ProblemType::LastOwner => "urn:rewind:problem:last-owner",
             ProblemType::TaskGone => "urn:rewind:problem:task-gone",
             ProblemType::PayloadTooLarge => "urn:rewind:problem:payload-too-large",
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
@@ -111,6 +124,7 @@ impl ProblemType {
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
             ProblemType::ToolsetUnavailable => "urn:rewind:problem:toolset-unavailable",
+            ProblemType::IdentityUnavailable => "urn:rewind:problem:identity-unavailable",
             ProblemType::Unavailable => "urn:rewind:problem:unavailable",
         }
     }
@@ -122,9 +136,11 @@ impl ProblemType {
             ProblemType::Unauthorized => 401,
             ProblemType::Forbidden => 403,
             ProblemType::NotFound => 404,
-            ProblemType::RunEnded | ProblemType::NotQuarantined | ProblemType::TaskNotWaiting => {
-                409
-            }
+            ProblemType::RunEnded
+            | ProblemType::NotQuarantined
+            | ProblemType::TaskNotWaiting
+            | ProblemType::RoleInUse
+            | ProblemType::LastOwner => 409,
             ProblemType::TaskGone => 410,
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
@@ -135,7 +151,7 @@ impl ProblemType {
             | ProblemType::InvalidSignal => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
-            ProblemType::ToolsetUnavailable => 502,
+            ProblemType::ToolsetUnavailable | ProblemType::IdentityUnavailable => 502,
             ProblemType::Unavailable => 503,
         }
     }
@@ -145,12 +161,14 @@ impl ProblemType {
         match self {
             ProblemType::InvalidRequest => "Invalid request",
             ProblemType::InvalidQuery => "The query cannot be read",
-            ProblemType::Unauthorized => "Missing or invalid API key",
-            ProblemType::Forbidden => "Not allowed for this API key",
+            ProblemType::Unauthorized => "Missing or invalid token",
+            ProblemType::Forbidden => "Not allowed for this caller",
             ProblemType::NotFound => "Not found",
             ProblemType::RunEnded => "The run has ended",
             ProblemType::NotQuarantined => "The run is not quarantined",
             ProblemType::TaskNotWaiting => "The task does not wait for the harness",
+            ProblemType::RoleInUse => "The role is in use",
+            ProblemType::LastOwner => "The organization would have no owner",
             ProblemType::TaskGone => "The task no longer exists",
             ProblemType::PayloadTooLarge => "Payload too large",
             ProblemType::UnsupportedMediaType => "Unsupported media type",
@@ -162,6 +180,7 @@ impl ProblemType {
             ProblemType::QuotaExceeded => "Too many active runs",
             ProblemType::Internal => "Internal error",
             ProblemType::ToolsetUnavailable => "A server of the toolset is unavailable",
+            ProblemType::IdentityUnavailable => "The identity provider is unavailable",
             ProblemType::Unavailable => "Service unavailable",
         }
     }

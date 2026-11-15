@@ -1,22 +1,43 @@
 # Dashboard
 
-The operator's view of Rewind: every run, all the code executed, and the tools they called
-([05](../archi/05-testing-and-observability.md#dashboard)). A React single-page application, served
-as static files by `rewind-server`, and a client of the public API `/v1` only.
+Rewind's view of every run, all the code executed, and the tools they called, and of who may see
+them ([05](../archi/05-testing-and-observability.md#dashboard)). A React single-page application,
+served as static files by `rewind-server` (and from `app.rewind.codes`), and a client of the public
+API `/v1` and of the sign-in `/auth` only.
 
 | View | Shows |
 | --- | --- |
 | Overview | The home page, over a window (1 h, 24 h, 7 d, 30 d): runs started (against the previous window), the share that completed, the failed ones, the runs waiting now, durations (p95, p50), quarantined runs; runs by outcome over time; what fails most; failing tools. Every figure, bar and row opens the runs behind it. Polled every 10 s. |
-| Runs | Every run the key may read, searched with the query language in one bar: suggestions as you type, the term the server cannot read underlined, facets beside the results (a click asks for a value, a second excludes it, a third removes it), ordered by start, activity or next wake. Saved searches are kept in the browser and listed in the navigation. |
+| Runs | Every run the caller may read, searched with the query language in one bar: suggestions as you type, the term the server cannot read underlined, facets beside the results (a click asks for a value, a second excludes it, a third removes it), ordered by start, activity or next wake. Saved searches are kept in the browser and listed in the navigation. |
 | Waiting | Every run paused on the outside world, by tab (signals, approvals, timers, tools) and grouped by what it waits for, with the line it is paused on and when it wakes, the soonest first. Polled every 10 s. |
 | Failures | Failed, cancelled and aborted runs of a window grouped by fingerprint: signature, runs, their series, scripts, first and last seen, the line most of them ended at, top labels, the latest run. |
 | Run | The source, with each tool call, timer, signal wait and log next to the line that caused it; the timeline; the journal, the logs and the LLM trace; payloads on demand. For a run of a workflow, its name and version and the run that started it (detached or not); the runs it started, each with how it ended, from its journal: `triage.start(…)`, `run.signal("approval", …)` and the `rewind:ended:` signals read as the script wrote them. Live through the event stream while the run goes on. A time cursor steps through the history (`?step=`): the marks of each line, hovers that show a call's arguments and result or a variable's value at that step, watches, a playhead on the timeline. |
 | Scripts | Every distinct script, with its runs by outcome, its tools and its labels; one script's source and runs. |
-| Tools | Latency (p50, p95, p99, max), error rate by kind and retries per tool, grouped by namespace, over a window, optionally for one toolset. |
+| Tools | Latency (p50, p95, p99, max), error rate by kind and retries per tool, grouped by namespace, over a window, optionally for one toolset. Not for a grant limited to labels. |
+| Organization | Members (their grant: role and allowed labels; change it, remove a member), Invitations (invite an email with a role and labels, resend, revoke), Roles (built-in and the organization's own, with their permissions; create, edit, delete), API keys (role, labels, creator, dates; create, with the secret shown once; revoke), Settings (name, default role). Each part is shown to whoever holds its permission; the roles offered are those the caller may give. |
 
-The query (`q`) follows the operator from Overview to Runs, Waiting and Failures in the URL.
-Links of earlier versions (`#/runs?status=failed&label=agent:triage&tool=…`) are read as the
-query they mean.
+The views follow what `GET /v1/whoami` says the caller may do: the run views need `runs:read`,
+and a member without it is told so. The query (`q`) follows the reader from Overview to Runs,
+Waiting and Failures in the URL. Links of earlier versions (`#/runs?status=failed&label=…`) are
+read as the query they mean.
+
+## Signing in
+
+| Server | The dashboard |
+| --- | --- |
+| With WorkOS (`GET /auth/config` answers) | Its own pages: "Continue with GitHub", or an email and the 6-digit code sent to it; then whatever step the server answers (an organization to choose, an email to verify, sign-ups closed and the waitlist). A member without an organization joins one they were invited to or creates one. The top bar has the organization switcher and the user menu. |
+| Without WorkOS (404) | An API key, typed by the operator, kept for the tab (`sessionStorage`) or on the device when asked (`localStorage`). A server that needs no key (the embedded one) lets the operator in at once. |
+
+- The session is the cookie `rewind_session`, which only `/auth` reads (`Path=/auth`,
+  `SameSite=Strict`, same origin). Every `POST` to `/auth` sends JSON.
+- The access token lives in memory only. It is asked for with `POST /auth/session` at load (after
+  GitHub's callback, the app lands on `/#/` and asks), a minute before it expires (corrected by the
+  server's `Date`), and once when `/v1` answers 401; a second refusal goes back to the sign-in.
+- An invitation link (`/?invitation_token=…`) is read at load, kept through the sign-in (GitHub's
+  `invitationToken`, the code's `invitationToken`), and dropped from the address once signed in.
+- The query cache belongs to one key, or one member in one organization: the tree under it
+  remounts when that changes (a sign-out, a switch of organization), so nothing read for one is
+  shown to the other.
 
 ## Commands
 
@@ -24,15 +45,23 @@ Node 22.12 or later and pnpm 10.
 
 ```sh
 pnpm install
-pnpm dev:mock                             # the app against the mocked API of src/mocks (a run goes on live)
-REWIND_MOCK_KEY=rewind_sk_x pnpm dev:mock # the same, with an API key required
-REWIND_URL=http://localhost:8080 pnpm dev # the app against a rewind server; /v1 is proxied to it
+pnpm dev:mock                             # the app against the mocked API of src/mocks, signing in as with WorkOS
+REWIND_MOCK_KEY=rewind_sk_x pnpm dev:mock # a server without WorkOS, which asks for that key
+REWIND_MOCK_WORKOS=0 pnpm dev:mock        # a server that needs no key, as the embedded one
+REWIND_URL=http://localhost:8080 pnpm dev # the app against a rewind server; /v1 and /auth are proxied to it
 pnpm test                                 # vitest, against the mocked API
 pnpm typecheck                            # TypeScript 7, strict
 pnpm check                                # Biome: lint and format
 pnpm build                                # type-check, then build to dist/
 pnpm generate:api                         # regenerate src/generated/api.ts from ../api/openapi.json
 ```
+
+`pnpm dev:mock` prints, in its terminal, the accounts of its world, the codes it "emails" and the
+invitation links it "sends": Ada (`ada@example.net`) owns Acme and reads in Globex, Grace is
+`harness` in Acme, Linus has a role without `runs:read`, Alan verifies his email first and reads
+only `agent:triage`, Margaret has no organization and an invitation to Globex, any other email
+meets the waitlist. "Continue with GitHub" signs in as Ada. A run goes on live, and the access
+tokens live 5 minutes, as WorkOS's: the event stream is closed at their expiry and resumed.
 
 ## The build
 
@@ -42,24 +71,32 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 
 - Every path in the build is relative, and the routes live in the URL fragment (`#/runs/…`): the
   server can serve the directory under any prefix, with no fallback route.
-- The app calls the API at `/v1` on the origin that serves it.
-- Nothing is loaded from elsewhere: the fonts (IBM Plex Sans and Mono) are in the build.
+- The app calls the API at `/v1` and the sign-in at `/auth` on the origin that serves it. On
+  Vercel (`vercel.json`), both are rewritten to `https://api.rewind.codes`; the cookies the API sets
+  come through the rewrite on `app.rewind.codes`, whose `WORKOS_REDIRECT_URI` is
+  `https://app.rewind.codes/auth/callback`.
+- Nothing is loaded from elsewhere: the fonts (IBM Plex Sans and Mono) are in the build. A member's
+  picture is the one image from another origin (GitHub's avatar, given by WorkOS), asked for
+  without a referrer; initials stand in when it does not load.
 - `index.html` should not be cached; the files of `assets/` never change.
 
 ## How it uses the API
 
 - Types come from `api/openapi.json` (`openapi-typescript`, committed in `src/generated/api.ts`);
-  calls go through `openapi-fetch` (`src/api/client.ts`).
-- It only sends `GET` requests: a key with the `reader` role is enough. The operator types the key;
-  it stays in `sessionStorage`, or in `localStorage` when asked. A server that needs no key lets the
-  operator in at once.
+  calls go through `openapi-fetch` (`src/api/client.ts`). The Bearer token goes to `/v1` only.
 - The event stream is read with `fetch` and `eventsource-parser`, since `EventSource` cannot send the
-  `Authorization` header; a dropped stream resumes from the next entry (`from`).
+  `Authorization` header; a stream that closes before the run ends (a drop, a proxy, an access
+  token's expiry) resumes from the next entry (`from`) with the current token.
 - A payload shows its size, digest and preview; its value is shown on demand, and read with
   `GET /v1/payloads/{digest}` when the entry left it out (above 256 KiB).
 - Lists search with `q` (`GET /v1/runs`, `/v1/runs/stats`, `/v1/runs/failures`); the server
   reads the query and answers `invalid-query` with the position of the term at fault, in
   characters. Suggestions and facets come from `GET /v1/runs/stats?q=…&top=…`.
+- The organization views write: grants, invitations, roles, keys, the organization. Before the
+  server enforces them, they follow its rules: only the roles whose permissions the caller holds
+  are offered, a role editor's permissions the caller lacks are disabled, a member or role beyond
+  the caller cannot be changed, and a grant limited to labels administers nothing. A refusal is
+  explained where it happened (`last-owner`, `role-in-use`, `forbidden`).
 - The time cursor is computed in the browser from the journal: a step is a trigger
   (`run_started`, a tool's result or failure, `timer_fired`, `signal_received`,
   `cancel_requested`) and the entries committed with it. What a hover shows is found with
@@ -72,10 +109,10 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 
 | Path | Holds |
 | --- | --- |
-| `src/api/` | The client, the event stream, the data hooks (TanStack Query), the DTO names |
-| `src/model/` | Pure code: a run's activities and steps from its journal, the runs it started (`workflows.ts`), callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting |
-| `src/views/` | Overview, Runs (with its facets), Waiting, Failures, Run (`run/`, with the time cursor), Scripts, Script, Tools |
-| `src/components/` | Shared pieces: statuses, payloads, the source view, the query bar, charts, tooltips |
-| `src/app/` | Routes, the key gate, the session, settings (theme, time zone), saved searches |
-| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run, and a run that starts runs of workflows), a small read model that reads the query language, MSW handlers, the Vite plugin of `dev:mock` |
+| `src/api/` | The client (`/v1` and `/auth`), the event stream, the data hooks (TanStack Query), the DTO names |
+| `src/model/` | Pure code: a run's activities and steps from its journal, the runs it started (`workflows.ts`), callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting, what a caller may do and give |
+| `src/views/` | Overview, Runs (with its facets), Waiting, Failures, Run (`run/`, with the time cursor), Scripts, Script, Tools, Organization (`org/`) |
+| `src/components/` | Shared pieces: statuses, payloads, the source view, the query bar, charts, tooltips, refusals explained |
+| `src/app/` | Routes, the session (key or member), the gate, the sign-in pages, the onboarding, the account menus, what the caller may do (`access.tsx`), settings (theme, time zone), saved searches |
+| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run, and a run that starts runs of workflows), a small read model that reads the query language, a world of identity and access (users, organizations, invitations, the waitlist, one browser's session, roles, grants, keys), MSW handlers, the Vite plugin of `dev:mock` |
 | `src/styles/` | Tokens for light and dark, and the styles |

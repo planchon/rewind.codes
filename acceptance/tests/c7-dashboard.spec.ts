@@ -60,7 +60,7 @@ test.describe("criterion 7: the dashboard", () => {
     readerKey = (await admin.apiKeys.create({ tenant: "acme", role: "reader", name: "operator" })).key!;
     const harness = new Rewind({
       url: server.url,
-      apiKey: (await admin.apiKeys.create({ tenant: "acme", role: "harness" })).key!,
+      apiKey: (await admin.apiKeys.create({ tenant: "acme", role: "harness", name: "harness" })).key!,
     });
     const toolset = await harness.toolsets.create({
       host: [

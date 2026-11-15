@@ -24,7 +24,7 @@ use rewind_core::{
     end_signal_name, starter_ended,
 };
 use rewind_engine::ports::{
-    AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
+    AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
@@ -289,17 +289,6 @@ fn tenant_from_row(row: &PgRow) -> Result<Tenant, Error> {
             read_model: row.duration(4)?,
             payload_grace: row.duration(5)?,
         },
-    })
-}
-
-fn api_key_from_row(row: &PgRow) -> Result<ApiKey, Error> {
-    Ok(ApiKey {
-        hash: row.digest(0)?,
-        tenant: row.tenant(1)?,
-        role: row.text(2)?,
-        allowed_labels: decode_labels(&row.text(3)?)?,
-        created_at: row.ts(4)?,
-        revoked_at: row.opt_ts(5)?,
     })
 }
 
@@ -3240,7 +3229,7 @@ impl JournalStore for PostgresStore {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Tenants and API keys
+    // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
         sqlx::query(
@@ -3289,53 +3278,6 @@ impl JournalStore for PostgresStore {
             .iter()
             .map(tenant_from_row)
             .collect::<Result<_, Error>>()?)
-    }
-
-    async fn put_api_key(&self, key: &ApiKey) -> Result<(), StoreError> {
-        let inserted = sqlx::query(
-            "INSERT INTO api_keys (hash, tenant, role, allowed_labels, created_at, revoked_at) \
-             VALUES ($1, $2, $3, $4::jsonb, $5, $6) ON CONFLICT (hash) DO NOTHING",
-        )
-        .bind(bytes(key.hash))
-        .bind(tenant(&key.tenant))
-        .bind(key.role.as_str())
-        .bind(encode_labels(&key.allowed_labels))
-        .bind(ts(key.created_at))
-        .bind(opt_ts(key.revoked_at))
-        .execute(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        if inserted.rows_affected() == 0 {
-            return Err(StoreError::Conflict(format!(
-                "an API key with hash {} already exists",
-                key.hash.short()
-            )));
-        }
-        Ok(())
-    }
-
-    async fn find_api_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
-        let row = sqlx::query(
-            "SELECT hash, tenant, role, allowed_labels::text, created_at, revoked_at \
-             FROM api_keys WHERE hash = $1",
-        )
-        .bind(bytes(hash))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        Ok(row.map(|row| api_key_from_row(&row)).transpose()?)
-    }
-
-    async fn revoke_api_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        let revoked = sqlx::query(
-            "UPDATE api_keys SET revoked_at = $2 WHERE hash = $1 AND revoked_at IS NULL",
-        )
-        .bind(bytes(hash))
-        .bind(ts(now))
-        .execute(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        Ok(revoked.rows_affected() > 0)
     }
 
     // ---------------------------------------------------------------------------------------

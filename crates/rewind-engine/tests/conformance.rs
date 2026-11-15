@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter, MemoryWebhooks,
+    MemoryAccess, MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter,
+    MemoryWebhooks,
 };
 use rewind_engine::conformance;
 use rewind_engine::ports::{Secret, Subscription, TenantId, WebhookEventType};
@@ -12,6 +13,11 @@ use rewind_engine::ports::{Secret, Subscription, TenantId, WebhookEventType};
 #[tokio::test]
 async fn memory_journal_conforms() {
     conformance::journal::run_all(MemoryJournal::new).await;
+}
+
+#[tokio::test]
+async fn memory_access_conforms() {
+    conformance::access::run_all(MemoryAccess::new).await;
 }
 
 #[tokio::test]

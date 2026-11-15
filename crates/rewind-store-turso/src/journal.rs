@@ -10,7 +10,7 @@ use rewind_core::{
     end_signal_name,
 };
 use rewind_engine::ports::{
-    AcquireRunnable, Activation, ApiKey, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
+    AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
@@ -622,17 +622,6 @@ fn tenant_from_row(row: &Row) -> Result<Tenant, Error> {
             read_model: row.duration(4)?,
             payload_grace: row.duration(5)?,
         },
-    })
-}
-
-fn api_key_from_row(row: &Row) -> Result<ApiKey, Error> {
-    Ok(ApiKey {
-        hash: row.digest(0)?,
-        tenant: row.tenant(1)?,
-        role: row.text(2)?,
-        allowed_labels: decode_labels(&row.text(3)?)?,
-        created_at: row.ts(4)?,
-        revoked_at: row.opt_ts(5)?,
     })
 }
 
@@ -2722,7 +2711,7 @@ impl JournalStore for TursoStore {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Tenants and API keys
+    // Tenants
 
     async fn put_tenant(&self, record: &Tenant) -> Result<(), StoreError> {
         let connection = self.connection().await?;
@@ -2771,64 +2760,6 @@ impl JournalStore for TursoStore {
             .iter()
             .map(tenant_from_row)
             .collect::<Result<_, Error>>()?)
-    }
-
-    async fn put_api_key(&self, key: &ApiKey) -> Result<(), StoreError> {
-        let connection = self.connection().await?;
-        let connection = &*connection;
-        transaction(connection, async {
-            let exists = sql::query_row(
-                connection,
-                "SELECT 1 FROM api_keys WHERE hash = ?",
-                vec![digest(key.hash)],
-            )
-            .await?;
-            if exists.is_some() {
-                return Err(StoreError::Conflict(format!(
-                    "an API key with hash {} already exists",
-                    key.hash.short()
-                )));
-            }
-            sql::execute(
-                connection,
-                "INSERT INTO api_keys (hash, tenant, role, allowed_labels, created_at, revoked_at) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                vec![
-                    digest(key.hash),
-                    tenant(&key.tenant),
-                    text(key.role.as_str()),
-                    text(encode_labels(&key.allowed_labels)),
-                    ts(key.created_at),
-                    opt_ts(key.revoked_at),
-                ],
-            )
-            .await?;
-            Ok(())
-        })
-        .await
-    }
-
-    async fn find_api_key(&self, hash: Digest) -> Result<Option<ApiKey>, StoreError> {
-        let connection = self.connection().await?;
-        let row = sql::query_row(
-            &connection,
-            "SELECT hash, tenant, role, allowed_labels, created_at, revoked_at FROM api_keys \
-             WHERE hash = ?",
-            vec![digest(hash)],
-        )
-        .await?;
-        Ok(row.map(|row| api_key_from_row(&row)).transpose()?)
-    }
-
-    async fn revoke_api_key(&self, hash: Digest, now: Timestamp) -> Result<bool, StoreError> {
-        let connection = self.connection().await?;
-        let revoked = sql::execute(
-            &connection,
-            "UPDATE api_keys SET revoked_at = ? WHERE hash = ? AND revoked_at IS NULL",
-            vec![ts(now), digest(hash)],
-        )
-        .await?;
-        Ok(revoked > 0)
     }
 
     // ---------------------------------------------------------------------------------------

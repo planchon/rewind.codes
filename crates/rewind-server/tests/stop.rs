@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use rewind_api::access::BuiltInRole;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::StartRun;
 use rewind_api::toolsets::{CreateToolset, McpServer, OnInterruption, ToolPolicy};
@@ -114,7 +115,7 @@ async fn a_call_in_flight_finishes_and_commits_before_the_server_stops() {
         runtime.block_on(async move {
             let server =
                 TestServer::start_in(&path, &first_store, &first_blobs, INTERNAL_MCP).await;
-            let harness = server.key(rewind_api::admin::Role::Harness, &[]).await;
+            let harness = server.key(BuiltInRole::Harness, &[]).await;
             // At most once: a call abandoned by the stop ends with its outcome unknown once its
             // claim expires, and the script fails with a ToolError.
             let policy = ToolPolicy {
@@ -162,7 +163,7 @@ export default async function main() {
     // Another server on the same store finishes the run with the call's result, without
     // calling the tool again.
     let server = TestServer::start_in(dir.path(), &store, &blobs, INTERNAL_MCP).await;
-    let harness = server.key(rewind_api::admin::Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let ended = harness.get_run(&run, wait("30s")).await.unwrap();
     assert_eq!(ended.status, RunStatus::Completed, "{:?}", ended.error);
     assert_eq!(

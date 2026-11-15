@@ -1,8 +1,8 @@
 //! The conformance suite of `JournalStore`: the commit invariant and fencing, lease renewal,
 //! single writers, tenants (isolation, quotas, fair draws), sticky affinity, idempotency keys,
 //! epochs, failure counts and quarantine, timers, run expiry, the tool task lifecycle and its
-//! concurrency limits, webhook tokens and subscriptions, payload rows and references, retention,
-//! API keys and the feed; workflow versions, and the watchers that receive a run's end.
+//! concurrency limits, webhook tokens and subscriptions, payload rows and references, retention
+//! and the feed; workflow versions, and the watchers that receive a run's end.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -17,14 +17,13 @@ use serde_json::json;
 
 use super::{T0, check, tenant};
 use crate::ports::{
-    AcquireRunnable, Activation, ApiKey, CompiledScript, CreateRun, Enqueued, ExpiredRuns,
-    FeedConsumer, ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask,
-    PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
-    QUARANTINE_AFTER_FAILURES, QuarantineKind, Retention, RunCursor, RunFilter, RunMetadata,
-    RunRef, RunWorkflow, STICKY_GRACE, Secret, StartedBy, StoreError, Subscription, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations,
-    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    AcquireRunnable, Activation, CompiledScript, CreateRun, Enqueued, ExpiredRuns, FeedConsumer,
+    ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
+    ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
+    Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
+    StartedBy, StoreError, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate,
+    Tenant, TenantId, TenantScope, ToolDeclarations, TraceContext, Trigger, Watched,
+    WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 
 const LEASE: Duration = Duration::from_secs(30);
@@ -193,7 +192,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         runs_with_feed_items_left_are_not_archived
     );
     check!("journal", new_store(), deleting_a_run_erases_it);
-    check!("journal", new_store(), tenants_and_api_keys_are_stored);
+    check!("journal", new_store(), tenants_are_stored);
     check!(
         "journal",
         new_store(),
@@ -3379,7 +3378,7 @@ pub async fn deleting_a_run_erases_it<S: JournalStore>(store: &S) {
     );
 }
 
-pub async fn tenants_and_api_keys_are_stored<S: JournalStore>(store: &S) {
+pub async fn tenants_are_stored<S: JournalStore>(store: &S) {
     assert_eq!(store.get_tenant(&acme()).await.expect("get_tenant"), None);
     let mut tenant_record = Tenant::new(acme());
     tenant_record.active_run_quota = Some(100);
@@ -3406,56 +3405,6 @@ pub async fn tenants_and_api_keys_are_stored<S: JournalStore>(store: &S) {
         .map(|t| t.id.to_string())
         .collect();
     assert_eq!(ids, ["acme", "beta"]);
-
-    let key = ApiKey {
-        hash: Digest::of(b"rewind_sk_secret"),
-        tenant: acme(),
-        role: "agent".into(),
-        allowed_labels: BTreeMap::from([("conversation".to_owned(), "c1".to_owned())]),
-        created_at: T0,
-        revoked_at: None,
-    };
-    store.put_api_key(&key).await.expect("put_api_key");
-    assert!(matches!(
-        store.put_api_key(&key).await,
-        Err(StoreError::Conflict(_))
-    ));
-    assert_eq!(
-        store.find_api_key(key.hash).await.expect("find_api_key"),
-        Some(key.clone())
-    );
-    assert_eq!(
-        store
-            .find_api_key(Digest::of(b"other"))
-            .await
-            .expect("find_api_key"),
-        None
-    );
-    let revoked_at = later(T0, 5);
-    assert!(
-        store
-            .revoke_api_key(key.hash, revoked_at)
-            .await
-            .expect("revoke")
-    );
-    assert!(
-        !store
-            .revoke_api_key(key.hash, revoked_at)
-            .await
-            .expect("revoke")
-    );
-    assert!(
-        !store
-            .revoke_api_key(Digest::of(b"other"), revoked_at)
-            .await
-            .expect("revoke")
-    );
-    let found = store
-        .find_api_key(key.hash)
-        .await
-        .expect("find_api_key")
-        .expect("kept");
-    assert_eq!(found.revoked_at, Some(revoked_at));
 }
 
 pub async fn the_feed_is_claimed_and_acknowledged_per_consumer<S: JournalStore>(store: &S) {

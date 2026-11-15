@@ -1,16 +1,18 @@
-//! The HTTP API `/v1` (`archi/07-code-architecture.md`, "HTTP API `/v1`"), the inbound
-//! webhooks and the dashboard. The paths are `rewind_api::routes`; the DTOs are `rewind-api`'s.
+//! The HTTP API `/v1` (`archi/07-code-architecture.md`, "HTTP API `/v1`"), the dashboard's
+//! sign-in `/auth`, the inbound webhooks and the dashboard. The paths are `rewind_api::routes`;
+//! the DTOs are `rewind-api`'s.
 
 mod admin;
-
-pub(crate) use admin::ensure_tenant;
 mod dashboard;
 mod events;
 mod hooks;
+mod organization;
 mod reading;
+mod roles;
 mod runs;
 mod scripts;
 mod search;
+mod sign_in;
 mod subscriptions;
 mod tasks;
 mod toolsets;
@@ -22,7 +24,7 @@ use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::HeaderValue;
 use axum::middleware::{Next, from_fn_with_state};
 use axum::response::Response;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use rewind_api::headers::REWIND_VERSION;
 use rewind_api::routes;
@@ -36,7 +38,8 @@ use crate::error::ApiError;
 const BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// The routes of one listener. Over the embedded server's socket, no key is read: the caller is
-/// the tenant `local`. Over TCP, every request to `/v1` carries a key.
+/// the operator of the tenant `local`. Over TCP, every request to `/v1` carries a key or, with
+/// WorkOS on the api role, a member's access token.
 pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
     let api = Router::new()
         .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))
@@ -80,9 +83,43 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::SUBSCRIPTION, delete(subscriptions::delete))
         .route(routes::TOOL_STATS, get(reading::tool_stats))
         .route(routes::PAYLOAD, get(reading::payload))
-        .route(routes::API_KEYS, post(admin::create_key))
+        .route(
+            routes::API_KEYS,
+            post(admin::create_key).get(admin::list_keys),
+        )
         .route(routes::API_KEY, delete(admin::revoke_key))
-        .route(routes::WHOAMI, get(admin::whoami))
+        .route(routes::WHOAMI, get(organization::whoami))
+        .route(
+            routes::ORGANIZATIONS,
+            post(organization::create_organization),
+        )
+        .route(
+            routes::ORGANIZATION,
+            patch(organization::update_organization),
+        )
+        .route(routes::INVITATIONS, get(organization::my_invitations))
+        .route(
+            routes::INVITATION_ACCEPT,
+            post(organization::accept_invitation),
+        )
+        .route(routes::MEMBERS, get(organization::members))
+        .route(routes::MEMBER, delete(organization::remove_member))
+        .route(routes::MEMBER_GRANT, put(organization::set_member_grant))
+        .route(
+            routes::ORGANIZATION_INVITATIONS,
+            get(organization::invitations).post(organization::invite),
+        )
+        .route(
+            routes::ORGANIZATION_INVITATION,
+            delete(organization::revoke_invitation),
+        )
+        .route(
+            routes::ORGANIZATION_INVITATION_RESEND,
+            post(organization::resend_invitation),
+        )
+        .route(routes::ROLES, get(roles::list))
+        .route(routes::ROLE, put(roles::put).delete(roles::delete))
+        .route(routes::PERMISSIONS, get(admin::permissions))
         .route(routes::SERVER, get(admin::server))
         .route(routes::SERVER_STOP, post(admin::stop))
         .with_state(app.clone());
@@ -91,7 +128,24 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
     } else {
         api.layer(from_fn_with_state(app.clone(), authenticate))
     };
+    // The sign-in reads its own cookies, never a Bearer token; 404 without WorkOS.
     let public = Router::new()
+        .route(routes::AUTH_CONFIG, get(sign_in::config))
+        .route(routes::AUTH_GITHUB, get(sign_in::github))
+        .route(routes::AUTH_CALLBACK, get(sign_in::callback))
+        .route(routes::AUTH_MAGIC_AUTH, post(sign_in::send_magic_code))
+        .route(
+            routes::AUTH_MAGIC_AUTH_VERIFY,
+            post(sign_in::verify_magic_code),
+        )
+        .route(routes::AUTH_EMAIL_VERIFICATION, post(sign_in::verify_email))
+        .route(
+            routes::AUTH_ORGANIZATION,
+            post(sign_in::select_organization),
+        )
+        .route(routes::AUTH_SESSION, post(sign_in::session_state))
+        .route(routes::AUTH_WAITLIST, post(sign_in::waitlist))
+        .route(routes::AUTH_LOGOUT, post(sign_in::logout))
         .route(routes::HOOK, post(hooks::post))
         .fallback(dashboard::serve)
         .with_state(app.clone());

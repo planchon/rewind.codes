@@ -96,11 +96,14 @@ export class Tools {
   }
 }
 
-/** API keys, for an `admin` key. */
+/** API keys, for a caller holding `api_keys:read` and `api_keys:write`. */
 export class ApiKeys {
   constructor(private readonly transport: Transport) {}
 
-  /** Creates a key `rewind_sk_…` for a tenant. The answer holds the key, once. */
+  /**
+   * Creates a key `rewind_sk_…` with a name and a role; the operator may name another tenant. The answer holds the
+   * key, once.
+   */
   create(key: CreateApiKey, options: RequestOptions = {}): Promise<ApiKey> {
     return this.transport.send(() => this.transport.api.POST("/v1/api-keys", { body: key, signal: options.signal }), {
       retry: false,

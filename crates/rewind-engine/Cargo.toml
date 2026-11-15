@@ -8,8 +8,8 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-# The five conformance suites every adapter of `JournalStore`, `BlobStore`, `ReadModel`,
-# `SecretStore` and `SpanExporter` must pass.
+# The conformance suites every adapter of `JournalStore`, `AccessStore`, `BlobStore`,
+# `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
 conformance = []
 
 [dependencies]

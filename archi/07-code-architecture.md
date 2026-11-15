@@ -80,17 +80,19 @@ Dependencies only point down. Adapters never depend on each other.
 
 All ports are declared in `rewind-engine` (`crates/rewind-engine/src/ports/`), each with an in-memory
 adapter in `rewind-engine` that is the reference implementation of its contract. The ports with
-state, `JournalStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` and
+state, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` and
 `WebhookSender` have a conformance suite in `rewind-engine` (feature `conformance`, modules
-`conformance::journal`, `::blobs`, `::read_model`, `::secrets`, `::spans`, `::webhooks`), and
+`conformance::journal`, `::access`, `::blobs`, `::read_model`, `::secrets`, `::spans`, `::webhooks`), and
 every adapter of the port passes it. `SpanExporter` and `WebhookSender` have no read side: their
 suites read the backend through a collector or a receiver the adapter's test provides (the
 receiver of the HTTP sender checks each signature). The contracts of the other ports are not
-observable through the port alone (the egress rules): their adapters test them.
+observable through the port alone (the egress rules, an identity provider): their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts, toolsets and workflow versions by digest; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants and API keys; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `JournalStore` | Scripts, toolsets and workflow versions by digest; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `rewind-runtime` (V8); a fake in engine tests |
 | `ToolDispatcher` | Execute a tool call with its idempotency key and credentials | static responses and cassettes (engine, mock mode); TypeScript mocks (`rewind-runtime`, in a separate isolate); `rewind-mcp` (MCP servers, built-ins `http` and `webhook`) |
@@ -145,7 +147,6 @@ drop_payloads([(tenant, digest)], started) -> count
 runs_to_archive(now, limit)        archive_run(run, document, now)
 runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
-put_api_key(key) / find_api_key(hash) / revoke_api_key(hash, now)
 claim_feed(consumer, owner, now, lease_duration, limit)    ack_feed(ids)
 ```
 
@@ -172,7 +173,7 @@ Contracts, all covered by the conformance suite:
   existing run; `enqueue` with a key already seen for that run does nothing
   ([storage](06-storage-and-scale.md#idempotency-of-the-api)).
 - `create_run` returns `QuotaExceeded` when the tenant already has its maximum of active runs
-  ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)); a retried request with its key
+  ([tenancy](06-storage-and-scale.md#tenancy-identity-and-access)); a retried request with its key
   still returns its run.
 - `acquire_runnable` only returns runs whose epoch is in `epochs` and whose tenant is in
   `tenants`, and never a quarantined run. It draws a tenant among those with runnable work
@@ -261,6 +262,30 @@ Contracts, all covered by the conformance suite:
 
 ### The other ports
 
+- **`AccessStore`** (`crates/rewind-engine/src/ports/access.rs`): the server's authorization
+  data, apart from the journal, which the engine never reads.
+  `put_key(key) / find_key(hash) / list_keys(tenant) / revoke_key(hash, now)`: keys are kept by
+  the SHA-256 of their secret, with their tenant, name, creator and dates.
+  `put_role(role) / get_role(tenant, name) / list_roles(tenant) / delete_role(tenant, name) ->
+  Deleted | NotFound | InUse`: the tenant's own roles, their permissions as strings that the
+  server interprets; `InUse` while a grant points to the role, decided in the same transaction.
+  `put_grant(grant, keep) / grant(tenant, principal) / list_grants(tenant) /
+  delete_grant(tenant, principal, keep)`: one grant per (tenant, principal), a principal being
+  `user:<id>`, `key:<hash>` or `invitation:<id>`; `keep` names a role (`owner`) that the write
+  must not leave without a holder in the tenant, else it returns `LastHolder` and changes
+  nothing. `claim_grant(tenant, invitation, user)` moves an invitation's grant to the user who
+  accepted it, unless the user already has one. `set_default_role(tenant, role) /
+  default_role(tenant)`. Built-in roles are not stored: the server knows them.
+- **`IdentityProvider`** (`crates/rewind-engine/src/ports/identity.rs`): `authorization_url`
+  (GitHub), `authenticate_code`, `send_magic_code`, `authenticate_magic_code`, `verify_email`,
+  `select_organization`, `refresh`, each answering `Authenticated` (the user, the organization if
+  one is selected, the tokens) or the next step the provider asks for
+  (`OrganizationSelectionRequired`, `EmailVerificationRequired`, `SignUpClosed`);
+  `verify_access_token -> AccessClaims { user, session, organization, expires_at }`;
+  `revoke_session`, `join_waitlist`; organizations (`create`, `rename`, `delete`, `get`),
+  `user`, memberships (`of_user`, `of_organization`, `add`, `remove`), invitations (`invite`,
+  `of_organization`, `for_email`, `get`, `accept`, `resend`, `revoke`). Memberships and
+  invitations carry no role. Tokens are opaque to Rewind but for the access token's claims.
 - **`BlobStore`**: `put(tenant, digest, bytes)`, `get(tenant, digest)`, `delete(tenant,
   digest)`. Immutable bytes keyed by their SHA-256: payload values above the table tier (their
   canonical JSON, so the key is the payload's digest) and the journal documents of archived
@@ -320,12 +345,13 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | Crate | Layer | Contents |
 | --- | --- | --- |
 | `rewind-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
-| `rewind-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
+| `rewind-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryAccess`, `MemoryIdentity`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
 | `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
-| `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa), the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
+| `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa) of `/v1` and `/auth`, the catalog of permissions and the built-in roles, the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
 | `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog, heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
-| `rewind-store-turso` | adapter | embedded `JournalStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
-| `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `ReadModel` and `SecretStore` |
+| `rewind-store-turso` | adapter | embedded `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
+| `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `AccessStore`, `ReadModel` and `SecretStore` |
+| `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
 | `rewind-blob` | adapter | `BlobStore` on local files and S3 |
 | `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
 | `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts` (with `rewind:workflows`), prompt rendering; a workflow's own declarations |
@@ -348,8 +374,9 @@ through the API, and starts the embedded server by running `rewind server --embe
 separate process.
 
 `rewind-server` wires each adapter in its own module of `src/wiring/` (store, blobs, tools,
-checker, telemetry, webhooks, clock), picked by configuration: `--store turso:<path>` or
-`postgres://…`, `--blobs <directory>` or `s3://<bucket>`, `--otlp-endpoint`.
+checker, telemetry, webhooks, clock, identity), picked by configuration: `--store turso:<path>` or
+`postgres://…`, `--blobs <directory>` or `s3://<bucket>`, `--otlp-endpoint`, WorkOS's
+variables ([sign-in](#sign-in-auth)).
 
 ## Dependency rules
 
@@ -423,7 +450,8 @@ Nothing about the script is emitted during replay.
 | `rewind-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine, failure counts and attempts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
 | `rewind-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`rewind-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `REWIND_E2E_RECORD=1` records the journals again |
-| `rewind-store-turso`, `rewind-store-postgres` | The conformance suites of `JournalStore`, `ReadModel` and `SecretStore` |
+| `rewind-store-turso`, `rewind-store-postgres` | The conformance suites of `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` |
+| `rewind-workos` | Against a fake WorkOS over HTTP (wiremock): every call, every error mapped, access tokens signed with a test key; against WorkOS Staging when `WORKOS_API_KEY` and `WORKOS_CLIENT_ID` are set |
 | `rewind-blob` | The conformance suite of `BlobStore` |
 | `rewind-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
 | `rewind-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
@@ -438,8 +466,10 @@ clients. The evals use its DTOs, with the engine in process
 
 Conventions:
 
-- Authentication by an API key as a Bearer token. The key designates the tenant
-  ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
+- Authentication by a Bearer token: an API key, or a WorkOS access token for the dashboard. It
+  designates the tenant; the caller's grant says what it may do, and every endpoint requires one
+  permission of the catalog ([access](06-storage-and-scale.md#tenancy-identity-and-access)). A
+  missing permission is 403, with a message that names it.
 - `Idempotency-Key` on run creation (start and fork) and on signals
   ([idempotency](06-storage-and-scale.md#idempotency-of-the-api)).
 - Errors are `application/problem+json`, with a message written for a model. Their `type` is
@@ -450,54 +480,114 @@ Conventions:
   `api/openapi.json`; a test fails when it is stale. The SDK's and the dashboard's types are
   generated from it (`api/README.md`).
 
-| Group | Endpoint | Does |
-| --- | --- | --- |
-| Toolsets | `POST /v1/toolsets` | Registers and pins a toolset, with the workflows it names; `base` derives it from a pinned toolset; returns its declarations |
-| | `GET /v1/toolsets` | The tenant's toolsets, with their servers and tool names |
-| | `GET /v1/toolsets/{id}/declarations` | The declarations, `format=dts` or `prompt` |
-| | `GET /v1/toolsets/{id}/search` | `search_tools`, for large toolsets |
-| | `PUT /v1/toolsets/{id}/credentials` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
-| Workflows | `POST /v1/workflows` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, and saves it as a new version; returns its declarations |
-| | `GET /v1/workflows` | The tenant's workflows, each with its latest version |
-| | `GET /v1/workflows/{name}` | A workflow's versions, newest first |
-| Scripts | `POST /v1/check` | Type-check only |
-| | `POST /v1/test` | Runs a scenario in mock mode, in virtual time |
-| Runs | `POST /v1/runs` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script and a toolset, or a `workflow` (`triage` or `triage@<version>`) |
-| | `GET /v1/runs` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
-| | `GET /v1/runs/stats` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
-| | `GET /v1/runs/failures` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
-| | `GET /v1/runs/{id}` | The run's state |
-| | `GET /v1/runs/{id}/trace?format=llm` | The LLM trace |
-| | `GET /v1/runs/{id}/entries/{idx}` | One journal entry in full |
-| | `GET /v1/runs/{id}/events` | SSE, `follow=1` |
-| | `POST /v1/runs/{id}/signals/{name}` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
-| | `POST /v1/runs/{id}/cancel` | Cancels the run |
-| | `POST /v1/runs/{id}/fork` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)) |
-| | `GET /v1/runs/{id}/journal` | Exports the journal document; `?as=cassette` exports a cassette |
-| | `POST /v1/runs/{id}/release` | Takes the run out of quarantine |
-| | `POST /v1/runs/{id}/give-up` | Gives up a quarantined run |
-| | `PUT /v1/runs/{id}/credentials` | Sets or renews the run's credentials |
-| | `DELETE /v1/runs/{id}` | Erases the run, payloads included |
-| Host-tool tasks | `GET /v1/tasks` | Long-poll, filtered by toolset and tools |
-| | `POST /v1/tasks/{token}/heartbeat` | Extends the task's claim |
-| | `POST /v1/tasks/{token}/defer` | The handler answers later: the task is `deferred`, without heartbeats, until `complete` or `fail` |
-| | `POST /v1/tasks/{token}/complete` | The result; also later, asynchronously |
-| | `POST /v1/tasks/{token}/fail` | The failure |
-| | `POST /v1/tasks/{id}/approve` | Approval policy, parked tasks: the task goes on |
-| | `POST /v1/tasks/{id}/reject` | The call fails with a `ToolError` |
-| Webhooks | `POST /hooks/{token}` | Inbound, without authentication, at an unguessable URL: becomes a signal |
-| | `POST /v1/subscriptions` | Outbound: signed lifecycle events |
-| | `GET /v1/subscriptions` | Lists the subscriptions, without their secrets |
-| | `DELETE /v1/subscriptions/{id}` | Deletes a subscription |
-| Reading (dashboard) | `GET /v1/scripts` | Every distinct script, its runs, its tools |
-| | `GET /v1/scripts/{digest}` | One script's source |
-| | `GET /v1/tools/stats` | Latency, errors, retries |
-| | `GET /v1/payloads/{digest}` | A payload, on demand, through a run that holds it (`run`, required with a key limited to labels) |
-| Administration | `POST /v1/api-keys` | Creates an API key for a tenant, with its scope; keys are revocable |
-| | `DELETE /v1/api-keys/{id}` | Revokes a key |
-| | `GET /v1/whoami` | The key's tenant, role and allowed labels |
-| | `GET /v1/server` | The server's version, epochs and roles |
-| | `POST /v1/server/stop` | Stops the embedded server, when the CLI replaces it with one of its own version |
+| Group | Endpoint | Permission | Does |
+| --- | --- | --- | --- |
+| Toolsets | `POST /v1/toolsets` | `toolsets:write` | Registers and pins a toolset, with the workflows it names; `base` derives it from a pinned toolset; returns its declarations |
+|  | `GET /v1/toolsets` | `toolsets:read` | The tenant's toolsets, with their servers and tool names |
+|  | `GET /v1/toolsets/{id}/declarations` | `toolsets:read` | The declarations, `format=dts` or `prompt` |
+|  | `GET /v1/toolsets/{id}/search` | `toolsets:read` | `search_tools`, for large toolsets |
+|  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
+| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, and saves it as a new version; returns its declarations |
+|  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version |
+|  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first |
+| Scripts | `POST /v1/check` | `runs:start` | Type-check only |
+|  | `POST /v1/test` | `runs:start` | Runs a scenario in mock mode, in virtual time |
+| Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script and a toolset, or a `workflow` (`triage` or `triage@<version>`) |
+|  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
+|  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
+|  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
+|  | `GET /v1/runs/{id}` | `runs:read` | The run's state |
+|  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
+|  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
+|  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
+|  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
+|  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
+|  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)) |
+|  | `GET /v1/runs/{id}/journal` | `runs:read` | Exports the journal document; `?as=cassette` exports a cassette |
+|  | `POST /v1/runs/{id}/release` | `runs:quarantine` | Takes the run out of quarantine |
+|  | `POST /v1/runs/{id}/give-up` | `runs:quarantine` | Gives up a quarantined run |
+|  | `PUT /v1/runs/{id}/credentials` | `credentials:write` | Sets or renews the run's credentials |
+|  | `DELETE /v1/runs/{id}` | `runs:delete` | Erases the run, payloads included |
+| Host-tool tasks | `GET /v1/tasks` | `tasks:work` | Long-poll, filtered by toolset and tools |
+|  | `POST /v1/tasks/{token}/heartbeat` | `tasks:work` | Extends the task's claim |
+|  | `POST /v1/tasks/{token}/defer` | `tasks:work` | The handler answers later: the task is `deferred`, without heartbeats, until `complete` or `fail` |
+|  | `POST /v1/tasks/{token}/complete` | `tasks:work` | The result; also later, asynchronously |
+|  | `POST /v1/tasks/{token}/fail` | `tasks:work` | The failure |
+|  | `POST /v1/tasks/{id}/approve` | `tasks:approve` | Approval policy, parked tasks: the task goes on |
+|  | `POST /v1/tasks/{id}/reject` | `tasks:approve` | The call fails with a `ToolError` |
+| Webhooks | `POST /hooks/{token}` | none | Inbound, without authentication, at an unguessable URL: becomes a signal |
+|  | `POST /v1/subscriptions` | `subscriptions:write` | Outbound: signed lifecycle events |
+|  | `GET /v1/subscriptions` | `subscriptions:read` | Lists the subscriptions, without their secrets |
+|  | `DELETE /v1/subscriptions/{id}` | `subscriptions:write` | Deletes a subscription |
+| Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
+|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
+|  | `GET /v1/tools/stats` | `runs:read` | Latency, errors, retries |
+|  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a key limited to labels) |
+| Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, or the user with their email, name and picture), the grant (role, allowed labels), the permissions it holds; for a member, the organization and every organization of the user |
+| | `POST /v1/organizations` | a member, even without organization | Creates an organization: in WorkOS with the caller's membership, then the tenant and the caller's `owner` grant; if the second step fails, the organization is deleted in WorkOS |
+| | `PATCH /v1/organization` | `organization:write` | The organization's name and default role |
+| | `GET /v1/invitations` | a member, even without organization | The pending invitations sent to the caller's email |
+| | `POST /v1/invitations/{id}/accept` | a member, even without organization | Joins the invitation's organization; the invitation's pending grant becomes the caller's |
+| | `GET /v1/organization/members` | `members:read` | The organization's memberships in WorkOS, each with its grant |
+| | `PUT /v1/organization/members/{user}/grant` | `members:manage` | Sets the member's role and allowed labels |
+| | `DELETE /v1/organization/members/{user}` | `members:manage` | Deletes the member's grant, then their membership in WorkOS |
+| | `GET /v1/organization/invitations` | `members:read` | The organization's invitations, each with its pending grant |
+| | `POST /v1/organization/invitations` | `members:invite` | Invites an email with a role and allowed labels: the invitation in WorkOS, the pending grant in Rewind |
+| | `POST /v1/organization/invitations/{id}/resend` | `members:invite` | Sends the invitation again |
+| | `DELETE /v1/organization/invitations/{id}` | `members:invite` | Revokes the invitation and deletes its pending grant |
+| Access | `GET /v1/permissions` | any caller | The catalog: every permission with its description |
+| | `GET /v1/roles` | `roles:read` | The built-in roles and the tenant's own, with their permissions |
+| | `PUT /v1/roles/{name}` | `roles:write` | Creates or changes a role of the tenant |
+| | `DELETE /v1/roles/{name}` | `roles:write` | Deletes a role no grant points to (409 otherwise) |
+| | `GET /v1/api-keys` | `api_keys:read` | The tenant's keys, without their secret, each with its grant |
+| | `POST /v1/api-keys` | `api_keys:write` | Creates a key with a name, a role and allowed labels; an operator may name another tenant. The secret is only in this answer |
+| | `DELETE /v1/api-keys/{id}` | `api_keys:write` | Revokes a key |
+| Server | `GET /v1/server` | any caller | The server's version, epochs and roles |
+| | `POST /v1/server/stop` | the operator | Stops the embedded server, when the CLI replaces it with one of its own version |
+
+### Sign-in (`/auth`)
+
+The dashboard's sign-in, served by the api role when WorkOS is configured. These routes are for a
+browser only: they read and write the cookie `rewind_session`, and `/v1` never reads it. They are
+described in the OpenAPI document like `/v1`.
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /auth/config` | The sign-in methods (`github`, `magic_auth`) and whether sign-ups go through the waitlist; 404 without WorkOS, and the dashboard asks for an API key |
+| `GET /auth/github` | Redirects to WorkOS for GitHub, with a random `state` and the `invitation_token` of the page, both kept in the cookie `rewind_oauth` (5 minutes) |
+| `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/#/`); when the sign-in did not go through, to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`), never with a token or WorkOS's message |
+| `POST /auth/magic-auth` | Sends the 6-digit code to an email; the same answer whether the email has an account or not |
+| `POST /auth/magic-auth/verify` | Checks the code |
+| `POST /auth/email-verification` | The code WorkOS sends when it requires the email to be verified |
+| `POST /auth/organization` | The organization chosen when WorkOS asks for one |
+| `POST /auth/session` | The current state: a valid access token, refreshed when less than a minute is left; with `organizationId`, switches organization. Writes a member's first grant in an organization |
+| `POST /auth/waitlist` | Puts an email on the waitlist |
+| `POST /auth/logout` | Revokes the session in WorkOS and clears the cookie |
+
+- `POST /auth/magic-auth` and `POST /auth/waitlist` answer 202 and `POST /auth/logout` 204, with no
+  body. Every other answer but the redirects is an `AuthState`: `authenticated` (the access token, its
+  expiry, the user, the organization or none), `organization_selection_required` (the
+  organizations), `email_verification_required` (the email), `sign_up_closed` (the email, for the
+  waitlist), or 401 without a session.
+- `rewind_session` holds the access token, the refresh token and the pending token of a step,
+  sealed with AES-256-GCM (`workos`'s `seal`, keyed by `WORKOS_COOKIE_PASSWORD`). Both cookies
+  are `HttpOnly`, `Secure` and `Path=/auth`. `rewind_session` is `SameSite=Strict`; `rewind_oauth`
+  is `SameSite=Lax`, since the browser comes back to `/auth/callback` from GitHub and WorkOS, a
+  navigation from another site, which a `Strict` cookie would miss. The callback only reads it. A `POST` takes a JSON body only (415
+  otherwise), which a form of another site cannot send without a preflight.
+- The server always keeps the refresh token WorkOS returns last. The access token lives 5
+  minutes (WorkOS's setting); the browser keeps it in memory only.
+
+| Variable | Value |
+| --- | --- |
+| `WORKOS_CLIENT_ID` | The WorkOS environment's client, `client_…` |
+| `WORKOS_API_KEY` | Its secret key, `sk_…`. On the api role only, never on a worker |
+| `WORKOS_COOKIE_PASSWORD` | 32 random bytes in hexadecimal (64 characters). Changing it signs everyone out |
+| `WORKOS_REDIRECT_URI` | `https://app.rewind.codes/auth/callback`: registered in WorkOS, on the dashboard's origin |
+
+The four are given together or not at all (exit code 64 otherwise). Without them the server has
+no `/auth` and accepts only API keys; keys still get their rights from grants and roles. A worker
+accepts only API keys: the dashboard never calls the routes the edge sends to workers.
 
 ## Embedded server and CLI
 
@@ -517,8 +607,8 @@ and worker.
 | The CLI's version differs from the server's | The CLI asks the server to stop and starts a new one. |
 | 10 minutes pass without requests and without work in progress | The server stops. A sleeping run resumes at the next `rewind` command. |
 
-- The socket is mode 0600 and takes no API key. The embedded server has one implicit tenant,
-  `local`.
+- The socket is mode 0600 and takes no token. Its one caller is the operator of the implicit
+  tenant `local`.
 - `rewind server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
 - Virtual time is an option of the server (`--virtual-time`, `--real-time`), kept in the
   `meta` table.
@@ -595,8 +685,9 @@ Its build is what `rewind-server` serves:
 | Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
 | Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
-| API | `/v1` on the same origin. Only `GET` requests, so a `reader` key is enough. The operator types the key; the browser keeps it for the tab, or on the device when asked |
+| Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
+| API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys are shown to whoever holds their permissions |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
-| Resources | None from another origin: the fonts are in the build. No inline script |
+| Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 
 `dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.

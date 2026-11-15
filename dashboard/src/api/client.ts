@@ -1,14 +1,29 @@
-// The dashboard's client of the API /v1: typed by the generated `paths`, authenticated with the
-// operator's key, and read-only. Every call is a GET, so a `reader` key is enough.
+// The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
+// with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
+// `/auth`, which read and write the session cookie and never see a token.
 import createClient from "openapi-fetch";
 import type {
+  ApiKey,
+  AuthConfig,
+  AuthState,
+  CreateApiKey,
+  CreateInvitation,
   Entry,
   FailureGroupPage,
   FailuresQuery,
+  Grant,
+  Identity,
+  Invitation,
   ListRunsQuery,
   ListScriptsQuery,
+  Member,
+  Organization,
+  OrganizationSettings,
+  PermissionInfo,
   Problem,
+  PutRole,
   paths,
+  Role,
   Run,
   RunPage,
   RunStats,
@@ -16,9 +31,11 @@ import type {
   Script,
   ScriptPage,
   ServerInfo,
+  SetGrant,
   ToolStatsPage,
   ToolStatsQuery,
   Trace,
+  UpdateOrganization,
 } from "./types";
 
 const PROBLEM_PREFIX = "urn:rewind:problem:";
@@ -77,11 +94,27 @@ export function toProblem(status: number, body: unknown, statusText = ""): Probl
   };
 }
 
+async function errorOf(response: Response): Promise<ApiError> {
+  const text = await response.text().catch(() => "");
+  let body: unknown = text;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    // Not JSON: keep the text.
+  }
+  return new ApiError(response.status, toProblem(response.status, body, response.statusText));
+}
+
 export interface ApiOptions {
   /** The origin serving the API, such as `https://rewind.example.com`. */
   baseUrl: string;
-  /** The operator's key, `rewind_sk_…`, or `null` to send none. */
-  key: () => string | null;
+  /** The Bearer token for `/v1`: an API key `rewind_sk_…`, an access token, or `null` for none. */
+  token: () => string | null;
+  /**
+   * Called when `/v1` refuses the token (401): renews it, and answers whether the request is
+   * worth sending again, once. A key cannot be renewed: leave it out.
+   */
+  renew?: () => Promise<boolean>;
   fetch?: (request: Request) => Promise<Response>;
 }
 
@@ -93,51 +126,72 @@ interface Answer<T> {
   response: Response;
 }
 
+/** An `AuthState`, with how far the server's clock is ahead of the browser's. */
+export interface AuthAnswer {
+  state: AuthState;
+  /** The server's clock minus the browser's, from the answer's `Date` header; 0 without one. */
+  skewMs: number;
+}
+
+function skewOf(response: Response): number {
+  const date = response.headers.get("Date");
+  const at = date ? Date.parse(date) : Number.NaN;
+  return Number.isFinite(at) ? at - Date.now() : 0;
+}
+
+/** Whether a request goes to `/v1`, the only routes that take the Bearer token. */
+function isV1(url: string): boolean {
+  return new URL(url).pathname.startsWith("/v1/");
+}
+
 export class Api {
   readonly baseUrl: string;
   readonly client: Client;
-  private readonly key: () => string | null;
+  private readonly token: () => string | null;
+  private readonly renew: (() => Promise<boolean>) | undefined;
   private readonly doFetch: (request: Request) => Promise<Response>;
 
   constructor(options: ApiOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.key = options.key;
+    this.token = options.token;
+    this.renew = options.renew;
     this.doFetch = options.fetch ?? ((request) => globalThis.fetch(request));
     this.client = createClient<paths>({
       baseUrl: this.baseUrl,
-      fetch: (request) => this.doFetch(request),
-    });
-    this.client.use({
-      onRequest: ({ request }) => {
-        this.authorize(request.headers);
-        return request;
-      },
+      fetch: (request) => this.send(request),
     });
   }
 
-  /** Adds the key to a request's headers. */
+  /** Adds the token to a request's headers. */
   authorize(headers: Headers): void {
-    const key = this.key();
-    if (key) headers.set("Authorization", `Bearer ${key}`);
+    const token = this.token();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  private withToken(request: Request): Request {
+    const headers = new Headers(request.headers);
+    this.authorize(headers);
+    return new Request(request, { headers });
+  }
+
+  /**
+   * Sends a request. To `/v1`, with the token: a refused token is renewed once, and the request
+   * sent again with the new one. To `/auth`, as it is: the session is the cookie's.
+   */
+  private async send(request: Request): Promise<Response> {
+    if (!isV1(request.url)) return this.doFetch(request);
+    const again = this.renew && this.token() !== null ? request.clone() : null;
+    const response = await this.doFetch(this.withToken(request));
+    if (response.status !== 401 || !again || !this.renew) return response;
+    if (!(await this.renew())) return response;
+    await response.body?.cancel().catch(() => undefined);
+    return this.doFetch(this.withToken(again));
   }
 
   /** A request outside the typed client (the event stream, downloads), authenticated. */
   async raw(path: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    this.authorize(headers);
-    const response = await this.doFetch(
-      new Request(`${this.baseUrl}${path}`, { ...init, headers }),
-    );
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      let body: unknown = text;
-      try {
-        body = JSON.parse(text);
-      } catch {
-        // Not JSON: keep the text.
-      }
-      throw new ApiError(response.status, toProblem(response.status, body, response.statusText));
-    }
+    const response = await this.send(new Request(`${this.baseUrl}${path}`, init));
+    if (!response.ok) throw await errorOf(response);
     return response;
   }
 
@@ -219,5 +273,182 @@ export class Api {
       headers: { Accept: "application/json" },
     });
     return response.blob();
+  }
+
+  // Sign-in (`/auth`). Every POST sends JSON: the server refuses anything else (415).
+
+  /** How to sign in; `null` when the server has no sign-in (404) and takes an API key. */
+  async authConfig(): Promise<AuthConfig | null> {
+    const answer = await this.client.GET("/auth/config");
+    if (answer.response.status === 404) return null;
+    return this.unwrap(answer);
+  }
+
+  private authState(answer: Answer<AuthState>): AuthAnswer {
+    return { state: this.unwrap(answer), skewMs: skewOf(answer.response) };
+  }
+
+  /**
+   * The session's state, its access token refreshed when less than a minute is left; with
+   * `organizationId`, a switch to that organization.
+   */
+  async session(organizationId?: string): Promise<AuthAnswer> {
+    return this.authState(
+      await this.client.POST("/auth/session", {
+        body: organizationId ? { organizationId } : {},
+      }),
+    );
+  }
+
+  /** Sends a 6-digit code to the email. */
+  async sendMagicCode(email: string, invitationToken: string | null): Promise<void> {
+    this.unwrap(
+      await this.client.POST("/auth/magic-auth", {
+        body: { email, ...(invitationToken ? { invitationToken } : {}) },
+      }),
+    );
+  }
+
+  async verifyMagicCode(
+    email: string,
+    code: string,
+    invitationToken: string | null,
+  ): Promise<AuthAnswer> {
+    return this.authState(
+      await this.client.POST("/auth/magic-auth/verify", {
+        body: { email, code, ...(invitationToken ? { invitationToken } : {}) },
+      }),
+    );
+  }
+
+  async verifyEmail(code: string): Promise<AuthAnswer> {
+    return this.authState(await this.client.POST("/auth/email-verification", { body: { code } }));
+  }
+
+  async selectOrganization(organizationId: string): Promise<AuthAnswer> {
+    return this.authState(
+      await this.client.POST("/auth/organization", { body: { organizationId } }),
+    );
+  }
+
+  async joinWaitlist(email: string): Promise<void> {
+    this.unwrap(await this.client.POST("/auth/waitlist", { body: { email } }));
+  }
+
+  /** Revokes the session and clears its cookie. A session already gone counts as signed out. */
+  async signOut(): Promise<void> {
+    const response = await this.doFetch(
+      new Request(`${this.baseUrl}/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+    );
+    if (response.ok || response.status === 401) return;
+    throw await errorOf(response);
+  }
+
+  /** Where the browser goes to sign in with GitHub. */
+  githubUrl(invitationToken: string | null): string {
+    const query = invitationToken ? `?invitationToken=${encodeURIComponent(invitationToken)}` : "";
+    return `${this.baseUrl}/auth/github${query}`;
+  }
+
+  // The organization and access (`/v1`).
+
+  async whoami(signal?: AbortSignal): Promise<Identity> {
+    return this.unwrap(await this.client.GET("/v1/whoami", { signal }));
+  }
+
+  async createOrganization(name: string): Promise<Organization> {
+    return this.unwrap(await this.client.POST("/v1/organizations", { body: { name } }));
+  }
+
+  async updateOrganization(body: UpdateOrganization): Promise<OrganizationSettings> {
+    return this.unwrap(await this.client.PATCH("/v1/organization", { body }));
+  }
+
+  /** The pending invitations sent to the caller's email. */
+  async myInvitations(signal?: AbortSignal): Promise<Invitation[]> {
+    return this.unwrap(await this.client.GET("/v1/invitations", { signal })).invitations;
+  }
+
+  async acceptInvitation(id: string): Promise<Invitation> {
+    return this.unwrap(
+      await this.client.POST("/v1/invitations/{id}/accept", { params: { path: { id } } }),
+    );
+  }
+
+  async members(signal?: AbortSignal): Promise<Member[]> {
+    return this.unwrap(await this.client.GET("/v1/organization/members", { signal })).members;
+  }
+
+  async setGrant(user: string, body: SetGrant): Promise<Grant> {
+    return this.unwrap(
+      await this.client.PUT("/v1/organization/members/{user}/grant", {
+        params: { path: { user } },
+        body,
+      }),
+    );
+  }
+
+  async removeMember(user: string): Promise<void> {
+    this.unwrap(
+      await this.client.DELETE("/v1/organization/members/{user}", { params: { path: { user } } }),
+    );
+  }
+
+  async invitations(signal?: AbortSignal): Promise<Invitation[]> {
+    return this.unwrap(await this.client.GET("/v1/organization/invitations", { signal }))
+      .invitations;
+  }
+
+  async invite(body: CreateInvitation): Promise<Invitation> {
+    return this.unwrap(await this.client.POST("/v1/organization/invitations", { body }));
+  }
+
+  async resendInvitation(id: string): Promise<Invitation> {
+    return this.unwrap(
+      await this.client.POST("/v1/organization/invitations/{id}/resend", {
+        params: { path: { id } },
+      }),
+    );
+  }
+
+  async revokeInvitation(id: string): Promise<void> {
+    this.unwrap(
+      await this.client.DELETE("/v1/organization/invitations/{id}", { params: { path: { id } } }),
+    );
+  }
+
+  async permissions(signal?: AbortSignal): Promise<PermissionInfo[]> {
+    return this.unwrap(await this.client.GET("/v1/permissions", { signal })).permissions;
+  }
+
+  async roles(signal?: AbortSignal): Promise<Role[]> {
+    return this.unwrap(await this.client.GET("/v1/roles", { signal })).roles;
+  }
+
+  async putRole(name: string, body: PutRole): Promise<Role> {
+    return this.unwrap(
+      await this.client.PUT("/v1/roles/{name}", { params: { path: { name } }, body }),
+    );
+  }
+
+  async deleteRole(name: string): Promise<void> {
+    this.unwrap(await this.client.DELETE("/v1/roles/{name}", { params: { path: { name } } }));
+  }
+
+  async apiKeys(signal?: AbortSignal): Promise<ApiKey[]> {
+    return this.unwrap(await this.client.GET("/v1/api-keys", { signal })).keys;
+  }
+
+  /** Creates a key: the answer holds its secret, once. */
+  async createApiKey(body: CreateApiKey): Promise<ApiKey> {
+    return this.unwrap(await this.client.POST("/v1/api-keys", { body }));
+  }
+
+  async revokeApiKey(id: string): Promise<void> {
+    this.unwrap(await this.client.DELETE("/v1/api-keys/{id}", { params: { path: { id } } }));
   }
 }

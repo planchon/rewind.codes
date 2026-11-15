@@ -12,6 +12,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
+use rewind_api::access::Permission;
 use rewind_api::common::{Labels, timestamp};
 use rewind_api::toolsets::Declarations;
 use rewind_api::workflows::{
@@ -24,7 +25,7 @@ use rewind_engine::ports::{
 use rewind_engine::{RegisterError, RegisterWorkflow};
 
 use crate::app::App;
-use crate::auth::{Access, Caller};
+use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
 use crate::http::toolsets;
@@ -42,7 +43,7 @@ pub(super) async fn create(
     caller: Caller,
     Body(request): Body<CreateWorkflow>,
 ) -> Result<Response, ApiError> {
-    caller.allow(Access::Write)?;
+    caller.require(Permission::ToolsetsWrite)?;
     let toolset = toolsets::parse_digest(&request.toolset)?;
     let schemas = WorkflowSchemas {
         input: request.input,
@@ -100,7 +101,7 @@ pub(super) async fn list(
     caller: Caller,
     Query(query): Query<WorkflowQuery>,
 ) -> Result<Json<WorkflowPage>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::ToolsetsRead)?;
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let found = app
         .store
@@ -127,7 +128,7 @@ pub(super) async fn versions(
     caller: Caller,
     Path(name): Path<String>,
 ) -> Result<Json<WorkflowVersions>, ApiError> {
-    caller.allow(Access::Read)?;
+    caller.require(Permission::ToolsetsRead)?;
     let versions = app
         .store
         .workflow_versions(&caller.tenant, &name, &caller.labels)

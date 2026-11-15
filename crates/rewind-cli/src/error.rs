@@ -112,6 +112,8 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::RunEnded
                 | ProblemType::NotQuarantined
                 | ProblemType::TaskNotWaiting
+                | ProblemType::RoleInUse
+                | ProblemType::LastOwner
                 | ProblemType::TaskGone
                 | ProblemType::QuotaExceeded
                 | ProblemType::Unauthorized
@@ -129,7 +131,10 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
             ) => Exit::Usage,
             Some(ProblemType::InvalidScript) => Exit::ScriptRefused,
             Some(
-                ProblemType::Internal | ProblemType::ToolsetUnavailable | ProblemType::Unavailable,
+                ProblemType::Internal
+                | ProblemType::ToolsetUnavailable
+                | ProblemType::IdentityUnavailable
+                | ProblemType::Unavailable,
             ) => Exit::Internal,
             // A problem this build does not know: by its status.
             None => match problem.status {

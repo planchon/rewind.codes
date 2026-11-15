@@ -122,8 +122,8 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | `save_workflow({ name, description, code, input, output, signals })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. The agent's later scripts can start it and signal its runs. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
-the lifecycle webhooks. An API key limited to these labels makes the scope hold for every
-tool that takes a `run_id` ([tenancy](06-storage-and-scale.md#tenancy-and-authentication)).
+the lifecycle webhooks. An API key whose grant is limited to these labels makes the scope hold for every
+tool that takes a `run_id` ([access](06-storage-and-scale.md#tenancy-identity-and-access)).
 
 ### What `run_script` returns
 

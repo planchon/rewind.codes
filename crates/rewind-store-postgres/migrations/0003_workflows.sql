@@ -1,4 +1,4 @@
--- Version 2: workflow versions, the workflow metadata of runs, and the watchers of a run's end
+-- Version 3: workflow versions, the workflow metadata of runs, and the watchers of a run's end
 -- (`archi/06-storage-and-scale.md`, "Tables"; `archi/03-execution.md`, "Workflows across runs").
 
 -- A workflow version: its `rewind-format` document, whose bytes hash to `version`, with the labels

@@ -8,7 +8,7 @@ mod support;
 
 use std::collections::BTreeMap;
 
-use rewind_api::admin::Role;
+use rewind_api::access::BuiltInRole;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{RunFilter, StartRun};
 use rewind_api::toolsets::CreateToolset;
@@ -71,7 +71,7 @@ fn triage(toolset: &str, script: &str) -> CreateWorkflow {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let toolset = harness
         .create_toolset(&CreateToolset::default())
         .await
@@ -229,7 +229,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
     let server = TestServer::start(&[]).await;
-    let harness = server.key(Role::Harness, &[]).await;
+    let harness = server.key(BuiltInRole::Harness, &[]).await;
     let toolset = harness
         .create_toolset(&CreateToolset::default())
         .await
@@ -274,7 +274,9 @@ async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
     );
 
     // A key limited to labels only sees the workflows saved with its labels.
-    let scoped = server.key(Role::Harness, &[("conversation", "c-1")]).await;
+    let scoped = server
+        .key(BuiltInRole::Harness, &[("conversation", "c-1")])
+        .await;
     assert!(
         scoped
             .list_workflows(&WorkflowQuery::default())

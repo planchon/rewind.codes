@@ -121,7 +121,7 @@ else
     local admin key
     admin="$(sed -n 's/^REWIND_ADMIN_KEY=//p' "$WORK/env")"
     key="$(curl -fsS "$URL/v1/api-keys" -H "Authorization: Bearer $admin" \
-      -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness"}' |
+      -H 'content-type: application/json' -d '{"tenant": "sdk", "role": "harness", "name": "sdk live test"}' |
       sed -n 's/.*"key":"\(rewind_sk_[A-Za-z0-9]*\)".*/\1/p')"
     [ -n "$key" ] || return 1
     pnpm --dir "$ROOT/sdk/typescript" install --frozen-lockfile >/dev/null &&

@@ -6,8 +6,10 @@
 //!            [--role api|worker]… [--public-url https://…] …
 //! ```
 //!
-//! Every option also reads an environment variable (`REWIND_*`), for deployments. The secrets
-//! (`--master-key`, `--admin-key`, S3 keys) are never printed.
+//! Every option also reads an environment variable (`REWIND_*`), for deployments; WorkOS's four
+//! keep WorkOS's names (`WORKOS_*`, `archi/07-code-architecture.md`, "Sign-in (`/auth`)"). The
+//! secrets (`--master-key`, `--admin-key`, S3 keys, WorkOS's API key and cookie password) are
+//! never printed.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -114,8 +116,8 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_MASTER_KEY", hide_env_values = true)]
     pub master_key: Option<String>,
 
-    /// An API key (`rewind_sk_…`) with the role `admin`, registered at start: the first key, from
-    /// which the others are made with `POST /v1/api-keys`.
+    /// An API key (`rewind_sk_…`) with the role `operator`, registered at start: the first key,
+    /// from which the others are made with `POST /v1/api-keys`.
     #[arg(long, env = "REWIND_ADMIN_KEY", hide_env_values = true)]
     pub admin_key: Option<String>,
 
@@ -232,6 +234,27 @@ pub struct ServerArgs {
     /// kept. 24 hours by default.
     #[arg(long, env = "REWIND_PAYLOAD_GRACE", value_parser = parse_duration)]
     pub payload_grace: Option<Duration>,
+
+    /// The WorkOS environment's client, `client_…`: with the three other `WORKOS_*`, the
+    /// dashboard's sign-in (`/auth`) and members' access tokens on `/v1`. The four are given
+    /// together or not at all; without them the server accepts only API keys. Used by the api
+    /// role only; the embedded server ignores them.
+    #[arg(long, env = "WORKOS_CLIENT_ID")]
+    pub workos_client_id: Option<String>,
+
+    /// The WorkOS environment's secret key, `sk_…`. On the api role only, never on a worker.
+    #[arg(long, env = "WORKOS_API_KEY", hide_env_values = true)]
+    pub workos_api_key: Option<String>,
+
+    /// 32 random bytes in hexadecimal (64 characters): the key of the sealed sign-in cookies.
+    /// Changing it signs everyone out.
+    #[arg(long, env = "WORKOS_COOKIE_PASSWORD", hide_env_values = true)]
+    pub workos_cookie_password: Option<String>,
+
+    /// Where WorkOS sends the browser back after GitHub: the dashboard's origin and
+    /// `/auth/callback` (`https://app.rewind.codes/auth/callback`), registered in WorkOS.
+    #[arg(long, env = "WORKOS_REDIRECT_URI")]
+    pub workos_redirect_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -276,6 +299,72 @@ fn parse_bytes(text: &str) -> Result<u64, String> {
     number
         .checked_mul(unit)
         .ok_or_else(|| format!("{text:?} is too large"))
+}
+
+/// The WorkOS environment of the dashboard's sign-in: the four `WORKOS_*`, checked.
+#[derive(Clone)]
+pub(crate) struct WorkOsConfig {
+    pub(crate) client_id: String,
+    pub(crate) api_key: String,
+    pub(crate) cookie_seal: rewind_workos::CookieSeal,
+    pub(crate) redirect_uri: String,
+}
+
+impl fmt::Debug for WorkOsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WorkOsConfig")
+            .field("client_id", &self.client_id)
+            .field("redirect_uri", &self.redirect_uri)
+            .finish_non_exhaustive()
+    }
+}
+
+impl ServerArgs {
+    /// The four `WORKOS_*`: all of them, or none (`None`).
+    fn workos(&self) -> Result<Option<WorkOsConfig>, ConfigError> {
+        let given = [
+            ("WORKOS_CLIENT_ID", &self.workos_client_id),
+            ("WORKOS_API_KEY", &self.workos_api_key),
+            ("WORKOS_COOKIE_PASSWORD", &self.workos_cookie_password),
+            ("WORKOS_REDIRECT_URI", &self.workos_redirect_uri),
+        ];
+        let missing: Vec<&str> = given
+            .iter()
+            .filter(|(_, value)| value.as_deref().is_none_or(|value| value.trim().is_empty()))
+            .map(|(name, _)| *name)
+            .collect();
+        if missing.len() == given.len() {
+            return Ok(None);
+        }
+        if !missing.is_empty() {
+            return Err(ConfigError::new(format!(
+                "the four WORKOS_* variables are given together or not at all: {} missing. \
+                 Without them the server has no sign-in and accepts only API keys",
+                missing.join(", ")
+            )));
+        }
+        let value = |value: &Option<String>| value.as_deref().unwrap_or_default().trim().to_owned();
+        let cookie_seal = rewind_workos::CookieSeal::new(&value(&self.workos_cookie_password))
+            .map_err(|_| {
+                ConfigError::new(
+                    "WORKOS_COOKIE_PASSWORD must be 32 random bytes in hexadecimal: 64 \
+                     characters 0-9 and a-f (openssl rand -hex 32)",
+                )
+            })?;
+        let redirect_uri = value(&self.workos_redirect_uri);
+        if !(redirect_uri.starts_with("https://") || redirect_uri.starts_with("http://")) {
+            return Err(ConfigError::new(
+                "WORKOS_REDIRECT_URI must be an http:// or https:// URL: the dashboard's origin \
+                 and /auth/callback, as registered in WorkOS",
+            ));
+        }
+        Ok(Some(WorkOsConfig {
+            client_id: value(&self.workos_client_id),
+            api_key: value(&self.workos_api_key),
+            cookie_seal,
+            redirect_uri,
+        }))
+    }
 }
 
 /// How the server listens.
@@ -325,6 +414,9 @@ pub(crate) struct Config {
     pub(crate) cache: CacheConfig,
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
+    /// The dashboard's sign-in, for the api role: `None` without WorkOS, on a worker alone and
+    /// on the embedded server.
+    pub(crate) workos: Option<WorkOsConfig>,
 }
 
 impl Config {
@@ -463,6 +555,9 @@ impl ServerArgs {
                 max_ttl,
                 cache,
                 retention,
+                // The embedded server's socket takes no token: WorkOS's variables, which a
+                // developer's shell may hold for another project, do not apply to it.
+                workos: None,
             });
         }
 
@@ -514,6 +609,13 @@ impl ServerArgs {
                 "--admin-key must be a key rewind_sk_… of at least 32 characters",
             ));
         }
+        let workos = self.workos()?;
+        if workos.is_some() && !api {
+            tracing::warn!(
+                "the WORKOS_* variables are set on a worker, which accepts only API keys: they \
+                 are not used, and WORKOS_API_KEY belongs on the api role only"
+            );
+        }
         Ok(Config {
             listen: Listen::Tcp(self.listen),
             api,
@@ -542,6 +644,7 @@ impl ServerArgs {
             max_ttl,
             cache,
             retention,
+            workos: workos.filter(|_| api),
         })
     }
 }
@@ -687,6 +790,74 @@ mod tests {
         let mut longer = base.to_vec();
         longer.extend(["--default-ttl", "8d", "--max-ttl", "7d"]);
         assert!(parse(&longer).is_err(), "the default TTL above the maximum");
+    }
+
+    #[test]
+    fn workos_takes_its_four_variables_or_none() {
+        let key = BASE64.encode([7u8; 32]);
+        let password = "0123456789abcdef".repeat(4);
+        let all = [
+            ("--workos-client-id", "client_01JTEST"),
+            ("--workos-api-key", "sk_test_secret"),
+            ("--workos-cookie-password", password.as_str()),
+            (
+                "--workos-redirect-uri",
+                "https://app.rewind.codes/auth/callback",
+            ),
+        ];
+        let deployed = |workos: &[(&str, &str)], role: &str| {
+            let mut args = vec![
+                "--store",
+                "turso:/tmp/j.db",
+                "--master-key",
+                &key,
+                "--role",
+                role,
+            ];
+            for (flag, value) in workos {
+                args.extend([*flag, *value]);
+            }
+            parse(&args)
+        };
+        let none = deployed(&[], "api").unwrap_or_else(|error| panic!("{error}"));
+        assert!(none.workos.is_none());
+        let configured = deployed(&all, "api").unwrap_or_else(|error| panic!("{error}"));
+        let workos = configured.workos.expect("WorkOS is configured");
+        assert_eq!(workos.client_id, "client_01JTEST");
+        assert!(!format!("{workos:?}").contains("sk_test_secret"));
+        for left_out in 0..all.len() {
+            let some: Vec<_> = all
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| *at != left_out)
+                .map(|(_, flag)| *flag)
+                .collect();
+            let error = deployed(&some, "api").unwrap_err().to_string();
+            assert!(error.contains("together or not at all"), "{error}");
+        }
+        let mut short = all;
+        short[2].1 = "abcd";
+        let error = deployed(&short, "api").unwrap_err().to_string();
+        assert!(error.contains("WORKOS_COOKIE_PASSWORD"), "{error}");
+        assert!(
+            !error.contains("abcd"),
+            "the password is not printed: {error}"
+        );
+        let mut relative = all;
+        relative[3].1 = "/auth/callback";
+        assert!(deployed(&relative, "api").is_err());
+
+        let worker = deployed(&all, "worker").unwrap_or_else(|error| panic!("{error}"));
+        assert!(worker.workos.is_none(), "a worker accepts only API keys");
+        let mut embedded = vec!["--embedded"];
+        for (flag, value) in &all[..2] {
+            embedded.extend([*flag, *value]);
+        }
+        let embedded = parse(&embedded).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            embedded.workos.is_none(),
+            "the embedded server ignores them"
+        );
     }
 
     #[test]

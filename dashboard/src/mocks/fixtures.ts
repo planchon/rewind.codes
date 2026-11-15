@@ -1,7 +1,9 @@
 // A small world of scripts and runs for the mocked API: every status, a quarantine, a fork, a
 // ten-day sleep, retries, a payload above the inline limit and, for `pnpm dev:mock`, a run that
-// goes on live. Times are relative to `now`.
+// goes on live. Times are relative to `now`. Who may read them is the access world's
+// (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
 import type { Labels, Quarantine, Run, Waiting } from "../api/types";
+import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { fakeDigest, JournalBuilder } from "./journal";
 
 const SECOND = 1_000;
@@ -42,9 +44,11 @@ export interface World {
   scripts: ScriptFixture[];
   runs: RunFixture[];
   payloads: Map<string, unknown>;
-  /** When set, every request must carry `Authorization: Bearer <requireKey>`. */
+  /** The operator's key: when set, every request must carry a key or an access token. */
   requireKey?: string;
   embedded: boolean;
+  /** Identity and access: the sign-in, organizations, roles, grants, API keys. */
+  access: AccessWorld;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -348,8 +352,14 @@ export interface WorldOptions {
   now: number;
   /** Adds a run whose entries keep arriving after `now`, for `pnpm dev:mock`. */
   live?: boolean;
-  requireKey?: string;
+  requireKey?: string | undefined;
   embedded?: boolean;
+  /** WorkOS on this server: members sign in, and the runs are the organization Acme's. */
+  workos?: AccessOptions["workos"];
+  tokenTtlMs?: number;
+  githubEmail?: string;
+  /** Where the codes and invitation links a deployment would email go. */
+  log?: (line: string) => void;
 }
 
 export function createWorld(options: WorldOptions): World {
@@ -1123,6 +1133,13 @@ export function createWorld(options: WorldOptions): World {
     runs,
     payloads,
     embedded: options.embedded ?? false,
+    access: createAccessWorld({
+      requireKey: options.requireKey,
+      ...(options.workos !== undefined ? { workos: options.workos } : {}),
+      ...(options.tokenTtlMs !== undefined ? { tokenTtlMs: options.tokenTtlMs } : {}),
+      ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
+      ...(options.log ? { log: options.log } : {}),
+    }),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   return world;

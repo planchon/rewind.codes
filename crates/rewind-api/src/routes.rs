@@ -47,14 +47,41 @@ pub const SUBSCRIPTION: &str = "/v1/subscriptions/{id}";
 pub const TOOL_STATS: &str = "/v1/tools/stats";
 pub const PAYLOAD: &str = "/v1/payloads/{digest}";
 
+pub const WHOAMI: &str = "/v1/whoami";
+pub const ORGANIZATIONS: &str = "/v1/organizations";
+pub const ORGANIZATION: &str = "/v1/organization";
+pub const INVITATIONS: &str = "/v1/invitations";
+pub const INVITATION_ACCEPT: &str = "/v1/invitations/{id}/accept";
+pub const MEMBERS: &str = "/v1/organization/members";
+pub const MEMBER: &str = "/v1/organization/members/{user}";
+pub const MEMBER_GRANT: &str = "/v1/organization/members/{user}/grant";
+pub const ORGANIZATION_INVITATIONS: &str = "/v1/organization/invitations";
+pub const ORGANIZATION_INVITATION: &str = "/v1/organization/invitations/{id}";
+pub const ORGANIZATION_INVITATION_RESEND: &str = "/v1/organization/invitations/{id}/resend";
+
+pub const PERMISSIONS: &str = "/v1/permissions";
+pub const ROLES: &str = "/v1/roles";
+pub const ROLE: &str = "/v1/roles/{name}";
 pub const API_KEYS: &str = "/v1/api-keys";
 pub const API_KEY: &str = "/v1/api-keys/{id}";
-pub const WHOAMI: &str = "/v1/whoami";
+
 pub const SERVER: &str = "/v1/server";
 pub const SERVER_STOP: &str = "/v1/server/stop";
 
+/// The dashboard's sign-in (`crate::auth`), outside `/v1`.
+pub const AUTH_CONFIG: &str = "/auth/config";
+pub const AUTH_GITHUB: &str = "/auth/github";
+pub const AUTH_CALLBACK: &str = "/auth/callback";
+pub const AUTH_MAGIC_AUTH: &str = "/auth/magic-auth";
+pub const AUTH_MAGIC_AUTH_VERIFY: &str = "/auth/magic-auth/verify";
+pub const AUTH_EMAIL_VERIFICATION: &str = "/auth/email-verification";
+pub const AUTH_ORGANIZATION: &str = "/auth/organization";
+pub const AUTH_SESSION: &str = "/auth/session";
+pub const AUTH_WAITLIST: &str = "/auth/waitlist";
+pub const AUTH_LOGOUT: &str = "/auth/logout";
+
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 46] = [
+pub const OPERATIONS: [(&str, &str); 72] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -96,11 +123,37 @@ pub const OPERATIONS: [(&str, &str); 46] = [
     ("DELETE", SUBSCRIPTION),
     ("GET", TOOL_STATS),
     ("GET", PAYLOAD),
+    ("GET", WHOAMI),
+    ("POST", ORGANIZATIONS),
+    ("PATCH", ORGANIZATION),
+    ("GET", INVITATIONS),
+    ("POST", INVITATION_ACCEPT),
+    ("GET", MEMBERS),
+    ("PUT", MEMBER_GRANT),
+    ("DELETE", MEMBER),
+    ("GET", ORGANIZATION_INVITATIONS),
+    ("POST", ORGANIZATION_INVITATIONS),
+    ("POST", ORGANIZATION_INVITATION_RESEND),
+    ("DELETE", ORGANIZATION_INVITATION),
+    ("GET", PERMISSIONS),
+    ("GET", ROLES),
+    ("PUT", ROLE),
+    ("DELETE", ROLE),
+    ("GET", API_KEYS),
     ("POST", API_KEYS),
     ("DELETE", API_KEY),
-    ("GET", WHOAMI),
     ("GET", SERVER),
     ("POST", SERVER_STOP),
+    ("GET", AUTH_CONFIG),
+    ("GET", AUTH_GITHUB),
+    ("GET", AUTH_CALLBACK),
+    ("POST", AUTH_MAGIC_AUTH),
+    ("POST", AUTH_MAGIC_AUTH_VERIFY),
+    ("POST", AUTH_EMAIL_VERIFICATION),
+    ("POST", AUTH_ORGANIZATION),
+    ("POST", AUTH_SESSION),
+    ("POST", AUTH_WAITLIST),
+    ("POST", AUTH_LOGOUT),
 ];
 
 /// Fills a path's parameters in order, each percent-encoded as one segment:

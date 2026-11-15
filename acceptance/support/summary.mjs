@@ -3,7 +3,8 @@
 //
 //   node acceptance/support/summary.mjs <results dir> <criterion…>
 //
-// Exits with 1 when a selected criterion did not pass.
+// Exits with 1 when a selected criterion did not pass: a criterion that could not run (a skipped
+// spec, or a step `run.sh` reported as not run) is NOT RUN, with its reason, never passed.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,9 +17,10 @@ const CRITERIA = {
   5: "rewind test replays a recorded real run as a scenario; rewind fork continues a failed run without repeating its calls",
   6: "Load tests and limit tests pass",
   7: "An operator finds any run by label, tool or error in the dashboard, and sees its code next to its trace",
+  8: "Someone signs in to the dashboard with a code by email, creates an organization, invites a member with a role, and creates an API key; each endpoint refuses a caller without its permission",
 };
 
-/** Every check: its criterion, its name and whether it passed. */
+/** Every check: its criterion, its name, whether it passed, and why it did not run. */
 const checks = [];
 
 const reportPath = join(results, "report.json");
@@ -33,9 +35,13 @@ if (existsSync(reportPath)) {
       const status = statuses.every((s) => s === "expected")
         ? "pass"
         : statuses.every((s) => s === "skipped")
-          ? "skipped"
+          ? "not_run"
           : "fail";
-      checks.push({ criterion: found[1], name: `${suite.file ?? ""} › ${spec.title}`.replace(/^ › /, ""), status });
+      // A skipped test says why in its annotation.
+      const reason = spec.tests
+        .flatMap((t) => t.annotations ?? [])
+        .find((a) => a.type === "skip" && a.description)?.description;
+      checks.push({ criterion: found[1], name: `${suite.file ?? ""} › ${spec.title}`.replace(/^ › /, ""), status, reason });
     }
     for (const child of suite.suites ?? []) walk({ ...child, file: child.file ?? suite.file }, [...titles, child.title]);
   };
@@ -54,7 +60,7 @@ const lines = ["# Acceptance of Rewind 0.1", "", "| Criterion | Status | Checks 
 for (const criterion of selected) {
   const mine = checks.filter((c) => c.criterion === criterion);
   const status =
-    mine.length === 0
+    mine.length === 0 || mine.every((c) => c.status === "not_run")
       ? "NOT RUN"
       : mine.some((c) => c.status === "fail")
         ? "FAIL"
@@ -62,7 +68,10 @@ for (const criterion of selected) {
           ? "PASS"
           : "INCOMPLETE";
   if (status !== "PASS") ok = false;
-  const detail = mine.map((c) => `${c.status === "pass" ? "✓" : c.status === "fail" ? "✗" : "–"} ${c.name}`).join("<br>");
+  const mark = (c) => (c.status === "pass" ? "✓" : c.status === "fail" ? "✗" : "–");
+  const detail = mine
+    .map((c) => `${mark(c)} ${c.name}${c.status === "not_run" && c.reason ? `: ${c.reason}` : ""}`)
+    .join("<br>");
   lines.push(`| ${criterion}. ${CRITERIA[criterion]} | ${status} | ${detail || "nothing ran"} |`);
 }
 const text = `${lines.join("\n")}\n`;

@@ -261,6 +261,7 @@ single-page application, served by `rewind-server`.
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used |
 | Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor; for a run of a workflow, its workflow, the run that started it and the runs it started |
 | Tools | Latency, error rate and retries, per tool and per toolset |
+| Organization | The members and their grants, the invitations, the roles and their permissions, the API keys; each part shown to whoever holds its permission |
 
 - **The time cursor.** The commit invariant makes a history a sequence of steps: a trigger
   (the start, a tool result, a timer, a signal, a cancellation) and the commands committed
@@ -272,10 +273,14 @@ single-page application, served by `rewind-server`.
   a live run it follows the head. Only values that crossed the journal are known: what the
   script computes in between is not recorded, and the dashboard does not execute code.
 - **Searches.** The query follows the operator from one view to another in the URL. Saved
-  searches are kept in the browser, like the key.
+  searches are kept in the browser.
+- **Signing in.** Members sign in with GitHub or a code by email, on the dashboard's pages, and
+  pick an organization; someone without one creates it or accepts an invitation. A server
+  without WorkOS asks for an API key ([access](06-storage-and-scale.md#tenancy-identity-and-access)).
 - It is a client of the **public HTTP API**, with no direct access to the store. The SDK,
   the agent tools and the dashboard see the same thing.
-- Access is scoped by tenant, since it exposes code and payloads.
+- Access is scoped by tenant, since it exposes code and payloads, and by the caller's
+  permissions.
 - It reads the journal through the read model, not an OTel backend. OTel backends sample,
   keep data for weeks, truncate attributes and don't store source code; a run paused for
   a month would fall out of them.
