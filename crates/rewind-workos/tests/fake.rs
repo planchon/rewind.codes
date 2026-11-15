@@ -359,10 +359,8 @@ async fn a_code_by_email_signs_in_with_the_browser_and_the_invitation() {
     let fake = Fake::start().await;
     Mock::given(method("POST"))
         .and(path("/user_management/magic_auth"))
-        .and(body_json(json!({
-            "email": "ada@example.net",
-            "invitation_token": "inv-token",
-        })))
+        // Without the invitation's token: WorkOS would accept the invitation at once.
+        .and(body_json(json!({ "email": "ada@example.net" })))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({
             "object": "magic_auth",
             "id": "magic_auth_1",
@@ -698,15 +696,19 @@ async fn refusals_never_repeat_the_secrets_sent() {
         ),
     )
     .await;
+    // Mounted first, so that it answers before the code's refusal below.
+    fake.authenticate(
+        json!({ "grant_type": "urn:workos:oauth:grant-type:magic-auth:code", "invitation_token": "invitation-secret" }),
+        error(
+            400,
+            "invitation_invalid",
+            "The invitation invitation-secret is not found, expired, or has already been used.",
+        ),
+    )
+    .await;
     fake.authenticate(
         json!({ "grant_type": "urn:workos:oauth:grant-type:magic-auth:code" }),
         error(400, "invalid_one_time_code", "Invalid one-time code"),
-    )
-    .await;
-    fake.answer(
-        "POST",
-        "/user_management/magic_auth",
-        not_found("invitation-secret"),
     )
     .await;
 
@@ -751,13 +753,18 @@ async fn refusals_never_repeat_the_secrets_sent() {
             .await,
     );
     assert_eq!(code, "invalid_one_time_code");
-    // An unknown invitation's token is refused, never named.
+    // An unknown or spent invitation's token is refused with the code, never named.
     let (code, message) = refused(
         fake.identity
-            .send_magic_code("ada@example.net", Some("invitation-secret"))
+            .authenticate_magic_code(
+                "ada@example.net",
+                "123456",
+                Some("invitation-secret"),
+                &browser(),
+            )
             .await,
     );
-    assert_eq!(code, "entity_not_found");
+    assert_eq!(code, "invitation_invalid");
     assert!(!message.contains("invitation-secret"), "{message}");
 }
 

@@ -9,10 +9,15 @@ acceptance/run.sh          # every criterion
 acceptance/run.sh 1 7      # some of them
 ```
 
-It needs Rust, Node 22.12 or later with pnpm 10, and Docker. It builds `rewind`, the evals, the SDK
-and the suite, runs every check, removes its containers and stops its servers, and writes
-`acceptance/results/`: `summary.md` (the status of each criterion), `report.json` and `html/`
-(Playwright's reports), and each server's and step's log.
+It needs Rust, Node 22.12 or later with pnpm 10, and Docker. Criterion 8 also needs WorkOS
+Staging: its `WORKOS_API_KEY` and `WORKOS_CLIENT_ID` in the environment (`set -a; . ./staging.env;
+set +a` first, or exported otherwise). Without them, criterion 8 is reported as not run, with the
+reason, and the run does not pass. They reach criterion 8's server only: the other steps and
+servers get no `WORKOS_*`.
+
+It builds `rewind`, the evals, the SDK and the suite, runs every check, removes its containers
+and stops its servers, and writes `acceptance/results/`: `summary.md` (the status of each
+criterion), `report.json` and `html/` (Playwright's reports), and each server's and step's log.
 
 ## What proves each criterion
 
@@ -25,6 +30,7 @@ and the suite, runs every check, removes its containers and stops its servers, a
 | 5. `rewind test` replays a recorded real run as a scenario; `rewind fork` continues a failed run with a corrected script without repeating its recorded calls | [`tests/c3-c5-mcp-test-fork.spec.ts`](tests/c3-c5-mcp-test-fork.spec.ts), criterion 5 | The run of criterion 3 exported as a cassette and replayed by `rewind test` (the MCP server receives nothing; a wrong expectation fails). A run that fails after two MCP calls is forked with a corrected script: the fork completes and the MCP server's log shows no new call |
 | 6. Load tests and limit tests pass | `deploy/acceptance.sh` (run by `run.sh`) | Built by the operations workstream: see 09 for its state |
 | 7. An operator finds any run by label, tool or error in the dashboard, and sees its code next to its trace | [`tests/c7-dashboard.spec.ts`](tests/c7-dashboard.spec.ts) | The dashboard served by `rewind server`, in Chromium. The operator signs in with a `reader` key and lands on the Overview (one run waiting now). In Runs, the query bar finds runs by label (`@team:support`), by tool, by a tool call's error kind and by error name; a facet's value narrows the list; a misspelt field is underlined with the server's message. The operator opens a run and sees its source with each call, timer and log next to its line, and its timeline; with the time cursor, steps to its first step and the next (the marks of each line, the timeline's playhead), hovers a variable bound to an awaited call and sees what it returned, and watches it as the cursor moves. Waiting lists the run waiting for a signal, with the line it is paused on; Failures groups the deadlock, and the group opens its run; a failed run shows its failed call on its line and its error |
+| 8. Someone signs in to the dashboard with a code by email, creates an organization, invites a member with a role, and creates an API key; each endpoint refuses a caller without its permission | [`tests/c8-accounts.spec.ts`](tests/c8-accounts.spec.ts) | `rewind server` with the four `WORKOS_*` on WorkOS Staging (a cookie password made for the run; the redirect URI of its own origin, which only a sign-in with GitHub would use), its dashboard in Chromium on `localhost`, where the sign-in's `Secure` cookies are kept. Someone new signs in with a code by email: the dashboard has WorkOS send it, and the test types the code WorkOS's Create Magic Auth answers for that email (no mailbox is read). In the onboarding they create an organization and become its owner; they invite a second person as `reader` and create a `harness` key, whose secret is shown once. With the key, a run completes in the organization and the owner sees it in the dashboard. One request per permission of the catalog (checked against `GET /v1/permissions`): the key is answered for each of its role's and refused (403, naming the permission) for each other. The invitee opens the invitation's link (the dashboard with its token, read from WorkOS) in a browser of their own and signs in with a code: sending the code leaves the invitation pending, the code accepts it, and they land in the organization as `reader` (its view shows them Members, Invitations and Roles only); with their access token, the same requests are answered within `reader` and refused outside it. The owner removes them in the dashboard, and their next request, with the same access token, is refused for want of a grant. The users, the organization and the invitations are removed from WorkOS at the end, even after a failure, and the test checks that none is left. Addresses are `@example.net` (WorkOS's demo organization holds `example.com`) |
 
 ## Layout
 
@@ -32,7 +38,7 @@ and the suite, runs every check, removes its containers and stops its servers, a
 | --- | --- |
 | `run.sh` | The one command |
 | `tests/` | One Playwright spec per criterion (3 and 5 share one: 5 replays and forks the runs of 3) |
-| `support/` | Servers and processes, Docker containers, the project directory of the CLI, the Collector's output, the summary |
+| `support/` | Servers and processes, Docker containers, the project directory of the CLI, the Collector's output, WorkOS Staging's API (codes, invitations, clean-up), the summary |
 | `results/` | Not committed: the last run's reports and logs |
 
 Specs can also run one by one, once `rewind` and the SDK are built: `pnpm --dir acceptance exec

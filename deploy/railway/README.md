@@ -82,7 +82,7 @@ People sign in on `app.rewind.codes`, with GitHub or a code by email, through Wo
 through WorkOS's waitlist: the operator approves people in WorkOS's dashboard, which sends them
 an invitation; a member then creates an organization, or joins one by an invitation of its
 members, and gets their rights from their grant in Rewind
-([`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md#tenancy-identity-and-access)).
+([`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 
 Vercel rewrites `/auth/*` to the API like `/v1/*`, and the edge sends both to the api. The
 browser's address does not reach the api: Vercel's rewrite and Railway's proxy stand between,
