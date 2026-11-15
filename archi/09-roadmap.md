@@ -37,13 +37,16 @@ Organization views. Namespaces ([06](06-storage-and-scale.md#namespaces)), desig
 are built too: end users' tokens (opaque and signed), `Rewind-Namespace`, the six quotas with
 their alerts, credentials per namespace, the erasure of a namespace, `rewind namespaces`, the
 SDK's `rewind.namespace(name)` and the dashboard's filter and Namespaces views.
-On November 15, 2026, with both: `cargo fmt --check`, `cargo clippy --workspace --all-targets
--- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors and `cargo test
---workspace` (939 tests, Postgres, MinIO and a Collector in Docker; `rewind-workos` also against
-WorkOS Staging) pass, the SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the eight
-criteria of [0.1 is done when](#01-is-done-when), the eighth against WorkOS Staging. Not yet
-done: the evals with real models (they need API keys), a run of the CI workflow on GitHub, and
-the gVisor profile on a Linux host.
+On November 15, 2026, with accounts, namespaces and workflows together: `cargo fmt --check`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo doc --workspace --no-deps` with
+warnings as errors and `cargo test --workspace` (998 tests, Postgres, MinIO and a Collector in
+Docker; `rewind-workos` also against WorkOS Staging) pass, the SDK's and the dashboard's checks
+pass, and `acceptance/run.sh` passes the eight criteria of [0.1 is done when](#01-is-done-when),
+the eighth against WorkOS Staging. A run of a workflow acts for an end user: the request's
+namespace, or its parent's when a script starts it ([08](08-decisions.md#taken-while-merging-the-namespaces-and-the-workflows-november-2026)).
+Not yet decided: whether the workflows an end user's agent saves belong to its namespace; they
+are the tenant's, scoped by labels. Not yet done: the evals with real models (they need API
+keys), a run of the CI workflow on GitHub, and the gVisor profile on a Linux host.
 
 On November 14, 2026, [workflows across runs](03-execution.md#workflows-across-runs) were built
 through every layer: the workflow version and its pinning in toolsets (`rewind-core`, format v1),
