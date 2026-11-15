@@ -228,6 +228,8 @@ pub(super) async fn list(
         error: args.error,
         quarantined: args.quarantined.then_some(true),
         parent: args.parent,
+        workflow: None,
+        started_by: None,
         started_after: None,
         started_before: None,
         limit: args.limit,

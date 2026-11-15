@@ -1,21 +1,23 @@
 //! `JournalStore` on Turso. The in-memory `MemoryJournal` of `rewind-engine` is the reference of
 //! every behavior here; both pass the same conformance suite.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, RunId, RunStatus, Script, Seq,
-    Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
+    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    end_signal_name,
 };
 use rewind_engine::ports::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CompiledScript, CreateRun, Created,
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, StoreError, StoredScript, StoredToolset, Subscription, TaskFilter, TaskRef,
-    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask,
-    TraceContext, Trigger, WebhookTarget, WebhookToken, deferred_timeout_failure,
+    RunRecord, RunRef, RunWorkflow, StartedBy, StoreError, StoredScript, StoredToolset,
+    StoredWorkflow, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
+    TenantId, TenantScope, ToolDeclarations, ToolTask, TraceContext, Trigger, Watched,
+    WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -49,7 +51,8 @@ macro_rules! run_columns {
         "id, tenant, script, toolset, status, epoch, expires_at, history_len, quarantine_kind, \
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
-         ended_at, archive_document, archived_at, parent_at, attempts, namespace"
+         ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
+         workflow_version, started_by, started_seq, detached, scope, namespace"
     };
 }
 
@@ -90,7 +93,7 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
             archived_at: row.ts(23)?,
         }),
     };
-    let namespace = row.text(26)?;
+    let namespace = row.text(32)?;
     Ok(RunRecord {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: NamespaceName::new(namespace.clone())
@@ -117,6 +120,26 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
                     })
                 })
                 .transpose()?,
+            workflow: row
+                .opt_text(26)?
+                .map(|name| -> Result<RunWorkflow, Error> {
+                    Ok(RunWorkflow {
+                        name,
+                        version: row.digest(27)?,
+                    })
+                })
+                .transpose()?,
+            started_by: row
+                .opt_run_id(28)?
+                .map(|run| -> Result<StartedBy, Error> {
+                    Ok(StartedBy {
+                        run,
+                        seq: Seq(row.u32(29)?),
+                        detached: row.boolean(30)?,
+                    })
+                })
+                .transpose()?,
+            scope: decode_labels(&row.text(31)?)?,
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -352,6 +375,116 @@ async fn end_run(connection: &Connection, run: RunId) -> Result<(), Error> {
         sql::execute(connection, statement, vec![run_id(run)]).await?;
     }
     Ok(())
+}
+
+/// Enqueues a completion for a run that has not ended, unless its key was already seen.
+async fn enqueue_live(
+    connection: &Connection,
+    run: RunId,
+    completion: Completion,
+    idempotency_key: Option<String>,
+    now: Timestamp,
+) -> Result<Enqueued, Error> {
+    if let Some(key) = idempotency_key {
+        let inserted = sql::execute(
+            connection,
+            "INSERT OR IGNORE INTO signal_keys (run_id, key) VALUES (?, ?)",
+            vec![run_id(run), text(key)],
+        )
+        .await?;
+        if inserted == 0 {
+            return Ok(Enqueued::Duplicate);
+        }
+    }
+    push_inbox(connection, run, &Trigger::Completion(completion), now).await?;
+    Ok(Enqueued::Accepted)
+}
+
+/// What a run's end does to the runs around it, in its terminal commit: its end to each of its
+/// watchers that has not ended, and a cancellation to each run it watches attached and that has
+/// not ended.
+async fn propagate_end(
+    connection: &Connection,
+    run: RunId,
+    end: Option<&JsonValue>,
+    now: Timestamp,
+) -> Result<(), Error> {
+    if let Some(end) = end {
+        let name = end_signal_name(run);
+        let watchers = sql::query(
+            connection,
+            concat!(
+                "SELECT w.watcher FROM run_watchers w JOIN runs r ON r.id = w.watcher \
+                 WHERE w.run_id = ? AND r.status NOT IN ",
+                terminal!(),
+                " ORDER BY w.watcher"
+            ),
+            vec![run_id(run)],
+        )
+        .await?;
+        for row in &watchers {
+            let completion = Completion::SignalReceived {
+                name: name.clone(),
+                payload: Payload::Value(end.clone()),
+            };
+            enqueue_live(
+                connection,
+                row.run_id(0)?,
+                completion,
+                Some(name.clone()),
+                now,
+            )
+            .await?;
+        }
+    }
+    let attached = sql::query(
+        connection,
+        concat!(
+            "SELECT w.run_id FROM run_watchers w JOIN runs r ON r.id = w.run_id \
+             WHERE w.watcher = ? AND w.attached = 1 AND r.status NOT IN ",
+            terminal!(),
+            " ORDER BY w.run_id"
+        ),
+        vec![run_id(run)],
+    )
+    .await?;
+    for row in &attached {
+        let completion = Completion::CancelRequested {
+            reason: CancelReason::Requested(Some(format!("the run {run} that started it ended"))),
+        };
+        enqueue_live(connection, row.run_id(0)?, completion, None, now).await?;
+    }
+    Ok(())
+}
+
+/// The columns of a [`StoredWorkflow`], read by [`workflow_from_row`].
+macro_rules! workflow_columns {
+    () => {
+        "version, document, labels, created_at"
+    };
+}
+
+fn workflow_from_row(row: &Row) -> Result<StoredWorkflow, Error> {
+    let version = row.digest(0)?;
+    let workflow = rewind_format::decode_workflow(&row.text(1)?)
+        .map_err(|err| Error::Corrupt(format!("workflow {version}: {err}")))?;
+    if workflow.version() != version {
+        return Err(Error::Corrupt(format!(
+            "workflow {version} does not hash to its key"
+        )));
+    }
+    Ok(StoredWorkflow {
+        workflow,
+        labels: decode_labels(&row.text(2)?)?,
+        created_at: row.ts(3)?,
+    })
+}
+
+/// Whether a version's labels hold all of `required`.
+fn carries(labels: &BTreeMap<String, String>, required: &BTreeMap<String, String>) -> bool {
+    required
+        .iter()
+        .all(|(key, value)| labels.get(key) == Some(value))
 }
 
 /// The task holding `token`: a claimed task, or a deferred one.
@@ -617,9 +750,6 @@ impl JournalStore for TursoStore {
         }))
     }
 
-    // ---------------------------------------------------------------------------------------
-    // The way in
-
     async fn list_toolsets(&self, tenant_id: &TenantId) -> Result<Vec<StoredToolset>, StoreError> {
         let connection = self.connection().await?;
         let rows = sql::query_dynamic(
@@ -649,6 +779,154 @@ impl JournalStore for TursoStore {
         }
         Ok(toolsets)
     }
+
+    // ---------------------------------------------------------------------------------------
+    // Workflows
+
+    async fn put_workflow(
+        &self,
+        tenant_id: &TenantId,
+        workflow: &Workflow,
+        labels: &BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> Result<StoredWorkflow, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let version = workflow.version();
+            let existing = sql::query_row(
+                connection,
+                concat!(
+                    "SELECT ",
+                    workflow_columns!(),
+                    " FROM workflows WHERE tenant = ? AND version = ?"
+                ),
+                vec![tenant(tenant_id), digest(version)],
+            )
+            .await?;
+            if let Some(existing) = existing {
+                return Ok(workflow_from_row(&existing)?);
+            }
+            // Only the versions of one workflow are compared by the order they were stored in.
+            let order = sql::query_row(
+                connection,
+                "SELECT COALESCE(MAX(stored_order), 0) + 1 FROM workflows \
+                 WHERE tenant = ? AND name = ?",
+                vec![tenant(tenant_id), text(workflow.name())],
+            )
+            .await?
+            .map_or(Ok(1), |row| row.u64(0))?;
+            sql::execute(
+                connection,
+                "INSERT INTO workflows (tenant, version, name, document, labels, created_at, \
+                 stored_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                vec![
+                    tenant(tenant_id),
+                    digest(version),
+                    text(workflow.name()),
+                    text(rewind_format::encode_workflow(workflow)),
+                    text(encode_labels(labels)),
+                    ts(now),
+                    int(order),
+                ],
+            )
+            .await?;
+            Ok(StoredWorkflow {
+                workflow: workflow.clone(),
+                labels: labels.clone(),
+                created_at: now,
+            })
+        })
+        .await
+    }
+
+    async fn get_workflow(
+        &self,
+        tenant_id: &TenantId,
+        version: Digest,
+    ) -> Result<Option<StoredWorkflow>, StoreError> {
+        let connection = self.connection().await?;
+        let row = sql::query_row(
+            &connection,
+            concat!(
+                "SELECT ",
+                workflow_columns!(),
+                " FROM workflows WHERE tenant = ? AND version = ?"
+            ),
+            vec![tenant(tenant_id), digest(version)],
+        )
+        .await?;
+        Ok(row.map(|row| workflow_from_row(&row)).transpose()?)
+    }
+
+    async fn workflow_versions(
+        &self,
+        tenant_id: &TenantId,
+        name: &str,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let connection = self.connection().await?;
+        let rows = sql::query(
+            &connection,
+            concat!(
+                "SELECT ",
+                workflow_columns!(),
+                " FROM workflows WHERE tenant = ? AND name = ? \
+                 ORDER BY created_at DESC, stored_order DESC"
+            ),
+            vec![tenant(tenant_id), text(name)],
+        )
+        .await?;
+        let mut versions = Vec::new();
+        for row in &rows {
+            // Labels are filtered here: a version's labels are one JSON column.
+            if carries(&decode_labels(&row.text(2)?)?, labels) {
+                versions.push(workflow_from_row(row)?);
+            }
+        }
+        Ok(versions)
+    }
+
+    async fn latest_workflows(
+        &self,
+        filter: &WorkflowFilter,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        if filter.limit.is_some_and(nothing) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let mut query = concat!(
+            "SELECT ",
+            workflow_columns!(),
+            ", name FROM workflows WHERE tenant = ?"
+        )
+        .to_owned();
+        let mut params = vec![tenant(&filter.tenant)];
+        if let Some(after) = &filter.after {
+            query.push_str(" AND name > ?");
+            params.push(text(after.as_str()));
+        }
+        // Each workflow's versions, newest first: the first carrying the labels is its latest.
+        query.push_str(" ORDER BY name, created_at DESC, stored_order DESC");
+        let rows = sql::query_dynamic(&connection, &query, params).await?;
+        let mut latest: Vec<StoredWorkflow> = Vec::new();
+        for row in &rows {
+            if filter.limit.is_some_and(|max| latest.len() >= max) {
+                break;
+            }
+            let name = row.text(4)?;
+            let found = latest
+                .last()
+                .is_some_and(|known| known.workflow.name() == name);
+            if !found && carries(&decode_labels(&row.text(2)?)?, &filter.labels) {
+                latest.push(workflow_from_row(row)?);
+            }
+        }
+        Ok(latest)
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The way in
 
     async fn create_run(
         &self,
@@ -693,13 +971,18 @@ impl JournalStore for TursoStore {
                 Ok(admitted) => admitted,
                 Err(refused) => return Ok(refused),
             };
-            let trace = run.metadata.trace_context.as_ref();
+            let metadata = &run.metadata;
+            let trace = metadata.trace_context.as_ref();
+            let workflow = metadata.workflow.as_ref();
+            let started_by = metadata.started_by;
             sql::execute(
                 connection,
                 "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
                  expires_at, expiry_enqueued, failures, attempts, fence, labels, traceparent, \
-                 tracestate, parent, parent_at, idempotency_key, created_at, updated_at, namespace) \
-                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
+                 workflow, workflow_version, started_by, started_seq, detached, scope, namespace) \
+                 VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                 ?, ?, ?, ?, ?)",
                 vec![
                     run_id(run.run.id),
                     tenant(tenant_id),
@@ -707,21 +990,42 @@ impl JournalStore for TursoStore {
                     digest(run.started.toolset),
                     int(u64::from(run.started.epoch.0)),
                     ts(run.started.expires_at),
-                    text(encode_labels(&run.metadata.labels)),
+                    text(encode_labels(&metadata.labels)),
                     opt_text(trace.map(|trace| trace.traceparent.as_str())),
                     opt_text(trace.and_then(|trace| trace.tracestate.as_deref())),
-                    opt_text(run.metadata.parent.map(|parent| parent.run.to_string())),
-                    run.metadata
+                    opt_text(metadata.parent.map(|parent| parent.run.to_string())),
+                    metadata
                         .parent
                         .and_then(|parent| parent.at)
                         .map_or(Value::Null, int),
                     opt_text(idempotency_key.as_deref()),
                     ts(run.created_at),
                     ts(run.created_at),
+                    opt_text(workflow.map(|workflow| workflow.name.as_str())),
+                    workflow.map_or(Value::Null, |workflow| digest(workflow.version)),
+                    opt_text(started_by.map(|started_by| started_by.run.to_string())),
+                    started_by.map_or(Value::Null, |started_by| int(u64::from(started_by.seq.0))),
+                    started_by.map_or(Value::Null, |started_by| boolean(started_by.detached)),
+                    text(encode_labels(&metadata.scope)),
                     text(run.namespace.as_str()),
                 ],
             )
             .await?;
+            // The run that started this one watches its end, attached unless it is detached.
+            if let Some(started_by) = started_by {
+                sql::execute(
+                    connection,
+                    "INSERT OR REPLACE INTO run_watchers (run_id, watcher, seq, attached) \
+                     VALUES (?, ?, ?, ?)",
+                    vec![
+                        run_id(run.run.id),
+                        run_id(started_by.run),
+                        int(u64::from(started_by.seq.0)),
+                        boolean(!started_by.detached),
+                    ],
+                )
+                .await?;
+            }
             let started = Trigger::RunStarted(run.started.clone());
             push_inbox(connection, run.run.id, &started, run.created_at).await?;
             namespaces::count_run(connection, &run, admitted).await?;
@@ -746,19 +1050,7 @@ impl JournalStore for TursoStore {
             if run_status(connection, run).await?.is_terminal() {
                 return Ok(Enqueued::RunEnded);
             }
-            if let Some(key) = idempotency_key {
-                let inserted = sql::execute(
-                    connection,
-                    "INSERT OR IGNORE INTO signal_keys (run_id, key) VALUES (?, ?)",
-                    vec![run_id(run.id), text(key)],
-                )
-                .await?;
-                if inserted == 0 {
-                    return Ok(Enqueued::Duplicate);
-                }
-            }
-            push_inbox(connection, run.id, &Trigger::Completion(completion), now).await?;
-            Ok(Enqueued::Accepted)
+            Ok(enqueue_live(connection, run.id, completion, idempotency_key, now).await?)
         })
         .await
     }
@@ -776,6 +1068,38 @@ impl JournalStore for TursoStore {
         )
         .await?;
         Ok(row.map(|row| record_from_row(&row)).transpose()?)
+    }
+
+    async fn watch_run(
+        &self,
+        run: &RunRef,
+        watcher: RunId,
+        seq: Seq,
+    ) -> Result<Option<Watched>, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let row = sql::query_row(
+                connection,
+                "SELECT status FROM runs WHERE id = ? AND tenant = ?",
+                vec![run_id(run.id), tenant(&run.tenant)],
+            )
+            .await?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let ended = codec::parse_status(&row.text(0)?)?.is_terminal();
+            // A fork's watch is never attached; a watch already there is kept as it is.
+            sql::execute(
+                connection,
+                "INSERT OR IGNORE INTO run_watchers (run_id, watcher, seq, attached) \
+                 VALUES (?, ?, ?, 0)",
+                vec![run_id(run.id), run_id(watcher), int(u64::from(seq.0))],
+            )
+            .await?;
+            Ok(Some(Watched { ended }))
+        })
+        .await
     }
 
     async fn list_runs(&self, filter: &RunFilter) -> Result<Vec<RunRecord>, StoreError> {
@@ -1254,6 +1578,7 @@ impl JournalStore for TursoStore {
             }
             if terminal {
                 end_run(connection, id).await?;
+                propagate_end(connection, id, activation.end.as_ref(), now).await?;
             }
             Ok(())
         })
@@ -2371,6 +2696,8 @@ impl JournalStore for TursoStore {
                 "DELETE FROM tool_tasks WHERE run_id = ?",
                 "DELETE FROM webhook_tokens WHERE run_id = ?",
                 "DELETE FROM feed WHERE run_id = ?",
+                "DELETE FROM run_watchers WHERE run_id = ?",
+                "DELETE FROM run_watchers WHERE watcher = ?",
                 "DELETE FROM runs WHERE id = ?",
             ] {
                 sql::execute(connection, statement, vec![run_id(run.id)]).await?;

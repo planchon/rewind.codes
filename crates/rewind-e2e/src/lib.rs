@@ -40,19 +40,21 @@ use std::time::Duration;
 use rewind_core::{
     Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle, McpServer,
     McpTransport, RunId, RunMode, RunOutcome, RunState, Script, Timestamp, Tool, ToolRoute,
-    Toolset, parse_duration,
+    Toolset, Workflow, WorkflowSchemas, parse_duration,
 };
 use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, StaticTypeChecker,
+    VirtualClock,
 };
 use rewind_engine::ports::{
-    Credentials, Entropy, RunRef, ScriptExecutor, Secret, ServerCredentials, TaskFilter, TaskRef,
-    TaskState, TenantId, TenantScope, VirtualTime,
+    Credentials, Entropy, JournalStore, RunFilter, RunRef, ScriptExecutor, Secret,
+    ServerCredentials, TaskFilter, TaskRef, TaskState, TenantId, TenantScope, ToolDeclarations,
+    VirtualTime, WorkflowDeclarations,
 };
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{
     Adapters, DriveOptions, Engine, EngineConfig, ForkRun, HostClaim, HostFailure, Limits,
-    ReplayVerdict, StartRun, ToolOrder,
+    RegisterWorkflow, ReplayVerdict, StartRun, ToolOrder,
 };
 use rewind_runtime::V8Executor;
 use serde_json::Value;
@@ -111,6 +113,8 @@ pub struct Case {
     pub script: Script,
     /// The corrected script of the fork, if the case forks its run.
     pub fork_script: Option<Script>,
+    /// The scripts of the scenario's workflows, by name.
+    pub workflow_scripts: BTreeMap<String, Script>,
 }
 
 impl Case {
@@ -137,6 +141,13 @@ impl Case {
             Some(fork) => Some(Script::new(read(&dir.join(&fork.script))?)),
             None => None,
         };
+        let mut workflow_scripts = BTreeMap::new();
+        for (workflow, case) in &scenario.workflows {
+            workflow_scripts.insert(
+                workflow.clone(),
+                Script::new(read(&dir.join(&case.script))?),
+            );
+        }
         let case = Self {
             name: name.to_owned(),
             dir,
@@ -144,10 +155,35 @@ impl Case {
             scenario,
             script,
             fork_script,
+            workflow_scripts,
         };
         case.check_color()?;
         scenario_toolset(&case.scenario).map_err(|err| format!("{name}/scenario.json: {err}"))?;
+        case.workflows()?;
         Ok(case)
+    }
+
+    /// The scenario's workflows, each with the scenario's tools as its toolset.
+    pub fn workflows(&self) -> Result<Vec<Workflow>, String> {
+        let toolset = scenario_toolset(&self.scenario)?.digest();
+        self.scenario
+            .workflows
+            .iter()
+            .map(|(name, case)| {
+                Workflow::new(
+                    name.clone(),
+                    case.description.clone(),
+                    self.workflow_scripts[name].digest(),
+                    toolset,
+                    WorkflowSchemas {
+                        input: case.input.clone(),
+                        output: case.output.clone(),
+                        signals: case.signals.clone(),
+                    },
+                )
+                .map_err(|err| format!("{}/scenario.json: workflow {name}: {err}", self.name))
+            })
+            .collect()
     }
 
     pub fn journal_path(&self) -> PathBuf {
@@ -159,7 +195,16 @@ impl Case {
     /// default otherwise). In mock mode every call goes to the scenario's responses, whatever
     /// its route.
     pub fn toolset(&self) -> Toolset {
-        scenario_toolset(&self.scenario).expect("the tools were checked when the case was loaded")
+        let workflows = self
+            .workflows()
+            .expect("the workflows were checked when the case was loaded");
+        scenario_toolset(&self.scenario)
+            .and_then(|toolset| {
+                toolset
+                    .with_workflows(workflows.iter().map(Workflow::pinned))
+                    .map_err(|err| err.to_string())
+            })
+            .expect("the tools were checked when the case was loaded")
     }
 
     /// The id of the run the case records: the first id of the scenario's entropy, or the
@@ -244,6 +289,11 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
         .collect();
     let mut tools = Vec::new();
     for (name, response) in &scenario.tools {
+        // The built-ins of a workflow come from `workflows`; in mock mode, their answers are
+        // here.
+        if rewind_core::WorkflowOp::of_tool(name).is_some() {
+            continue;
+        }
         let server = name
             .split_once('.')
             .map(|(namespace, _)| namespace)
@@ -432,6 +482,8 @@ pub struct Recorded {
     pub state: RunState,
     /// How many times each tool answered, across the case.
     pub dispatched: BTreeMap<String, usize>,
+    /// The statuses of the runs of workflows the run started, in the order of its calls.
+    pub children: Vec<String>,
 }
 
 /// The outcome of a live run.
@@ -445,12 +497,17 @@ pub enum Live {
 /// Runs a case live: starts the run, drives it, applies the steps, drives it in virtual time.
 pub async fn run_live(case: &Case) -> Result<Live, String> {
     let engine = engine(case);
+    register_workflows(case, &engine).await?;
     let mut request = StartRun::new(
         case.script.clone(),
         case.toolset(),
         case.scenario.input.clone(),
     );
-    request.mode = RunMode::Mock;
+    request.mode = if case.scenario.live {
+        RunMode::Live
+    } else {
+        RunMode::Mock
+    };
     if let Some(ttl) = &case.scenario.ttl {
         request.ttl = Some(parse_duration(ttl).map_err(|err| format!("ttl {ttl:?}: {err}"))?);
     }
@@ -527,12 +584,60 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
 
     let journal = engine.export_journal(&run).await.map_err(fail)?;
     let state = RunState::from_history(&journal.entries).map_err(|err| err.to_string())?;
+    let mut children: Vec<(u32, String)> = engine
+        .journal()
+        .list_runs(&RunFilter::new(TenantId::local()))
+        .await
+        .map_err(|err| err.to_string())?
+        .into_iter()
+        .filter_map(|record| {
+            let by = record.metadata.started_by.filter(|by| by.run == run.id)?;
+            Some((by.seq.0, record.status.as_str().to_owned()))
+        })
+        .collect();
+    children.sort();
     Ok(Live::Ran(Box::new(Recorded {
         run_id: run.id,
         journal,
         state,
         dispatched: engine.dispatcher().dispatched(),
+        children: children.into_iter().map(|(_, status)| status).collect(),
     })))
+}
+
+/// Registers the scenario's workflows, with the scenario's tools as their toolset, so that the
+/// run's starts find them.
+async fn register_workflows(case: &Case, engine: &CorpusEngine) -> Result<(), String> {
+    if case.scenario.workflows.is_empty() {
+        return Ok(());
+    }
+    let tenant = TenantId::local();
+    let toolset = scenario_toolset(&case.scenario)?;
+    engine
+        .journal()
+        .put_toolset(&tenant, &toolset, &ToolDeclarations::default())
+        .await
+        .map_err(|err| err.to_string())?;
+    for workflow in case.workflows()? {
+        let name = workflow.name().to_owned();
+        engine
+            .register_workflow(
+                RegisterWorkflow {
+                    tenant: tenant.clone(),
+                    name: name.clone(),
+                    description: workflow.description().map(str::to_owned),
+                    script: case.workflow_scripts[&name].clone(),
+                    toolset: toolset.digest(),
+                    schemas: workflow.schemas().clone(),
+                    labels: BTreeMap::new(),
+                    declarations: WorkflowDeclarations::default(),
+                },
+                &StaticTypeChecker::default(),
+            )
+            .await
+            .map_err(|err| format!("workflow {name}: {err}"))?;
+    }
+    Ok(())
 }
 
 /// Applies steps to a run, each followed by a pass of the engine at the current time.
@@ -747,6 +852,16 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
             failures.push(message);
         }
     };
+
+    if let Some(children) = &expect.children {
+        check(
+            &recorded.children == children,
+            format!(
+                "the runs it started are {:?}, expected {children:?}",
+                recorded.children
+            ),
+        );
+    }
 
     if let Some(status) = &expect.status {
         check(

@@ -173,9 +173,9 @@ impl Permission {
             Permission::RunsQuarantine => "Release a quarantined run, or give it up.",
             Permission::RunsDelete => "Erase a run, its payloads included.",
             Permission::ToolsetsRead => {
-                "List toolsets, read their declarations and search their tools."
+                "List toolsets and workflows, read their declarations and search their tools."
             }
-            Permission::ToolsetsWrite => "Register a toolset.",
+            Permission::ToolsetsWrite => "Register a toolset, and save a workflow.",
             Permission::CredentialsWrite => {
                 "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or \
                  of a run."

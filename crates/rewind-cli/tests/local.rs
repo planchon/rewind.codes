@@ -446,7 +446,8 @@ async fn the_corpus_replays_through_the_cli() {
 /// `rewind test`, and meet their expectations: status, output, error, calls, abort, refused start.
 /// The others need what only the corpus harness drives (approvals, virtual time moved by hand,
 /// a host worker, limits, forks, MCP servers, `http` hosts, idempotency keys, transient
-/// failures): they are listed, so that the selection cannot shrink silently.
+/// failures, workflows registered before the run): they are listed, so that the selection
+/// cannot shrink silently.
 #[tokio::test]
 async fn the_corpus_runs_through_rewind_test() {
     let dir = tempfile::tempdir().unwrap();
@@ -532,6 +533,10 @@ async fn the_corpus_runs_through_rewind_test() {
             "blue/tool_called_without_arguments",
             "blue/transient_failure_retried",
             "blue/triage_workflow",
+            "blue/workflow_attached_run_ends_first",
+            "blue/workflow_detached_run_lives_on",
+            "blue/workflow_start_answered_by_mocks",
+            "blue/workflows_started_signalled_and_awaited",
             "red/approval_rejected",
             "red/built_in_imported_from_rewind_tools",
             "red/cancellation_grace_exceeded",
@@ -547,6 +552,10 @@ async fn the_corpus_runs_through_rewind_test() {
             "red/mcp_content_that_is_not_json",
             "red/too_many_commands",
             "red/webhook_without_the_built_in",
+            "red/workflow_input_refused",
+            "red/workflow_not_pinned",
+            "red/workflow_parent_failure_cancels_its_runs",
+            "red/workflow_run_failed_uncaught",
         ],
         "the corpus cases left to the corpus harness"
     );

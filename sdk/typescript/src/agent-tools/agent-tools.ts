@@ -1,12 +1,23 @@
 import { toMillis } from "../duration.js";
-import { NamespaceRequiredError, RewindApiError, RewindError } from "../errors.js";
+import { NamespaceRequiredError, RewindApiError, RewindError, isProblem } from "../errors.js";
 import { isValidIdempotencyKey } from "../http.js";
 import { hasLabels } from "../params.js";
 import type { Payloads } from "../resources/admin.js";
 import type { Runs } from "../resources/runs.js";
 import type { Scripts } from "../resources/scripts.js";
 import type { Toolsets } from "../resources/toolsets.js";
-import type { Duration, Labels, Run, RunStatus, ScenarioSignal, TestRequest } from "../types.js";
+import type { Workflows } from "../resources/workflows.js";
+import type {
+  Duration,
+  Labels,
+  Run,
+  RunStatus,
+  ScenarioSignal,
+  SignalAccepted,
+  TestRequest,
+  Toolset,
+  Workflow,
+} from "../types.js";
 import {
   anthropicTools,
   openaiChatTools,
@@ -38,6 +49,8 @@ import {
   describeRun,
   describeRuns,
   describeTest,
+  describeWorkflow,
+  describeWorkflowRefusal,
   entryText,
   json,
   limitsFor,
@@ -52,11 +65,16 @@ export interface AgentToolsClient {
   runs: Runs;
   scripts: Scripts;
   toolsets: Toolsets;
+  workflows: Workflows;
   payloads: Payloads;
 }
 
 export interface AgentToolsOptions {
-  /** The toolset the model's scripts import from `rewind:tools`. `search_tools` needs one. */
+  /**
+   * The toolset the model's scripts import from `rewind:tools`. `search_tools` and
+   * `save_workflow` need one. Each workflow `save_workflow` saves derives a new toolset from it,
+   * which the later calls use: read it from `agentTools.toolset`.
+   */
   toolset?: string | undefined;
   /**
    * Set on every run the model starts. They scope `list_runs`, and the tools that take a run id
@@ -64,7 +82,10 @@ export interface AgentToolsOptions {
    * labels makes the scope hold on the server too.
    */
   labels?: Labels | undefined;
-  /** The tools to give the model. All of them by default; `search_tools` only with a toolset. */
+  /**
+   * The tools to give the model. All of them by default; `search_tools` and `save_workflow` only
+   * with a toolset.
+   */
   tools?: readonly AgentToolName[] | undefined;
   /** How long `run_script`, `retry_run` and `cancel_run` wait for the run to end. 30 s by default. */
   wait?: Duration | undefined;
@@ -99,6 +120,10 @@ export interface AgentToolResult {
   isError: boolean;
   /** The run the call started or read, for the harness (pending approvals, for example). */
   run?: Run | undefined;
+  /** The workflow `save_workflow` saved. */
+  workflow?: Workflow | undefined;
+  /** The toolset `save_workflow` derived: the one the agent tools use from then on. */
+  toolset?: Toolset | undefined;
 }
 
 class InputError extends Error {}
@@ -132,12 +157,17 @@ export class AgentTools {
   private readonly limits: Limits;
   private readonly defaultWaitMs: number;
   private readonly maxWaitMs: number;
+  /** The toolset of the model's scripts: the one given, then the last one `save_workflow` derived. */
+  private currentToolset: string | undefined;
+  /** The derivations of the toolset, one after the other, so concurrent saves all end up in it. */
+  private derivations: Promise<unknown> = Promise.resolve();
 
   constructor(client: AgentToolsClient, options: AgentToolsOptions = {}) {
     this.client = client;
     this.options = options;
+    this.currentToolset = options.toolset;
     const names =
-      options.tools ?? AGENT_TOOL_NAMES.filter((name) => name !== "search_tools" || options.toolset !== undefined);
+      options.tools ?? AGENT_TOOL_NAMES.filter((name) => !NEEDS_TOOLSET.has(name) || options.toolset !== undefined);
     for (const name of names) {
       if (!isAgentToolName(name)) {
         throw new TypeError(
@@ -145,8 +175,10 @@ export class AgentTools {
         );
       }
     }
-    if (names.includes("search_tools") && options.toolset === undefined) {
-      throw new TypeError("search_tools needs a toolset");
+    for (const name of names) {
+      if (NEEDS_TOOLSET.has(name) && options.toolset === undefined) {
+        throw new TypeError(`${name} needs a toolset`);
+      }
     }
     this.names = new Set(names);
     this.limits = limitsFor(options.outputLimit ?? OUTPUT_LIMIT);
@@ -183,6 +215,15 @@ export class AgentTools {
         },
       },
     };
+  }
+
+  /**
+   * The toolset the model's scripts run with: the one given, or the last one `save_workflow`
+   * derived from it. A harness that creates the agent tools again for each turn keeps it with
+   * the conversation, and passes it as `toolset` the next time.
+   */
+  get toolset(): string | undefined {
+    return this.currentToolset;
   }
 
   /** Whether `name` is one of these tools. */
@@ -232,6 +273,8 @@ export class AgentTools {
         return this.retryRun(values, options);
       case "search_tools":
         return this.searchTools(values, options);
+      case "save_workflow":
+        return this.saveWorkflow(values, options);
     }
   }
 
@@ -241,7 +284,7 @@ export class AgentTools {
     const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
     const run = await this.client.runs.start({
       script: code,
-      toolset: this.options.toolset,
+      toolset: this.currentToolset,
       input: input["input"],
       wait,
       idempotencyKey,
@@ -257,7 +300,7 @@ export class AgentTools {
   private async checkScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const result = await this.client.scripts.check({
       script: requireString(input, "code"),
-      toolset: this.options.toolset,
+      toolset: this.currentToolset,
       signal: options.signal,
     });
     return { content: describeCheck(result, this.limits), isError: !result.ok };
@@ -270,8 +313,8 @@ export class AgentTools {
       throw new InputError("`scenario` must be an object.");
     }
     const request: TestRequest = { script: code };
-    if (this.options.toolset !== undefined) {
-      request.toolset = this.options.toolset;
+    if (this.currentToolset !== undefined) {
+      request.toolset = this.currentToolset;
     }
     if (scenario["input"] !== undefined) {
       request.input = scenario["input"];
@@ -364,10 +407,19 @@ export class AgentTools {
     const runId = requireString(input, "run_id");
     const name = requireString(input, "name");
     const run = await this.scopedRun(runId, options.signal);
-    const accepted = await this.client.runs.signal(runId, name, input["payload"] ?? null, {
-      idempotencyKey: await idempotencyKeyOf(options.toolCallId),
-      signal: options.signal,
-    });
+    let accepted: SignalAccepted;
+    try {
+      accepted = await this.client.runs.signal(runId, name, input["payload"] ?? null, {
+        idempotencyKey: await idempotencyKeyOf(options.toolCallId),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (isProblem(error, "invalid-signal")) {
+        const detail = truncateEnd(error.detail, this.limits.value);
+        return { content: `Run ${runId} refused the signal ${JSON.stringify(name)}: ${detail}`, isError: true, run };
+      }
+      throw error;
+    }
     const content = accepted.duplicate
       ? `This signal ${JSON.stringify(name)} was already sent to run ${runId}: nothing was added.`
       : `Sent the signal ${JSON.stringify(name)} to run ${runId}. Read what the run does next with get_run(${args({ run_id: runId, wait: "30s" })}).`;
@@ -401,12 +453,79 @@ export class AgentTools {
 
   private async searchTools(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const query = requireString(input, "query");
-    const toolset = this.options.toolset;
+    const toolset = this.currentToolset;
     if (toolset === undefined) {
       throw new RewindError("search_tools needs a toolset");
     }
     const results = await this.client.toolsets.search(toolset, query, { signal: options.signal });
     return { content: describeMatches(query, results.tools), isError: false };
+  }
+
+  /**
+   * Saves a workflow with the agent's toolset, then derives from that toolset one that pins this
+   * version of it: the later scripts of the model import it from `rewind:workflows`.
+   */
+  private async saveWorkflow(input: Values, options: HandleOptions): Promise<AgentToolResult> {
+    const name = requireString(input, "name");
+    const description = requireString(input, "description");
+    const code = requireString(input, "code");
+    const schemas = { input: requireObject(input, "input"), output: requireObject(input, "output") };
+    const signals = input["signals"] === undefined || input["signals"] === null ? undefined : input["signals"];
+    if (signals !== undefined && !isObject(signals)) {
+      throw new InputError("`signals` must be an object of JSON Schemas by signal name.");
+    }
+    const toolset = this.currentToolset;
+    if (toolset === undefined) {
+      throw new RewindError("save_workflow needs a toolset");
+    }
+    let workflow: Workflow;
+    try {
+      workflow = await this.client.workflows.create(
+        { name, description, toolset, script: code, ...schemas, ...(signals === undefined ? {} : { signals }) },
+        { signal: options.signal },
+      );
+    } catch (error) {
+      if (isProblem(error, "invalid-script") || isProblem(error, "invalid-workflow")) {
+        return { content: describeWorkflowRefusal(error.detail, error.diagnostics, this.limits), isError: true };
+      }
+      throw error;
+    }
+    let derived: Toolset;
+    try {
+      derived = await this.derive(workflow, options.signal);
+    } catch (error) {
+      if (error instanceof RewindApiError && error.status !== 401 && error.status < 500) {
+        const detail = truncateEnd(error.detail, this.limits.value);
+        return {
+          content: `The workflow ${workflow.name} was saved, but your scripts cannot start it yet: adding it to your tools failed: ${detail}`,
+          isError: true,
+          workflow,
+        };
+      }
+      throw error;
+    }
+    return { content: describeWorkflow(workflow, this.limits), isError: false, workflow, toolset: derived };
+  }
+
+  /**
+   * The current toolset with this version of the workflow pinned, which becomes the current
+   * toolset. One derivation at a time: each starts from the toolset the previous one gave.
+   */
+  private derive(workflow: Workflow, signal: AbortSignal | undefined): Promise<Toolset> {
+    const derived = this.derivations.then(async () => {
+      const base = this.currentToolset;
+      if (base === undefined) {
+        throw new RewindError("save_workflow needs a toolset");
+      }
+      const toolset = await this.client.toolsets.create(
+        { base, workflows: [`${workflow.name}@${workflow.version}`] },
+        { signal },
+      );
+      this.currentToolset = toolset.id;
+      return toolset;
+    });
+    this.derivations = derived.catch(() => undefined);
+    return derived;
   }
 
   /** A run's report: its output when it completed, its trace when asked. */
@@ -497,6 +616,9 @@ export class AgentTools {
 
 type Values = Record<string, unknown>;
 
+/** The tools that need a toolset. */
+const NEEDS_TOOLSET: ReadonlySet<AgentToolName> = new Set(["search_tools", "save_workflow"]);
+
 function parseInput(name: AgentToolName, input: unknown): Values {
   let values = input;
   if (typeof input === "string") {
@@ -538,6 +660,14 @@ function requireString(values: Values, key: string, label = key): string {
   const value = values[key];
   if (typeof value !== "string" || value === "") {
     throw new InputError(`\`${label}\` must be a non-empty string.`);
+  }
+  return value;
+}
+
+function requireObject(values: Values, key: string): Values {
+  const value = values[key];
+  if (!isObject(value)) {
+    throw new InputError(`\`${key}\` must be a JSON Schema: an object.`);
   }
   return value;
 }

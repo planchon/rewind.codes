@@ -8,8 +8,10 @@ nothing is stored. Refused at start, with a diagnostic written for the model (a 
 column in `script.ts`):
 
 - a syntax error;
-- an import of anything other than `rewind` and `rewind:tools`, a dynamic `import()`, a `require`;
-- an import of a name `rewind` does not export, or of a tool the run's toolset does not have;
+- an import of anything other than `rewind`, `rewind:tools` and `rewind:workflows`, a dynamic
+  `import()`, a `require`;
+- an import of a name `rewind` does not export, of a tool the run's toolset does not have, or of
+  a workflow it does not pin;
 - no default export, or a default export that is certainly not a function (a literal, an
   object, a class);
 - more lines than its namespace's `maxScriptLines`
@@ -203,6 +205,9 @@ The engine replays the new script against the parent's history:
   that the tool recognizes a duplicate. It fails with `outcomeUnknown` if its policy is
   `at_most_once`.
 - A script that reads `run.id` diverges there: the fork has its own id.
+- A workflow run started by a call copied from the parent stays the parent's child: the fork
+  receives its end too (unless the copied history already holds it), and never cancels it. A
+  start made live starts a child of the fork ([workflows](#workflows-across-runs)).
 
 With the parent's seed, the corrected script emits the same commands as long as it takes the
 same path. The `at` index forces the fork live from an entry even if the commands still
@@ -285,7 +290,7 @@ goes idle:
 | `main` returned | Success, with its return value as output. |
 | `main` threw | Failure, with that error. |
 | A promise was rejected and still has no handler once microtasks are drained | Failure, with the rejection as the error. |
-| `main` has not settled, and no tool call, timer or signal wait is pending | Failure, `DeadlockError`: nothing can wake the script any more. After a cancellation, the failure is `CancelledError` instead: the run ends `cancelled` (a wait built on `setTimeout` loses its timer when cancelled). |
+| `main` has not settled, and no tool call, timer or signal wait is pending (a `result()` that waits for a workflow run is a signal wait) | Failure, `DeadlockError`: nothing can wake the script any more. After a cancellation, the failure is `CancelledError` instead: the run ends `cancelled` (a wait built on `setTimeout` loses its timer when cancelled). |
 
 **Unhandled rejections** follow Node, its known trap included:
 `const p = tool(); await other(); await p` fails if `p` is rejected before it is
@@ -298,12 +303,14 @@ common mistake in generated code, and the TypeScript compiler does not catch it.
 - After `main` returned, the glue holds the output and the script stays alive: pending
   tool calls complete, their continuations run, and the table above still applies. So
   the effect the script asked for happens, and if it fails, the unhandled rejection
-  fails the run. `complete_run` is emitted when the last tool call has settled.
+  fails the run. `complete_run` is emitted when the last tool call has settled and the last
+  [attached](#workflows-across-runs) workflow run the script started has ended.
 - After a failure, no script code runs any more. The outcomes of the tool calls in
   flight are recorded as they arrive, without being delivered to the script, and
   `fail_run` is emitted after the last one.
 - Timers and signal waits still pending at that point are dropped: they have no effect
-  outside the run.
+  outside the run. Attached workflow runs still running are not waited for: the run's end
+  cancels them.
 
 Consequences:
 
@@ -330,12 +337,71 @@ The [run TTL](#run-ttl) bounds it.
   timer is cancelled (`cancel_timer`); if the timer fires first, the waiter resolves to
   `undefined`.
 
+## Workflows across runs
+
+A script starts and signals runs of [workflows](01-product.md#workflows) through two built-ins
+per workflow its toolset pins, `workflows.<name>.start` and `workflows.<name>.signal`, which
+the engine serves itself, like `webhook` ([routes](04-tools.md#routes)). They are tool calls:
+journaled as such, retried with the same idempotency key, reused by forks, answered by mocks.
+The end of a run comes back to the run that started it as a signal. The journal has no event
+of its own for any of it.
+
+| In the script | In the caller's journal | What the engine does | In the target's journal |
+| --- | --- | --- | --- |
+| `triage.start(input, opts)` | `schedule_tool_call` of `workflows.triage.start` with `{ input, detached?, labels?, ttl? }`, then `tool_call_completed { runId }` | Creates the run of the pinned version: its script and toolset, the caller's labels plus `labels`, the trace context of the call, the caller's scope. Its run key is `rewind:{idempotency key}`, so an attempt after a lost claim finds the same run | `run_started` |
+| `run.signal(name, payload)`, `triage.get(id).signal(name, payload)` | `schedule_tool_call` of `workflows.triage.signal` with `{ run, name, payload }`, then `tool_call_completed {}` | Puts the signal in the target's inbox with the key `rewind:{idempotency key}`, so it is delivered once | `signal_received` |
+| `run.result()` | `signal_awaited`, then `signal_received rewind:ended:<run>` | The target's terminal commit puts its end in the inbox of the run that started it, and of every run that watches it, in the same transaction | `complete_run`, `fail_run` or `run_aborted` |
+
+Checks:
+
+- Inside the op, before the command is recorded, as tool args are: the input against the
+  workflow's input schema; a signal's name against the names it declares, and its payload
+  against that signal's schema; `labels` and `ttl` as when the API starts a run. A failure
+  throws a `TypeError` at the call.
+- At dispatch, `signal` fails with a `ToolError` when the target does not exist or is out of
+  the caller's scope, is not a run of that workflow, has ended, or refuses the payload (its own
+  version declares the signal differently). `start` fails with a `ToolError` (`unavailable`)
+  when the tenant has reached its quota of active runs.
+- `result()` checks the output against the pinned output schema. A mismatch rejects with
+  `WorkflowError` (`invalid_output`).
+
+Ends:
+
+- The glue takes the `rewind:ended:` signals itself: they never reach a mailbox the script
+  reads. `result()` gives the same answer each time it is called, and an end that arrives
+  before the start's result is kept for it.
+- A run started without `detached: true` is **attached**: `complete_run` waits for it
+  ([how a script ends](#how-a-script-ends)). A failure or a cancellation does not.
+- When a run ends, the same terminal commit enqueues `cancel_requested` for each of its
+  attached children still running, with the message `the run <id> that started it ended`. A
+  cancellation does not wait for a start in flight: a child created after its caller ended is
+  cancelled as soon as it exists.
+- The end of a run that no running run watches (a detached child whose parent has ended) goes
+  nowhere.
+- A fork watches the children its copied history started: it receives their ends, and never
+  cancels them ([forks](#forks)).
+
+A script reaches only the runs of its tenant within its **scope**: the allowed labels of the
+grant that started the first run of its tree (an API key's or a member's), none for a grant
+without labels. Children inherit the
+scope, and their labels always include it. Versions are content-addressed and a toolset pins a
+version, so a workflow cannot start itself, or a workflow that starts it.
+
+In mock mode, `workflows.<name>.start` is answered by the mock sources like any tool call, and
+their answer is the child's outcome: a result is its output, a failure its error. No run is
+created: the start resolves with a run id drawn from the engine's entropy, and the end follows
+at once as a signal. `workflows.<name>.signal` is accepted unless a mock source answers it. The
+cassette of a run records each start with the outcome of its child, read from the end signal
+in the journal (a child that had not ended is recorded as failed with that reason), and
+leaves the `rewind:ended:` signals out of its signal timeline.
+
 ## Cancellation
 
 `cancel_requested` rejects every pending await in the script with `CancelledError`. The
 script may catch it to clean up (it gets one grace activation). Otherwise the run ends
 `cancelled`, and its pending tool tasks and timers are cancelled. Cancellation does not
-wait for the tool calls in flight: their results are dropped when they arrive.
+wait for the tool calls in flight: their results are dropped when they arrive. Nor does it
+wait for the attached workflow runs the script started: the run's end cancels them.
 
 The grace is the delivery of `cancel_requested` itself: once the script is idle again,
 it must have ended by itself (`complete_run`, or `fail_run`, `CancelledError` included). If it

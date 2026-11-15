@@ -3,11 +3,12 @@
 //!
 //! [`PostgresStore`] implements four ports of `rewind-engine` on one database:
 //!
-//! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, namespaces
-//!   with their quotas, use and alerts, payload rows and references, retention. The starts of a
-//!   tenant and the writes of its use take a transaction-scoped advisory lock on the tenant: two
-//!   starts never take the same last place of a quota;
+//! - `JournalStore`: scripts, toolsets, workflow versions, runs and the runs that watch their
+//!   end, histories, inboxes, timers, tool tasks, leases and fencing, quarantine, the feed,
+//!   webhook tokens and subscriptions, tenants, namespaces with their quotas, use and alerts,
+//!   payload rows and references, retention. The starts of a tenant and the writes of its use
+//!   take a transaction-scoped advisory lock on the tenant: two starts never take the same last
+//!   place of a quota;
 //! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
 //!   tokens and token keys. The writes of a tenant's grants and roles take a transaction-scoped
 //!   advisory lock on the tenant: the kept role's last holder and a role in use are decided

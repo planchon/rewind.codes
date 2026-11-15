@@ -3,15 +3,22 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { useRunEntry } from "../../api/queries";
-import type { Entry, Run } from "../../api/types";
+import type { Entry, Payload, Run } from "../../api/types";
 import { Link } from "../../app/namespace";
 import { ProblemView, Time } from "../../components/bits";
 import { JsonValue, PayloadView } from "../../components/Payload";
-import { OutcomeBadge } from "../../components/Status";
+import { OutcomeBadge, StatusBadge } from "../../components/Status";
 import { formatDuration, formatOffset } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
 import type { Activity, RunModel } from "../../model/run";
 import { type Step, stepOf } from "../../model/steps";
+import {
+  endedRunOf,
+  readRunEnd,
+  signalTargetOf,
+  startedRunOf,
+  workflowCallOf,
+} from "../../model/workflows";
 import { activityOutcome, activityTitle, entrySummary } from "./describe";
 
 export type Selection = { kind: "entry"; idx: number } | { kind: "line"; line: number } | null;
@@ -97,6 +104,33 @@ function StepLinks({
   );
 }
 
+/** A link to another run, by its full id. */
+function RunLink({ id }: { id: string }) {
+  return (
+    <Link to={`/runs/${id}`} className="mono" title="Open this run">
+      {id}
+    </Link>
+  );
+}
+
+/** How a run this run started ended, from the payload of its `rewind:ended:` signal. */
+function RunEndRows({ runId, payload }: { runId: string; payload: Payload }) {
+  const end = readRunEnd(payload);
+  return (
+    <>
+      <dt>run</dt>
+      <dd>
+        <RunLink id={runId} />
+      </dd>
+      <dt>it ended</dt>
+      <dd>
+        {end.status ? <StatusBadge status={end.status} /> : <span className="muted">ended</span>}
+        {end.message && <span className="muted"> {end.message}</span>}
+      </dd>
+    </>
+  );
+}
+
 function ActivityDetail({
   run,
   model,
@@ -117,6 +151,11 @@ function ActivityDetail({
   const t0 = model.firstAt;
   const a = activity;
   const outcome = activityOutcome(a);
+  const workflowCall = a.kind === "tool_call" ? workflowCallOf(a.tool) : null;
+  const startedRun = a.kind === "tool_call" ? startedRunOf(a) : null;
+  const signalTarget =
+    a.kind === "tool_call" && workflowCall?.op === "signal" ? signalTargetOf(a.args) : null;
+  const endedRun = a.kind === "signal" ? endedRunOf(a.name) : null;
   const waiting =
     a.kind === "tool_call"
       ? run.waitingFor?.find((w) => w.kind === "tool_call" && w.seq === a.seq)
@@ -168,6 +207,33 @@ function ActivityDetail({
         <dd>
           <At ms={a.at} t0={t0} />
         </dd>
+        {startedRun !== null && (
+          <>
+            <dt>started</dt>
+            <dd>
+              <RunLink id={startedRun} />
+            </dd>
+          </>
+        )}
+        {signalTarget !== null && (
+          <>
+            <dt>to run</dt>
+            <dd>
+              <RunLink id={signalTarget} />
+            </dd>
+          </>
+        )}
+        {endedRun !== null && a.kind === "signal" && a.end?.outcome === "received" && (
+          <RunEndRows runId={endedRun} payload={a.end.payload} />
+        )}
+        {endedRun !== null && a.kind === "signal" && a.end === null && (
+          <>
+            <dt>run</dt>
+            <dd>
+              <RunLink id={endedRun} />
+            </dd>
+          </>
+        )}
         {a.kind === "timer" && (
           <>
             <dt>duration</dt>
@@ -264,7 +330,11 @@ function ActivityDetail({
         </section>
       )}
       {a.kind === "signal" && a.end?.outcome === "received" && (
-        <PayloadView runId={run.id} name="payload" payload={a.end.payload} />
+        <PayloadView
+          runId={run.id}
+          name={endedRun !== null ? "end" : "payload"}
+          payload={a.end.payload}
+        />
       )}
     </div>
   );
@@ -272,10 +342,11 @@ function ActivityDetail({
 
 function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: Entry }) {
   const e = entry.event;
+  const endedRun = e.type === "signal_received" ? endedRunOf(e.name) : null;
   return (
     <div className="inspector-body">
       <div className="inspector-title">
-        <h3 className="mono">{e.type}</h3>
+        <h3 className="mono">{endedRun !== null ? "end of a run it started" : e.type}</h3>
         <span className="muted mono">#{entry.idx}</span>
       </div>
       <dl className="kv">
@@ -285,6 +356,9 @@ function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: 
         </dd>
         <dt>event</dt>
         <dd>{entrySummary(entry)}</dd>
+        {endedRun !== null && e.type === "signal_received" && (
+          <RunEndRows runId={endedRun} payload={e.payload} />
+        )}
         <dt>entry</dt>
         <dd>
           <RawEntry runId={run.id} idx={entry.idx} />
@@ -293,7 +367,11 @@ function EntryDetail({ run, model, entry }: { run: Run; model: RunModel; entry: 
       {e.type === "run_started" && <PayloadView runId={run.id} name="input" payload={e.input} />}
       {e.type === "complete_run" && <PayloadView runId={run.id} name="output" payload={e.output} />}
       {e.type === "signal_received" && (
-        <PayloadView runId={run.id} name="payload" payload={e.payload} />
+        <PayloadView
+          runId={run.id}
+          name={endedRun !== null ? "end" : "payload"}
+          payload={e.payload}
+        />
       )}
       {e.type === "fail_run" && e.error.stack && <pre className="frame">{e.error.stack}</pre>}
     </div>
@@ -378,7 +456,9 @@ export function Inspector({
           : activity.kind === "timer"
             ? "Timer"
             : activity.kind === "signal"
-              ? "Signal wait"
+              ? endedRunOf(activity.name) !== null
+                ? "Result of a run"
+                : "Signal wait"
               : "Log";
       body = (
         <ActivityDetail

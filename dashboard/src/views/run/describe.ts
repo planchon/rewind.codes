@@ -2,17 +2,21 @@
 // the notes beside the source.
 import type { Entry } from "../../api/types";
 import type { Outcome } from "../../components/Status";
-import { formatBytes, formatDuration } from "../../model/format";
+import { formatBytes, formatDuration, shortRunId } from "../../model/format";
 import type { Activity } from "../../model/run";
+import { callName, endedRunOf, readRunEnd, workflowCallOf } from "../../model/workflows";
 
 export function activityTitle(a: Activity): string {
   switch (a.kind) {
     case "tool_call":
-      return `#${a.seq} ${a.tool}`;
+      return `#${a.seq} ${callName(a.tool, a.args)}`;
     case "timer":
       return `#${a.seq} ${a.timeoutOf !== null ? "timeout" : "sleep"} ${formatDuration(a.durationMs)}`;
-    case "signal":
-      return `signal "${a.name}"`;
+    case "signal": {
+      // `run.result()`: a wait on the end of a run this run started.
+      const ended = endedRunOf(a.name);
+      return ended !== null ? `result() of run ${shortRunId(ended)}` : `signal "${a.name}"`;
+    }
     case "log":
       return `console.${a.level}`;
   }
@@ -21,6 +25,12 @@ export function activityTitle(a: Activity): string {
 export function activityOutcome(a: Activity): Outcome {
   if (a.kind === "log") return "ok";
   if (a.end === null) return "open";
+  // The end of a run this run waited for: `result()` rejects unless that run completed.
+  if (a.kind === "signal" && a.end.outcome === "received" && endedRunOf(a.name) !== null) {
+    const status = readRunEnd(a.end.payload).status;
+    if (status === "failed" || status === "aborted") return "failed";
+    if (status === "cancelled") return "cancelled";
+  }
   return a.end.outcome;
 }
 
@@ -43,7 +53,9 @@ export function entrySummary(entry: Entry): string {
     case "run_aborted":
       return `${e.reason.kind}: ${e.reason.message}`;
     case "schedule_tool_call":
-      return `#${e.seq} ${e.tool}(${args(e.args.preview)})`;
+      return workflowCallOf(e.tool)
+        ? `#${e.seq} ${callName(e.tool, e.args)} ${args(e.args.preview)}`
+        : `#${e.seq} ${e.tool}(${args(e.args.preview)})`;
     case "tool_call_completed":
       return `#${e.seq} → ${args(e.result.preview)} (${formatBytes(e.result.bytes)})`;
     case "tool_call_failed":
@@ -58,14 +70,21 @@ export function entrySummary(entry: Entry): string {
       return `→ ${args(e.output.preview)}`;
     case "fail_run":
       return `${e.error.name}: ${e.error.message}`;
-    case "signal_received":
-      return `"${e.name}" ${args(e.payload.preview)}`;
+    case "signal_received": {
+      const ended = endedRunOf(e.name);
+      if (ended === null) return `"${e.name}" ${args(e.payload.preview)}`;
+      const end = readRunEnd(e.payload);
+      return `end of run ${shortRunId(ended)}: ${end.status ?? "ended"}${end.message ? `, ${end.message}` : ""}`;
+    }
     case "cancel_requested":
       return `${e.reason}${e.message ? `: ${e.message}` : ""}`;
     case "log":
       return `[${e.level}] ${e.message}`;
-    case "signal_awaited":
-      return `"${e.name}"${e.timeout != null ? `, timeout timer #${e.timeout}` : ""}`;
+    case "signal_awaited": {
+      const ended = endedRunOf(e.name);
+      const what = ended === null ? `"${e.name}"` : `result() of run ${shortRunId(ended)}`;
+      return `${what}${e.timeout != null ? `, timeout timer #${e.timeout}` : ""}`;
+    }
   }
 }
 

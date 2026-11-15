@@ -4250,6 +4250,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.3.4",
  "jiff",
+ "jsonschema",
  "regex",
  "rewind-core",
  "rewind-engine",

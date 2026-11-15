@@ -9,6 +9,8 @@
 //! - [`JournalDocument`]: a run's journal with its script and toolset, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
 //! - [`Shape`]: the type of a tool's results, as observed in journals.
+//! - [`Workflow`]: a script with a name and a typed interface, that scripts start and signal;
+//!   [`RunEnd`], how a run's end reaches the runs that watch it.
 //!
 //! This crate is the domain and nothing else: no I/O, no async, no V8, no serde, no telemetry.
 //! It knows nothing about how events are stored or transported, nor where time, ids and seeds
@@ -30,6 +32,7 @@ mod shape;
 mod state;
 mod time;
 mod toolset;
+mod workflow;
 
 pub use artifacts::Script;
 pub use canonical::{canonical_json, canonicalize};
@@ -51,6 +54,10 @@ pub use time::{DurationError, Timestamp, parse_duration};
 pub use toolset::{
     Builtin, Interruption, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute,
     Toolset, ToolsetError,
+};
+pub use workflow::{
+    InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RunEnd, WORKFLOWS_NAMESPACE, Workflow,
+    WorkflowOp, WorkflowSchemas, end_signal_name, ended_run, is_reserved_signal, starter_ended,
 };
 
 /// The JSON value type carried by payloads.

@@ -99,7 +99,7 @@ describe("suggestions", () => {
   it("offer the fields and the label keys while a name is typed", () => {
     const s = suggest("sta", 3, FACETS);
     expect(s?.from).toBe(0);
-    expect(s?.items.map((i) => i.insert)).toEqual(["status:", "started:"]);
+    expect(s?.items.map((i) => i.insert)).toEqual(["status:", "started:", "started_by:"]);
     const labels = suggest("@a", 2, FACETS);
     expect(labels?.items.map((i) => i.insert)).toEqual(["@agent:"]);
     expect(suggest("", 0, FACETS)?.items.length).toBeGreaterThan(5);

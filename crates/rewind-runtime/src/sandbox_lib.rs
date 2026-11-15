@@ -270,11 +270,26 @@ mod tests {
                 Decl::TsTypeAlias(alias) => {
                     types.insert(alias.id.sym.to_string());
                 }
+                Decl::TsInterface(interface) => {
+                    types.insert(interface.id.sym.to_string());
+                }
                 decl => values.extend(value_names(decl)),
             }
         }
         assert_eq!(values, declared_globals().rewind);
-        assert_eq!(types, set(&["Duration"]));
+        assert_eq!(
+            types,
+            set(&[
+                "Duration",
+                "SignalName",
+                "SignalPayload",
+                "Signals",
+                "StartOptions",
+                "Workflow",
+                "WorkflowRun",
+                "WorkflowRunRef",
+            ])
+        );
     }
 
     /// Everything the runtime's `rewind` exports is declared.

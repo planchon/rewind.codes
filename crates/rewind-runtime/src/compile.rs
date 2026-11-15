@@ -3,8 +3,9 @@
 //!
 //! Everything that can be refused without running the script is refused here, so that a run
 //! is never created for a script that cannot load (`archi/03-execution.md`, "Starting a
-//! run"): syntax errors, dynamic `import()`, imports of modules other than `rewind` and
-//! `rewind:tools`, imports of names those modules do not export, a missing default export.
+//! run"): syntax errors, dynamic `import()`, imports of modules other than `rewind`,
+//! `rewind:tools` and `rewind:workflows`, imports of names those modules do not export, a
+//! missing default export.
 
 use std::collections::BTreeSet;
 
@@ -41,6 +42,7 @@ pub(crate) fn compile(
             .map(|name| (*name).to_owned())
             .collect(),
         tools: (glue.tool_exports)(toolset),
+        workflows: (glue.workflow_exports)(toolset),
     }
     .check()?;
     let Transpiled {
@@ -110,6 +112,8 @@ struct Checker<'a> {
     std: BTreeSet<String>,
     /// What `rewind:tools` exports for the run's toolset.
     tools: BTreeSet<String>,
+    /// What `rewind:workflows` exports for the run's toolset.
+    workflows: BTreeSet<String>,
 }
 
 impl Checker<'_> {
@@ -118,8 +122,8 @@ impl Checker<'_> {
         self.parsed.program().visit_with(&mut dynamic);
         if let Some(position) = dynamic.first {
             return Err(invalid(format!(
-                "dynamic import() is not available in Rewind scripts ({}): import from \"rewind\" \
-                 and \"rewind:tools\" at the top of the script",
+                "dynamic import() is not available in Rewind scripts ({}): import from \"rewind\", \
+                 \"rewind:tools\" and \"rewind:workflows\" at the top of the script",
                 self.at(position)
             )));
         }
@@ -196,7 +200,7 @@ impl Checker<'_> {
                     if let TsModuleRef::TsExternalModuleRef(require) = &import.module_ref {
                         return Err(invalid(format!(
                             "require() is not available in Rewind scripts ({}): use `import` \
-                             from \"rewind\" and \"rewind:tools\"",
+                             from \"rewind\", \"rewind:tools\" and \"rewind:workflows\"",
                             self.at(SourcePos::unsafely_from_byte_pos(require.span.lo))
                         )));
                     }
@@ -227,8 +231,10 @@ impl Checker<'_> {
         match src.value.to_atom_lossy().as_str() {
             "rewind" => Ok(&self.std),
             "rewind:tools" => Ok(&self.tools),
+            "rewind:workflows" => Ok(&self.workflows),
             other => Err(invalid(format!(
-                "cannot import {other:?} ({}): scripts can only import \"rewind\" and \"rewind:tools\"",
+                "cannot import {other:?} ({}): scripts can only import \"rewind\", \"rewind:tools\" \
+                 and \"rewind:workflows\"",
                 self.at(SourcePos::unsafely_from_byte_pos(src.span.lo))
             ))),
         }
@@ -371,7 +377,7 @@ mod tests {
                 "export default async function main() {\n  return await import(\"rewind\");\n}"
             ),
             "dynamic import() is not available in Rewind scripts (script.ts:2:16): import from \
-             \"rewind\" and \"rewind:tools\" at the top of the script"
+             \"rewind\", \"rewind:tools\" and \"rewind:workflows\" at the top of the script"
         );
     }
 
@@ -379,8 +385,8 @@ mod tests {
     fn refuses_other_modules() {
         assert_eq!(
             refused("import fs from \"node:fs\";\nexport default async () => fs;"),
-            "cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"rewind\" and \
-             \"rewind:tools\""
+            "cannot import \"node:fs\" (script.ts:1:16): scripts can only import \"rewind\", \
+             \"rewind:tools\" and \"rewind:workflows\""
         );
         assert!(
             refused("import hooks from \"rewind:internal\";\nexport default async () => hooks;")
@@ -401,7 +407,7 @@ mod tests {
         assert_eq!(
             refused("import { fetch } from \"rewind\";\nexport default async () => fetch;"),
             "\"rewind\" has no export named \"fetch\" (script.ts:1:10); it exports CancelledError, \
-             ToolError, run, signal, sleep, webhook"
+             ToolError, WorkflowError, run, signal, sleep, webhook"
         );
         assert_eq!(
             refused("import { jira } from \"rewind:tools\";\nexport default async () => jira;"),

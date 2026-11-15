@@ -14,6 +14,20 @@ pub struct ToolDeclarations {
     pub prompt: String,
 }
 
+/// What `rewind-codegen` generates from a workflow's schemas, to check its own script when it is
+/// registered (`archi/04-tools.md`, "Type-checking").
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkflowDeclarations {
+    /// Declarations that augment the `rewind` module with the workflow's signals: its `Signals`
+    /// interface, so that `signal()` and `webhook()` take only their names and `signal()`
+    /// returns their types.
+    pub signals: String,
+    /// `entry.ts`: a module that imports the script's default export from `./script` and
+    /// assigns it to a function from the input type to the output type. A diagnostic there
+    /// means the default export does not match the workflow's schemas.
+    pub entry: String,
+}
+
 /// One problem found in a script, written for a model.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
@@ -91,6 +105,16 @@ pub trait TypeChecker: Send + Sync {
         &self,
         script: &Script,
         declarations: &ToolDeclarations,
+    ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
+
+    /// Type-checks a workflow's script as [`check`](Self::check) does, with the workflow's own
+    /// declarations too: its signals, and its `entry.ts`, whose diagnostics are reported at the
+    /// script's default export.
+    fn check_workflow(
+        &self,
+        script: &Script,
+        declarations: &ToolDeclarations,
+        workflow: &WorkflowDeclarations,
     ) -> impl Future<Output = Result<Vec<Diagnostic>, CheckerError>> + Send;
 }
 

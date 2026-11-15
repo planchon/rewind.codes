@@ -8,16 +8,21 @@
 //!
 //! ```text
 //! Toolset
-//! ├── servers: McpServer { name, transport: http(url) | stdio(command, args, env), concurrency }
-//! └── tools:   Tool { name, route, description?, input_schema, output_schema?, policy }
-//!                     route  = mcp(server) | host(group?) | builtin(http(allowed_hosts) | webhook)
-//!                     policy = { on_interruption: retry | at_most_once, approval,
-//!                                execution_timeout?, heartbeat_timeout, concurrency }
+//! ├── servers:   McpServer { name, transport: http(url) | stdio(command, args, env), concurrency }
+//! ├── tools:     Tool { name, route, description?, input_schema, output_schema?, policy }
+//! │                     route  = mcp(server) | host(group?) | builtin(http(allowed_hosts) | webhook)
+//! │                     policy = { on_interruption: retry | at_most_once, approval,
+//! │                                execution_timeout?, heartbeat_timeout, concurrency }
+//! └── workflows: PinnedWorkflow { name, version, description?, schemas }
+//!                  each gives two built-ins, not in the document:
+//!                  workflows.<name>.start and workflows.<name>.signal (builtin(workflow))
 //! ```
 //!
 //! A tool is named as its server defines it, behind its namespace: `github.list_issues` for the
 //! tool `list_issues` of the MCP server `github`, `harness.ask_user` or `ask_user` for a host
 //! tool, `http` and `webhook` for the built-ins. The namespace is what `rewind:tools` exports.
+//! The namespace `workflows` is reserved for the workflows' built-ins; `rewind:workflows`
+//! exports one name per pinned workflow.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -27,6 +32,7 @@ use serde_json::{Map, Value, json};
 
 use crate::canonical::canonical_json;
 use crate::digest::Digest;
+use crate::workflow::{InvalidWorkflow, PinnedWorkflow, WORKFLOWS_NAMESPACE, WorkflowOp};
 
 /// The tools a run may call, pinned when the toolset was registered.
 ///
@@ -37,6 +43,10 @@ use crate::digest::Digest;
 pub struct Toolset {
     servers: Vec<McpServer>,
     tools: Vec<Tool>,
+    /// Sorted by name.
+    workflows: Vec<PinnedWorkflow>,
+    /// The built-ins of the workflows, derived from them, sorted by name.
+    workflow_tools: Vec<Tool>,
 }
 
 /// An MCP server of a toolset, as it was pinned.
@@ -158,14 +168,21 @@ pub enum Builtin {
     Http { allowed_hosts: Vec<String> },
     /// `webhook`: `webhook(name)` returns a URL bound to the run and the signal name.
     Webhook,
+    /// `workflows.<workflow>.start` or `workflows.<workflow>.signal`: starts or signals a run of
+    /// a workflow the toolset pins (`archi/03-execution.md`, "Workflows across runs"). Derived
+    /// from the pinned workflow, never declared as a tool.
+    Workflow { workflow: String, op: WorkflowOp },
 }
 
 impl Builtin {
     /// The name of the tool, as scripts call it.
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> String {
         match self {
-            Builtin::Http { .. } => "http",
-            Builtin::Webhook => "webhook",
+            Builtin::Http { .. } => "http".into(),
+            Builtin::Webhook => "webhook".into(),
+            Builtin::Workflow { workflow, op } => {
+                format!("{WORKFLOWS_NAMESPACE}.{workflow}.{}", op.as_str())
+            }
         }
     }
 }
@@ -255,6 +272,10 @@ pub enum ToolsetError {
     MisplacedTool { tool: String, expected: String },
     #[error("tool {tool:?}: {message}")]
     InvalidTool { tool: String, message: String },
+    #[error("workflow {0:?} is pinned twice")]
+    DuplicateWorkflow(String),
+    #[error(transparent)]
+    InvalidWorkflow(#[from] InvalidWorkflow),
 }
 
 impl Toolset {
@@ -292,7 +313,46 @@ impl Toolset {
             }
             check_tool(tool, &servers)?;
         }
-        Ok(Self { servers, tools })
+        Ok(Self {
+            servers,
+            tools,
+            workflows: Vec::new(),
+            workflow_tools: Vec::new(),
+        })
+    }
+
+    /// This toolset, pinning these workflows instead of those it pinned: each gives the
+    /// built-ins `workflows.<name>.start` and `workflows.<name>.signal`.
+    pub fn with_workflows(
+        mut self,
+        workflows: impl IntoIterator<Item = PinnedWorkflow>,
+    ) -> Result<Self, ToolsetError> {
+        let mut workflows: Vec<PinnedWorkflow> = workflows.into_iter().collect();
+        workflows.sort_by(|a, b| a.name.cmp(&b.name));
+        for pair in workflows.windows(2) {
+            if pair[0].name == pair[1].name {
+                return Err(ToolsetError::DuplicateWorkflow(pair[0].name.clone()));
+            }
+        }
+        for workflow in &workflows {
+            workflow.check()?;
+        }
+        let mut workflow_tools: Vec<Tool> = workflows
+            .iter()
+            .flat_map(|workflow| {
+                [WorkflowOp::Start, WorkflowOp::Signal].map(|op| {
+                    let route = ToolRoute::Builtin(Builtin::Workflow {
+                        workflow: workflow.name.clone(),
+                        op,
+                    });
+                    Tool::new(workflow.tool_name(op), route, json!({}))
+                })
+            })
+            .collect();
+        workflow_tools.sort_by(|a, b| a.name.cmp(&b.name));
+        self.workflows = workflows;
+        self.workflow_tools = workflow_tools;
+        Ok(self)
     }
 
     /// A toolset with no tool.
@@ -319,16 +379,35 @@ impl Toolset {
         &self.servers
     }
 
-    /// The tools, sorted by name.
+    /// The tools, sorted by name: those the toolset declares, without the workflows'
+    /// built-ins.
     pub fn tools(&self) -> &[Tool] {
         &self.tools
     }
 
-    pub fn tool(&self, name: &str) -> Option<&Tool> {
-        self.tools
-            .binary_search_by(|tool| tool.name.as_str().cmp(name))
+    /// The pinned workflows, sorted by name.
+    pub fn workflows(&self) -> &[PinnedWorkflow] {
+        &self.workflows
+    }
+
+    pub fn workflow(&self, name: &str) -> Option<&PinnedWorkflow> {
+        self.workflows
+            .binary_search_by(|workflow| workflow.name.as_str().cmp(name))
             .ok()
-            .map(|index| &self.tools[index])
+            .map(|index| &self.workflows[index])
+    }
+
+    /// A tool scripts may call: one the toolset declares, or a built-in of a pinned workflow.
+    pub fn tool(&self, name: &str) -> Option<&Tool> {
+        let find = |tools: &'_ [Tool]| {
+            tools
+                .binary_search_by(|tool| tool.name.as_str().cmp(name))
+                .ok()
+        };
+        if let Some(index) = find(&self.tools) {
+            return Some(&self.tools[index]);
+        }
+        find(&self.workflow_tools).map(|index| &self.workflow_tools[index])
     }
 
     pub fn server(&self, name: &str) -> Option<&McpServer> {
@@ -349,11 +428,22 @@ impl Toolset {
         Digest::of(canonical_json(&self.document()).as_bytes())
     }
 
-    /// The pinned toolset document v1, as a JSON value.
+    /// The pinned toolset document v1, as a JSON value. `workflows` is only there when the
+    /// toolset pins some, so the digests of the toolsets without workflows did not change when
+    /// workflows came.
     fn document(&self) -> Value {
         let servers: Vec<Value> = self.servers.iter().map(server_json).collect();
         let tools: Vec<Value> = self.tools.iter().map(tool_json).collect();
-        json!({ "v": 1, "servers": servers, "tools": tools })
+        let mut document = json!({ "v": 1, "servers": servers, "tools": tools });
+        if !self.workflows.is_empty() {
+            let workflows: Vec<Value> = self
+                .workflows
+                .iter()
+                .map(PinnedWorkflow::document)
+                .collect();
+            document["workflows"] = Value::Array(workflows);
+        }
+        document
     }
 }
 
@@ -362,10 +452,14 @@ impl fmt::Display for Toolset {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "toolset {} ({} tools)",
+            "toolset {} ({} tools",
             self.digest().short(),
             self.tools.len()
-        )
+        )?;
+        if !self.workflows.is_empty() {
+            write!(f, ", {} workflows", self.workflows.len())?;
+        }
+        f.write_str(")")
     }
 }
 
@@ -379,6 +473,11 @@ fn check_server(server: &McpServer) -> Result<(), ToolsetError> {
     };
     if !is_identifier(&server.name) || is_reserved(&server.name) {
         return Err(ToolsetError::InvalidServerName(server.name.clone()));
+    }
+    if server.name == WORKFLOWS_NAMESPACE {
+        return Err(invalid(
+            "the namespace \"workflows\" is reserved for the built-ins of the workflows",
+        ));
     }
     if server.concurrency == 0 {
         return Err(invalid("its concurrency must be at least 1"));
@@ -430,6 +529,11 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
                      import it"
                 )));
             }
+            if group == WORKFLOWS_NAMESPACE {
+                return Err(invalid(
+                    "the group \"workflows\" is reserved for the built-ins of the workflows".into(),
+                ));
+            }
             in_namespace(name, group).ok_or_else(|| misplaced(format!("{group}.<tool>")))?;
         }
         ToolRoute::Host { group: None } => {
@@ -446,6 +550,11 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
                         .into(),
                 ));
             }
+        }
+        ToolRoute::Builtin(Builtin::Workflow { .. }) => {
+            return Err(invalid(
+                "the built-ins of a workflow come from the workflows the toolset pins".into(),
+            ));
         }
         ToolRoute::Builtin(builtin) => {
             if name != builtin.name() {
@@ -494,7 +603,7 @@ fn in_namespace<'a>(name: &'a str, namespace: &str) -> Option<&'a str> {
 
 /// An ECMAScript identifier name in ASCII. What `rewind:tools` exports a namespace or a host tool
 /// as must also not be a [reserved word](RESERVED_WORDS).
-fn is_identifier(name: &str) -> bool {
+pub(crate) fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
@@ -559,7 +668,7 @@ pub const RESERVED_WORDS: &[&str] = &[
     "eval",
 ];
 
-fn is_reserved(name: &str) -> bool {
+pub(crate) fn is_reserved(name: &str) -> bool {
     RESERVED_WORDS.contains(&name)
 }
 
@@ -586,6 +695,10 @@ fn tool_json(tool: &Tool) -> Value {
             json!({ "type": "builtin", "builtin": "http", "allowed_hosts": allowed_hosts })
         }
         ToolRoute::Builtin(Builtin::Webhook) => json!({ "type": "builtin", "builtin": "webhook" }),
+        // Never written: a toolset declares no such tool (`check_tool`).
+        ToolRoute::Builtin(Builtin::Workflow { workflow, op }) => json!({
+            "type": "builtin", "builtin": "workflow", "workflow": workflow, "op": op.as_str(),
+        }),
     };
     let mut schemas = Map::new();
     schemas.insert("input".into(), tool.input_schema.clone());
@@ -980,5 +1093,97 @@ mod tests {
         // A host tool whose name is no identifier at all stays out of `rewind:tools`, as before.
         let dashed = Tool::new("ask-user", ToolRoute::Host { group: None }, json!({}));
         assert!(Toolset::new([], [dashed]).is_ok());
+    }
+
+    fn pinned(name: &str) -> PinnedWorkflow {
+        crate::Workflow::new(
+            name,
+            None,
+            Digest::of(b"script"),
+            Digest::of(b"toolset"),
+            crate::WorkflowSchemas {
+                input: json!({ "type": "object" }),
+                output: json!({}),
+                signals: BTreeMap::from([("approval".to_owned(), json!({}))]),
+            },
+        )
+        .unwrap()
+        .pinned()
+    }
+
+    #[test]
+    fn pinned_workflows_give_their_builtins_outside_the_document() {
+        let base = Toolset::new([github()], [mcp_tool("github.a")]).unwrap();
+        let toolset = base
+            .clone()
+            .with_workflows([pinned("triage"), pinned("digest")])
+            .unwrap();
+        let names: Vec<&str> = toolset
+            .workflows()
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect();
+        assert_eq!(names, ["digest", "triage"]);
+        assert_eq!(toolset.tools(), base.tools());
+        let start = toolset.tool("workflows.triage.start").unwrap();
+        assert_eq!(
+            start.route,
+            ToolRoute::Builtin(Builtin::Workflow {
+                workflow: "triage".into(),
+                op: WorkflowOp::Start,
+            })
+        );
+        assert_eq!(start.policy, ToolPolicy::default_for(&start.route));
+        assert!(toolset.contains("workflows.digest.signal"));
+        assert!(!toolset.contains("workflows.triage"));
+        assert_eq!(toolset.workflow("triage"), Some(&pinned("triage")));
+        assert_ne!(toolset.digest(), base.digest());
+        // Without workflows, the document has no `workflows`: older digests hold.
+        assert_eq!(
+            base.clone().with_workflows([]).unwrap().digest(),
+            base.digest()
+        );
+        assert!(toolset.to_string().ends_with("(1 tools, 2 workflows)"));
+    }
+
+    #[test]
+    fn workflows_are_checked_and_their_namespace_is_reserved() {
+        assert_eq!(
+            Toolset::empty().with_workflows([pinned("triage"), pinned("triage")]),
+            Err(ToolsetError::DuplicateWorkflow("triage".into()))
+        );
+        let mut invalid = pinned("triage");
+        invalid.name = "default".into();
+        assert!(matches!(
+            Toolset::empty().with_workflows([invalid]),
+            Err(ToolsetError::InvalidWorkflow(_))
+        ));
+        assert!(matches!(
+            Toolset::new([server("workflows")], []),
+            Err(ToolsetError::InvalidServer { .. })
+        ));
+        let grouped = Tool::new(
+            "workflows.ask",
+            ToolRoute::Host {
+                group: Some("workflows".into()),
+            },
+            json!({}),
+        );
+        assert!(matches!(
+            Toolset::new([], [grouped]),
+            Err(ToolsetError::InvalidTool { .. })
+        ));
+        let declared = Tool::new(
+            "workflows.triage.start",
+            ToolRoute::Builtin(Builtin::Workflow {
+                workflow: "triage".into(),
+                op: WorkflowOp::Start,
+            }),
+            json!({}),
+        );
+        assert!(matches!(
+            Toolset::new([], [declared]),
+            Err(ToolsetError::InvalidTool { .. })
+        ));
     }
 }

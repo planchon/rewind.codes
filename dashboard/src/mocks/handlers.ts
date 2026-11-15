@@ -123,6 +123,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
           "script",
           "error",
           "parent",
+          "workflow",
+          "startedBy",
           "startedAfter",
           "startedBefore",
           "cursor",

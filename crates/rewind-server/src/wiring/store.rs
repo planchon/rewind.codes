@@ -248,6 +248,49 @@ impl JournalStore for Store {
         journal!(self, store => store.list_toolsets(tenant).await)
     }
 
+    async fn put_workflow(
+        &self,
+        tenant: &TenantId,
+        workflow: &rewind_core::Workflow,
+        labels: &std::collections::BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> Result<rewind_engine::ports::StoredWorkflow, StoreError> {
+        journal!(self, store => store.put_workflow(tenant, workflow, labels, now).await)
+    }
+
+    async fn get_workflow(
+        &self,
+        tenant: &TenantId,
+        version: Digest,
+    ) -> Result<Option<rewind_engine::ports::StoredWorkflow>, StoreError> {
+        journal!(self, store => store.get_workflow(tenant, version).await)
+    }
+
+    async fn workflow_versions(
+        &self,
+        tenant: &TenantId,
+        name: &str,
+        labels: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<rewind_engine::ports::StoredWorkflow>, StoreError> {
+        journal!(self, store => store.workflow_versions(tenant, name, labels).await)
+    }
+
+    async fn latest_workflows(
+        &self,
+        filter: &rewind_engine::ports::WorkflowFilter,
+    ) -> Result<Vec<rewind_engine::ports::StoredWorkflow>, StoreError> {
+        journal!(self, store => store.latest_workflows(filter).await)
+    }
+
+    async fn watch_run(
+        &self,
+        run: &RunRef,
+        watcher: rewind_core::RunId,
+        seq: rewind_core::Seq,
+    ) -> Result<Option<rewind_engine::ports::Watched>, StoreError> {
+        journal!(self, store => store.watch_run(run, watcher, seq).await)
+    }
+
     async fn create_run(
         &self,
         run: NewRun,

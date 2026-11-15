@@ -77,6 +77,8 @@ pub(crate) fn builtin(builtin: &Builtin) -> String {
         Builtin::Webhook => "webhook(name) → { url: string } · From \"rewind\": a URL bound to \
                              this run; what is posted to it becomes the signal `name`."
             .to_owned(),
+        // Never listed: a workflow's built-ins are reached through `rewind:workflows`.
+        Builtin::Workflow { workflow, .. } => format!("{workflow}.start(input) → run"),
     }
 }
 

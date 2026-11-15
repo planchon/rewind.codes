@@ -52,6 +52,11 @@ impl NamespaceName {
         Self(Self::MIGRATED.to_owned())
     }
 
+    /// `*`, which no namespace is named: the credentials resolved for it are a toolset's own.
+    pub(crate) fn none() -> Self {
+        Self("*".to_owned())
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

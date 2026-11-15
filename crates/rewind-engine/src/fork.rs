@@ -258,6 +258,11 @@ where
                 run: parent.id,
                 at: request.at,
             }),
+            // A fork runs a corrected script: it is no run of the parent's workflow, and no
+            // script started it. Its scripts reach what the parent's reached.
+            workflow: None,
+            started_by: None,
+            scope: record.metadata.scope.clone(),
         };
         refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref()).map_err(refused)?;
         let stored = self.toolset(&parent.tenant, record.toolset).await?;
@@ -393,11 +398,14 @@ where
         source: ForkSource<'_>,
     ) -> Result<Option<X::Instance>, EngineError> {
         let parent = RunRef::new(source.run.tenant.clone(), source.parent.run);
+        let fork = source.run.clone();
         let history = self.journal.load_history(&parent, 0).await?;
         let followed = self
             .follow_parent(batch, heartbeat, source, &history)
             .await?;
         tracing::info!(parent = %parent, point = %followed.point, "the fork goes live");
+        // The runs the copied history started stay the parent's: the fork receives their end.
+        self.watch_inherited(&fork, batch.entries()).await?;
         let Some(mut instance) = followed.instance else {
             return Ok(None);
         };

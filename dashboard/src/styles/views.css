@@ -451,6 +451,32 @@ a.status:hover .num {
   flex-wrap: wrap;
 }
 
+.started-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+
+.started-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.started-list .run-id {
+  color: var(--accent);
+}
+
+.started-message {
+  overflow-wrap: anywhere;
+}
+
 .run-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);

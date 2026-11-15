@@ -3,12 +3,12 @@
 The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 
 - **the client** of the HTTP API `/v1`
-  ([`api/openapi.json`](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json)): toolsets, runs,
-  signals, forks, traces, journals, credentials, webhooks, and the end users of the harness (namespaces, their tokens
-  and their quotas);
+  ([`api/openapi.json`](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json)): toolsets, workflows,
+  runs, signals, forks, traces, journals, credentials, webhooks, and the end users of the harness (namespaces, their
+  tokens and their quotas);
 - **the host-tool worker**, which executes the harness's own tools when scripts call them;
-- **the agent tools**, ready-made tools for the model (`run_script`, `get_run`…), with adapters for the Anthropic
-  and OpenAI tool formats.
+- **the agent tools**, ready-made tools for the model (`run_script`, `get_run`, `save_workflow`…), with adapters for
+  the Anthropic and OpenAI tool formats.
 
 ```sh
 npm install @rewind.codes/sdk
@@ -49,38 +49,67 @@ const run = await rewind.namespace(user.id).runs.start({
 });
 ```
 
-| Resource                     | Calls                                                                                                                                                                                                                              |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rewind.toolsets`            | `create`, `declarations`, `search`, `setCredentials`                                                                                                                                                                               |
-| `rewind.scripts`             | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                |
-| `rewind.runs`                | `start`, `get`, `list` and `listAll` (`q`: the query language, `sort`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
-| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                             |
-| `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                        |
-| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                              |
-| `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts`                                                                                                        |
-| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                               |
-| `rewind.namespaces.tokens`   | `create` (its answer holds the token, once), `revoke`, `revokeAll`                                                                                                                                                                 |
-| `rewind.tokenKeys`           | `create`, `list`, `delete`: the keys the harness signs end users' tokens with                                                                                                                                                      |
-| `rewind.subscriptions`       | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                     |
-| `rewind.webhooks`            | `verify`                                                                                                                                                                                                                           |
-| `rewind.tools`               | `stats`                                                                                                                                                                                                                            |
-| `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                 |
-| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                     |
+A workflow is a script with a name and JSON Schemas for its input, its output and the signals it accepts. Each save is
+a new immutable version; a toolset that names it lets its scripts `import { triage } from "rewind:workflows"`, start
+runs of it, signal them and wait for their output.
+
+```ts
+const triage = await rewind.workflows.create({
+  name: "triage",
+  description: "Triage the stale issues of a repository, after approval.",
+  toolset: toolset.id,
+  script: triageSource,
+  input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
+  output: { type: "object", properties: { closed: { type: "integer" } }, required: ["closed"] },
+  signals: { approval: { type: "object", properties: { close: { type: "boolean" } }, required: ["close"] } },
+});
+// triage.declarations.prompt: how a script starts it, signals its runs and reads their result
+
+// A toolset whose scripts start it: derived from `toolset`, without listing its servers again.
+const withTriage = await rewind.toolsets.create({ base: toolset.id, workflows: ["triage"] });
+
+// The harness can start a run of it too, for an end user, by name (its latest version) or by version.
+const triageRun = await rewind.namespace(user.id).runs.start({
+  workflow: `triage@${triage.version.slice(0, 12)}`,
+  input: { repo: "acme/api" },
+});
+// triageRun.workflow: { name, version }; a run a script started has `startedBy: { run, seq, detached }`
+```
+
+| Resource                     | Calls                                                                                                                                                                                                                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rewind.toolsets`            | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials`                                                                                                                                                                        |
+| `rewind.workflows`           | `create`, `list` and `listAll` (the latest version of each), `versions` (newest first)                                                                                                                                                                                                  |
+| `rewind.scripts`             | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                                                                     |
+| `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                  |
+| `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                             |
+| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                                                                                   |
+| `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts`                                                                                                                                                             |
+| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                                                                                    |
+| `rewind.namespaces.tokens`   | `create` (its answer holds the token, once), `revoke`, `revokeAll`                                                                                                                                                                                                                      |
+| `rewind.tokenKeys`           | `create`, `list`, `delete`: the keys the harness signs end users' tokens with                                                                                                                                                                                                           |
+| `rewind.subscriptions`       | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                                                                          |
+| `rewind.webhooks`            | `verify`                                                                                                                                                                                                                                                                                |
+| `rewind.tools`               | `stats`                                                                                                                                                                                                                                                                                 |
+| `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                                                                      |
+| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                                                                          |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
-`status`, `slug` (`"run-ended"`, `"invalid-script"`…), `detail` (written for a model), `diagnostics` (for a refused
-script), `query` (for a query that cannot be read: where the term at fault is) and `quota` (for `quota-exceeded`: which
-quota, at which scope, its limit, the use and when it frees). `isProblem(error, "task-gone")` tests the kind. A key's
-client that starts a run, checks or tests a script without naming a namespace gets the server's 400 as a
-`NamespaceRequiredError`. A server that cannot be reached gives a `RewindConnectionError`.
+`status`, `slug` (`"run-ended"`, `"invalid-script"`, `"invalid-workflow"`, `"invalid-input"`, `"invalid-signal"`…),
+`detail` (written for a model), `diagnostics` (for a refused script), `query` (for a query that cannot be read: where
+the term at fault is) and `quota` (for `quota-exceeded`: which quota, at which scope, its limit, the use and when it
+frees). `isProblem(error, "task-gone")` tests the kind. A key's client that starts a run, checks or tests a script
+without naming a namespace gets the server's 400 as a `NamespaceRequiredError`. A server that cannot be reached gives a
+`RewindConnectionError`.
 
 **Retries.** A request that is safe to repeat is sent again after a network error or a 503, twice by default
-(`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration, checks and tests, and the requests
-that carry an idempotency key. Starting a run, forking it or sending a signal without a key is never repeated, nor is
-minting a token.
+(`maxRetries`): reads, `PUT`, `DELETE`, the content-addressed toolset registration and workflow save, checks and
+tests, and the requests that carry an idempotency key. Starting a run, forking it or sending a signal without a key is
+never repeated, nor is minting a token.
 
 **Waiting.** `runs.start`, `runs.fork`, `runs.cancel` and `runs.get` take `wait`: they answer when the run ends or
 `wait` passes. A wait longer than 50 seconds is split into several requests, so proxies and HTTP timeouts never cut it.
@@ -252,17 +281,18 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
 // Any other API:           agentTools.definitions and agentTools.handle(name, input, { toolCallId })
 ```
 
-| Tool                                          | Does                                                                                 |
-| --------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `run_script({ code, input?, wait? })`         | Type-checks and starts a run; returns its output, its error, or what it waits for    |
-| `check_script({ code })`                      | Type-check only                                                                      |
-| `test_script({ code, scenario })`             | Mock mode, virtual time; `scenario.from_run` replays the calls a run recorded        |
-| `get_run({ run_id, entry?, offset?, wait? })` | The run's state and trace; one journal entry in full; the next page of a long output |
-| `list_runs({ status? })`                      | The runs started with the same labels                                                |
-| `signal_run({ run_id, name, payload? })`      | Sends a signal                                                                       |
-| `cancel_run({ run_id })`                      | Cancels a run                                                                        |
-| `retry_run({ run_id, code })`                 | Forks the run with a corrected script: the calls already made are not made again     |
-| `search_tools({ query })`                     | The declarations of the matching tools (only with a toolset)                         |
+| Tool                                                                  | Does                                                                                                |
+| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `run_script({ code, input?, wait? })`                                 | Type-checks and starts a run; returns its output, its error, or what it waits for                   |
+| `check_script({ code })`                                              | Type-check only                                                                                     |
+| `test_script({ code, scenario })`                                     | Mock mode, virtual time; `scenario.from_run` replays the calls a run recorded                       |
+| `get_run({ run_id, entry?, offset?, wait? })`                         | The run's state and trace; one journal entry in full; the next page of a long output                |
+| `list_runs({ status? })`                                              | The runs started with the same labels                                                               |
+| `signal_run({ run_id, name, payload? })`                              | Sends a signal                                                                                      |
+| `cancel_run({ run_id })`                                              | Cancels a run                                                                                       |
+| `retry_run({ run_id, code })`                                         | Forks the run with a corrected script: the calls already made are not made again                    |
+| `search_tools({ query })`                                             | The declarations of the matching tools (only with a toolset)                                        |
+| `save_workflow({ name, description, code, input, output, signals? })` | Saves a workflow; the model's later scripts import it from `rewind:workflows` (only with a toolset) |
 
 - Results are plain text written for the model, and bounded: `run_script` returns at most 256 KiB of output, with the
   call that reads the rest (`get_run` with `offset`); a failure shows the error with its line and code frame, the call
@@ -280,6 +310,14 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   unreachable server, a 401, a 5xx, a key's client that names no namespace) are thrown.
 - `result.run` holds the run the call started or read, for the harness: `rewind.approvals.pending(result.run)` says what
   waits for it.
+- `save_workflow` saves the workflow with the agent's toolset, then derives a toolset from it that pins this version
+  (`toolsets.create({ base, workflows: ["triage@<version>"] })`). The later `run_script`, `check_script`,
+  `test_script` and `search_tools` of these agent tools use the derived toolset: `agentTools.toolset` is its id, and
+  `result.workflow` and `result.toolset` hold what was saved and derived. A harness that creates the agent tools for
+  each turn keeps `agentTools.toolset` with the conversation and passes it as `toolset` the next time. The derived
+  toolset has another id: a worker that claims tasks `toolset: <id>` does not claim those of its runs (start it
+  without `toolset`, with its `tools`), and credentials set on the first toolset are not carried over (set them on the
+  derived one with `toolsets.setCredentials`). A refused script comes back with its diagnostics.
 - Options: `tools` (a subset), `wait` (30 s), `maxWait` (2 min, the longest wait the model may ask for), `ttl`,
   `traceparent` (a string, or a function giving the current one), `outputLimit`.
 

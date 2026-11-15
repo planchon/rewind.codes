@@ -205,6 +205,8 @@ mod tests {
     async fn host_tools_and_http_are_pinned_as_written() {
         let create = CreateToolset {
             credentials: None,
+            workflows: Vec::new(),
+            base: None,
             mcp: Vec::new(),
             host: vec![HostTool {
                 name: "crm.ask_user".into(),

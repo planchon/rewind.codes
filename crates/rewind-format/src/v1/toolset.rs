@@ -16,12 +16,21 @@
 //! and `{"type":"builtin","builtin":"webhook"}`; transports `{"type":"http","url":…}` and
 //! `{"type":"stdio","command":…,"args":[…],"env":{…}}`. Optional fields are omitted when
 //! absent: `description`, `schemas.output`, `policy.execution_timeout_ms`, `route.group`.
+//!
+//! A toolset that pins workflows also has `"workflows":[{"name":"triage","version":"<sha-256>",
+//! "description":…,"schemas":{"input":…,"output":…,"signals":{"approval":…}}}]`; one that pins
+//! none has no `workflows`. The workflows' built-ins are derived from them, never written.
+//!
+//! The workflow version document (the `workflows` table) is
+//! `{"description":…,"name":"triage","schemas":{…},"script":"<sha-256>","toolset":"<sha-256>",
+//! "v":1}`, in its canonical form, so that its bytes hash to the version.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
+    Builtin, Digest, Interruption, McpServer, McpTransport, PinnedWorkflow, Tool, ToolPolicy,
+    ToolRoute, Toolset, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -31,6 +40,37 @@ use serde_json::Value;
 struct ToolsetV1 {
     servers: Vec<ServerV1>,
     tools: Vec<ToolV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    workflows: Vec<PinnedWorkflowV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PinnedWorkflowV1 {
+    name: String,
+    version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    schemas: WorkflowSchemasV1,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowSchemasV1 {
+    input: Value,
+    output: Value,
+    signals: BTreeMap<String, Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowV1 {
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    script: String,
+    toolset: String,
+    schemas: WorkflowSchemasV1,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -120,6 +160,7 @@ pub(crate) fn toolset_document(toolset: &Toolset) -> Value {
     let dto = ToolsetV1 {
         servers: toolset.servers().iter().map(server_dto).collect(),
         tools: toolset.tools().iter().map(tool_dto).collect(),
+        workflows: toolset.workflows().iter().map(pinned_dto).collect(),
     };
     let mut document = serde_json::to_value(dto).expect("toolset DTOs always serialize");
     if let Value::Object(fields) = &mut document {
@@ -144,7 +185,80 @@ pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
         .into_iter()
         .map(tool_from_dto)
         .collect::<Result<Vec<Tool>, String>>()?;
-    Toolset::new(servers, tools).map_err(|err| err.to_string())
+    let workflows = dto
+        .workflows
+        .into_iter()
+        .map(|workflow| {
+            Ok(PinnedWorkflow {
+                version: digest(&workflow.version, "the version of a workflow")?,
+                name: workflow.name,
+                description: workflow.description,
+                schemas: schemas_from_dto(workflow.schemas),
+            })
+        })
+        .collect::<Result<Vec<PinnedWorkflow>, String>>()?;
+    Toolset::new(servers, tools)
+        .and_then(|toolset| toolset.with_workflows(workflows))
+        .map_err(|err| err.to_string())
+}
+
+/// The workflow version document as a JSON value, `"v"` included. The caller writes it in
+/// canonical form.
+pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
+    let dto = WorkflowV1 {
+        name: workflow.name().to_owned(),
+        description: workflow.description().map(str::to_owned),
+        script: workflow.script().to_hex(),
+        toolset: workflow.toolset().to_hex(),
+        schemas: schemas_dto(workflow.schemas()),
+    };
+    let mut document = serde_json::to_value(dto).expect("workflow DTOs always serialize");
+    if let Value::Object(fields) = &mut document {
+        fields.insert("v".into(), Value::from(crate::VERSION));
+    }
+    document
+}
+
+/// Decodes the fields of a v1 workflow version document, its version already taken out.
+pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
+    let dto: WorkflowV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
+    Workflow::new(
+        dto.name,
+        dto.description,
+        digest(&dto.script, "\"script\"")?,
+        digest(&dto.toolset, "\"toolset\"")?,
+        schemas_from_dto(dto.schemas),
+    )
+    .map_err(|err| err.to_string())
+}
+
+fn pinned_dto(workflow: &PinnedWorkflow) -> PinnedWorkflowV1 {
+    PinnedWorkflowV1 {
+        name: workflow.name.clone(),
+        version: workflow.version.to_hex(),
+        description: workflow.description.clone(),
+        schemas: schemas_dto(&workflow.schemas),
+    }
+}
+
+fn schemas_dto(schemas: &WorkflowSchemas) -> WorkflowSchemasV1 {
+    WorkflowSchemasV1 {
+        input: schemas.input.clone(),
+        output: schemas.output.clone(),
+        signals: schemas.signals.clone(),
+    }
+}
+
+fn schemas_from_dto(dto: WorkflowSchemasV1) -> WorkflowSchemas {
+    WorkflowSchemas {
+        input: dto.input,
+        output: dto.output,
+        signals: dto.signals,
+    }
+}
+
+fn digest(hex: &str, what: &str) -> Result<Digest, String> {
+    Digest::from_hex(hex).map_err(|err| format!("{what}: {err}"))
 }
 
 fn server_dto(server: &McpServer) -> ServerV1 {
@@ -178,6 +292,9 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
             builtin: BuiltinV1::Webhook,
             allowed_hosts: None,
         },
+        ToolRoute::Builtin(Builtin::Workflow { .. }) => {
+            unreachable!("a toolset declares no workflow built-in: they come from its workflows")
+        }
     };
     let policy = &tool.policy;
     ToolV1 {

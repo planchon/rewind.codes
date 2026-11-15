@@ -46,8 +46,9 @@ directory (Turso, local files), or of a remote one
 ```
 
 1. The harness **registers a toolset**: MCP servers and, optionally, its own *host tools*
-   (JSON Schema + handler). Rewind connects to the MCP servers, pins their schemas, and
-   returns the generated TypeScript declarations ([routes](04-tools.md#routes)).
+   (JSON Schema + handler) and the [workflows](#workflows) its scripts may start. Rewind
+   connects to the MCP servers, pins their schemas and the workflows' versions, and returns the
+   generated TypeScript declarations ([routes](04-tools.md#routes)).
 2. The harness puts those declarations in the system prompt and exposes the **agent
    tools** to its model (below).
 3. When the model calls `run_script`, the harness calls
@@ -147,6 +148,7 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | `cancel_run({ run_id })` | Cancels a run. |
 | `retry_run({ run_id, code })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). |
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
+| `save_workflow({ name, description, code, input, output, signals })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. The agent's later scripts can start it and signal its runs. |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
 the lifecycle webhooks. A token or an API key limited to these labels makes the scope hold for
@@ -191,18 +193,24 @@ export default async function main(input: { repo: string }) {
 ### Modules available to scripts
 
 - `rewind:tools`: generated per toolset. One namespace per MCP server or host-tool group.
+- `rewind:workflows`: generated per toolset. One export per [workflow](#workflows) the toolset
+  pins.
 - `rewind`: the runtime standard library.
 
 ```ts
 declare module "rewind" {
   type Duration = number | `${number}${"ms" | "s" | "m" | "h" | "d" | "w"}` | string; // "1h30m"
   export function sleep(duration: Duration): Promise<void>;
+  // In a run of a workflow, the name is one of its declared signals and the payload has its type.
   export function signal<T = unknown>(name: string): Promise<T>;
   export function signal<T = unknown>(name: string, opts: { timeout: Duration }): Promise<T | undefined>;
   export function webhook(name: string): Promise<{ url: string }>;
   export const run: { readonly id: string; readonly startedAt: Date };
   export class ToolError extends Error { tool: string; outcomeUnknown: boolean; data?: unknown }
   export class CancelledError extends Error {}
+  export class WorkflowError extends Error {
+    workflow: string; runId: string; status: "failed" | "cancelled" | "aborted" | "invalid_output";
+  }
 }
 ```
 
@@ -213,7 +221,7 @@ curated set of deterministic utility libraries can be bundled later.
 
 A signal is a named message sent to a run from the outside. Events can come from any
 source: the harness, a human through a UI, another agent (with `signal_run`), another
-run (through a tool), or an external system through a webhook.
+run (through [`rewind:workflows`](#workflows)), or an external system through a webhook.
 
 ```
 POST /v1/runs/{run_id}/signals/approval   { "close": true }
@@ -248,6 +256,68 @@ const event = await signal("pr_merged");          // anything POSTed to hook.url
 `webhook(name)` returns a unique URL bound to this run and this signal name. Every
 request posted to it becomes a `pr_merged` signal on the run. When the sender provides a
 delivery id, it is used as the signal's idempotency key.
+
+Signal names starting with `rewind:` are reserved for Rewind. A run of a [workflow](#workflows)
+accepts only the signals its workflow declares, with a payload that matches their schema:
+anything else is refused (422), whoever sends it. Other runs accept any name, and
+`signal<T>(name)` only says what the script expects.
+
+### Workflows
+
+A **workflow** is a script with a name and a typed interface: JSON Schemas for its input, its
+output and each signal it accepts. A script can start a run of a workflow, signal it and wait
+for its result, and it can signal a run of a workflow that already exists, by its id. tsgo
+checks every one of these calls before the script runs.
+
+The harness registers workflows (`POST /v1/workflows`, `rewind.workflows.create`), and so does
+the model, with the agent tool `save_workflow`. Registering one checks its script against its
+toolset and against its own schemas: its default export must accept the input and return the
+output, and `signal(name)` only takes a declared name and returns that signal's type.
+
+```ts
+await rewind.workflows.create({
+  name: "triage",
+  description: "Triage the stale issues of a repository, after approval.",
+  toolset: github.id,
+  script: triageSource, // export default async function main(input: { repo: string }) { … }
+  input: { type: "object", properties: { repo: { type: "string" } }, required: ["repo"] },
+  output: { type: "object", properties: { closed: { type: "integer" } }, required: ["closed"] },
+  signals: { approval: { type: "object", properties: { close: { type: "boolean" } }, required: ["close"] } },
+});
+```
+
+Each registration is a new immutable **version**, identified by its digest
+(`triage@9f2c4e1a07b3`). A toolset lists the workflows its scripts may start, and pins their
+latest versions when it is registered, as it pins the schemas of MCP tools
+([toolsets](04-tools.md#toolsets-and-code-generation)). Its scripts import them from
+`rewind:workflows`:
+
+```ts
+import { triage } from "rewind:workflows";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo })));
+  await Promise.all(runs.map((run) => run.signal("approval", { close: true })));
+  const results = await Promise.all(runs.map((run) => run.result()));
+  return { closed: results.reduce((sum, result) => sum + result.closed, 0) };
+}
+```
+
+| Call | Does |
+| --- | --- |
+| `triage.start(input, opts?)` | Starts a run of the pinned version, and returns its handle once the run exists. `opts`: `detached`, `labels` (added to the parent's), `ttl`. |
+| `run.signal(name, payload)` | Sends one of the workflow's signals to the run. Resolves once the signal is in the run's mailbox. |
+| `run.result()`, `run.result({ timeout })` | The run's output. Rejects with `WorkflowError` if the run failed, was cancelled or aborted. With a timeout, `undefined` if the run has not ended in time. |
+| `triage.get(runId)` | A handle on an existing run of `triage`, which can be signalled. |
+
+A run started by a script is **attached** to it unless it is started with `detached: true`. A
+parent does not end before its attached children, as it does not end with a tool call in
+flight, so a forgotten `result()` is harmless. A parent that fails, is cancelled or is aborted
+cancels its attached children still running. A detached child lives on its own: use it to
+start a long workflow and move on.
+
+The harness can also start a run of a workflow: `POST /v1/runs { workflow: "triage", input }`.
+How all of this lives in the journal: [execution](03-execution.md#workflows-across-runs).
 
 ### What exists in the sandbox
 

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
     Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode, RunStatus, Shape,
-    ToolFailureKind, ToolRoute, canonical_json,
+    ToolFailureKind, ToolRoute, WorkflowOp, canonical_json,
 };
 use rewind_engine::ports::{
     ParkKind, Principal, QuarantineKind, TaskPhase, Trigger, WaitKind, WebhookEventType,
@@ -217,7 +217,8 @@ pub(crate) fn decode_trigger(json: &str) -> Result<Trigger, Error> {
 // Tool routes
 
 /// `{"mcp":"github"}`, `{"host":null}`, `{"host":"group"}`, `{"builtin":"webhook"}`,
-/// `{"builtin":"http","allowed_hosts":[…]}`.
+/// `{"builtin":"http","allowed_hosts":[…]}`,
+/// `{"builtin":"workflow","workflow":"triage","op":"start"}`.
 pub(crate) fn encode_route(route: &ToolRoute) -> String {
     let value = match route {
         ToolRoute::Mcp { server } => json!({ "mcp": server }),
@@ -225,6 +226,9 @@ pub(crate) fn encode_route(route: &ToolRoute) -> String {
         ToolRoute::Builtin(Builtin::Webhook) => json!({ "builtin": "webhook" }),
         ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
             json!({ "builtin": "http", "allowed_hosts": allowed_hosts })
+        }
+        ToolRoute::Builtin(Builtin::Workflow { workflow, op }) => {
+            json!({ "builtin": "workflow", "workflow": workflow, "op": op.as_str() })
         }
     };
     canonical_json(&value)
@@ -259,6 +263,21 @@ pub(crate) fn decode_route(json: &str) -> Result<ToolRoute, Error> {
                 .map(|host| host.as_str().map(str::to_owned).ok_or_else(invalid))
                 .collect::<Result<_, _>>()?;
             Ok(ToolRoute::Builtin(Builtin::Http { allowed_hosts }))
+        }
+        Some("workflow") => {
+            let workflow = value
+                .get("workflow")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            let op = match value.get("op").and_then(Value::as_str) {
+                Some("start") => WorkflowOp::Start,
+                Some("signal") => WorkflowOp::Signal,
+                _ => return Err(invalid()),
+            };
+            Ok(ToolRoute::Builtin(Builtin::Workflow {
+                workflow: workflow.to_owned(),
+                op,
+            }))
         }
         _ => Err(invalid()),
     }
@@ -437,6 +456,14 @@ mod tests {
             ToolRoute::Builtin(Builtin::Webhook),
             ToolRoute::Builtin(Builtin::Http {
                 allowed_hosts: vec!["api.example.com".into()],
+            }),
+            ToolRoute::Builtin(Builtin::Workflow {
+                workflow: "triage".into(),
+                op: WorkflowOp::Start,
+            }),
+            ToolRoute::Builtin(Builtin::Workflow {
+                workflow: "triage".into(),
+                op: WorkflowOp::Signal,
             }),
         ] {
             assert_eq!(decode_route(&encode_route(&route)), Ok(route));

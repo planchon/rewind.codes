@@ -2,7 +2,7 @@
 //! single writers, tenants (isolation, quotas, fair draws), sticky affinity, idempotency keys,
 //! epochs, failure counts and quarantine, timers, run expiry, the tool task lifecycle and its
 //! concurrency limits, webhook tokens and subscriptions, payload rows and references, retention
-//! and the feed.
+//! and the feed; workflow versions, and the watchers that receive a run's end.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -11,7 +11,7 @@ use rewind_core::{
     AbortKind, AbortReason, Annotation, CancelReason, Command, Completion, Digest, Epoch, Event,
     HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunStatus, Script,
     Seed, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute,
-    Toolset,
+    Toolset, Workflow, WorkflowSchemas, end_signal_name,
 };
 use serde_json::json;
 
@@ -20,10 +20,10 @@ use crate::ports::{
     AcquireRunnable, Activation, CompiledScript, CreateRun, Enqueued, ExpiredRuns, FeedConsumer,
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
-    Retention, RunCursor, RunFilter, RunMetadata, RunRef, STICKY_GRACE, Secret, StoreError,
-    Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId,
-    TenantScope, ToolDeclarations, TraceContext, Trigger, WebhookEventType, WebhookToken,
-    deferred_timeout_failure,
+    Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
+    StartedBy, StoreError, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate,
+    Tenant, TenantId, TenantScope, ToolDeclarations, TraceContext, Trigger, Watched,
+    WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DropNamespace, Month, NamespaceCursor, NamespaceFilter, NamespaceName,
@@ -212,7 +212,17 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        workflow_versions_are_stored_by_tenant_and_listed_newest_first
+    );
+    check!(
+        "journal",
+        new_store(),
         idempotency_keys_are_scoped_by_namespace
+    );
+    check!(
+        "journal",
+        new_store(),
+        a_run_ends_to_its_watchers_and_cancels_its_attached_runs
     );
     check!(
         "journal",
@@ -249,6 +259,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         "journal",
         new_store(),
         runs_tasks_and_parked_calls_are_filtered_by_namespace
+    );
+    check!(
+        "journal",
+        new_store(),
+        watching_a_run_says_whether_it_has_ended
     );
 }
 
@@ -640,6 +655,16 @@ pub async fn create_run_enqueues_run_started<S: JournalStore>(store: &S) {
             run: id(99),
             at: Some(7),
         }),
+        workflow: Some(RunWorkflow {
+            name: "triage".into(),
+            version: Digest::of(b"version"),
+        }),
+        started_by: Some(StartedBy {
+            run: id(98),
+            seq: Seq(3),
+            detached: true,
+        }),
+        scope: BTreeMap::from([("conversation".to_owned(), "c-1".to_owned())]),
     };
     let created = store
         .create_run(run.clone(), Some("call-1".into()))
@@ -3637,7 +3662,7 @@ fn created(outcome: &CreateRun) -> bool {
 }
 
 /// Commits `run_started`, then a terminal entry: the run ends `aborted`.
-async fn end<S: JournalStore>(store: &S, run: &RunRef, at: Timestamp) {
+async fn abort<S: JournalStore>(store: &S, run: &RunRef, at: Timestamp) {
     let lease = lease_of(store, run, at).await;
     let consumed = inbox_ids(store, &lease).await;
     commit(
@@ -3858,7 +3883,7 @@ pub async fn active_runs_are_limited_per_namespace_then_per_tenant<S: JournalSto
         }),
         "the tenant's ceiling bounds the sum"
     );
-    end(store, &run_ref(1), later(T0, 10)).await;
+    abort(store, &run_ref(1), later(T0, 10)).await;
     assert!(
         created(&create_in(store, 7, &alice(), b"s", later(T0, 20)).await),
         "an ended run frees its place"
@@ -4494,4 +4519,306 @@ pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalSto
         store.tool_tasks(&run_ref(1)).await.expect("tool_tasks")[0].state,
         TaskState::Parked(_)
     ));
+}
+
+// Workflows and watchers
+
+fn workflow(name: &str, script: &str) -> Workflow {
+    Workflow::new(
+        name,
+        Some(format!("The {name} workflow")),
+        Digest::of(script.as_bytes()),
+        toolset_digest(),
+        WorkflowSchemas {
+            input: json!({ "type": "object" }),
+            output: json!({}),
+            signals: BTreeMap::from([("approval".to_owned(), json!({ "type": "boolean" }))]),
+        },
+    )
+    .expect("a valid workflow")
+}
+
+fn labels(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+    pairs
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<S: JournalStore>(
+    store: &S,
+) {
+    let none = BTreeMap::new();
+    let scoped = labels(&[("conversation", "c-1")]);
+    let first = workflow("triage", "v1");
+    let second = workflow("triage", "v2");
+    let third = workflow("triage", "v3");
+    let digest = workflow("digest", "d1");
+    let put = |workflow: Workflow, labels: BTreeMap<String, String>, at: Timestamp| async move {
+        store
+            .put_workflow(&acme(), &workflow, &labels, at)
+            .await
+            .expect("put_workflow")
+    };
+    let stored = put(first.clone(), none.clone(), T0).await;
+    assert_eq!(
+        (&stored.workflow, &stored.labels, stored.created_at),
+        (&first, &none, T0)
+    );
+    put(second.clone(), scoped.clone(), later(T0, 10)).await;
+    put(digest.clone(), scoped.clone(), later(T0, 20)).await;
+    put(third.clone(), none.clone(), later(T0, 30)).await;
+    // A version is immutable: a second put changes nothing.
+    let again = put(first.clone(), scoped.clone(), later(T0, 40)).await;
+    assert_eq!((&again.labels, again.created_at), (&none, T0));
+    store
+        .put_workflow(
+            &tenant("other"),
+            &workflow("triage", "elsewhere"),
+            &none,
+            later(T0, 50),
+        )
+        .await
+        .expect("put_workflow");
+
+    let found = store
+        .get_workflow(&acme(), second.version())
+        .await
+        .expect("get_workflow")
+        .expect("the version is stored");
+    assert_eq!(
+        (&found.workflow, &found.labels, found.created_at),
+        (&second, &scoped, later(T0, 10))
+    );
+    assert_eq!(
+        store
+            .get_workflow(&tenant("other"), second.version())
+            .await
+            .expect("get_workflow"),
+        None,
+        "another tenant's version"
+    );
+
+    let versions = |labels: BTreeMap<String, String>| async move {
+        store
+            .workflow_versions(&acme(), "triage", &labels)
+            .await
+            .expect("workflow_versions")
+            .into_iter()
+            .map(|stored| stored.workflow)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        versions(none.clone()).await,
+        [third.clone(), second.clone(), first.clone()],
+        "newest first"
+    );
+    assert_eq!(
+        versions(scoped.clone()).await,
+        std::slice::from_ref(&second),
+        "only the versions carrying the labels"
+    );
+    assert_eq!(
+        store
+            .workflow_versions(&acme(), "nothing", &none)
+            .await
+            .expect("workflow_versions"),
+        []
+    );
+
+    let latest = |labels: BTreeMap<String, String>, after: Option<String>, limit: Option<usize>| async move {
+        store
+            .latest_workflows(&WorkflowFilter {
+                tenant: acme(),
+                labels,
+                after,
+                limit,
+            })
+            .await
+            .expect("latest_workflows")
+            .into_iter()
+            .map(|stored| stored.workflow)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        latest(none.clone(), None, None).await,
+        [digest.clone(), third.clone()],
+        "the latest version of each workflow, by name"
+    );
+    assert_eq!(
+        latest(scoped.clone(), None, None).await,
+        [digest.clone(), second.clone()],
+        "the latest among the versions carrying the labels"
+    );
+    assert_eq!(
+        latest(none.clone(), None, Some(1)).await,
+        std::slice::from_ref(&digest)
+    );
+    assert_eq!(latest(none, Some("digest".into()), None).await, [third]);
+}
+
+/// Creates a run that `starter` started with the call `seq`.
+async fn create_started<S: JournalStore>(
+    store: &S,
+    run: RunRef,
+    starter: RunId,
+    seq: u32,
+    detached: bool,
+) -> RunRef {
+    let mut new = new_run(run.clone());
+    new.metadata.started_by = Some(StartedBy {
+        run: starter,
+        seq: Seq(seq),
+        detached,
+    });
+    store.create_run(new, None).await.expect("create_run");
+    let lease = lease_of(store, &run, T0).await;
+    let consumed = inbox_ids(store, &lease).await;
+    commit(
+        store,
+        &lease,
+        Activation::new(vec![run_started_entry()], consumed, RunStatus::Active),
+        T0,
+    )
+    .await;
+    store.release(&lease).await.expect("release");
+    run
+}
+
+/// Ends an active run whose history holds only its `run_started`, with this end.
+async fn end<S: JournalStore>(
+    store: &S,
+    run: &RunRef,
+    end: Option<serde_json::Value>,
+    at: Timestamp,
+) {
+    let lease = lease_of(store, run, at).await;
+    let consumed = inbox_ids(store, &lease).await;
+    let mut activation = Activation::new(vec![aborted_entry(1)], consumed, RunStatus::Aborted);
+    activation.end = end;
+    commit(store, &lease, activation, at).await;
+}
+
+pub async fn a_run_ends_to_its_watchers_and_cancels_its_attached_runs<S: JournalStore>(store: &S) {
+    let parent = start(store, run_ref(1)).await;
+    let attached = create_started(store, run_ref(2), parent.id, 1, false).await;
+    let detached = create_started(store, run_ref(3), parent.id, 2, true).await;
+    let finished = create_started(store, run_ref(4), parent.id, 3, false).await;
+    let fork = start(store, run_ref(5)).await;
+    let ended_fork = start(store, run_ref(6)).await;
+    for watcher in [fork.id, ended_fork.id] {
+        assert_eq!(
+            store
+                .watch_run(&attached, watcher, Seq(1))
+                .await
+                .expect("watch_run"),
+            Some(Watched { ended: false })
+        );
+    }
+    end(store, &ended_fork, None, later(T0, 1)).await;
+
+    // A run's end reaches each watcher that has not ended, once, under its name as key.
+    let outcome = json!({ "status": "completed", "output": { "closed": 3 } });
+    end(store, &attached, Some(outcome.clone()), later(T0, 2)).await;
+    let ended = Trigger::Completion(Completion::SignalReceived {
+        name: end_signal_name(attached.id),
+        payload: Payload::Value(outcome),
+    });
+    assert_eq!(
+        inbox(store, &parent, later(T0, 3)).await,
+        std::slice::from_ref(&ended)
+    );
+    assert_eq!(inbox(store, &fork, later(T0, 3)).await, [ended]);
+    assert_eq!(
+        store
+            .enqueue(
+                &parent,
+                Completion::SignalReceived {
+                    name: "late".into(),
+                    payload: json!(1).into(),
+                },
+                Some(end_signal_name(attached.id)),
+                later(T0, 4),
+            )
+            .await
+            .expect("enqueue"),
+        Enqueued::Duplicate,
+        "the end's key is the signal's name"
+    );
+
+    // A run that ended without an end to give reaches no one; its parent still knows nothing.
+    end(store, &finished, None, later(T0, 5)).await;
+    assert_eq!(inbox(store, &parent, later(T0, 6)).await.len(), 1);
+
+    // The parent's end cancels its attached runs still running, not its detached ones.
+    let still_attached = create_started(store, run_ref(7), parent.id, 4, false).await;
+    end(
+        store,
+        &parent,
+        Some(json!({ "status": "aborted" })),
+        later(T0, 7),
+    )
+    .await;
+    let cancelled = inbox(store, &still_attached, later(T0, 8)).await;
+    assert!(
+        matches!(
+            cancelled.as_slice(),
+            [Trigger::Completion(Completion::CancelRequested { reason })]
+                if *reason == rewind_core::starter_ended(parent.id)
+        ),
+        "{cancelled:?}"
+    );
+    assert_eq!(inbox(store, &detached, later(T0, 8)).await, []);
+
+    // The detached run's end has no watcher left that runs: it goes nowhere.
+    end(
+        store,
+        &detached,
+        Some(json!({ "status": "completed", "output": 1 })),
+        later(T0, 9),
+    )
+    .await;
+    assert_eq!(record(store, &parent).await.status, RunStatus::Aborted);
+}
+
+pub async fn watching_a_run_says_whether_it_has_ended<S: JournalStore>(store: &S) {
+    let run = start(store, run_ref(1)).await;
+    let watcher = start(store, run_ref(2)).await;
+    assert_eq!(
+        store
+            .watch_run(&run_ref(9), watcher.id, Seq(1))
+            .await
+            .expect("watch_run"),
+        None,
+        "an unknown run"
+    );
+    assert_eq!(
+        store
+            .watch_run(&run_in(&tenant("other"), 1), watcher.id, Seq(1))
+            .await
+            .expect("watch_run"),
+        None,
+        "another tenant's run"
+    );
+    end(
+        store,
+        &run,
+        Some(json!({ "status": "completed", "output": 1 })),
+        later(T0, 1),
+    )
+    .await;
+    for _ in 0..2 {
+        assert_eq!(
+            store
+                .watch_run(&run, watcher.id, Seq(1))
+                .await
+                .expect("watch_run"),
+            Some(Watched { ended: true })
+        );
+    }
+    assert_eq!(
+        inbox(store, &watcher, later(T0, 2)).await,
+        [],
+        "the end of a run that had ended is the caller's to enqueue"
+    );
 }

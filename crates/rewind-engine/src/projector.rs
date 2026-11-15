@@ -347,6 +347,12 @@ where
             toolset: record.toolset,
             labels: record.metadata.labels.clone(),
             parent: record.metadata.parent.map(|parent| parent.run),
+            workflow: record
+                .metadata
+                .workflow
+                .as_ref()
+                .map(|workflow| workflow.name.clone()),
+            started_by: record.metadata.started_by.map(|by| by.run),
         };
         let snapshot = run_snapshot(history, toolset);
         self.read_model.apply(&run, &entries, &snapshot).await?;

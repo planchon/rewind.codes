@@ -8,7 +8,8 @@ export type AgentToolName =
   | "signal_run"
   | "cancel_run"
   | "retry_run"
-  | "search_tools";
+  | "search_tools"
+  | "save_workflow";
 
 export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   "run_script",
@@ -20,6 +21,7 @@ export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   "cancel_run",
   "retry_run",
   "search_tools",
+  "save_workflow",
 ];
 
 /** The JSON Schema of a tool's arguments, as the model APIs take it: always an object. */
@@ -41,7 +43,7 @@ const RUN_ID = { type: "string", description: "The run id, as a previous tool re
 const CODE = {
   type: "string",
   description:
-    'The TypeScript source: one ES module whose default export is `async function main(input)`. It imports tools from "rewind:tools" and `sleep`, `signal`, `webhook` from "rewind". Its input and output are JSON.',
+    'The TypeScript source: one ES module whose default export is `async function main(input)`. It imports tools from "rewind:tools", workflows from "rewind:workflows", and `sleep`, `signal`, `webhook` from "rewind". Its input and output are JSON.',
 };
 const WAIT = {
   type: "string",
@@ -235,6 +237,37 @@ const DEFINITIONS: Record<AgentToolName, AgentToolDefinition> = {
       type: "object",
       properties: { query: { type: "string", description: "Words to look for in tool names and descriptions." } },
       required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  save_workflow: {
+    name: "save_workflow",
+    description:
+      'Save a script as a workflow: a named script with JSON Schemas for its input, its output and the signals it accepts. The script is type-checked against your tools and against these schemas before it is saved: its default export must take the input and return the output, and `signal(name)` only takes a declared name and returns that signal\'s payload. Once saved, your later scripts can `import { <name> } from "rewind:workflows"`, start runs of it with `<name>.start(input)`, send them signals with `run.signal(name, payload)` and wait for their output with `run.result()`. Saving it again with another script or other schemas saves a new version, which your later scripts use.',
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            'What scripts import from "rewind:workflows": a JavaScript identifier that is not a reserved word, such as triage.',
+        },
+        description: { type: "string", description: "What the workflow does, shown with its declaration." },
+        code: {
+          ...CODE,
+          description:
+            'The workflow\'s TypeScript source: one ES module whose default export is `async function main(input)`, taking the input and returning the output. It imports tools from "rewind:tools" and `sleep`, `signal`, `webhook` from "rewind".',
+        },
+        input: { type: "object", description: "The JSON Schema of the input of `main`." },
+        output: { type: "object", description: "The JSON Schema of what `main` returns." },
+        signals: {
+          type: "object",
+          description:
+            'The signals its runs accept, by name, each with the JSON Schema of its payload, such as {"approval": {"type": "object", "properties": {"close": {"type": "boolean"}}, "required": ["close"]}}. None when absent; names starting with "rewind:" are reserved.',
+          additionalProperties: { type: "object" },
+        },
+      },
+      required: ["name", "description", "code", "input", "output"],
       additionalProperties: false,
     },
   },

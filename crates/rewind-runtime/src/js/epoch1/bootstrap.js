@@ -56,7 +56,9 @@
     RegExpPrototypeExec,
     RegExpPrototypeSymbolReplace,
     SafeMap,
+    SafeSet,
     String,
+    StringPrototypeStartsWith,
     StringPrototypePadStart,
     StringPrototypeSlice,
     StringPrototypeSplit,
@@ -74,6 +76,7 @@
   const {
     op_drain_pending_rejections,
     op_rewind_call_tool,
+    op_rewind_check_workflow_output,
     op_rewind_heap_exceeded,
     op_rewind_cancel_timer,
     op_rewind_complete,
@@ -595,6 +598,23 @@
     }
   }
 
+  // A run this run started ended badly, or its output does not match its workflow's schema.
+  class WorkflowError extends Error {
+    constructor(workflow, runId, status, detail) {
+      const what = status === "invalid_output"
+        ? "returned an output its schema refuses"
+        : status === "failed"
+        ? "failed"
+        : `was ${status}`;
+      super(`workflow ${workflow} (run ${runId}) ${what}: ${detail}`);
+      this.name = "WorkflowError";
+      this.workflow = workflow;
+      this.runId = runId;
+      this.status = status;
+      ownStack(this);
+    }
+  }
+
   class DeadlockError extends Error {
     constructor() {
       super(
@@ -789,8 +809,16 @@
   const mailboxes = new SafeMap(); // name -> [payload]
   const waiters = new SafeMap(); // name -> [{ resolve, reject, timeoutSeq }]
 
+  // Names starting with this prefix are Rewind's: no mailbox the script reads holds them.
+  const RESERVED = "rewind:";
+
   function signal(name, options) {
     name = String(name);
+    if (StringPrototypeStartsWith(name, RESERVED)) {
+      return PromiseReject(
+        atCallSite(new TypeError(`signal names starting with "${RESERVED}" are reserved: ${name}`)),
+      );
+    }
     const mailbox = mailboxes.get(name);
     if (mailbox !== undefined && mailbox.length > 0) {
       return PromiseResolve(ArrayPrototypeShift(mailbox));
@@ -813,6 +841,10 @@
   }
 
   function receiveSignal(name, payload) {
+    if (StringPrototypeStartsWith(name, ENDED)) {
+      receiveEnd(StringPrototypeSlice(name, ENDED.length), payload);
+      return;
+    }
     const queue = waiters.get(name);
     if (queue !== undefined && queue.length > 0) {
       const waiter = ArrayPrototypeShift(queue);
@@ -828,6 +860,146 @@
       mailboxes.set(name, mailbox);
     }
     ArrayPrototypePush(mailbox, payload);
+  }
+
+  // ---------------------------------------------------------------------------------------
+  // Workflows across runs (archi/03-execution.md): `workflows.<name>.start` and
+  // `workflows.<name>.signal` are tool calls. The end of a run this run started, or watches,
+  // comes back as the signal `rewind:ended:<run id>`, which the glue takes itself: it never
+  // reaches a mailbox the script reads. An end may arrive before the start's result: it is kept.
+
+  const ENDED = "rewind:ended:";
+  const ends = new SafeMap(); // run id -> its end, as the signal carried it
+  const attached = new SafeSet(); // runs started attached whose end has not arrived
+
+  function workflow(name) {
+    return ObjectFreeze({
+      name,
+      start(input, options = undefined) {
+        const args = { input: input === undefined ? null : input };
+        if (options !== undefined && options !== null) {
+          // The options go to the op as given, which refuses those it does not know.
+          for (const [key, value] of ObjectEntries(options)) {
+            if (key === "input") {
+              return PromiseReject(
+                atCallSite(
+                  `${name}.start() takes no option "input": its options are detached, labels and ttl`,
+                ),
+              );
+            }
+            if (value !== undefined) args[key] = value;
+          }
+        }
+        const detached = args.detached === true;
+        return PromisePrototypeThen(callTool(`workflows.${name}.start`, args), (result) => {
+          const runId = String(result.runId);
+          if (!detached && !ends.has(runId)) attached.add(runId);
+          return workflowRun(name, runId, true);
+        });
+      },
+      get(runId) {
+        return workflowRun(name, String(runId), false);
+      },
+    });
+  }
+
+  // A handle on a run of the workflow `name`: one this run started has `result()`.
+  function workflowRun(name, runId, started) {
+    const handle = {
+      id: runId,
+      signal(signalName, payload = undefined) {
+        const args = {
+          run: runId,
+          name: String(signalName),
+          payload: payload === undefined ? null : payload,
+        };
+        return PromisePrototypeThen(
+          callTool(`workflows.${name}.signal`, args),
+          () => undefined,
+        );
+      },
+    };
+    if (started) {
+      handle.result = (options = undefined) => awaitEnd(name, runId, options);
+    }
+    return ObjectFreeze(handle);
+  }
+
+  // The run's output, or a WorkflowError; with a timeout, `undefined` if the run has not ended
+  // in time. A wait on the end is a signal wait: `signal_awaited` names `rewind:ended:<run id>`.
+  function awaitEnd(name, runId, options) {
+    if (ends.has(runId)) {
+      const settled = settleEnd(name, runId, ends.get(runId));
+      return settled.ok ? PromiseResolve(settled.value) : PromiseReject(settled.value);
+    }
+    const signalName = ENDED + runId;
+    const [line, column] = callsite();
+    return new Promise((resolve, reject) => {
+      const waiter = { resolve, reject, timeoutSeq: undefined, workflow: name };
+      if (options?.timeout !== undefined) {
+        waiter.timeoutSeq = op_rewind_start_timer(durationArg(options.timeout), line, column);
+        pending.set(waiter.timeoutSeq, { kind: "timeout", name: signalName, waiter });
+      }
+      op_rewind_signal_awaited(signalName, waiter.timeoutSeq ?? 0, line, column);
+      let queue = waiters.get(signalName);
+      if (queue === undefined) {
+        queue = [];
+        waiters.set(signalName, queue);
+      }
+      ArrayPrototypePush(queue, waiter);
+    });
+  }
+
+  function receiveEnd(runId, end) {
+    if (ends.has(runId)) return;
+    ends.set(runId, end);
+    attached.delete(runId);
+    const queue = waiters.get(ENDED + runId);
+    while (queue !== undefined && queue.length > 0) {
+      const waiter = ArrayPrototypeShift(queue);
+      if (waiter.timeoutSeq !== undefined && take(waiter.timeoutSeq) !== undefined) {
+        op_rewind_cancel_timer(waiter.timeoutSeq);
+      }
+      const settled = settleEnd(waiter.workflow, runId, end);
+      if (settled.ok) waiter.resolve(settled.value);
+      else waiter.reject(settled.value);
+    }
+  }
+
+  // What `result()` gives for an end: its output once checked against the pinned output schema,
+  // or the error it rejects with.
+  function settleEnd(name, runId, end) {
+    switch (end?.status) {
+      case "completed": {
+        const output = end.output === undefined ? null : end.output;
+        const refused = op_rewind_check_workflow_output(name, wellFormed(JSONStringify(output)));
+        if (refused !== "") {
+          return { ok: false, value: new WorkflowError(name, runId, "invalid_output", refused) };
+        }
+        return { ok: true, value: output };
+      }
+      case "failed":
+      case "cancelled":
+        return {
+          ok: false,
+          value: new WorkflowError(
+            name,
+            runId,
+            end.status,
+            `${end.error?.name ?? "Error"}: ${end.error?.message ?? ""}`,
+          ),
+        };
+      default:
+        return {
+          ok: false,
+          value: new WorkflowError(
+            name,
+            runId,
+            "aborted",
+            `${end?.reason?.kind ?? "internal"}: ${end?.reason?.message ?? ""}`,
+          ),
+        };
+    }
   }
 
   function fireTimer(seq) {
@@ -1226,6 +1398,8 @@
       run,
       ToolError,
       CancelledError,
+      WorkflowError,
+      workflow,
       setMain(fn) {
         if (typeof fn !== "function") {
           throw new TypeError("the script must `export default` its main function");
@@ -1339,7 +1513,9 @@
     if (failure !== undefined) {
       if (toolsInFlight === 0) end();
     } else if (mainState === "returned") {
-      if (toolsInFlight === 0) end();
+      // The runs it started attached end first, unless the run is being cancelled: its end
+      // cancels them.
+      if (toolsInFlight === 0 && (attached.size === 0 || cancellation !== undefined)) end();
     } else if (toolsInFlight === 0 && !hasPendingTimers() && !hasSignalWaiters()) {
       // Nothing can wake the script any more. After a cancellation, that is how it ends.
       fail(cancellation === undefined ? new DeadlockError() : new CancelledError(cancellation));

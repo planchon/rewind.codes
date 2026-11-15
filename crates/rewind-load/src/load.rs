@@ -325,8 +325,7 @@ fn toolset(mcp_url: &str) -> CreateToolset {
             })),
             policy: None,
         }],
-        http: None,
-        credentials: None,
+        ..CreateToolset::default()
     }
 }
 

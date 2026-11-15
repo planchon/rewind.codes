@@ -30,8 +30,8 @@ pub enum ProblemType {
     /// names it), or its allowed labels do not cover the request; a member without a grant in
     /// the organization.
     Forbidden,
-    /// 404: no such run, toolset, script, task, payload, subscription, API key, role, member or
-    /// invitation (for this tenant).
+    /// 404: no such run, toolset, workflow, script, task, payload, subscription, API key, role,
+    /// member or invitation (for this tenant).
     NotFound,
     /// 409: a signal or a cancellation sent to a run that has ended.
     RunEnded,
@@ -57,6 +57,14 @@ pub enum ProblemType {
     /// 422: the toolset was refused: an invalid schema, a duplicate tool name, or a transport
     /// this server does not allow.
     InvalidToolset,
+    /// 422: the workflow was refused: its name, a signal's name, or a schema that cannot be
+    /// used. A script that does not check is `invalid-script`.
+    InvalidWorkflow,
+    /// 422: the input of a run of a workflow does not match the workflow's input schema.
+    InvalidInput,
+    /// 422: a signal the run does not take: a name starting with `rewind:`, or, for a run of a
+    /// workflow, a signal it does not declare or a payload that does not match.
+    InvalidSignal,
     /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
     /// `scripts`; `quota` says which, at which scope, and when it frees.
     QuotaExceeded,
@@ -71,7 +79,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 21] = [
+    pub const ALL: [ProblemType; 24] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -88,6 +96,9 @@ impl ProblemType {
         ProblemType::UnsupportedMediaType,
         ProblemType::InvalidScript,
         ProblemType::InvalidToolset,
+        ProblemType::InvalidWorkflow,
+        ProblemType::InvalidInput,
+        ProblemType::InvalidSignal,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
         ProblemType::ToolsetUnavailable,
@@ -114,6 +125,9 @@ impl ProblemType {
             ProblemType::UnsupportedMediaType => "urn:rewind:problem:unsupported-media-type",
             ProblemType::InvalidScript => "urn:rewind:problem:invalid-script",
             ProblemType::InvalidToolset => "urn:rewind:problem:invalid-toolset",
+            ProblemType::InvalidWorkflow => "urn:rewind:problem:invalid-workflow",
+            ProblemType::InvalidInput => "urn:rewind:problem:invalid-input",
+            ProblemType::InvalidSignal => "urn:rewind:problem:invalid-signal",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
             ProblemType::ToolsetUnavailable => "urn:rewind:problem:toolset-unavailable",
@@ -138,7 +152,11 @@ impl ProblemType {
             ProblemType::TaskGone => 410,
             ProblemType::PayloadTooLarge => 413,
             ProblemType::UnsupportedMediaType => 415,
-            ProblemType::InvalidScript | ProblemType::InvalidToolset => 422,
+            ProblemType::InvalidScript
+            | ProblemType::InvalidToolset
+            | ProblemType::InvalidWorkflow
+            | ProblemType::InvalidInput
+            | ProblemType::InvalidSignal => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
             ProblemType::ToolsetUnavailable | ProblemType::IdentityUnavailable => 502,
@@ -165,6 +183,9 @@ impl ProblemType {
             ProblemType::UnsupportedMediaType => "Unsupported media type",
             ProblemType::InvalidScript => "The script was refused",
             ProblemType::InvalidToolset => "The toolset was refused",
+            ProblemType::InvalidWorkflow => "The workflow was refused",
+            ProblemType::InvalidInput => "The input does not match the workflow",
+            ProblemType::InvalidSignal => "The run does not take this signal",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",
             ProblemType::ToolsetUnavailable => "A server of the toolset is unavailable",

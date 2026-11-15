@@ -6,11 +6,11 @@
 //! code:
 //!
 //! - the DTOs of every endpoint, request and response, one module per group of the endpoint
-//!   table: [`toolsets`], [`scripts`], [`runs`] (with [`events`], the journal entries and the
-//!   event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`], [`access`] (with the
-//!   catalog of permissions and the built-in roles), [`namespaces`] (the end users, their
-//!   quotas and their tokens) and [`admin`] (the server); and the dashboard's sign-in,
-//!   [`auth`];
+//!   table: [`toolsets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the journal
+//!   entries and the event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`],
+//!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
+//!   end users, their quotas and their tokens) and [`admin`] (the server); and the dashboard's
+//!   sign-in, [`auth`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
 //! - the query language of the run lists ([`query`]);
 //! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, `Rewind-Namespace`, the
@@ -51,6 +51,7 @@ pub mod scripts;
 pub mod tasks;
 pub mod toolsets;
 pub mod webhooks;
+pub mod workflows;
 
 pub use client::{Client, EventStream};
 pub use error::Error;

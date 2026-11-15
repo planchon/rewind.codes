@@ -7,7 +7,7 @@ A toolset has three kinds of tools:
 | Route | Called by | Used for |
 | --- | --- | --- |
 | MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
-| Built-ins: `http`, `webhook` | The dispatcher of Rewind | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)) |
+| Built-ins: `http`, `webhook`; `workflows.<name>.start` and `workflows.<name>.signal` for each workflow the toolset pins | The dispatcher of Rewind; the engine itself for `webhook` and the workflows' | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)); the workflows' start and signal runs of [workflows](03-execution.md#workflows-across-runs), in the namespace of the run that calls them |
 | Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
 
 Rewind calls MCP tools and built-ins directly. Their results go back to the script, never to
@@ -104,11 +104,21 @@ The script sees failures as a thrown `ToolError` and decides what to do.
 
 ## Toolsets and code generation
 
-A toolset is a list of MCP servers and host tools, with a policy per tool. Registering it
-(`POST /v1/toolsets`) connects to the servers, lists their tools, and **pins** the schemas.
+A toolset is a list of MCP servers and host tools, with a policy per tool, and of the
+[workflows](01-product.md#workflows) its scripts may start. Registering it
+(`POST /v1/toolsets`) connects to the servers, lists their tools, and **pins** the schemas, and
+the latest version of each workflow it names (or the version it names: `triage@9f2c4e1a07b3`).
 The pinned toolset is a document of the [stored format](02-journal.md#stored-format-v1): its
-servers, and for each tool its name, route, schemas and policy. The toolset is
-content-addressed, and every run records the digest it was started with.
+servers, for each tool its name, route, schemas and policy, and for each workflow its name,
+version, description and schemas. The toolset is content-addressed, and every run records the
+digest it was started with. A toolset can also be derived from a pinned one (`base`): its
+servers and tools are kept as pinned, and the workflows it names are added or pinned again,
+without listing the servers again. It calls the same servers, so it takes the base's
+credentials, unless the request gives its own.
+
+Each pinned workflow gives two built-in tools, `workflows.<name>.start` and
+`workflows.<name>.signal`, with the default policy of built-ins. They are not part of the
+document: the workflow is.
 
 From each pinned tool, `rewind-codegen` generates three outputs. For `github.list_issues`:
 
@@ -117,6 +127,14 @@ From each pinned tool, `rewind-codegen` generates three outputs. For `github.lis
 | The `rewind:tools` runtime module: thin wrappers over the tool op | The runtime | `list_issues: (args) => call("github.list_issues", args)` |
 | `rewind-tools.d.ts`: types for args (from `inputSchema`) and results (from `outputSchema` when present, otherwise the MCP content type with `.text()` and `.json()` helpers), with tool descriptions as JSDoc | tsgo | `list_issues(args: { repo: string; state?: "open" \| "closed" }): Promise<Issue[]>` |
 | A **compact prompt rendering** of the same declarations | The model | `github.list_issues({ repo, state? }) → Issue[] · List the issues` |
+
+For each pinned workflow, `rewind-tools.d.ts` also declares the module `rewind:workflows`, and
+the prompt rendering gives it a line:
+
+| Output | Example |
+| --- | --- |
+| `rewind-tools.d.ts` | `export const triage: Workflow<{ repo: string }, { closed: number }, { approval: { close: boolean } }>` |
+| Prompt rendering | `triage.start({ repo: string }) → run · run.signal("approval", { close: boolean }) · run.result() → { closed: number } · Triage…`, after the line `import { triage } from "rewind:workflows";` |
 
 Codegen is deterministic. Without it, nothing could check a script before it runs: tsgo would
 not know that `repo` is a string. With it, `github.list_issues({ repo: 42 })` is refused at
@@ -127,7 +145,9 @@ Tool names are kept as the server defines them (`github.list_issues`) so they ma
 descriptions the model reads. The names `rewind:tools` declares, a server, a host-tool group and a
 host tool without a group, are identifiers that are not reserved words of JavaScript (`default`,
 `delete`, `class`…), nor the words strict mode reserves (`let`, `static`, `eval`…): a toolset
-naming one is refused when it is registered.
+naming one is refused when it is registered. So are the names of workflows, which
+`rewind:workflows` declares. The namespace `workflows` is reserved for their built-ins: no server
+or host-tool group takes it.
 
 Args are also validated at run time, against the same JSON Schema, inside the op, before any
 command is recorded. Invalid args throw a `TypeError` at the call site. This is deterministic,
@@ -239,8 +259,9 @@ What tsgo sees:
 | --- | --- |
 | ECMAScript lib | ES2025 and the ESNext pieces V8 ships (`Temporal`, explicit resource management…), no DOM, without the shared memory and weak references the sandbox removes |
 | Sandbox globals | `globals.d.ts`, declaring exactly the globals the [sandbox](01-product.md#what-exists-in-the-sandbox) has; `fetch.d.ts` only when the toolset enables the `http` tool, whose `rewind-tools.d.ts` then starts with `/// <reference path="fetch.d.ts" />` |
-| `rewind.d.ts` | The `rewind` module: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError` |
-| `rewind-tools.d.ts` | Generated by `rewind-codegen` for the toolset |
+| `rewind.d.ts` | The `rewind` module: `sleep`, `signal`, `webhook`, `run`, `ToolError`, `CancelledError`, `WorkflowError`, the types of workflows and their runs, and `Signals`, the signals the run accepts (empty, so any name, unless the script is a workflow's) |
+| `rewind-tools.d.ts` | Generated by `rewind-codegen` for the toolset: `rewind:tools` and `rewind:workflows` |
+| The workflow's own declarations | Only when a workflow is registered, generated from its schemas: its signals, which `Signals` takes, so `signal()` and `webhook()` take only their names and `signal()` returns their types; and `entry.ts`, which assigns the script's default export to a function from the input type to the output type |
 
 What type-checks exists at run time, and the reverse. The sandbox lib lives in
 `crates/rewind-runtime/lib/`, with `tsconfig.json` (tsgo's options) and `globals.json` (the
@@ -264,6 +285,7 @@ slightly less precise than rules based on types.
 Their diagnostics join tsgo's. These rules are the first line. At run time, a forgotten
 `await` is still harmless ([how a script ends](03-execution.md#how-a-script-ends)).
 
-`runs.start` checks by default; the harness can skip it.
+`runs.start` checks by default; the harness can skip it. Registering a workflow always checks
+its script, and a run of a workflow is not checked again when it starts.
 
 Transpilation is `deno_ast` (swc: type stripping and source maps).

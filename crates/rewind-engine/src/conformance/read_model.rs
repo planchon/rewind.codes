@@ -80,6 +80,11 @@ pub async fn run_all<S: ReadModel>(new_store: impl Fn() -> S) {
         new_store(),
         runs_scripts_and_tools_are_scoped_by_namespace
     );
+    check!(
+        "read model",
+        new_store(),
+        runs_are_found_by_workflow_and_by_the_run_that_started_them
+    );
 }
 
 // -------------------------------------------------------------------------------------------
@@ -433,6 +438,8 @@ fn run(
         toolset: toolset(toolset_n),
         labels: labels(pairs),
         parent,
+        workflow: None,
+        started_by: None,
     }
 }
 
@@ -1043,6 +1050,8 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
             mode: Some(RunMode::Mock),
             labels: labels(&[("agent", "deploy"), ("conversation", "c-42")]),
             parent: Some(id(1)),
+            workflow: None,
+            started_by: None,
             started_at: Some(at(3_000)),
             ended_at: None,
             last_activity_at: at(3_100),
@@ -1093,6 +1102,8 @@ pub async fn runs_are_summarized<S: ReadModel>(store: &S) {
             mode: Some(RunMode::Live),
             labels: labels(&[("agent", "deploy")]),
             parent: None,
+            workflow: None,
+            started_by: None,
             started_at: Some(at(1_000)),
             ended_at: Some(at(1_500)),
             last_activity_at: at(1_500),
@@ -3411,5 +3422,66 @@ pub async fn runs_are_purged_and_deleted<S: ReadModel>(store: &S) {
     assert!(
         store.attempts(&four).await.expect("attempts").is_empty(),
         "deleted with its task states"
+    );
+}
+
+/// Runs of a workflow, and the runs a run started, are searched by them
+/// (`archi/05-testing-and-observability.md`, "Query language").
+pub async fn runs_are_found_by_workflow_and_by_the_run_that_started_them<S: ReadModel>(store: &S) {
+    let of = |n: u128, workflow: Option<&str>, started_by: Option<u128>| {
+        let mut run = run(acme(), n, 0, 0, "// a run", &[], None);
+        run.workflow = workflow.map(str::to_owned);
+        run.started_by = started_by.map(id);
+        Fixture::new(run, History::started(1_000 + n as u64), RunMode::Live)
+    };
+    apply_all(
+        store,
+        &[
+            of(1, None, None),
+            of(2, Some("triage"), Some(1)),
+            of(3, Some("triage"), Some(1)),
+            of(4, Some("digest"), Some(2)),
+            of(5, Some("digest"), None),
+        ],
+    )
+    .await;
+    // In any order: the page's is the newest first.
+    let found = |predicate: Predicate| async move {
+        let mut found = ids(store, &RunQuery::new(acme()).with(predicate)).await;
+        found.sort_unstable();
+        found
+    };
+    assert_eq!(
+        found(Predicate::Workflow(vec![TextMatch::Exact("triage".into())])).await,
+        [2, 3]
+    );
+    assert_eq!(
+        found(Predicate::Workflow(vec![
+            TextMatch::Prefix("dig".into()),
+            TextMatch::Exact("triage".into()),
+        ]))
+        .await,
+        [2, 3, 4, 5]
+    );
+    assert_eq!(
+        found(Predicate::Workflow(vec![TextMatch::Any])).await,
+        [2, 3, 4, 5]
+    );
+    assert_eq!(found(Predicate::StartedBy(id(1))).await, [2, 3]);
+    assert_eq!(found(Predicate::StartedBy(id(2))).await, [4]);
+    assert_eq!(found(Predicate::StartedBy(id(9))).await, Vec::<u128>::new());
+    let summary = summary(store, acme(), 4).await;
+    assert_eq!(
+        (summary.workflow.as_deref(), summary.started_by),
+        (Some("digest"), Some(id(2)))
+    );
+    assert_eq!(
+        ids(
+            store,
+            &RunQuery::new(tenant("other")).with(Predicate::StartedBy(id(1)))
+        )
+        .await,
+        Vec::<u128>::new(),
+        "another tenant's runs"
     );
 }

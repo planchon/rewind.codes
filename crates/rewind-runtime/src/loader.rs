@@ -1,6 +1,6 @@
 //! The modules of an isolate, and the import rules.
 //!
-//! A script may only import `rewind` and `rewind:tools`; `rewind:internal` is reserved to the runtime's
+//! A script may only import `rewind`, `rewind:tools` and `rewind:workflows`; `rewind:internal` is reserved to the runtime's
 //! own modules; there is no dynamic `import()`, no npm, no relative import. A module of mock
 //! handlers imports nothing.
 
@@ -29,6 +29,7 @@ enum Modules {
         glue: &'static Glue,
         script: String,
         tools: String,
+        workflows: String,
     },
     Mocks {
         javascript: String,
@@ -36,18 +37,21 @@ enum Modules {
 }
 
 impl Loader {
-    /// The modules of a run: its entry, the glue's `rewind` modules, its `rewind:tools`, its script.
+    /// The modules of a run: its entry, the glue's `rewind` modules, its `rewind:tools` and
+    /// `rewind:workflows`, its script.
     pub(crate) fn script(
         glue: &'static Glue,
         script: String,
         source_map: Vec<u8>,
         tools: String,
+        workflows: String,
     ) -> Self {
         Self {
             modules: Modules::Script {
                 glue,
                 script,
                 tools,
+                workflows,
             },
             source_map,
         }
@@ -87,12 +91,18 @@ impl ModuleLoader for Loader {
             (Modules::Script { .. }, ENTRY_SPECIFIER, "rewind:internal" | SCRIPT_SPECIFIER) => {
                 specifier
             }
-            (Modules::Script { .. }, "rewind:std" | "rewind:tools", "rewind:internal") => specifier,
+            (
+                Modules::Script { .. },
+                "rewind:std" | "rewind:tools" | "rewind:workflows",
+                "rewind:internal",
+            ) => specifier,
             (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind") => "rewind:std",
             (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind:tools") => "rewind:tools",
+            (Modules::Script { .. }, SCRIPT_SPECIFIER, "rewind:workflows") => "rewind:workflows",
             (Modules::Script { .. }, SCRIPT_SPECIFIER, other) => {
                 return Err(JsErrorBox::type_error(format!(
-                    "cannot import {other:?}: scripts can only import \"rewind\" and \"rewind:tools\""
+                    "cannot import {other:?}: scripts can only import \"rewind\", \
+                     \"rewind:tools\" and \"rewind:workflows\""
                 )));
             }
             (Modules::Mocks { .. }, _, MOCKS_SPECIFIER) if main => specifier,
@@ -121,6 +131,7 @@ impl ModuleLoader for Loader {
             (Modules::Script { glue, .. }, "rewind:internal") => glue.internal.to_owned(),
             (Modules::Script { glue, .. }, "rewind:std") => glue.std.to_owned(),
             (Modules::Script { tools, .. }, "rewind:tools") => tools.clone(),
+            (Modules::Script { workflows, .. }, "rewind:workflows") => workflows.clone(),
             (Modules::Script { script, .. }, SCRIPT_SPECIFIER) => script.clone(),
             (Modules::Mocks { javascript }, MOCKS_SPECIFIER) => javascript.clone(),
             (_, other) => {

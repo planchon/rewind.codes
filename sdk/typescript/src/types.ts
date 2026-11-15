@@ -17,6 +17,7 @@ export type CreateSubscription = Schemas["CreateSubscription"];
 export type CreateToken = Schemas["CreateToken"];
 export type CreateTokenKey = Schemas["CreateTokenKey"];
 export type CreateToolset = Schemas["CreateToolset"];
+export type CreateWorkflow = Schemas["CreateWorkflow"];
 export type Credentials = Schemas["Credentials"];
 export type CredentialsExpired = Schemas["CredentialsExpired"];
 export type DayUsage = Schemas["DayUsage"];
@@ -60,6 +61,7 @@ export type NamespaceOrder = NonNullable<NonNullable<operations["listNamespaces"
 export type OnInterruption = Schemas["OnInterruption"];
 export type ParkedReason = Schemas["ParkedReason"];
 export type Payload = Schemas["Payload"];
+export type PinnedWorkflow = Schemas["PinnedWorkflow"];
 export type Permission = Schemas["Permission"];
 /**
  * A problem, as the API answers errors. With `quota-exceeded`, it also says which quota was reached (`quota`,
@@ -93,6 +95,7 @@ export type RunStats = Schemas["RunStats"];
 export type RunStatus = Schemas["RunStatus"];
 export type RunSummary = Schemas["RunSummary"];
 export type RunWait = Schemas["RunWait"];
+export type RunWorkflow = Schemas["RunWorkflow"];
 export type ScenarioSignal = Schemas["ScenarioSignal"];
 export type Script = Schemas["Script"];
 export type ScriptError = Schemas["ScriptError"];
@@ -107,6 +110,7 @@ export type Severity = Schemas["Severity"];
 export type SignalAccepted = Schemas["SignalAccepted"];
 /** The claims of a token the customer signs itself, with a key it registered (`kid` `rk_…`). */
 export type SignedTokenClaims = Schemas["SignedTokenClaims"];
+export type StartedBy = Schemas["StartedBy"];
 export type StatusCounts = Schemas["StatusCounts"];
 export type StreamEvent = Schemas["StreamEvent"];
 export type Subscription = Schemas["Subscription"];
@@ -134,6 +138,9 @@ export type Waiting = Schemas["Waiting"];
 export type WaitKind = Schemas["WaitKind"];
 export type WebhookEvent = Schemas["WebhookEvent"];
 export type WebhookEventType = Schemas["WebhookEventType"];
+export type Workflow = Schemas["Workflow"];
+export type WorkflowPage = Schemas["WorkflowPage"];
+export type WorkflowVersions = Schemas["WorkflowVersions"];
 
 /** A run that has ended: its status is final. */
 export const TERMINAL_STATUSES: readonly RunStatus[] = ["completed", "failed", "cancelled", "aborted"];

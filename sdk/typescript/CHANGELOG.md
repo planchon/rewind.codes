@@ -2,9 +2,10 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## 0.2.0 (2026-11-14)
+## 0.2.0 (2026-11-15)
 
-For the HTTP API `/v1` with namespaces: the end users of a harness, their tokens and their quotas.
+For the HTTP API `/v1` with namespaces (the end users of a harness, their tokens and their quotas) and workflows
+(named scripts with typed inputs, outputs and signals, that scripts start and signal).
 
 - `rewind.namespace(name)`: the same client acting for one end user, whose requests name its namespace
   (`Rewind-Namespace`). It starts runs, checks and tests scripts in that namespace, and narrows reads to it.
@@ -20,6 +21,18 @@ For the HTTP API `/v1` with namespaces: the end users of a harness, their tokens
   problem slugs `namespace-deleting`, `role-in-use`, `last-owner` and `identity-unavailable`; the types of namespaces,
   quotas, alerts, tokens and token keys.
 - `verifyWebhook` accepts `quota.alert`, the alert of a limit crossed.
+- `rewind.workflows`: `create` (a new version; `invalid-script` with diagnostics, or `invalid-workflow`), `list` and
+  `listAll` (the latest version of each), `versions`.
+- `runs.start({ workflow: "triage" | "triage@<version>", input })` starts a run of a workflow instead of a script
+  (`invalid-input` when the input does not match). `Run` and `RunSummary` have `workflow` and `startedBy`, and
+  `runs.list` filters by them (`workflow`, `startedBy`; `workflow:triage` and `started_by:<run id>` in `q`).
+- `toolsets.create` takes `workflows` (pinned for its scripts' `rewind:workflows`) and `base` (derives from a
+  registered toolset); `Toolset` has `workflows`.
+- The problem slugs `invalid-workflow`, `invalid-input` and `invalid-signal`.
+- The agent tool `save_workflow`: it saves a workflow with the agent's toolset, derives a toolset that pins it, and
+  the later `run_script`, `check_script`, `test_script` and `search_tools` use it (`agentTools.toolset`).
+  `signal_run` says when the run refuses the signal (`invalid-signal`), and `get_run` which workflow a run executes
+  and which run started it.
 
 Breaking changes:
 
@@ -30,6 +43,7 @@ Breaking changes:
 - `apiKeys.create` takes a `name` and a `role` by name (a built-in role or one of the organization's); only the
   operator names a `tenant`. `Role` describes a role (its name, description and permissions), no longer the name of
   a key's role.
+- `AgentToolsClient` needs `workflows`.
 
 ## 0.1.0 (2026-11-14)
 

@@ -73,6 +73,11 @@ pub struct Activation {
     /// The run's status after the entries. A terminal status clears the run's timers, tool
     /// tasks, inbox and webhook tokens.
     pub status: RunStatus,
+    /// With a terminal status, the run's end: the payload of the signal `rewind:ended:<run>`
+    /// the store enqueues for each of the run's watchers that has not ended ([`RunEnd`]).
+    ///
+    /// [`RunEnd`]: rewind_core::RunEnd
+    pub end: Option<JsonValue>,
 }
 
 impl Activation {
@@ -87,6 +92,7 @@ impl Activation {
             timers: Vec::new(),
             cancelled_timers: Vec::new(),
             status,
+            end: None,
         }
     }
 }

@@ -90,7 +90,7 @@ observable through the port alone (the egress rules, an identity provider): thei
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts and toolsets by digest; runs, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `JournalStore` | Scripts, toolsets and workflow versions by digest; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role; end users' tokens and the keys that sign them | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
@@ -114,8 +114,11 @@ Methods (declared in `crates/rewind-engine/src/ports/journal/mod.rs`):
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
 put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
+put_workflow(tenant, workflow, labels, now) -> StoredWorkflow / get_workflow(tenant, version)
+workflow_versions(tenant, name, labels) / latest_workflows(WorkflowFilter { tenant, labels, after, limit })
 create_run(NewRun { run: (tenant, id), namespace, started, metadata, created_at }, key?)
     -> Created { run, created } | QuotaExceeded { quota, scope, limit, used, resets_at } | NamespaceDeleting
+watch_run(run, watcher, seq) -> Watched { ended }
 enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
 get_run(run)                       list_runs(RunFilter { tenant, namespace, status, labels, quarantined, after, limit })
 acquire_runnable(AcquireRunnable { owner, epochs, tenants, now, lease_duration, sticky_grace, draw }) -> Lease { run, fence }
@@ -169,8 +172,9 @@ A key looked up with a NUL character matches nothing, and never reaches a store:
 is not found, and a filter is refused with 400
 ([decided](08-decisions.md#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)).
 
-`metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`), stored with
-the run and never part of its events. `commit_activation` also writes one feed item per
+`metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`; the
+workflow and version of a run of a workflow, the run and `seq` that started it and whether it is
+detached, its scope), stored with the run and never part of its events. `commit_activation` also writes one feed item per
 consumer (`read_model`, `otel`, `webhooks`) in the same transaction: the store guarantees that
 every committed activation is eventually projected.
 
@@ -234,6 +238,17 @@ Contracts, all covered by the conformance suite:
   `commit_activation`.
 - A terminal commit clears the run's timers, tool tasks, inbox, webhook tokens and quarantine;
   nothing is enqueued for a terminal run any more (`Enqueued::RunEnded`).
+- Workflows across runs ([execution](03-execution.md#workflows-across-runs)): `create_run` of a
+  run started by a script records the starter as its first watcher, attached unless the run is
+  detached. A terminal commit carries the run's end (`Activation::end`): in the same
+  transaction, the store enqueues it as the signal `rewind:ended:<run>` for every watcher that
+  has not ended, with that name as idempotency key, and enqueues `cancel_requested` for every
+  run this one watches attached and that has not ended. `watch_run` adds a watcher that is
+  never attached (a fork), and says whether the run has already ended: the engine then enqueues
+  the end itself, under the same key. A workflow version is immutable: a second `put_workflow`
+  of a version changes nothing and returns the first. `workflow_versions` lists a name's
+  versions carrying `labels`, newest first (created last first, then stored last first): the
+  first is the latest; `latest_workflows` gives the latest version of each name, by name.
 - Tool tasks follow the [lifecycle](04-tools.md#tool-task-lifecycle). A new task starts in
   `approval` when its policy asks for it, else `ready`. `claim_tool_tasks` only hands out
   `ready` tasks whose `next_attempt_at` has passed, and `claimed` tasks whose claim expired
@@ -327,7 +342,9 @@ Contracts, all covered by the conformance suite:
   fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
   token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher
   never writes to the journal.
-- **`TypeChecker`**: `check(script, declarations) -> diagnostics`. Deterministic.
+- **`TypeChecker`**: `check(script, declarations) -> diagnostics`, and
+  `check_workflow(script, declarations, workflow)` for a workflow's script, `workflow` being its
+  own declarations (its signals, and `entry.ts`). Deterministic.
   Diagnostics are written for a model, with a location in `script.ts`, a severity, their source
   (a TypeScript code or one of the checker's own rules), a hint and a code frame
   ([type-checking](04-tools.md#type-checking)).
@@ -381,7 +398,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
 | `rewind-blob` | adapter | `BlobStore` on local files and S3 |
 | `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
-| `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts`, prompt rendering |
+| `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts` (with `rewind:workflows`), prompt rendering; a workflow's own declarations |
 | `rewind-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `rewind` binary; the checker's own rules on the swc syntax tree |
 | `rewind-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
 | `rewind-cli` | composition root | the client commands of the `rewind` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
@@ -523,15 +540,18 @@ Conventions:
 
 | Group | Endpoint | Permission | Does |
 | --- | --- | --- | --- |
-| Toolsets | `POST /v1/toolsets` | `toolsets:write` | Registers and pins a toolset; returns its declarations |
+| Toolsets | `POST /v1/toolsets` | `toolsets:write` | Registers and pins a toolset, with the workflows it names; `base` derives it from a pinned toolset; returns its declarations |
 |  | `GET /v1/toolsets` | `toolsets:read` | The tenant's toolsets, with their servers and tool names |
 |  | `GET /v1/toolsets/{id}/declarations` | `toolsets:read` | The declarations, `format=dts` or `prompt` |
 |  | `GET /v1/toolsets/{id}/search` | `toolsets:read` | `search_tools`, for large toolsets |
 |  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
 |  | `PUT /v1/namespaces/{name}/toolsets/{id}/credentials` | `credentials:write` | Sets or renews an end user's credentials for the toolset |
+| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, and saves it as a new version; returns its declarations |
+|  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version |
+|  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first |
 | Scripts | `POST /v1/check` | `runs:start` | Type-check only |
 |  | `POST /v1/test` | `runs:start` | Runs a scenario in mock mode, in virtual time |
-| Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl` |
+| Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script and a toolset, or a `workflow` (`triage` or `triage@<version>`) |
 |  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
 |  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
 |  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
@@ -539,7 +559,7 @@ Conventions:
 |  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
 |  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
-|  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended |
+|  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
 |  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)) |
 |  | `GET /v1/runs/{id}/journal` | `runs:read` | Exports the journal document; `?as=cassette` exports a cassette |

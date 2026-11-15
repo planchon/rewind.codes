@@ -34,12 +34,15 @@ access_settings (tenant PK, default_role)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
 namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, namespace, digest)
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
-runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on, runnable_at,
-            expires_at, quarantine, failures, attempts, lease_owner, lease_until, fence,
-            sticky_worker,
-            parent, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
-            archive)
+workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
+                                                           index on (tenant, name, created_at)
+runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on,
+            runnable_at, expires_at, quarantine, failures, attempts, lease_owner, lease_until,
+            fence, sticky_worker,
+            parent, workflow, workflow_version, started_by, started_seq, detached, scope,
+            labels, trace_context, idempotency_key, created_at, updated_at, ended_at, archive)
             PK (tenant, id), UNIQUE (tenant, namespace, idempotency_key), index (tenant, namespace, status)
+run_watchers (run_id, watcher, seq, attached)               PK (run_id, watcher)
 history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
 inbox      (id, run_id, event, received_at)
 signal_keys (run_id, key)                                  PK (run_id, key)
@@ -67,10 +70,14 @@ tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, comple
 ```
 
 `event` columns hold the `rewind-format` v1 JSON of the event. `namespace`, `labels`,
-`trace_context`, `idempotency_key` and `parent` are run metadata: stored with the run, never in
-its events ([05](05-testing-and-observability.md#run-metadata)). `namespaces`, `namespace_scripts`,
-`usage` and `quota_alerts` belong to the `JournalStore`, which checks quotas when it creates a run;
-`tokens` and `token_keys` to the `AccessStore`.
+`trace_context`, `idempotency_key`, `parent`, `workflow`, `workflow_version`, `started_by`,
+`started_seq`, `detached` and `scope` are run metadata: stored with the run, never in its events
+([05](05-testing-and-observability.md#run-metadata)). A `workflows` row holds a
+[workflow version](02-journal.md#stored-format-v1) document. `run_watchers` lists the runs that
+receive a run's end ([workflows](03-execution.md#workflows-across-runs)): the run that started
+it (`attached` unless it was started detached), and the forks that copied that start.
+`namespaces`, `namespace_scripts`, `usage` and `quota_alerts` belong to the `JournalStore`, which
+checks quotas when it creates a run; `tokens` and `token_keys` to the `AccessStore`.
 
 `epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
@@ -120,6 +127,9 @@ retries without knowing.
 | --- | --- | --- | --- |
 | Start a run | Unique per namespace | Returns the existing run | A second run starts and repeats every effect |
 | Send a signal | Unique per run | Is acknowledged and ignored | A second `approval` stays in the mailbox and approves the script's next `signal("approval")` |
+| A script starts a workflow run | `rewind:{run_id}/{seq}`, the call's key | Returns the run already started | |
+| A script signals a run | `rewind:{run_id}/{seq}`, the call's key | Is acknowledged and ignored | |
+| A run ends | `rewind:ended:{run id}`, for each run that watches it | Is ignored | |
 
 - A signal's key is kept in `signal_keys` for the life of the run, not in the inbox. It
   must outlive the delivery of the signal, or a late retry would pass.
@@ -198,6 +208,7 @@ The tenant is part of every storage key:
 | Idempotency keys of runs | `(tenant, namespace, key)` |
 | Namespaces, their usage, alerts and script counts | `(tenant, namespace)` |
 | Scripts, toolsets | `(tenant, digest)` |
+| Workflow versions | `(tenant, version)` |
 | Payloads | `(tenant, digest)`; blobs at `{tenant}/sha256/…` |
 | Read model, secrets, quotas, keys, tokens, roles, grants | Per tenant |
 
@@ -353,8 +364,8 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `runs:control` | Send signals, cancel | yes | yes | | |
 | `runs:quarantine` | Release a quarantined run or give it up | yes | yes | | |
 | `runs:delete` | Erase a run | yes | yes | | |
-| `toolsets:read` | List toolsets, read their declarations, search their tools | yes | yes | | yes |
-| `toolsets:write` | Register a toolset | yes | yes | | |
+| `toolsets:read` | List toolsets and workflows, read their declarations, search their tools | yes | yes | | yes |
+| `toolsets:write` | Register a toolset, save a workflow | yes | yes | | |
 | `credentials:write` | Set the credentials of a toolset, a namespace or a run | yes | yes | | |
 | `tasks:work` | Claim host-tool tasks, heartbeat, defer, complete, fail | yes | yes | yes | |
 | `tasks:approve` | Approve or reject a parked task | yes | yes | | |
@@ -383,6 +394,10 @@ Rules, enforced by the server:
   subscriptions) gets them; a contradicting label is refused (403). Such a grant cannot claim
   tasks, read tool statistics, nor use the permissions `members:invite`, `members:manage`,
   `roles:write`, `api_keys:*` and `organization:write` (403).
+- **Workflows.** A workflow saved under a grant limited to labels carries those labels. Such a
+  principal only lists, reads and pins the workflows carrying its labels, and a run it starts
+  takes them as its **scope**: the scripts of that run and of the runs it starts only reach runs
+  carrying them ([workflows](03-execution.md#workflows-across-runs)).
 - **No one gives more than they hold.** Creating a key, inviting someone, setting a grant or
   writing a role requires holding every permission of the role given. Changing or removing a
   principal's grant also requires holding every permission of its current role.

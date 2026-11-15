@@ -232,6 +232,8 @@ async fn committed_entries_are_projected_once_whatever_the_deliveries() {
                 toolset: record.toolset,
                 labels: record.metadata.labels.clone(),
                 parent: None,
+                workflow: None,
+                started_by: None,
             },
             &history,
             &run_snapshot(&history, None),
@@ -260,7 +262,7 @@ async fn a_run_started_with_a_traceparent_joins_the_harness_s_trace() {
                 traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01".into(),
                 tracestate: None,
             }),
-            parent: None,
+            ..RunMetadata::default()
         },
     )
     .await;

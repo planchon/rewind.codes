@@ -65,6 +65,8 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         labels: Labels::new(),
         trace_id: "0".repeat(32),
         parent: None,
+        workflow: None,
+        started_by: None,
         input: Some(Payload::of(json!({}), 1024)),
         output: None,
         error: None,
@@ -329,6 +331,8 @@ async fn list(
             waiting_for: Vec::new(),
             wakes_at: None,
             parent: None,
+            workflow: None,
+            started_by: None,
         })
         .collect();
     axum::Json(RunPage {
@@ -394,6 +398,7 @@ async fn create_toolset(
         id: TOOLSET_ID.into(),
         servers: Vec::new(),
         tools: Vec::new(),
+        workflows: Vec::new(),
         declarations: Declarations {
             dts: "declare module \"rewind:tools\" {}\n".into(),
             prompt: String::new(),

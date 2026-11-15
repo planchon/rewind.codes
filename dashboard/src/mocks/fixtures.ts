@@ -2,7 +2,7 @@
 // ten-day sleep, retries, a payload above the inline limit and, for `pnpm dev:mock`, a run that
 // goes on live. Times are relative to `now`. Who may read them is the access world's
 // (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
-import type { Labels, Quarantine, Waiting } from "../api/types";
+import type { Labels, Quarantine, Run, Waiting } from "../api/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { fakeDigest, JournalBuilder } from "./journal";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
@@ -27,6 +27,10 @@ export interface RunFixture {
   labels: Labels;
   journal: JournalBuilder;
   parent?: { run: string; at?: number | null };
+  /** For a run of a workflow, the workflow and its version. */
+  workflow?: NonNullable<Run["workflow"]>;
+  /** For a run a script started, that run and the `seq` of its call. */
+  startedBy?: NonNullable<Run["startedBy"]>;
   quarantine?: Quarantine;
   /** Where `fail_run` happened, for `Run.error.location`. */
   errorAt?: { line: number; column: number };
@@ -188,7 +192,54 @@ export default async function main(input: { repo: string }) {
 `,
 );
 
-export const SCRIPTS = { TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW };
+/** The script of the workflow `triage`: a run per repository, which the run below starts. */
+const TRIAGE_REPO = script(
+  "triage_repo.ts",
+  `import { github } from "rewind:tools";
+import { signal } from "rewind";
+
+export default async function main(input: { repo: string }) {
+  const issues = await github.list_issues({ repo: input.repo, state: "open" });
+  const stale = issues.filter((i) => Date.now() - Date.parse(i.updated_at) > 30 * 86_400_000);
+  const { close } = await signal("approval");
+  if (!close) return { closed: 0 };
+  await Promise.all(stale.map((i) => github.close_issue({ repo: input.repo, number: i.number })));
+  return { closed: stale.length };
+}
+`,
+);
+
+/** A script that starts runs of the workflows `triage` and `digest`, signals them and waits. */
+const TRIAGE_ALL = script(
+  "triage_all.ts",
+  `import { digest, triage } from "rewind:workflows";
+
+export default async function main(input: { repos: string[] }) {
+  const runs = await Promise.all(input.repos.map((repo) => triage.start({ repo })));
+  await Promise.all(runs.map((run) => run.signal("approval", { close: true })));
+  await digest.start({ repos: input.repos, channel: "#eng" }, { detached: true });
+  const results = await Promise.all(runs.map((run) => run.result()));
+  return { closed: results.reduce((sum, result) => sum + result.closed, 0) };
+}
+`,
+);
+
+/** The versions of the workflows the world's runs execute. */
+export const WORKFLOWS = {
+  triage: { name: "triage", version: fakeDigest("workflow:triage") },
+  digest: { name: "digest", version: fakeDigest("workflow:digest") },
+};
+
+export const SCRIPTS = {
+  TRIAGE,
+  TRIAGE_FIXED,
+  DIGEST,
+  ONBOARDING,
+  FORECAST,
+  TRIAGE_WORKFLOW,
+  TRIAGE_REPO,
+  TRIAGE_ALL,
+};
 
 /**
  * The journal of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow, started at `start`: 18
@@ -273,6 +324,7 @@ const TOOLSET_GITHUB = fakeDigest("toolset:github,slack");
 const TOOLSET_DIGEST = fakeDigest("toolset:github,llm,slack");
 const TOOLSET_CRM = fakeDigest("toolset:ask_user,crm");
 const TOOLSET_WEATHER = fakeDigest("toolset:weather");
+const TOOLSET_WORKFLOWS = fakeDigest("toolset:github,slack+workflows:digest,triage");
 
 /** A deterministic UUID v7 for a run started at `at`. */
 export function runId(at: number, n: number): string {
@@ -915,6 +967,133 @@ export function createWorld(options: WorldOptions): World {
     if (random() < 0.15) r.retries = { 1: 1 + Math.floor(random() * 2) };
   }
 
+  // Workflows: a run that starts two runs of triage and waits for them, and a detached digest.
+  {
+    const start = now - 5 * HOUR - 20 * MINUTE;
+    const labels = { agent: "triage", conversation: "c-50", env: "prod" };
+    const repos = ["acme/api", "acme/web"];
+    const parent = run(start, TRIAGE_ALL, TOOLSET_WORKFLOWS, labels, { repos });
+    const children = repos.map((repo, i) =>
+      run(
+        start + 60 + 5 * i,
+        TRIAGE_REPO,
+        TOOLSET_GITHUB,
+        labels,
+        { repo },
+        {
+          workflow: WORKFLOWS.triage,
+          startedBy: { run: parent.id, seq: i + 1, detached: false },
+        },
+      ),
+    );
+    const detached = run(
+      start + 400,
+      DIGEST,
+      TOOLSET_DIGEST,
+      labels,
+      { repos, channel: "#eng" },
+      {
+        workflow: WORKFLOWS.digest,
+        startedBy: { run: parent.id, seq: 5, detached: true },
+      },
+    );
+    const [api, web] = children as [RunFixture, RunFixture];
+    const closed = [2, 1];
+    children.forEach((child, i) => {
+      const repo = repos[i] as string;
+      child.journal
+        .after(30)
+        .call(1, "github.list_issues", { repo, state: "open" }, 5)
+        .after(240)
+        .ok(1, issues(6 - 2 * i, start))
+        .awaitSignal("approval", 7)
+        .after(50 + 10 * i)
+        .signal("approval", { close: true });
+      for (let k = 0; k < (closed[i] ?? 0); k += 1)
+        child.journal.call(2 + k, "github.close_issue", { repo, number: 4100 + 3 * k }, 9, 52);
+      child.journal.after(180);
+      for (let k = 0; k < (closed[i] ?? 0); k += 1) child.journal.ok(2 + k, { state: "closed" });
+      child.journal.complete({ closed: closed[i] });
+    });
+    const result = TRIAGE_ALL.source.split("\n")[6]?.indexOf("run.result") ?? 0;
+    parent.journal
+      .after(20)
+      .call(1, "workflows.triage.start", { input: { repo: "acme/api" } }, 4, 59)
+      .call(2, "workflows.triage.start", { input: { repo: "acme/web" } }, 4, 59)
+      .after(45)
+      .ok(1, { runId: api.id })
+      .ok(2, { runId: web.id })
+      .after(300)
+      .call(
+        3,
+        "workflows.triage.signal",
+        { run: api.id, name: "approval", payload: { close: true } },
+        5,
+        50,
+      )
+      .call(
+        4,
+        "workflows.triage.signal",
+        { run: web.id, name: "approval", payload: { close: true } },
+        5,
+        50,
+      )
+      .after(15)
+      .ok(3, {})
+      .ok(4, {})
+      .call(
+        5,
+        "workflows.digest.start",
+        { input: { repos, channel: "#eng" }, detached: true },
+        6,
+        16,
+      )
+      .after(40)
+      .ok(5, { runId: detached.id })
+      .awaitSignal(`rewind:ended:${api.id}`, 7, undefined, result + 5)
+      .awaitSignal(`rewind:ended:${web.id}`, 7, undefined, result + 5)
+      .after(200)
+      .signal(`rewind:ended:${api.id}`, { status: "completed", output: { closed: 2 } })
+      .after(10)
+      .signal(`rewind:ended:${web.id}`, { status: "completed", output: { closed: 1 } })
+      .complete({ closed: 3 });
+    // The detached run ends after its parent: its end goes nowhere.
+    detached.journal
+      .after(25)
+      .call(
+        1,
+        "github.list_pull_requests",
+        { repo: "acme/api", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(400)
+      .ok(1, [{ number: 31, title: "Faster CI", merged_at: "2026-11-12T09:00:00Z" }])
+      .call(
+        2,
+        "github.list_pull_requests",
+        { repo: "acme/web", state: "closed", since: "7d" },
+        6,
+        18,
+      )
+      .after(380)
+      .ok(2, [])
+      .log("info", "summarising 1 merged pull requests", 9)
+      .call(
+        3,
+        "llm.complete",
+        { model: "claude-haiku-5-5", prompt: "Summarise these changes for the team:\n- Faster CI" },
+        11,
+        25,
+      )
+      .after(3_100)
+      .ok(3, { text: "Faster CI this week." })
+      .call(4, "slack.post_message", { channel: "#eng", text: "Faster CI this week." }, 16, 24)
+      .after(150)
+      .ok(4, { ok: true, ts: "1731390000.000300" })
+      .complete({ prs: 1, ts: "1731390000.000300" });
+  }
+
   // digest: live, for pnpm dev:mock. Its entries arrive over the next minute.
   if (options.live) {
     const repos = ["acme/api", "acme/web", "acme/infra", "acme/docs", "acme/cli", "acme/sdk"];
@@ -970,7 +1149,16 @@ export function createWorld(options: WorldOptions): World {
   });
   const world: World = {
     now,
-    scripts: [TRIAGE, TRIAGE_FIXED, DIGEST, ONBOARDING, FORECAST, TRIAGE_WORKFLOW],
+    scripts: [
+      TRIAGE,
+      TRIAGE_FIXED,
+      DIGEST,
+      ONBOARDING,
+      FORECAST,
+      TRIAGE_WORKFLOW,
+      TRIAGE_REPO,
+      TRIAGE_ALL,
+    ],
     runs,
     payloads,
     embedded: options.embedded ?? false,

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Rewind, RewindApiError, RewindConnectionError, RewindError, isProblem } from "../src/index.js";
-import { RUN_ID, TOOLSET, payload, run } from "./fixtures.js";
+import { RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
 import { MockServer, json, noContent, problem } from "./mock-server.js";
 
 let server: MockServer;
@@ -129,6 +129,42 @@ describe("the client", () => {
     });
   });
 
+  it("starts a run of a workflow, without a script or a toolset", async () => {
+    const started = run({
+      workflow: { name: "triage", version: VERSION },
+      startedBy: { run: "0193a5c4-0000-7000-8000-000000000001", seq: 3, detached: true },
+    });
+    server.on("POST", "/v1/runs", json(started, 201));
+    const answered = await rewind.runs.start({
+      workflow: "triage@4be1c07a9d3e",
+      input: { repo: "acme/api" },
+      idempotencyKey: "start-1",
+      labels: { agent: "triage" },
+    });
+    expect(answered.workflow).toEqual({ name: "triage", version: VERSION });
+    expect(answered.startedBy).toEqual({ run: "0193a5c4-0000-7000-8000-000000000001", seq: 3, detached: true });
+    expect(server.requests[0]?.body).toEqual({
+      workflow: "triage@4be1c07a9d3e",
+      input: { repo: "acme/api" },
+      labels: { agent: "triage" },
+    });
+
+    server.on("POST", "/v1/runs", problem(422, "invalid-input", "the input of triage: repo is required"));
+    const error = await rewind.runs.start({ workflow: "triage", input: {} }).catch((e: unknown) => e);
+    expect(isProblem(error, "invalid-input")).toBe(true);
+    expect((error as RewindApiError).detail).toBe("the input of triage: repo is required");
+  });
+
+  it("derives a toolset that pins workflows", async () => {
+    const derived = toolset("ab".repeat(32), [workflow()]);
+    server.on("POST", "/v1/toolsets", json(derived, 201));
+    const created = await rewind.toolsets.create({ base: TOOLSET, workflows: ["triage"] });
+    expect(created.workflows).toEqual([
+      { name: "triage", version: VERSION, description: "Triage the stale issues of a repository, after approval." },
+    ]);
+    expect(server.requests[0]?.body).toEqual({ base: TOOLSET, workflows: ["triage"] });
+  });
+
   it("refuses an idempotency key the server would refuse", async () => {
     await expect(rewind.runs.start({ script: "x", idempotencyKey: "café" })).rejects.toThrow(/idempotency key/);
     await expect(rewind.runs.start({ script: "x", idempotencyKey: "x".repeat(256) })).rejects.toThrow(RewindError);
@@ -239,6 +275,18 @@ describe("the client", () => {
     await expect(pending).rejects.toThrow("enough");
   });
 
+  it("lists the runs of a workflow, and the runs a run started", async () => {
+    server.on(
+      "GET",
+      "/v1/runs",
+      json({ runs: [{ ...summary("child-1"), workflow: "triage", startedBy: RUN_ID }], nextCursor: null }),
+    );
+    const page = await rewind.runs.list({ workflow: "triage", startedBy: RUN_ID });
+    expect(page.runs[0]).toMatchObject({ workflow: "triage", startedBy: RUN_ID });
+    expect(server.requests[0]?.query.get("workflow")).toBe("triage");
+    expect(server.requests[0]?.query.get("startedBy")).toBe(RUN_ID);
+  });
+
   it("lists runs with repeated labels, and pages through them", async () => {
     server.on("GET", "/v1/runs", (request) =>
       json(
@@ -311,6 +359,14 @@ describe("the client", () => {
     expect(isProblem(error, "run-ended")).toBe(true);
   });
 
+  it("refuses a signal the run's workflow does not declare", async () => {
+    const detail = `run ${RUN_ID} is a run of triage, which does not declare the signal "ping" (it declares approval)`;
+    server.on("POST", "/v1/runs/{id}/signals/{name}", problem(422, "invalid-signal", detail));
+    const error = await rewind.runs.signal(RUN_ID, "ping").catch((e: unknown) => e);
+    expect(isProblem(error, "invalid-signal")).toBe(true);
+    expect((error as RewindApiError).detail).toBe(detail);
+  });
+
   it("cancels, forks, releases, gives up and deletes runs", async () => {
     server
       .on("POST", "/v1/runs/{id}/cancel", json(run({ status: "cancelled" }), 202))
@@ -379,6 +435,70 @@ describe("the client", () => {
     expect((await rewind.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
     expect(server.requests[2]?.query.getAll("label")).toEqual(["agent:a"]);
     expect((await rewind.scripts.get("dd")).source).toBe("src");
+  });
+
+  it("saves workflows, lists them and reads their versions", async () => {
+    const saved = workflow();
+    const definition = {
+      name: "triage",
+      description: "Triage the stale issues of a repository, after approval.",
+      toolset: TOOLSET,
+      script: "export default async function main(input: { repo: string }) { return { closed: 0 }; }",
+      input: saved.input,
+      output: saved.output,
+      signals: saved.signals,
+    };
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    expect(await rewind.workflows.create(definition)).toEqual(saved);
+    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual(definition);
+
+    const older = workflow({ version: "77".repeat(32), createdAt: "2026-11-11T10:00:00Z" });
+    server.on("GET", "/v1/workflows/{name}", (request) =>
+      request.params["name"] === "triage"
+        ? json({ name: "triage", versions: [saved, older] })
+        : problem(404, "not-found", `no workflow ${request.params["name"]} for this API key`),
+    );
+    expect((await rewind.workflows.versions("triage")).map((w) => w.version)).toEqual([VERSION, older.version]);
+    const missing = await rewind.workflows.versions("nope").catch((e: unknown) => e);
+    expect(isProblem(missing, "not-found")).toBe(true);
+
+    server.on("GET", "/v1/workflows", (request) =>
+      request.query.get("after") === null
+        ? json({ workflows: [saved], next: "triage" })
+        : json({ workflows: [workflow({ name: "digest" })] }),
+    );
+    const page = await rewind.workflows.list({ limit: 1 });
+    expect(page.next).toBe("triage");
+    const names: string[] = [];
+    for await (const w of rewind.workflows.listAll({ limit: 1 })) {
+      names.push(w.name);
+    }
+    expect(names).toEqual(["triage", "digest"]);
+    const lists = server.calls("GET", "/v1/workflows");
+    expect(lists.map((r) => [r.query.get("after"), r.query.get("limit")])).toEqual([
+      [null, "1"],
+      [null, "1"],
+      ["triage", "1"],
+    ]);
+  });
+
+  it("refuses a workflow whose script or schemas cannot be used", async () => {
+    const definition = { name: "triage", toolset: TOOLSET, script: "x", input: {}, output: {} };
+    server.on(
+      "POST",
+      "/v1/workflows",
+      problem(422, "invalid-script", "the script does not type-check", {
+        diagnostics: [{ code: "TS2322", message: "Type 'string' is not assignable", severity: "error" }],
+      }),
+    );
+    const refused = await rewind.workflows.create(definition).catch((e: unknown) => e);
+    expect(isProblem(refused, "invalid-script")).toBe(true);
+    expect((refused as RewindApiError).diagnostics).toHaveLength(1);
+
+    server.on("POST", "/v1/workflows", problem(422, "invalid-workflow", '"class" is a reserved word'));
+    const invalid = await rewind.workflows.create({ ...definition, name: "class" }).catch((e: unknown) => e);
+    expect(isProblem(invalid, "invalid-workflow")).toBe(true);
+    expect((invalid as RewindApiError).detail).toBe('"class" is a reserved word');
   });
 
   it("manages subscriptions, API keys and the server", async () => {

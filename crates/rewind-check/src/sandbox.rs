@@ -24,6 +24,10 @@ pub(crate) const SCRIPT: &str = "script.ts";
 pub(crate) const TOOLS: &str = "rewind-tools.d.ts";
 /// The declaration file of `fetch`, as the toolset's declarations reference it.
 pub(crate) const FETCH: &str = "fetch.d.ts";
+/// Where a workflow's own declarations are written: its signals.
+pub(crate) const WORKFLOW: &str = "rewind-workflow.d.ts";
+/// Where a workflow's entry is written: its default export against its schemas.
+pub(crate) const ENTRY: &str = "entry.ts";
 
 /// The files written next to the script and the toolset's declarations, by name.
 pub(crate) fn files(http_tool: bool) -> Vec<(&'static str, &'static str)> {

@@ -62,10 +62,10 @@ const RUN_TABLES: [&str; 5] = [
 
 /// The columns a summary is read from, in the order of [`summary_of`].
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.headline, s.toolset, s.status, \
-     s.mode, s.labels, s.parent, s.started_at, s.ended_at, s.last_activity_at, s.tool_calls, \
-     s.errors, s.history_len, s.wakes_at, s.ending_error, s.ending_message, s.ending_line, \
-     s.ending_signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace \
-     FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
+     s.mode, s.labels, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
+     s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.ending_error, \
+     s.ending_message, s.ending_line, s.ending_signature, s.fingerprint, q.kind, q.reason, \
+     q.since, s.namespace FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
 
 /// The status a terminal entry gives its run.
 fn status_of(event: &Event) -> Option<RunStatus> {
@@ -320,25 +320,25 @@ async fn foreign(connection: &Connection, run: &RunRef) -> Result<bool, Error> {
 
 /// A summary from a row of [`SUMMARY_COLUMNS`], without its waits.
 fn summary_of(row: &Row) -> Result<RunSummary, Error> {
-    let ending = match row.opt_text(16)? {
+    let ending = match row.opt_text(18)? {
         Some(error) => Some(Ending {
             error,
-            message: row.text(17)?,
-            line: row.opt_u32(18)?,
-            signature: row.text(19)?,
-            fingerprint: row.text(20)?,
+            message: row.text(19)?,
+            line: row.opt_u32(20)?,
+            signature: row.text(21)?,
+            fingerprint: row.text(22)?,
         }),
         None => None,
     };
-    let quarantine = match row.opt_text(21)? {
+    let quarantine = match row.opt_text(23)? {
         Some(kind) => Some(QuarantineNote {
             kind: codec::parse_quarantine_kind(&kind)?,
-            reason: row.text(22)?,
-            since: row.ts(23)?,
+            reason: row.text(24)?,
+            since: row.ts(25)?,
         }),
         None => None,
     };
-    let namespace = row.text(24)?;
+    let namespace = row.text(26)?;
     Ok(RunSummary {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
@@ -353,14 +353,16 @@ fn summary_of(row: &Row) -> Result<RunSummary, Error> {
             .transpose()?,
         labels: decode_labels(&row.text(7)?)?,
         parent: row.opt_run_id(8)?,
-        started_at: row.opt_ts(9)?,
-        ended_at: row.opt_ts(10)?,
-        last_activity_at: row.ts(11)?,
-        tool_calls: row.u64(12)?,
-        errors: row.u64(13)?,
-        history_len: row.u64(14)?,
+        workflow: row.opt_text(9)?,
+        started_by: row.opt_run_id(10)?,
+        started_at: row.opt_ts(11)?,
+        ended_at: row.opt_ts(12)?,
+        last_activity_at: row.ts(13)?,
+        tool_calls: row.u64(14)?,
+        errors: row.u64(15)?,
+        history_len: row.u64(16)?,
         waits: Vec::new(),
-        wakes_at: row.opt_ts(15)?,
+        wakes_at: row.opt_ts(17)?,
         ending,
         quarantine,
     })
@@ -507,11 +509,13 @@ impl ReadModel for TursoStore {
             sql::execute(
                 connection,
                 "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
-                 labels, parent, last_activity_at, tool_calls, errors, history_len, \
-                 snapshot_len, namespace) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, 0, 0, 0, 0, 0, ?) \
+                 labels, parent, workflow, started_by, last_activity_at, tool_calls, errors, \
+                 history_len, snapshot_len, namespace) \
+                 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?) \
                  ON CONFLICT (run_id) DO UPDATE SET tenant = excluded.tenant, \
                  script = excluded.script, headline = excluded.headline, \
                  toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent, \
+                 workflow = excluded.workflow, started_by = excluded.started_by, \
                  namespace = excluded.namespace",
                 vec![
                     id.clone(),
@@ -521,6 +525,8 @@ impl ReadModel for TursoStore {
                     digest(run.toolset),
                     text(encode_labels(&run.labels)),
                     run.parent.map_or(Value::Null, run_id),
+                    opt_text(run.workflow.as_deref()),
+                    run.started_by.map_or(Value::Null, run_id),
                     text(run.namespace.as_str()),
                 ],
             )

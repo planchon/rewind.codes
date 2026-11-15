@@ -1,0 +1,64 @@
+//! Workflow versions as the store keeps them, and who watches a run's end
+//! (`archi/01-product.md`, "Workflows"; `archi/03-execution.md`, "Workflows across runs").
+
+use std::collections::BTreeMap;
+
+use rewind_core::{Digest, RunId, Seq, Timestamp, Workflow};
+
+use crate::ports::tenancy::TenantId;
+
+/// A workflow version as stored: immutable, keyed by its version in its tenant.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredWorkflow {
+    pub workflow: Workflow,
+    /// The labels of the API key that saved it: a key limited to labels only sees the workflows
+    /// that carry them.
+    pub labels: BTreeMap<String, String>,
+    pub created_at: Timestamp,
+}
+
+impl StoredWorkflow {
+    /// Whether a caller limited to `labels` sees this version: it carries all of them.
+    pub fn carries(&self, labels: &BTreeMap<String, String>) -> bool {
+        labels
+            .iter()
+            .all(|(key, value)| self.labels.get(key) == Some(value))
+    }
+}
+
+/// The latest version of each workflow of a tenant, by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowFilter {
+    pub tenant: TenantId,
+    /// Only the versions carrying all of these labels count.
+    pub labels: BTreeMap<String, String>,
+    /// Workflows whose name comes after this one: the last name of the previous page.
+    pub after: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// What `watch_run` found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Watched {
+    /// The run has already ended: its end was not enqueued for the new watcher, which the
+    /// caller does itself.
+    pub ended: bool,
+}
+
+/// A run a script started: that run, the call, and whether it is detached
+/// (`archi/03-execution.md`, "Workflows across runs").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StartedBy {
+    pub run: RunId,
+    /// The `seq` of the call of `workflows.<name>.start`.
+    pub seq: Seq,
+    /// A detached run lives on its own: its starter's end does not cancel it.
+    pub detached: bool,
+}
+
+/// The workflow version a run executes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunWorkflow {
+    pub name: String,
+    pub version: Digest,
+}

@@ -3,9 +3,10 @@
 //!
 //! [`TursoStore`] implements four ports of `rewind-engine` on one database file, `journal.db`:
 //!
-//! - `JournalStore`: scripts, toolsets, runs, histories, inboxes, timers, tool tasks, leases
-//!   and fencing, quarantine, the feed, webhook tokens and subscriptions, tenants, namespaces
-//!   with their quotas, use and alerts, payload rows and references, retention;
+//! - `JournalStore`: scripts, toolsets, workflow versions, runs and their watchers, histories,
+//!   inboxes, timers, tool tasks, leases and fencing, quarantine, the feed, webhook tokens and
+//!   subscriptions, tenants, namespaces with their quotas, use and alerts, payload rows and
+//!   references, retention;
 //! - `AccessStore`: API keys, the tenants' own roles, grants and default roles, end users'
 //!   tokens and token keys;
 //! - `ReadModel`: the projections behind the dashboard and the query language

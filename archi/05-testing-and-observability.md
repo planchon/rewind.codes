@@ -39,6 +39,10 @@ plus the failed expectations. `POST /v1/test` does the same on a server.
 In mock mode, the CLI also takes static responses per tool from `rewind.tools.json`
 (`{"$error": "message"}` for a failure).
 
+A script that starts [workflows](01-product.md#workflows) is tested the same way: the mock
+sources answer `workflows.triage.start` with the child's output (or its failure), and no
+child runs ([execution](03-execution.md#workflows-across-runs)).
+
 ## Replay, debugging and forks
 
 - `rewind replay <run>`: fetches the journal and the script, re-executes them locally, and
@@ -157,7 +161,8 @@ One OTel trace per run.
   activation agrees without coordination. The read model is never sampled.
 - **Context propagation**: tool calls forward the W3C trace context (the tool call span as
   parent) to MCP servers in `_meta`, next to the idempotency key, and to host tools
-  through the SDK.
+  through the SDK. A run of a workflow started by a script takes the trace context of its
+  start call: its run span is a child of that call's span, so a tree of runs is one trace.
 - In mock mode and virtual time, nothing is exported by default: timestamps are virtual.
 
 ### Run metadata
@@ -174,6 +179,9 @@ up in a cassette.
 - `idempotency_key`: see [storage](06-storage-and-scale.md#idempotency-of-the-api).
 - The tenant ([decided](08-decisions.md#taken-after-the-layering-november-2026): it lives here, never in the core).
 - For a fork, the run it was forked from ([forks](03-execution.md#forks)).
+- For a run of a [workflow](01-product.md#workflows): the workflow and its version; when a
+  script started it, that run, the call's `seq` and whether it is detached; the label scope it
+  inherited ([execution](03-execution.md#workflows-across-runs)).
 
 ### Read model
 
@@ -181,7 +189,8 @@ up in a cassette.
 separate **read model** behind the `ReadModel` port, filled by the projector:
 
 - `run_summaries`: namespace, status, script and its first line, toolset, labels, mode, the parent of a
-  fork, start and end, last activity, number of tool calls and errors, history length; for a
+  fork, the workflow of a run of a workflow (its name: the version is on the run) and the run
+  that started it, start and end, last activity, number of tool calls and errors, history length; for a
   run that waits, what it waits for and when it wakes; for a run that ended badly, the error's
   name, message, line and fingerprint; whether it is quarantined.
 - `run_labels`: one row per label of a run, for equality, prefix and presence.
@@ -231,6 +240,7 @@ and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 | `duration:>5m`, `calls:>=20`, `errors:>0` | by duration (ended runs), number of tool calls, number of failed calls |
 | `script:9f2c4e1a`, `toolset:…`, `id:0193a5c4` | by digest or id prefix: 8 hexadecimal digits at least |
 | `parent:<run id>` | forks of this run |
+| `workflow:triage`, `started_by:<run id>` | runs of this workflow; runs this run started |
 | `fingerprint:<fingerprint>` | in this failure group |
 | `quarantined:yes`, `mode:mock` | quarantined (`no` for the others), by mode |
 | `rate`, `"rate limit"` | containing this text, case-insensitive, in the error's message, the script's first line, a label's value or the run's id |
@@ -254,7 +264,7 @@ single-page application, served by `rewind-server`.
 | Failures | Failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run |
 | Runs | The query bar, with suggestions drawn from the values that exist, and the counts of each value (facets) beside the results |
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used |
-| Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor |
+| Run | The source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor; for a run of a workflow, its workflow, the run that started it and the runs it started |
 | Tools | Latency, error rate and retries, per tool and per toolset |
 | Organization | The members and their grants, the invitations, the roles and their permissions, the API keys; each part shown to whoever holds its permission |
 | Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search, and a filter of those above 80 %. A namespace's page: its cumulative CPU against its quota over the month, its alerts, its tokens in use, its exceptions, and the actions its permissions allow (change its limits, revoke its tokens, delete it) |

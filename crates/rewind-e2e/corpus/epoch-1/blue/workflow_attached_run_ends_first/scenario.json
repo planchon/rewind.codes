@@ -1,0 +1,18 @@
+{
+  "description": "A script that returns while a run it started attached is still running ends only once that run has ended, as it does with a tool call in flight: its end is in the journal before complete_run.",
+  "live": true,
+  "workflows": {
+    "triage": {
+      "script": "triage.ts",
+      "input": { "type": "object", "properties": { "repo": { "type": "string" } }, "required": ["repo"] },
+      "output": { "type": "object", "properties": { "closed": { "type": "integer" } }, "required": ["closed"] },
+      "signals": { "approval": { "type": "object", "properties": { "close": { "type": "boolean" } }, "required": ["close"] } }
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": "started",
+    "events": ["run_started", "schedule_tool_call", "tool_call_completed", "signal_received", "complete_run"],
+    "children": ["completed"]
+  }
+}

@@ -156,6 +156,35 @@ impl Client {
         self.json(request).await
     }
 
+    /// `POST /v1/workflows`.
+    pub async fn create_workflow(
+        &self,
+        workflow: &crate::workflows::CreateWorkflow,
+    ) -> Result<crate::workflows::Workflow, Error> {
+        let request = self
+            .request(Method::POST, routes::WORKFLOWS, &[])?
+            .json(workflow);
+        self.json(request).await
+    }
+
+    /// `GET /v1/workflows`.
+    pub async fn list_workflows(
+        &self,
+        query: &crate::workflows::WorkflowQuery,
+    ) -> Result<crate::workflows::WorkflowPage, Error> {
+        let request = self.request_with(Method::GET, routes::WORKFLOWS, &[], query)?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/workflows/{name}`.
+    pub async fn workflow_versions(
+        &self,
+        name: &str,
+    ) -> Result<crate::workflows::WorkflowVersions, Error> {
+        let request = self.request(Method::GET, routes::WORKFLOW, &[name])?;
+        self.json(request).await
+    }
+
     /// `GET /v1/toolsets/{id}/declarations`.
     pub async fn toolset_declarations(
         &self,

@@ -17,6 +17,7 @@ use rewind_api::runs::{CancelRun, ForkRun, RunFilter};
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::tasks::TaskQuery;
 use rewind_api::toolsets::{CreateToolset, Credentials};
+use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
 use rewind_engine::ports::{AccessStore, Role, TenantId};
@@ -75,6 +76,7 @@ enum Call {
     ListToolsets,
     CreateToolset,
     SetToolsetCredentials,
+    ListWorkflows,
     Check,
     ListRuns,
     ForkRun,
@@ -93,10 +95,11 @@ enum Call {
     RevokeApiKey,
 }
 
-const CALLS: [Call; 19] = [
+const CALLS: [Call; 20] = [
     Call::ListToolsets,
     Call::CreateToolset,
     Call::SetToolsetCredentials,
+    Call::ListWorkflows,
     Call::Check,
     Call::ListRuns,
     Call::ForkRun,
@@ -130,7 +133,7 @@ impl Call {
     /// The permission of 07's table.
     fn permission(self) -> Permission {
         match self {
-            Call::ListToolsets => Permission::ToolsetsRead,
+            Call::ListToolsets | Call::ListWorkflows => Permission::ToolsetsRead,
             Call::CreateToolset => Permission::ToolsetsWrite,
             Call::SetToolsetCredentials | Call::SetRunCredentials => Permission::CredentialsWrite,
             Call::Check | Call::ForkRun => Permission::RunsStart,
@@ -161,6 +164,7 @@ impl Call {
                     .set_toolset_credentials("unknown", &credentials)
                     .await,
             ),
+            Call::ListWorkflows => outcome(client.list_workflows(&WorkflowQuery::default()).await),
             Call::Check => outcome(
                 client
                     .check(&CheckRequest {

@@ -45,6 +45,18 @@ criteria of [0.1 is done when](#01-is-done-when), the eighth against WorkOS Stag
 done: the evals with real models (they need API keys), a run of the CI workflow on GitHub, and
 the gVisor profile on a Linux host.
 
+On November 14, 2026, [workflows across runs](03-execution.md#workflows-across-runs) were built
+through every layer: the workflow version and its pinning in toolsets (`rewind-core`, format v1),
+the store's workflows and watchers (both stores, schema version 4, the conformance suites), the
+engine's registration, starts of workflow runs, built-ins and ends (live, forks, mock mode and
+cassettes), the glue of `rewind:workflows` in epoch 1, codegen and the checker's
+`check_workflow`, `/v1/workflows` and the `workflow:` and `started_by:` terms, the SDK's
+`workflows` resource and `save_workflow`, and the dashboard's links between runs. Eight cases
+joined the corpus. `cargo fmt --check`, clippy, `cargo doc` with warnings as errors and
+`cargo test --workspace` (961 tests once merged with access, Postgres, MinIO and a Collector in
+Docker) pass, and so do the SDK's and the dashboard's checks. The workflow endpoints take the
+permissions `toolsets:read` and `toolsets:write`.
+
 | Crate | State |
 | --- | --- |
 | `rewind-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
@@ -139,6 +151,9 @@ specified.
 - **The dashboard's debugger and search**: the time cursor, the waiting runs, failure groups,
   the query language ([05](05-testing-and-observability.md#query-language)).
 - **Evals**: the models, run on demand ([05](05-testing-and-observability.md#evals)).
+- **Workflows across runs**: named, typed workflows that scripts start and signal, the end of a
+  run coming back as a signal, attached and detached runs, scopes
+  ([01](01-product.md#workflows), [03](03-execution.md#workflows-across-runs)).
 
 ## Out of 0.1
 

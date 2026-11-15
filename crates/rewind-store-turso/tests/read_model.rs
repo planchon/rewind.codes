@@ -1,7 +1,8 @@
 //! What the conformance suite of `ReadModel` does not pin, and SQL could get wrong: prefixes
-//! compared case-sensitively (Turso's `LIKE` folds ASCII case), text lowercased with Unicode's
-//! rules (SQLite's `lower` only knows ASCII), text never matched across two fields whatever
-//! characters it holds, NUL included, and task states recorded before a run is deleted.
+//! compared case-sensitively, `%` and `_` as plain characters (Turso's `LIKE` folds ASCII case
+//! and reads them as wildcards), text lowercased with Unicode's rules (SQLite's `lower` only
+//! knows ASCII), text never matched across two fields whatever characters it holds, NUL
+//! included, and task states recorded before a run is deleted.
 
 use std::collections::BTreeMap;
 
@@ -44,12 +45,13 @@ fn entry(index: u64, event: Event) -> HistoryEntry {
     }
 }
 
-/// A run started, which called `tool`, and failed with `ending` if given; otherwise active,
-/// waiting for the signal `signal`.
+/// A run started, of `workflow` if given, which called `tool`, and failed with `ending` if
+/// given; otherwise active, waiting for the signal `signal`.
 struct Run<'a> {
     n: u128,
     headline: &'a str,
     labels: &'a [(&'a str, &'a str)],
+    workflow: Option<&'a str>,
     tool: &'a str,
     signal: &'a str,
     ending: Option<(&'a str, &'a str)>,
@@ -120,6 +122,8 @@ async fn project(store: &TursoStore, run: Run<'_>) {
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect(),
         parent: None,
+        workflow: run.workflow.map(str::to_owned),
+        started_by: None,
     };
     let snapshot = RunSnapshot {
         history_len: entries.len() as u64,
@@ -178,6 +182,7 @@ async fn prefixes_are_case_sensitive() {
             n: 1,
             headline: "",
             labels: &[("agent", "Deploy")],
+            workflow: Some("Triage"),
             tool: "GitHub.close_issue",
             signal: "Review",
             ending: None,
@@ -190,6 +195,7 @@ async fn prefixes_are_case_sensitive() {
             n: 2,
             headline: "",
             labels: &[("agent", "deploy")],
+            workflow: Some("triage"),
             tool: "github.close_issue",
             signal: "review",
             ending: None,
@@ -208,6 +214,16 @@ async fn prefixes_are_case_sensitive() {
         (Predicate::Tool(vec![prefix("github.")]), vec![2]),
         (Predicate::Signal(vec![prefix("Rev")]), vec![1]),
         (Predicate::Signal(vec![prefix("rev")]), vec![2]),
+        (Predicate::Workflow(vec![prefix("Tri")]), vec![1]),
+        (Predicate::Workflow(vec![prefix("tri")]), vec![2]),
+        (
+            Predicate::Workflow(vec![TextMatch::Exact("TRIAGE".into())]),
+            vec![],
+        ),
+        (
+            Predicate::Workflow(vec![prefix("Tr%"), prefix("tr_")]),
+            vec![],
+        ),
         (
             Predicate::Id(vec![id(1).to_string().to_uppercase()]),
             vec![],
@@ -238,6 +254,7 @@ async fn text_is_lowercased_with_unicode_rules() {
             n: 1,
             headline: "ÉCOLE Été",
             labels: &[("city", "ZÜRICH")],
+            workflow: None,
             tool: "t",
             signal: "s",
             ending: Some(("ΣφάλμαError", "ÇA N'A PAS MARCHÉ")),
@@ -250,6 +267,7 @@ async fn text_is_lowercased_with_unicode_rules() {
             n: 2,
             headline: "école",
             labels: &[],
+            workflow: None,
             tool: "t",
             signal: "s",
             ending: None,
@@ -278,6 +296,7 @@ async fn text_never_matches_across_fields() {
             n: 1,
             headline: "alpha",
             labels: &[("a", "beta"), ("b", "gamma\0delta")],
+            workflow: None,
             tool: "t",
             signal: "s",
             ending: Some(("Epsilon", "zeta")),
@@ -349,6 +368,7 @@ async fn a_deleted_run_loses_what_was_recorded_before_it_was_projected() {
             n: 1,
             headline: "",
             labels: &[],
+            workflow: None,
             tool: "t",
             signal: "s",
             ending: None,

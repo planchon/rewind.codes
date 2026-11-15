@@ -54,6 +54,9 @@ use crate::webhooks::{
         operations::get_toolset_declarations,
         operations::search_tools,
         operations::set_toolset_credentials,
+        operations::create_workflow,
+        operations::list_workflows,
+        operations::get_workflow_versions,
         operations::check_script,
         operations::test_script,
         operations::list_scripts,
@@ -148,6 +151,7 @@ use crate::webhooks::{
     security(("bearer" = [])),
     tags(
         (name = "toolsets", description = "Register and pin toolsets; their declarations and credentials."),
+        (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
         (name = "tasks", description = "Host-tool tasks: long-polled by the harness's SDK worker, approved or rejected by the harness."),
@@ -453,6 +457,9 @@ mod operations {
         ToolSearchResults, Toolset, ToolsetList,
     };
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
+    use crate::workflows::{
+        CreateWorkflow, Workflow, WorkflowPage, WorkflowQuery, WorkflowVersions,
+    };
 
     // ---------------------------------------------------------------------------------------
     // Toolsets
@@ -518,6 +525,46 @@ mod operations {
         )
     )]
     pub(super) fn set_toolset_credentials() {}
+
+    // ---------------------------------------------------------------------------------------
+    // Workflows
+
+    /// Save a workflow (`save_workflow`)
+    ///
+    /// Checks the workflow's script against its toolset and its own schemas, and saves it as a
+    /// new version, the workflow's latest. Saving the same version again returns it (200).
+    #[utoipa::path(
+        post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
+        request_body = CreateWorkflow,
+        responses(
+            (status = 201, description = "Saved as a new version.", body = Workflow),
+            (status = 200, description = "Saved earlier.", body = Workflow),
+            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The script was refused (`invalid-script`, with `diagnostics`), or the name, a signal's name or a schema (`invalid-workflow`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn create_workflow() {}
+
+    /// List the workflows
+    ///
+    /// The latest version of each workflow the caller sees, by name.
+    #[utoipa::path(
+        get, path = "/v1/workflows", tag = "workflows", operation_id = "listWorkflows",
+        params(WorkflowQuery),
+        responses((status = 200, description = "A page of workflows, by name.", body = WorkflowPage))
+    )]
+    pub(super) fn list_workflows() {}
+
+    /// A workflow's versions
+    #[utoipa::path(
+        get, path = "/v1/workflows/{name}", tag = "workflows", operation_id = "getWorkflowVersions",
+        params(("name" = String, Path, description = "The workflow's name.")),
+        responses(
+            (status = 200, description = "Its versions, newest first.", body = WorkflowVersions),
+            (status = 404, description = "No such workflow.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_workflow_versions() {}
 
     // ---------------------------------------------------------------------------------------
     // Scripts
@@ -591,7 +638,7 @@ mod operations {
             (status = 200, description = "Started earlier with the same `Idempotency-Key`.", body = Run),
             (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The input is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused before any run exists (`invalid-script`), with `diagnostics`.", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The script was refused before any run exists (`invalid-script`), with `diagnostics`; or the input does not match the workflow (`invalid-input`).", body = Problem, content_type = "application/problem+json"),
             (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
             (status = 429, description = "The namespace or the tenant reached its `active_runs`, `runs_per_month` or `scripts` (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
         )
@@ -721,6 +768,7 @@ mod operations {
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
             (status = 409, description = "The run has ended (`run-ended`).", body = Problem, content_type = "application/problem+json"),
             (status = 413, description = "The payload is too large (`payload-too-large`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "A name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match (`invalid-signal`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn signal_run() {}

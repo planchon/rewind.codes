@@ -15,6 +15,7 @@ import type {
   TestResult,
   ToolMatch,
   Waiting,
+  Workflow,
 } from "../types.js";
 import { sliceUtf8, truncateEnd, truncateMiddle, utf8Length } from "./bound.js";
 
@@ -91,8 +92,12 @@ export function describeRun(run: Run, extras: RunExtras, limits: Limits): string
 }
 
 function headline(run: Run, limits: Limits): string {
-  const fork = run.parent ? ` (a fork of run ${run.parent.run})` : "";
-  const name = `Run ${run.id}${fork}`;
+  const about = [
+    run.parent ? `a fork of run ${run.parent.run}` : undefined,
+    run.workflow ? `a run of the workflow ${workflowRef(run.workflow)}` : undefined,
+    run.startedBy ? `started by run ${run.startedBy.run}${run.startedBy.detached ? ", detached" : ""}` : undefined,
+  ].filter((part) => part !== undefined);
+  const name = `Run ${run.id}${about.length === 0 ? "" : ` (${about.join(", ")})`}`;
   switch (run.status) {
     case "completed":
       return `${name} completed.`;
@@ -241,6 +246,34 @@ export function describeRefusal(detail: string, diagnostics: Diagnostic[], limit
   return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
 }
 
+/** A workflow saved: how the model's scripts use it, and its declaration. */
+export function describeWorkflow(workflow: Workflow, limits: Limits): string {
+  const lines = [
+    `Saved the workflow ${workflowRef(workflow)}. Your next scripts can import it:`,
+    `import { ${workflow.name} } from "rewind:workflows";`,
+  ];
+  const prompt = workflow.declarations.prompt.trim();
+  if (prompt !== "") {
+    lines.push(truncateEnd(prompt, limits.value));
+  }
+  const dts = workflow.declarations.dts.trim();
+  if (dts !== "") {
+    lines.push("Its declaration:", truncateEnd(dts, limits.trace));
+  }
+  return lines.join("\n");
+}
+
+/** A workflow refused: why, and the diagnostics of its script. */
+export function describeWorkflowRefusal(detail: string, diagnostics: Diagnostic[], limits: Limits): string {
+  const text = `The workflow was not saved: ${truncateEnd(detail, limits.value)}`;
+  return diagnostics.length === 0 ? text : `${text}\n${diagnosticsText(diagnostics, limits)}`;
+}
+
+/** `triage@9f2c4e1a07b3`: a workflow's name and the first 12 digits of its version. */
+export function workflowRef(workflow: { name: string; version: string }): string {
+  return `${workflow.name}@${workflow.version.slice(0, 12)}`;
+}
+
 /** The diagnostics, in order, as many as the room of a trace holds. */
 export function diagnosticsText(diagnostics: Diagnostic[], limits: Limits): string {
   const shown: string[] = [];
@@ -317,6 +350,12 @@ export function describeRuns(runs: RunSummary[], more: boolean, status: RunStatu
     }
     if (run.parent) {
       parts.push(`a fork of ${run.parent}`);
+    }
+    if (run.workflow) {
+      parts.push(`a run of the workflow ${run.workflow}`);
+    }
+    if (run.startedBy) {
+      parts.push(`started by ${run.startedBy}`);
     }
     lines.push(`- ${parts.join(", ")}`);
   }

@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { createWorld, type RunFixture, SCRIPTS } from "../../mocks/fixtures";
+import { createWorld, type RunFixture, SCRIPTS, WORKFLOWS } from "../../mocks/fixtures";
+import { shortRunId } from "../../model/format";
 import { NOW, renderApp, search } from "../../test/app";
 
 function find(world: ReturnType<typeof createWorld>, test: (r: RunFixture) => boolean): RunFixture {
@@ -153,5 +154,93 @@ describe("RunView", () => {
     expect(screen.getAllByText("schedule_tool_call").length).toBeGreaterThan(0);
     await user.click(screen.getByRole("tab", { name: /Logs/ }));
     expect(screen.getAllByText("provision failed (1/3), retrying in 1m").length).toBeGreaterThan(0);
+  });
+
+  describe("workflows", () => {
+    const world = createWorld({ now: NOW });
+    const parent = find(world, (r) => r.script === SCRIPTS.TRIAGE_ALL);
+    const children = world.runs.filter((r) => r.startedBy?.run === parent.id);
+
+    it("lists the runs a run started, with how each ended, and reads their calls naturally", async () => {
+      const user = userEvent.setup();
+      renderApp(`/runs/${parent.id}`, { world });
+      const panel = await screen.findByRole("region", { name: "Runs it started" });
+      expect(children).toHaveLength(3);
+      for (const child of children) {
+        expect(
+          within(panel)
+            .getAllByRole("link")
+            .some((a) => a.getAttribute("href") === `/runs/${child.id}`),
+        ).toBe(true);
+      }
+      expect(within(panel).getAllByText("completed")).toHaveLength(2);
+      expect(within(panel).getByText("detached")).toBeInTheDocument();
+      // The detached run ended after this one: its end never came back.
+      expect(within(panel).getByText("not ended with this run")).toBeInTheDocument();
+      expect(within(panel).getByRole("link", { name: "In Runs" })).toHaveAttribute(
+        "href",
+        `/runs?q=started_by%3A${parent.id}`,
+      );
+
+      await waitFor(() =>
+        expect(within(notesOf(4)).getByRole("button")).toHaveTextContent(/triage\.start\(…\)\s*×2/),
+      );
+      expect(within(notesOf(5)).getByRole("button")).toHaveTextContent(
+        /run\.signal\("approval", …\)\s*×2/,
+      );
+      expect(within(notesOf(6)).getByRole("button")).toHaveTextContent(/digest\.start\(…\)/);
+      expect(within(notesOf(7)).getByRole("button")).toHaveTextContent(
+        /run\.result\(\)\s*×2\s*all ended/,
+      );
+      // In the journal, the end signals read as the ends of those runs.
+      const [first, second] = children as [RunFixture, RunFixture];
+      expect(screen.getByText(`end of run ${shortRunId(first.id)}: completed`)).toBeInTheDocument();
+      expect(
+        screen.getByText(`end of run ${shortRunId(second.id)}: completed`),
+      ).toBeInTheDocument();
+
+      // The end of a run, selected: the run it is the end of, and its status.
+      await user.click(
+        within(panel).getAllByRole("button", { name: /end at entry/ })[0] as HTMLElement,
+      );
+      const inspector = screen.getByRole("complementary", { name: "Inspector" });
+      expect(await within(inspector).findByText("Result of a run")).toBeInTheDocument();
+      expect(within(inspector).getByRole("link", { name: first.id })).toHaveAttribute(
+        "href",
+        `/runs/${first.id}`,
+      );
+      expect(within(inspector).getByText("completed")).toBeInTheDocument();
+
+      // The call that started a run links to it.
+      await user.click(
+        within(panel).getAllByRole("button", { name: "#1 triage.start(…)" })[0] as HTMLElement,
+      );
+      expect(await within(inspector).findByText("#1 triage.start(…)")).toBeInTheDocument();
+      expect(within(inspector).getByRole("link", { name: first.id })).toBeInTheDocument();
+    });
+
+    it("shows a run of a workflow: its version, and the run that started it", async () => {
+      const [child] = children as [RunFixture];
+      renderApp(`/runs/${child.id}`, { world });
+      const ref = `triage@${WORKFLOWS.triage.version.slice(0, 12)}`;
+      expect(await screen.findByRole("link", { name: ref })).toHaveAttribute(
+        "href",
+        "/runs?q=workflow%3Atriage",
+      );
+      const started = screen.getByRole("link", { name: `started by ${shortRunId(parent.id)}` });
+      expect(started).toHaveAttribute("href", `/runs/${parent.id}`);
+      expect(screen.queryByRole("region", { name: "Runs it started" })).toBeNull();
+    });
+
+    it("marks a run started detached", async () => {
+      const detached = children.find((c) => c.startedBy?.detached) as RunFixture;
+      renderApp(`/runs/${detached.id}`, { world });
+      expect(
+        await screen.findByRole("link", { name: `started by ${shortRunId(parent.id)} · detached` }),
+      ).toHaveAttribute("href", `/runs/${parent.id}`);
+      expect(
+        screen.getByRole("link", { name: `digest@${WORKFLOWS.digest.version.slice(0, 12)}` }),
+      ).toBeInTheDocument();
+    });
   });
 });

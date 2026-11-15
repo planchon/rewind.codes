@@ -39,8 +39,8 @@ describe("RunsView", () => {
         ),
       ).toBe(true),
     );
-    // Four triage runs closed issues; the corpus run too.
-    await waitFor(() => expect(rows().length).toBe(5));
+    // Four triage runs closed issues; the corpus run and the two runs of the workflow triage too.
+    await waitFor(() => expect(rows().length).toBe(7));
   });
 
   it("reads the filters of an older link as a query", async () => {

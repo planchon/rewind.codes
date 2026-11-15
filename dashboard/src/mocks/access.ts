@@ -31,8 +31,8 @@ export const DESCRIPTIONS: Record<Permission, string> = {
   "runs:control": "Send signals to runs and cancel them.",
   "runs:quarantine": "Release a quarantined run, or give it up.",
   "runs:delete": "Erase a run, its payloads included.",
-  "toolsets:read": "List toolsets, read their declarations and search their tools.",
-  "toolsets:write": "Register a toolset.",
+  "toolsets:read": "List toolsets and workflows, read their declarations and search their tools.",
+  "toolsets:write": "Register a toolset, and save a workflow.",
   "credentials:write":
     "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or of a run.",
   "tasks:work": "Claim host-tool tasks, and heartbeat, defer, complete or fail them.",

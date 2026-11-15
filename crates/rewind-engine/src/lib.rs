@@ -47,10 +47,12 @@ pub mod projector;
 pub mod quotas;
 pub mod replay;
 pub mod retention;
+pub mod schema;
 mod tasks;
 pub mod telemetry;
 pub mod text;
 pub mod trace;
+mod workflows;
 
 pub use cache::CacheConfig;
 pub use driver::{DriveOptions, DriveReport, ToolOrder};
@@ -62,3 +64,4 @@ pub use fork::{Compatibility, ForkError, ForkPoint, ForkRun};
 pub use payloads::PayloadTiers;
 pub use tasks::{Backoff, HostClaim, HostFailure, HostTask};
 pub use text::NulCharacter;
+pub use workflows::{RegisterError, RegisterWorkflow, SignalRefused, StartWorkflow};

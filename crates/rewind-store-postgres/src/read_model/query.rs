@@ -166,6 +166,17 @@ fn push_predicate(sql: &mut Sql<'_>, predicate: &Predicate) {
         Predicate::Parent(parent) => {
             sql.push("s.parent = ").push_bind(uuid(*parent));
         }
+        Predicate::Workflow(matchers) => {
+            if matchers.is_empty() {
+                sql.push("FALSE");
+                return;
+            }
+            sql.push("s.workflow IS NOT NULL AND ");
+            push_matches(sql, "s.workflow", matchers);
+        }
+        Predicate::StartedBy(run) => {
+            sql.push("s.started_by = ").push_bind(uuid(*run));
+        }
         Predicate::Fingerprint(fingerprints) => {
             push_in(sql, "s.fingerprint", fingerprints.clone());
         }
@@ -348,30 +359,30 @@ fn digest_range(prefix: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 /// The columns of a summary, read by [`summary_from_row`]: `run_summaries s` with its
 /// quarantine, `run_quarantine q`, joined.
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.toolset, s.headline, s.status, \
-     s.mode, s.labels::text, s.parent, s.started_at, s.ended_at, s.last_activity_at, \
-     s.tool_calls, s.errors, s.history_len, s.wakes_at, s.error, s.message, s.line, \
-     s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace";
+     s.mode, s.labels::text, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
+     s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.error, s.message, \
+     s.line, s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace";
 
 fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
-    let ending = match row.opt_text(16)? {
+    let ending = match row.opt_text(18)? {
         Some(error) => Some(Ending {
             error,
-            message: row.text(17)?,
-            line: row.opt_u32(18)?,
-            signature: row.text(19)?,
-            fingerprint: row.text(20)?,
+            message: row.text(19)?,
+            line: row.opt_u32(20)?,
+            signature: row.text(21)?,
+            fingerprint: row.text(22)?,
         }),
         None => None,
     };
-    let quarantine = match row.opt_text(21)? {
+    let quarantine = match row.opt_text(23)? {
         Some(kind) => Some(QuarantineNote {
             kind: codec::parse_quarantine_kind(&kind)?,
-            reason: row.text(22)?,
-            since: row.ts(23)?,
+            reason: row.text(24)?,
+            since: row.ts(25)?,
         }),
         None => None,
     };
-    let namespace = row.text(24)?;
+    let namespace = row.text(26)?;
     Ok(RunSummary {
         run: RunRef::new(row.tenant(1)?, row.run_id(0)?),
         namespace: rewind_engine::ports::NamespaceName::new(namespace.clone())
@@ -386,14 +397,16 @@ fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
             .transpose()?,
         labels: decode_labels(&row.text(7)?)?,
         parent: row.opt_run_id(8)?,
-        started_at: row.opt_ts(9)?,
-        ended_at: row.opt_ts(10)?,
-        last_activity_at: row.ts(11)?,
-        tool_calls: row.u64(12)?,
-        errors: row.u64(13)?,
-        history_len: row.u64(14)?,
+        workflow: row.opt_text(9)?,
+        started_by: row.opt_run_id(10)?,
+        started_at: row.opt_ts(11)?,
+        ended_at: row.opt_ts(12)?,
+        last_activity_at: row.ts(13)?,
+        tool_calls: row.u64(14)?,
+        errors: row.u64(15)?,
+        history_len: row.u64(16)?,
         waits: Vec::new(),
-        wakes_at: row.opt_ts(15)?,
+        wakes_at: row.opt_ts(17)?,
         ending,
         quarantine,
     })

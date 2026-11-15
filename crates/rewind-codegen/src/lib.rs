@@ -16,7 +16,10 @@
 //! shape; for an MCP tool, which returns its content, the shape of its `structuredContent`.
 //!
 //! `rewind-tools.d.ts` always declares the module `rewind:tools` (`declare module "rewind:tools" { … }`),
-//! empty for a toolset without tools. Built-ins are not part of it: scripts reach `http` through
+//! empty for a toolset without tools. A toolset that pins workflows also gets the module
+//! `rewind:workflows`, one typed export per workflow, and a prompt line per workflow; the
+//! declarations a workflow's own script is checked against come from
+//! [`workflow_declarations`]. Built-ins are not part of it: scripts reach `http` through
 //! `fetch` and `webhook` through the `rewind` module. For a toolset that enables `http`, the file
 //! starts with [`HTTP_TOOL_REFERENCE`], from which the type-checker knows to declare `fetch`.
 //! The prompt lists the built-ins too, with the hosts `fetch` may reach.
@@ -33,6 +36,9 @@ mod observed;
 mod prompt;
 mod schema;
 mod ty;
+mod workflows;
+
+pub use workflows::{WorkflowDeclarations, workflow_declarations};
 
 /// The first line of the `rewind-tools.d.ts` of a toolset that enables the `http` tool. It is how
 /// the type-checker learns that the script has `fetch`: it then adds `fetch.d.ts` to the check.
@@ -51,10 +57,11 @@ pub struct Declarations {
     pub tools: Vec<ToolDeclaration>,
 }
 
-/// One tool's declarations.
+/// One tool's declarations, or one pinned workflow's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolDeclaration {
-    /// As scripts call it: `github.list_issues`, `ask_user`, `http`.
+    /// As scripts call it: `github.list_issues`, `ask_user`, `http`; `workflows.triage` for the
+    /// workflow `triage` of `rewind:workflows`.
     pub name: String,
     /// The tool's line of the prompt rendering.
     pub prompt: String,
@@ -75,7 +82,11 @@ pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declar
         .tools()
         .iter()
         .any(|tool| matches!(tool.route, ToolRoute::Builtin(Builtin::Http { .. })));
-    let typescript = dts::module(&toolset.digest().short(), &exports, http_tool);
+    let mut typescript = dts::module(&toolset.digest().short(), &exports, http_tool);
+    if !toolset.workflows().is_empty() {
+        typescript.push('\n');
+        typescript.push_str(&workflows::module(toolset.workflows()));
+    }
 
     let mut tools = Vec::new();
     for export in &exports {
@@ -97,9 +108,22 @@ pub fn generate(toolset: &Toolset, observed: &BTreeMap<String, Shape>) -> Declar
         }
     }
     tools.sort_by(|a, b| a.name.cmp(&b.name));
+    let pinned: Vec<ToolDeclaration> = toolset
+        .workflows()
+        .iter()
+        .map(|workflow| ToolDeclaration {
+            name: format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name),
+            prompt: workflows::prompt(workflow),
+            typescript: workflows::declaration(workflow),
+        })
+        .collect();
 
     let mut lines: Vec<String> = prompt::imports(&exports).into_iter().collect();
+    lines.extend(workflows::imports(toolset.workflows()));
     lines.extend(tools.iter().map(|tool| tool.prompt.clone()));
+    lines.extend(pinned.iter().map(|workflow| workflow.prompt.clone()));
+    tools.extend(pinned);
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
     if typescript.contains("export interface ToolContent<") {
         lines.push(prompt::CONTENT_LINE.to_owned());
     }
@@ -124,5 +148,7 @@ fn builtin_declaration(builtin: &rewind_core::Builtin) -> &'static str {
         rewind_core::Builtin::Webhook => {
             "declare module \"rewind\" {\n  export function webhook(name: string): Promise<{ url: string }>;\n}\n"
         }
+        // Not listed: a workflow's built-ins are reached through `rewind:workflows`.
+        rewind_core::Builtin::Workflow { .. } => "",
     }
 }

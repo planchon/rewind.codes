@@ -21,7 +21,7 @@ use crate::common::{Duration, RunMode, RunStatus, Timestamp};
 use crate::namespaces::NamespaceName;
 
 /// The fields of the language, in the order error messages list them.
-pub const FIELDS: [&str; 19] = [
+pub const FIELDS: [&str; 21] = [
     "status",
     "tool",
     "error",
@@ -37,6 +37,8 @@ pub const FIELDS: [&str; 19] = [
     "toolset",
     "id",
     "parent",
+    "workflow",
+    "started_by",
     "fingerprint",
     "quarantined",
     "mode",
@@ -100,6 +102,10 @@ pub enum Filter {
     Id(Vec<String>),
     /// Forks of this run (a full run id, lowercase).
     Parent(String),
+    /// Runs of a workflow one of these matches.
+    Workflow(Vec<Pattern>),
+    /// Runs this run started (a full run id, lowercase).
+    StartedBy(String),
     /// Lowercase fingerprints of 16 hexadecimal digits.
     Fingerprint(Vec<String>),
     Quarantined(bool),
@@ -339,7 +345,7 @@ fn term(body: &str) -> Result<Filter, String> {
     let (name, operand) = (&body[..colon], &body[colon + 1..]);
     let mut input = name;
     let known: Result<&str, winnow::error::ContextError> =
-        take_while(1.., 'a'..='z').parse_next(&mut input);
+        take_while(1.., ('a'..='z', '_')).parse_next(&mut input);
     if known.is_err() || !input.is_empty() || !FIELDS.contains(&name) {
         return Err(format!(
             "unknown field {name:?}: the fields are {}; a label is written @key:value; quote text that contains a colon",
@@ -388,6 +394,10 @@ fn field(name: &str, operand: &str) -> Result<Filter, String> {
         }
         "id" => Filter::Id(hex_prefixes(name, operand, true)?),
         "parent" => Filter::Parent(run_id(operand)?),
+        "workflow" => Filter::Workflow(patterns(operand)?),
+        "started_by" => Filter::StartedBy(
+            run_id(operand).map_err(|error| error.replacen("parent:", "started_by:", 1))?,
+        ),
         "fingerprint" => {
             let values = exact(name, operand)?;
             for value in &values {
@@ -949,6 +959,29 @@ mod tests {
                 .contains("8 hexadecimal digits")
         );
         assert!(error("parent:abc").message.contains("not a run id"));
+    }
+
+    #[test]
+    fn runs_of_workflows_and_the_runs_a_run_started() {
+        assert_eq!(
+            filters("workflow:triage,dig* -started_by:0193A5C4-B2E1-7C3D-8E4F-0A1B2C3D4E5F"),
+            vec![
+                (
+                    false,
+                    Filter::Workflow(vec![
+                        Pattern::Exact("triage".into()),
+                        Pattern::Prefix("dig".into()),
+                    ])
+                ),
+                (
+                    true,
+                    Filter::StartedBy("0193a5c4-b2e1-7c3d-8e4f-0a1b2c3d4e5f".into())
+                ),
+            ]
+        );
+        let refused = error("started_by:abc").message;
+        assert!(refused.starts_with("started_by:"), "{refused}");
+        assert!(refused.contains("not a run id"), "{refused}");
     }
 
     #[test]
