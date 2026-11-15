@@ -37,10 +37,10 @@ Organization views. Namespaces ([06](06-storage-and-scale.md#namespaces)), desig
 are built too: end users' tokens (opaque and signed), `Rewind-Namespace`, the six quotas with
 their alerts, credentials per namespace, the erasure of a namespace, `rewind namespaces`, the
 SDK's `rewind.namespace(name)` and the dashboard's filter and Namespaces views.
-On November 14, 2026: `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D
-warnings`, `cargo doc --workspace --no-deps` with warnings as errors and `cargo test --workspace`
-(903 tests, Postgres, MinIO and a Collector in Docker; `rewind-workos` also against WorkOS
-Staging) pass, the SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the eight
+On November 15, 2026, with both: `cargo fmt --check`, `cargo clippy --workspace --all-targets
+-- -D warnings`, `cargo doc --workspace --no-deps` with warnings as errors and `cargo test
+--workspace` (939 tests, Postgres, MinIO and a Collector in Docker; `rewind-workos` also against
+WorkOS Staging) pass, the SDK's and the dashboard's checks pass, and `acceptance/run.sh` passes the eight
 criteria of [0.1 is done when](#01-is-done-when), the eighth against WorkOS Staging. Not yet
 done: the evals with real models (they need API keys), a run of the CI workflow on GitHub, and
 the gVisor profile on a Linux host.
