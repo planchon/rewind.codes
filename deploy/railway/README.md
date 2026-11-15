@@ -103,7 +103,20 @@ cannot reach `postgres.railway.internal`. The admin key and WorkOS's key stay of
 
 ## Vercel
 
-Each site is a Vercel project deployed from its directory (`vercel deploy --prod` in `landing/`
-or `dashboard/`, linked to the team `planchons-projects`). The dashboard's `vercel.json` builds
-it with pnpm and rewrites `/v1/*` and `/auth/*` to the API; the landing is static files with a
-few headers.
+Each site is a Vercel project of the team `planchons-projects`, deployed from its directory:
+`rewind-dashboard` from `dashboard/`, `rewind-landing` from `landing/`. The dashboard's
+`vercel.json` builds it with pnpm and rewrites `/v1/*` and `/auth/*` to the API; the landing is
+static files with a few headers.
+
+CI deploys both to production on every push to `main`
+([`.github/workflows/ci.yml`](../../.github/workflows/ci.yml), jobs `deploy-dashboard` and
+`deploy-landing`): the dashboard once its job (lint, types, tests, the generated API types,
+the build) passes, the landing at once. Each runs `vercel deploy --prod` in its directory, with
+the project's id in `VERCEL_PROJECT_ID` and the repository's secret `VERCEL_TOKEN`, a token of
+the team (vercel.com, Account settings, Tokens). The projects are not connected to the
+repository on Vercel: a pull request deploys nothing. By hand, `vercel deploy --prod` in the
+site's directory, linked to its project, still works.
+
+The API and the workers are not deployed by CI ([The images](#the-images)): a commit that
+changes the API and the dashboard together reaches `app.rewind.codes` before the API, until
+`railway up` deploys it.

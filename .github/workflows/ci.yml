@@ -1,6 +1,8 @@
 # CI of Rewind: the Rust workspace (formatting, lints, every test with the Docker services the
 # tests start: Postgres, MinIO, the OpenTelemetry Collector; the e2e corpus; the OpenAPI
-# document), the SDK and the dashboard, the image, and the reference deployment under load.
+# document), the SDK and the dashboard, the image, and the reference deployment under load. On
+# main, it deploys the sites on Vercel: app.rewind.codes once the dashboard's checks pass, and
+# rewind.codes (deploy/railway/README.md, "Vercel").
 name: CI
 
 on:
@@ -24,6 +26,9 @@ env:
   RUST_BACKTRACE: 1
   PNPM_VERSION: 10.15.0
   NODE_VERSION: 22
+  VERCEL_CLI_VERSION: 48.0.1
+  # The team planchons-projects on Vercel; each deploy job names its project.
+  VERCEL_ORG_ID: team_3kvbr5Odt6ZC3rG8nlbHVIGE
 
 jobs:
   rust:
@@ -258,3 +263,59 @@ jobs:
       - name: Stop
         if: always()
         run: docker compose --profile runc --profile gvisor --profile walls --profile load down -v
+
+  # The sites, from main only. Vercel builds each from its directory, as its vercel.json says;
+  # VERCEL_TOKEN is a token of the team planchons-projects, a secret of the repository.
+  deploy-dashboard:
+    name: Deploy app.rewind.codes
+    needs: dashboard
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: app.rewind.codes
+      url: https://app.rewind.codes
+    # One deploy at a time, the later after the earlier: production ends on the latest commit.
+    concurrency:
+      group: deploy-dashboard
+      cancel-in-progress: false
+    env:
+      VERCEL_PROJECT_ID: prj_52eqdFVey1BaBF4y8PyTrLhgiscg
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Deploy to production
+        run: npx --yes "vercel@$VERCEL_CLI_VERSION" deploy --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  deploy-landing:
+    name: Deploy rewind.codes
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: rewind.codes
+      url: https://rewind.codes
+    concurrency:
+      group: deploy-landing
+      cancel-in-progress: false
+    env:
+      VERCEL_PROJECT_ID: prj_0QXPir4Pe2XOuH3eRRiUypnsTcyA
+    defaults:
+      run:
+        working-directory: landing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Deploy to production
+        run: npx --yes "vercel@$VERCEL_CLI_VERSION" deploy --prod --yes --token "$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
