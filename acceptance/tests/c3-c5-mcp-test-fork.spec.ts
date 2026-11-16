@@ -5,7 +5,7 @@
  *   reference `@modelcontextprotocol/server-everything`, over stdio through `npx`. A wrong
  *   argument type is refused by `rewind check` (and at start) before any run exists; a correct
  *   script runs to completion.
- * - 5: `rewind test` replays that recorded real run as a scenario, from its cassette; `rewind fork`
+ * - 5: `rewind test` replays that recorded real run as a test, from its cassette; `rewind fork`
  *   continues a failed run with a corrected script without repeating its recorded calls.
  *
  * The MCP server's call log: the toolset starts it behind `tee`, which appends every JSON-RPC
@@ -135,35 +135,36 @@ test.describe.serial("criteria 3 and 5: a real MCP server, rewind check, rewind 
     }
   });
 
-  test("criterion 5: rewind test replays the recorded run as a scenario, without calling the server", async () => {
+  test("criterion 5: rewind test replays the recorded run as a test, without calling the server", async () => {
     const exported = await project.rewind(["export", recorded, "--as", "cassette", "--output", "recorded.cassette.json"]);
     expect(exported.code, exported.stderr).toBe(0);
-    project.write(
-      "scenario.json",
-      JSON.stringify({
-        script: "good.ts",
-        toolset: "toolset.json",
-        cassette: "recorded.cassette.json",
-        input: { city: "Chicago" },
-        expect: {
-          status: "completed",
-          output: { echoed: "Echo: hello", sum: "The sum of 2 and 40 is 42.", celsius: true },
-          calls: { "everything.echo": 1, "everything.get-sum": 1, "everything.get-structured-content": 1 },
+    const tests = (celsius: boolean) =>
+      JSON.stringify([
+        {
+          name: "answers from the recorded run",
+          input: { city: "Chicago" },
+          world: { cassette: "recorded.cassette.json" },
+          expect: {
+            status: "completed",
+            output: { echoed: "Echo: hello", sum: "The sum of 2 and 40 is 42.", celsius },
+            calls: [
+              { tool: "everything.echo", times: 1 },
+              { tool: "everything.get-sum", times: 1 },
+              { tool: "everything.get-structured-content", times: 1 },
+            ],
+          },
         },
-      }),
-    );
+      ]);
+    project.write("good.tests.json", tests(true));
     const before = toolCalls().length;
-    const tested = await project.rewind(["test", "scenario.json"]);
+    const tested = await project.rewind(["test", "good.ts", "--toolset", "toolset.json"]);
     expect(tested.code, tested.stdout + tested.stderr).toBe(0);
     expect(tested.stdout.startsWith("PASS"), tested.stdout).toBe(true);
     expect(toolCalls()).toHaveLength(before);
 
-    // The same scenario with another expectation fails: the test is not vacuous.
-    project.write(
-      "wrong-scenario.json",
-      readFileSync(project.path("scenario.json"), "utf8").replace('"celsius":true', '"celsius":false'),
-    );
-    const failed = await project.rewind(["test", "wrong-scenario.json"]);
+    // The same test with another expectation fails: the test is not vacuous.
+    project.write("wrong.tests.json", tests(false));
+    const failed = await project.rewind(["test", "good.ts", "--toolset", "toolset.json", "--tests", "wrong.tests.json"]);
     expect(failed.code).toBe(1);
   });
 

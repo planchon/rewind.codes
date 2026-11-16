@@ -128,8 +128,10 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::InvalidToolset
                 | ProblemType::InvalidWorkflow
                 | ProblemType::InvalidInput
+                | ProblemType::InvalidTest
                 | ProblemType::InvalidSignal,
             ) => Exit::Usage,
+            Some(ProblemType::TestsFailed) => Exit::Failed,
             Some(ProblemType::InvalidScript) => Exit::ScriptRefused,
             Some(
                 ProblemType::Internal

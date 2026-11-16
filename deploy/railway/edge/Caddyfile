@@ -1,13 +1,18 @@
 # The edge of the Railway deployment (deploy/railway/README.md), behind api.rewind.codes: everything
-# goes to the api, except `POST /v1/test`, which runs a script and therefore runs on the workers
-# (the api role answers it with 503). Both are on Railway's private network.
+# goes to the api, except the requests that run tests, and therefore model-written code, on the
+# workers (the api role answers them with 503): `POST /v1/test`, `POST /v1/workflows` and
+# `POST /v1/runs/{id}/fork`. Both are on Railway's private network.
 {
 	admin off
 	auto_https off
 }
 
 :8080 {
-	handle /v1/test {
+	@runs_tests {
+		method POST
+		path_regexp ^/v1/(test|workflows|runs/[^/]+/fork)$
+	}
+	handle @runs_tests {
 		reverse_proxy worker.railway.internal:8080 {
 			lb_try_duration 30s
 			lb_try_interval 500ms

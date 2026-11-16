@@ -1017,3 +1017,22 @@ Designed with the owner on 16 November 2026, with diagrams ([testing](05-testing
 | `POST /v1/test` takes `{ script?, toolset?, tests?, workflow? }` and answers `{ passed, tests: [TestResult] }`; `POST /v1/workflows/{name}/test` does not exist | A second endpoint to test a candidate | One endpoint: with `workflow`, the suite runs against the given script or toolset, which is how a candidate and an upgrade are checked. |
 | The gate and the fork of a run of a workflow run tests: on a server without the worker role they answer 503 when there is a test to run; the edge sends `POST /v1/workflows` and `POST /v1/runs/{id}/fork` to the workers, like `POST /v1/test` | Running isolates on the api role | Only workers run model-written code. |
 | `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` replaces `rewind test scenario.json`; a tests file is a JSON array of tests whose `world.mocks` and `world.cassette` may name files | Keeping the scenario file | One format for a test, in a file, in the API and in a suite. |
+
+### Taken while building workflow test suites (November 2026)
+
+| Decision | Instead of | Why |
+| --- | --- | --- |
+| The engine takes the stored format of tests from the composition root (`TestFormat`: `rewind_format::encode_test`, `decode_test`), as retention takes the archive's encoder | `rewind-engine` depending on `rewind-format` | The engine does not know the stored format (07, principle 1). |
+| A test's TypeScript mock handlers come through a `MockLoader`; `rewind-runtime`'s `TsMockLoader` runs them in an isolate of their own, its clock started at the test's start | The server and the CLI building `TsMocks` each | One way to run a test, in the gate, `POST /v1/test`, a fork and `rewind test`. |
+| A save whose name, description, script, toolset and schemas are those of the latest version, without suite changes, returns that version (200) | A new version, its parent itself | Saving the same workflow again changes nothing, as before suites. |
+| A test document has no TTL; the corpus case `red/ttl_too_long` stays with the corpus harness | A `ttl` field | A test describes behavior; a TTL is an option of a start. |
+| `rewind test` runs on the server when the tests need what it holds: `--workflow` (its suite) or `--toolset <id>` | Fetching the suite and running it in the process | A run in the process needs the version's pinned toolset, which the API does not hand out. |
+| Mock handlers that cannot load fail their test (`failed`, "the mock handlers cannot load: …") | 400 `invalid-request` for the whole request | In a suite, one test's handlers must not hide the others' outcomes. |
+| A test given inline with an `origin` is refused (422 `invalid-test`) | Taking it as recorded | A recorded test is read like its run: only recording sets where it comes from. |
+| An update gives a whole `test` or a new `expect`, never both; the replacement takes the inherited test's name | Renaming through an update | A test keeps its name along the lineage. |
+| On a server without the worker role, `POST /v1/workflows` answers 503 only when there are tests to run (the parent's suite, or tests and updates given); the edge sends every `POST /v1/workflows` to the workers | Refusing every save there | A workflow without a suite saves where it did. |
+| Four tests run at once; a run of tests takes at most 5 minutes of wall-clock time | Unbounded | Each test starts V8 instances; a gate must answer. |
+| Recording reads the candidate runs from the read model (`search_runs` with the caller's scope, `workflow:` and the statuses), then each run's history | Scanning the journal | The query language and the scopes are the read model's; a run that ended a moment ago may be missing until the projector reaches it. |
+| Postgres: a new version locks its suite's test rows (`FOR SHARE`) until its references are written; the cleanup marks only rows it holds (`FOR UPDATE SKIP LOCKED`), then checks the references again | One statement | A test is never marked while a version that references it is being saved. |
+| A test document and a payload byte for byte the same share a blob: each cleanup leaves out a digest the other holds when it marks it, but not one reserved after the mark | Fencing the two cleanups against each other | It needs a script to output a test document exactly; the cost of the fence is not worth it. |
+

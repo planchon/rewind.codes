@@ -220,6 +220,8 @@ const PROBES: Probe[] = [
     body: { name: "matrix", toolset: NO_DIGEST, script: "export default async function main() {}", input: {}, output: {} },
   },
   { op: "GET /v1/workflows/{name}", need: p("toolsets:read"), path: "/v1/workflows/matrix-never-saved" },
+  { op: "POST /v1/workflows/{name}/record", need: p("runs:read"), path: "/v1/workflows/matrix-never-saved/record", body: {} },
+  { op: "GET /v1/tests/{digest}", need: p("toolsets:read"), path: `/v1/tests/${NO_DIGEST}` },
 ];
 
 /** Every operation of `api/openapi.json`, as `METHOD /path`. */

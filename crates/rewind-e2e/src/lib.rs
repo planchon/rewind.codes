@@ -631,8 +631,19 @@ async fn register_workflows(case: &Case, engine: &CorpusEngine) -> Result<(), St
                     schemas: workflow.schemas().clone(),
                     labels: BTreeMap::new(),
                     declarations: WorkflowDeclarations::default(),
+                    suite: rewind_engine::suites::SuiteChanges::default(),
                 },
                 &StaticTypeChecker::default(),
+                &rewind_engine::suites::TestKit {
+                    loader: &rewind_runtime::TsMockLoader::default(),
+                    format: rewind_engine::suites::TestFormat {
+                        encode: rewind_format::encode_test,
+                        decode: |document| {
+                            rewind_format::decode_test(document).map_err(|err| err.to_string())
+                        },
+                    },
+                    options: rewind_engine::testing::TestOptions::default(),
+                },
             )
             .await
             .map_err(|err| format!("workflow {name}: {err}"))?;

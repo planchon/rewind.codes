@@ -40,9 +40,7 @@ use crate::runs::{
     Run, RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceFormat,
     TraceQuery,
 };
-use crate::scripts::{
-    CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest,
-};
+use crate::scripts::{CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest};
 use crate::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
 };

@@ -10,7 +10,7 @@ WorkOS's waitlist: they sign in to the dashboard ([sign-in](#sign-in)).
 | --- | --- | --- |
 | `rewind.codes` | Vercel, project `rewind-landing` ([`landing/`](../../landing)) | The landing, static. `www.rewind.codes` redirects to it. `/auth/waitlist` is rewritten to `api.rewind.codes`, for its waitlist form |
 | `app.rewind.codes` | Vercel, project `rewind-dashboard` ([`dashboard/`](../../dashboard)) | The dashboard. `/v1/*` and `/auth/*` are rewritten to `api.rewind.codes`, so the app calls the API and signs in on its own origin: the sign-in's cookies are the app's |
-| `api.rewind.codes` | Railway, service `edge` | Caddy ([`edge/Caddyfile`](edge/Caddyfile)): `POST /v1/test` to the workers, everything else to the api |
+| `api.rewind.codes` | Railway, service `edge` | Caddy ([`edge/Caddyfile`](edge/Caddyfile)): what runs tests (`POST /v1/test`, `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) to the workers, everything else to the api |
 | (private) | Railway, service `api` | `rewind server --role api`: the HTTP API and keys. No V8 |
 | (private) | Railway, service `worker` | `rewind server --role worker`: activations, tool dispatch, scheduler, projector, retention |
 | (private) | Railway, `Postgres` | Journal, read model, secrets. Railway's Postgres template, with a 5 GB volume |

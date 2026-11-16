@@ -448,11 +448,13 @@ mod operations {
         CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalQuery, Run,
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
     };
-    use crate::scripts::{CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest};
-    use crate::testing::{Test, TestRun};
+    use crate::scripts::{
+        CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest,
+    };
     use crate::tasks::{
         CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
     };
+    use crate::testing::{Test, TestRun};
     use crate::toolsets::{
         CreateToolset, Credentials, DeclarationsQuery, DeclarationsText, SearchQuery,
         ToolSearchResults, Toolset, ToolsetList,

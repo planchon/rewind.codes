@@ -65,6 +65,10 @@ fn triage(toolset: &str, script: &str) -> CreateWorkflow {
                 "required": ["close"],
             }),
         )]),
+        parent: None,
+        tests: Vec::new(),
+        update: Vec::new(),
+        retire: Vec::new(),
     }
 }
 

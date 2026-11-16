@@ -707,8 +707,9 @@ and worker.
 - `rewind server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
   when another server holds the directory's lock.
 - Local-only commands run in the CLI process, without a server: `rewind check`, `rewind test`, and
-  the replay of an exported journal. `rewind test --workflow` only reads the workflow's suite
-  from the server.
+  the replay of an exported journal. `rewind test` runs on the server (`POST /v1/test`) when the
+  tests need what the server holds: a workflow's suite (`--workflow`) or a toolset registered
+  there (`--toolset <id>`).
 
 The `.rewind/` directory:
 
@@ -733,7 +734,7 @@ Commands:
 | --- | --- |
 | `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d]` | Starts a run and waits for it, up to `--wait` |
 | `rewind check script.ts` | Type-checks a script against the toolset's declarations ([tools](04-tools.md#type-checking)) |
-| `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` | Runs tests in virtual time, in the process ([testing](05-testing-and-observability.md#testing-and-mocks)): those of `--tests` (`script.tests.json` next to the script by default), and with `--workflow` the suite of that workflow, fetched from the server, against the script or the version's own |
+| `rewind test [script.ts] [--tests file] [--workflow name] [--toolset id\|file]` | Runs tests in virtual time ([testing](05-testing-and-observability.md#testing-and-mocks)): those of `--tests` (`script.tests.json` next to the script by default), in the process; with `--workflow`, the suite of that workflow too, on the server, against the script or the version's own |
 | `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | Records tests from a workflow's past runs; prints their digests, names and paths |
 | `rewind signal <run> <name> [payload]` | Sends a signal |
 | `rewind cancel <run>` | Cancels a run |

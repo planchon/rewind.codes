@@ -16,6 +16,7 @@ mod search;
 mod sign_in;
 mod subscriptions;
 mod tasks;
+mod testing;
 mod tokens;
 mod toolsets;
 mod workflows;
@@ -53,8 +54,10 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
             post(workflows::create).get(workflows::list),
         )
         .route(routes::WORKFLOW, get(workflows::versions))
+        .route(routes::WORKFLOW_RECORD, post(testing::record))
+        .route(routes::TEST_DOCUMENT, get(testing::get))
         .route(routes::CHECK, post(scripts::check))
-        .route(routes::TEST, post(scripts::test))
+        .route(routes::TEST, post(testing::test))
         .route(routes::SCRIPTS, get(reading::scripts))
         .route(routes::SCRIPT, get(reading::script))
         .route(routes::RUNS, post(runs::start).get(runs::list))

@@ -397,7 +397,10 @@ impl Test {
     }
 
     /// The DTO of a domain test. `encode_cassette` writes a cassette document.
-    pub fn from_core(test: &rewind_core::Test, encode_cassette: impl Fn(&Cassette) -> Value) -> Self {
+    pub fn from_core(
+        test: &rewind_core::Test,
+        encode_cassette: impl Fn(&Cassette) -> Value,
+    ) -> Self {
         Self {
             name: test.name.clone(),
             input: test.input.clone(),
@@ -602,7 +605,10 @@ mod tests {
             "expect": { "status": "completed", "calls": [{ "tool": "a.b", "times": 0 }], "order": "listed" }
         }))
         .unwrap();
-        let core = test.clone().into_core(|_| Err("no cassette".into())).unwrap();
+        let core = test
+            .clone()
+            .into_core(|_| Err("no cassette".into()))
+            .unwrap();
         assert_eq!(core.seed, Some(Seed::from_bytes([7; 32])));
         assert_eq!(
             core.signals[0].when,

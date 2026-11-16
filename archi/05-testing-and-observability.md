@@ -102,7 +102,8 @@ A test that runs and does not meet its expectations is **`failed`**.
 
 `rewind test`, `POST /v1/test` and the agent tool `test_script` run tests against a script: in
 the CLI process, or on a server with the worker role. Each test runs in its own engine with
-in-memory adapters; several run at once. A test's report says whether it passed, its problem,
+in-memory adapters; four run at once, and a run of tests takes 5 minutes of wall-clock time at
+most. Mock handlers that cannot load fail their test. A test's report says whether it passed, its problem,
 its failures (one sentence each, written for a model), the run's status, output or error, how
 many times each tool was called, and the LLM trace of the run.
 
@@ -113,7 +114,9 @@ POST /v1/test   { "script": "…", "toolset": "…", "tests": [ … ], "workflow
 With `workflow`, the suite of that version runs too, and checks for incompatibility against
 its interface; the script and the toolset default to the version's. For `rewind test`, a tests
 file is a JSON array of tests, whose `world.mocks` and `world.cassette` may name files relative
-to it; without a toolset, the toolset is the tools the tests answer, as host tools. This is how a candidate
+to it; without a toolset, the toolset is the tools the tests answer, as host tools. The tests run
+in the CLI process, or on the server when they need what it holds: a workflow's suite, or a
+toolset registered there. This is how a candidate
 is checked before it is saved: a corrected script (`script`), or the version on a new toolset
 whose MCP server changed (`toolset`).
 

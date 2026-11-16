@@ -567,6 +567,48 @@ impl JournalStore for Store {
         journal!(self, store => store.reserve_payloads(tenant, payloads, now).await)
     }
 
+    async fn reserve_tests(
+        &self,
+        tenant: &TenantId,
+        tests: &[rewind_engine::ports::TestRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        journal!(self, store => store.reserve_tests(tenant, tests, now).await)
+    }
+
+    async fn get_test(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<rewind_engine::ports::TestRecord>, StoreError> {
+        journal!(self, store => store.get_test(tenant, digest).await)
+    }
+
+    async fn namespace_tests(
+        &self,
+        tenant: &TenantId,
+        namespace: &rewind_engine::ports::NamespaceName,
+        limit: usize,
+    ) -> Result<Vec<Digest>, StoreError> {
+        journal!(self, store => store.namespace_tests(tenant, namespace, limit).await)
+    }
+
+    async fn unreferenced_tests(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
+        journal!(self, store => store.unreferenced_tests(now, limit).await)
+    }
+
+    async fn drop_tests(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> Result<usize, StoreError> {
+        journal!(self, store => store.drop_tests(tests, erased).await)
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,

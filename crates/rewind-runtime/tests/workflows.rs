@@ -148,8 +148,18 @@ async fn harness_with(
                 schemas: schemas(),
                 labels: BTreeMap::new(),
                 declarations: WorkflowDeclarations::default(),
+                suite: rewind_engine::suites::SuiteChanges::default(),
             },
             &StaticTypeChecker::default(),
+            // No suite: no test is written or read.
+            &rewind_engine::suites::TestKit {
+                loader: &rewind_engine::testing::NoMockLoader,
+                format: rewind_engine::suites::TestFormat {
+                    encode: |_| String::new(),
+                    decode: |_| Err("no test is read here".into()),
+                },
+                options: rewind_engine::testing::TestOptions::default(),
+            },
         )
         .await
         .unwrap();

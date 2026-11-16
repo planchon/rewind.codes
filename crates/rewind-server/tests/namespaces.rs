@@ -67,17 +67,14 @@ fn refused<T: std::fmt::Debug>(result: Result<T, rewind_api::Error>) -> (u16, Op
     (problem.status, problem.kind())
 }
 
-/// A scenario of `script`, without mocks or expectations.
+/// One test of `script`, without a world or expectations.
 fn scenario(script: &str) -> TestRequest {
     TestRequest {
-        script: script.into(),
-        toolset: None,
-        input: json!({}),
-        cassette: None,
-        mocks: None,
-        tools: std::collections::BTreeMap::new(),
-        signals: Vec::new(),
-        expect: rewind_api::scripts::Expectations::default(),
+        script: Some(script.into()),
+        tests: vec![rewind_api::testing::TestInput::Inline(Box::new(
+            serde_json::from_value(json!({ "name": "runs" })).unwrap(),
+        ))],
+        ..TestRequest::default()
     }
 }
 

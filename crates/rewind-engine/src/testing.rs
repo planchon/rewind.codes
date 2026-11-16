@@ -319,16 +319,19 @@ where
     executor
         .compile(subject.script, subject.toolset)
         .map_err(StartError::InvalidScript)?;
-    stream::iter(
-        tests
-            .iter()
-            .map(|test| run_test(executor, loader, subject, test, options)),
-    )
-    .buffered(PARALLEL_TESTS)
-    .collect::<Vec<_>>()
-    .await
-    .into_iter()
-    .collect()
+    // The futures are collected before they are streamed: a closure kept in the stream's state
+    // would make the future's `Send` depend on a higher-ranked lifetime the compiler cannot
+    // prove.
+    let mut runs = Vec::with_capacity(tests.len());
+    for test in tests {
+        runs.push(run_test(executor, loader, subject, test, options));
+    }
+    stream::iter(runs)
+        .buffered(PARALLEL_TESTS)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect()
 }
 
 /// Runs one test: checks it, then runs the subject in mock mode and virtual time against the

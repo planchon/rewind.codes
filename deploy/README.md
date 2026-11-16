@@ -10,7 +10,7 @@ Vercel.
 
 | Service | Image | Networks | Role |
 | --- | --- | --- | --- |
-| `edge` | `caddy:2-alpine` | public, core | The only published port. Sends `POST /v1/test` to the workers, everything else to the api |
+| `edge` | `caddy:2-alpine` | public, core | The only published port. Sends what runs tests (`POST /v1/test`, `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) to the workers, everything else to the api |
 | `api` | `rewind` | public, core | `rewind server --role api`: the HTTP API, keys, the dashboard. No V8 |
 | `worker-1`, `worker-2` | `rewind` | a holder's namespace | `rewind server --role worker`: activations (V8), tool dispatch, scheduler, projector, retention |
 | `worker-N-net` | `rewind-egress` | core | Holds a worker's network namespace, with its default route through `egress`; healthy once the route is set |

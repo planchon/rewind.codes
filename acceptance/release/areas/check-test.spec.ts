@@ -1,6 +1,6 @@
 /**
  * Area "Check and test" of the release gate: `POST /v1/check` and the checks at start on setup A
- * (deployed), and `POST /v1/test` (scenarios in mock mode, in virtual time) on setup B, a server
+ * (deployed), and `POST /v1/test` (tests in mock mode, in virtual time) on setup B, a server
  * with both roles: in production the edge sends `/v1/test` to the workers, and the api role
  * answers it with 503 (`archi/03-execution.md`, "Starting a run"; `archi/04-tools.md`,
  * "Type-checking"; `archi/05`, "Testing and mocks").
@@ -89,37 +89,54 @@ export default async function main(input: { email: string }) {
   expect(reply.json.diagnostics.filter((d: any) => d.severity === "error")).toEqual([]);
 });
 
-test("a scenario runs in mock mode and virtual time: a 10-day sleep, a signal, static responses", { tag: "@success" }, async () => {
+test("a test runs in mock mode and virtual time: a 10-day sleep, a signal, a tool's answer", { tag: "@success" }, async () => {
   const started = Date.now();
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
     toolset: testedToolset,
-    input: { email: "ada@example.com" },
-    tools: { "crm.lookup": { id: "cus_ada", notes: "" } },
-    signals: [{ name: "decision", payload: { refund: 10 } }],
-    expect: { status: "completed", output: { customer: "cus_ada", refund: 10 }, calls: { "crm.lookup": 1 } },
+    tests: [
+      {
+        name: "refunds ada",
+        input: { email: "ada@example.com" },
+        world: { tools: { "crm.lookup": { returns: { id: "cus_ada", notes: "" } } } },
+        signals: [{ name: "decision", payload: { refund: 10 } }],
+        expect: {
+          status: "completed",
+          output: { customer: "cus_ada", refund: 10 },
+          calls: [{ tool: "crm.lookup", args: { email: "ada@example.com" }, times: 1 }],
+        },
+      },
+    ],
   });
   expectOk(reply, 200);
   expect(reply.json.passed, JSON.stringify(reply.json)).toBe(true);
-  expect(reply.json.failures).toEqual([]);
-  expect(reply.json.status).toBe("completed");
-  expect(reply.json.output.slept).toBe(10 * 24 * 3_600_000);
-  expect(reply.json.calls).toEqual({ "crm.lookup": 1 });
-  expect(reply.json.trace).toContain("crm.lookup");
+  const [result] = reply.json.tests;
+  expect(result.failures).toEqual([]);
+  expect(result.status).toBe("completed");
+  expect(result.output.slept).toBe(10 * 24 * 3_600_000);
+  expect(result.calls).toEqual({ "crm.lookup": 1 });
+  expect(result.trace).toContain("crm.lookup");
   expect(Date.now() - started, "ten days pass in virtual time").toBeLessThan(20_000);
 });
 
-test("a scenario's TypeScript mock handlers answer the calls", { tag: "@success" }, async () => {
+test("a test's TypeScript mock handlers answer the calls", { tag: "@success" }, async () => {
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
     toolset: testedToolset,
-    input: { email: "grace@example.com" },
-    mocks: `export default {
+    tests: [
+      {
+        name: "refunds grace nothing",
+        input: { email: "grace@example.com" },
+        world: {
+          mocks: `export default {
   crm: { lookup: ({ email }, call) => ({ id: "cus_" + email.split("@")[0], notes: call.tool }) },
 };
 `,
-    signals: [{ name: "decision", when: "2h", payload: { refund: 0 } }],
-    expect: { status: "completed", output: { customer: "cus_grace", refund: 0 } },
+        },
+        signals: [{ name: "decision", when: "2h", payload: { refund: 0 } }],
+        expect: { status: "completed", output: { customer: "cus_grace", refund: 0 } },
+      },
+    ],
   });
   expectOk(reply, 200);
   expect(reply.json.passed, JSON.stringify(reply.json)).toBe(true);
@@ -200,28 +217,34 @@ test("the checks at start refuse what cannot run even unchecked: a syntax error,
   expect(await runIds(api)).toEqual(before);
 });
 
-test("a scenario whose expectations do not hold says which, in sentences", { tag: "@failure" }, async () => {
+test("a test whose expectations do not hold says which, in sentences", { tag: "@failure" }, async () => {
   const reply = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
     toolset: testedToolset,
-    input: { email: "ada@example.com" },
-    tools: { "crm.lookup": { $error: "the CRM is down" } },
-    signals: [{ name: "decision", payload: { refund: 10 } }],
-    expect: { status: "completed", calls: { "crm.lookup": 2 } },
+    tests: [
+      {
+        name: "the CRM is down",
+        input: { email: "ada@example.com" },
+        world: { tools: { "crm.lookup": { error: { message: "the CRM is down" } } } },
+        signals: [{ name: "decision", payload: { refund: 10 } }],
+        expect: { status: "completed", calls: [{ tool: "crm.lookup", times: 2 }] },
+      },
+    ],
   });
   expectOk(reply, 200);
   expect(reply.json.passed).toBe(false);
-  expect(reply.json.status).toBe("failed");
-  expect(reply.json.error?.name).toBe("ToolError");
-  expect(reply.json.failures.length).toBeGreaterThanOrEqual(2);
-  expect(reply.json.failures.join("\n")).toContain("crm.lookup");
+  const [result] = reply.json.tests;
+  expect(result.problem).toBe("failed");
+  expect(result.status).toBe("failed");
+  expect(result.error?.name).toBe("ToolError");
+  expect(result.failures.length).toBeGreaterThanOrEqual(2);
+  expect(result.failures.join("\n")).toContain("crm.lookup");
 });
 
-test("on setup A, the edge sends /v1/test to a worker, where the scenario runs", { tag: "@success" }, async () => {
+test("on setup A, the edge sends /v1/test to a worker, where the tests run", { tag: "@success" }, async () => {
   const reply = await api.post("/v1/test", {
     script: "export default async function main(input: { n: number }) { return input.n + 1; }\n",
-    input: { n: 41 },
-    expect: { status: "completed", output: 42 },
+    tests: [{ name: "adds one", input: { n: 41 }, expect: { status: "completed", output: 42 } }],
   });
   expectOk(reply, 200);
   expect(reply.json.passed, JSON.stringify(reply.json)).toBe(true);
@@ -286,16 +309,26 @@ test("mock handlers run in a sandbox of their own: no imports, no process, no ne
   const imported = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
     toolset: testedToolset,
-    mocks: `import fs from "node:fs";\nexport default { crm: { lookup: () => ({ id: typeof fs, notes: "" }) } };\n`,
+    tests: [
+      {
+        name: "imports node:fs",
+        world: { mocks: `import fs from "node:fs";\nexport default { crm: { lookup: () => ({ id: typeof fs, notes: "" }) } };\n` },
+      },
+    ],
   });
-  expectProblem(imported, 400, "invalid-request");
-  expect(imported.json.detail).toContain("the mocks cannot load");
+  expectOk(imported, 200);
+  expect(imported.json.passed).toBe(false);
+  expect(imported.json.tests[0].failures.join("\n")).toContain("the mock handlers cannot load");
 
   const probing = await tested.post("/v1/test", {
     script: SCENARIO_SCRIPT,
     toolset: testedToolset,
-    input: { email: "eve@example.com" },
-    mocks: `export default {
+    tests: [
+      {
+        name: "probes its sandbox",
+        input: { email: "eve@example.com" },
+        world: {
+          mocks: `export default {
   crm: {
     lookup: () => ({
       id: [typeof process, typeof Deno, typeof require, typeof fetch, typeof WebAssembly].join("/"),
@@ -304,11 +337,15 @@ test("mock handlers run in a sandbox of their own: no imports, no process, no ne
   },
 };
 `,
-    signals: [{ name: "decision", payload: { refund: 0 } }],
-    expect: { status: "completed" },
+        },
+        signals: [{ name: "decision", payload: { refund: 0 } }],
+        expect: { status: "completed" },
+      },
+    ],
   });
   expectOk(probing, 200);
-  expect(probing.json.status, JSON.stringify(probing.json)).toBe("completed");
-  expect(probing.json.output.customer).toBe("undefined/undefined/undefined/undefined/undefined");
-  evidence("mocks importing node:fs: 400 the mocks cannot load; process, Deno, require, fetch, WebAssembly are undefined in their isolate");
+  const [probed] = probing.json.tests;
+  expect(probed.status, JSON.stringify(probing.json)).toBe("completed");
+  expect(probed.output.customer).toBe("undefined/undefined/undefined/undefined/undefined");
+  evidence("mocks importing node:fs: the test fails, the mocks cannot load; process, Deno, require, fetch, WebAssembly are undefined in their isolate");
 });

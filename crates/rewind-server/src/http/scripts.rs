@@ -1,22 +1,14 @@
-//! Scripts: type-checking (`POST /v1/check`) and scenarios in mock mode (`POST /v1/test`).
+//! Scripts: type-checking (`POST /v1/check`). Tests (`POST /v1/test`) are in [`super::testing`].
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use axum::Json;
 use axum::extract::State;
 use rewind_api::access::Permission;
-use rewind_api::common::{AbortReason, RunStatus, ScriptError};
-use rewind_api::scripts::{CheckRequest, CheckResult, Severity, TestRequest, TestResult};
+use rewind_api::scripts::{CheckRequest, CheckResult, Severity};
 use rewind_core::Script;
 use rewind_engine::StartError;
-use rewind_engine::adapters::VirtualClock;
-use rewind_engine::mock::{
-    Expectations, ExpectedError, MockDispatcher, Mocks, Scenario, ScenarioError, ScenarioSignal,
-    SignalWhen, TestReport, run_scenario,
-};
 use rewind_engine::ports::{JournalStore, Quotas, ScriptExecutor, Tenant, TypeChecker, limits};
-use rewind_runtime::{MockError, SandboxLimits, TsMocks};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -27,7 +19,7 @@ use crate::http::toolsets;
 /// The limits a script checked or tested in the request's namespace passes, as a start would:
 /// its namespace's (its exceptions over the tenant's defaults) and the tenant's ceiling. The
 /// header `Rewind-Namespace` is required with a key or a member (400).
-async fn bounds(app: &App, caller: &Caller) -> Result<Quotas, ApiError> {
+pub(super) async fn bounds(app: &App, caller: &Caller) -> Result<Quotas, ApiError> {
     let namespace = caller.namespace_required("check or test a script")?;
     let tenant = app
         .store
@@ -39,7 +31,7 @@ async fn bounds(app: &App, caller: &Caller) -> Result<Quotas, ApiError> {
 }
 
 /// Refuses (422 `invalid-script`) a script longer than `max_script_lines`, as a start does.
-fn check_lines(script: &Script, bounds: &Quotas) -> Result<(), ApiError> {
+pub(super) fn check_lines(script: &Script, bounds: &Quotas) -> Result<(), ApiError> {
     let Some(max) = bounds.max_script_lines else {
         return Ok(());
     };
@@ -87,131 +79,4 @@ pub(super) async fn check(
             .any(|diagnostic| diagnostic.severity == Severity::Error),
         diagnostics,
     }))
-}
-
-/// `POST /v1/test`: the scenario runs in this process, in virtual time, with in-memory adapters
-/// and the mocks of the request. It runs the script: only a server with the worker role does.
-pub(super) async fn test(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Body(request): Body<TestRequest>,
-) -> Result<Json<TestResult>, ApiError> {
-    caller.require(Permission::RunsStart)?;
-    if !app.settings.worker() {
-        return Err(ApiError::unavailable(
-            "POST /v1/test runs the script, and this server has only the api role: send it to a \
-             server with the worker role",
-        ));
-    }
-    let bounds = bounds(&app, &caller).await?;
-    let stored = match &request.toolset {
-        Some(id) => toolsets::stored(&app, &caller.tenant, id).await?,
-        None => app.default_toolset(&caller.tenant).await?,
-    };
-    let script = Script::new(request.script);
-    check_lines(&script, &bounds)?;
-    let mut scenario = Scenario::new(script, stored.toolset, request.input);
-    // The default TTL is lowered to the namespace's longest.
-    scenario.ttl = bounds
-        .max_ttl
-        .map(|max| max.min(app.engine.config().default_ttl));
-    for signal in request.signals {
-        let when = match signal.when.as_deref() {
-            None | Some("blocked") => SignalWhen::Blocked,
-            Some(after) => SignalWhen::After(
-                after
-                    .parse::<rewind_api::common::Duration>()
-                    .map(Into::into)
-                    .map_err(|_| {
-                        ApiError::invalid(format!(
-                            "signal {}: when must be \"blocked\" or a duration such as \"2h\", \
-                             not {after:?}",
-                            signal.name
-                        ))
-                    })?,
-            ),
-        };
-        scenario.signals.push(ScenarioSignal {
-            name: signal.name,
-            payload: signal.payload,
-            when,
-        });
-    }
-    scenario.expect = Expectations {
-        status: request.expect.status.map(super::runs_status),
-        output: request.expect.output,
-        error: request.expect.error.map(|error| ExpectedError {
-            name: error.name,
-            message: error.message,
-        }),
-        calls: request.expect.calls,
-    };
-
-    let mut dispatcher = MockDispatcher::new();
-    if let Some(cassette) = request.cassette {
-        let cassette = rewind_format::decode_cassette(&cassette.to_string())
-            .map_err(|error| ApiError::invalid(format!("the cassette is not valid: {error}")))?;
-        dispatcher = dispatcher.with_cassette(cassette);
-    }
-    if !request.tools.is_empty() {
-        let tools = serde_json::Value::Object(request.tools.into_iter().collect());
-        dispatcher = dispatcher
-            .with_static_responses(&tools)
-            .map_err(|error| ApiError::invalid(format!("tools: {error}")))?;
-    }
-    let executor = app.engine.executor();
-    let report = match request.mocks {
-        Some(source) => {
-            let clock = Arc::new(VirtualClock::new(scenario.start));
-            let mocks = TsMocks::new(&Script::new(source), clock, SandboxLimits::default())
-                .await
-                .map_err(|error| match error {
-                    MockError::Invalid(message) => {
-                        ApiError::invalid(format!("the mocks cannot load: {message}"))
-                    }
-                    MockError::Internal(message) => ApiError::internal(message),
-                })?;
-            let tools = mocks.tools().clone();
-            let dispatcher = dispatcher.with_mocks(Mocks {
-                handlers: mocks,
-                tools,
-            });
-            run(executor, dispatcher, scenario).await?
-        }
-        None => run(executor, dispatcher, scenario).await?,
-    };
-    Ok(Json(TestResult {
-        passed: report.passed,
-        failures: report.failures,
-        status: RunStatus::from(report.status),
-        output: report.output,
-        error: report.error.as_ref().map(ScriptError::from),
-        abort: report.abort.as_ref().map(AbortReason::from),
-        calls: report.calls,
-        trace: report.trace,
-    }))
-}
-
-/// A scenario may not take longer than this, in wall-clock time.
-const SCENARIO_TIMEOUT: Duration = Duration::from_secs(120);
-
-async fn run<X: ScriptExecutor, M: rewind_engine::ports::ToolDispatcher>(
-    executor: &X,
-    dispatcher: MockDispatcher<M>,
-    scenario: Scenario,
-) -> Result<TestReport, ApiError> {
-    match tokio::time::timeout(
-        SCENARIO_TIMEOUT,
-        run_scenario(executor, dispatcher, scenario),
-    )
-    .await
-    {
-        Ok(Ok(report)) => Ok(report),
-        Ok(Err(ScenarioError::Start(error))) => Err(error.into()),
-        Ok(Err(ScenarioError::Engine(error))) => Err(error.into()),
-        Err(_) => Err(ApiError::invalid(format!(
-            "the scenario took longer than {}s of wall-clock time",
-            SCENARIO_TIMEOUT.as_secs()
-        ))),
-    }
 }

@@ -3,7 +3,8 @@
  *
  * - **A, deployed**: Postgres 17, blobs on MinIO, an OpenTelemetry Collector, one
  *   `rewind server --role api` and two `--role worker` behind an edge, as production runs: the edge
- *   sends `POST /v1/test` to the workers and everything else to the api server
+ *   sends what runs tests (`POST /v1/test`, `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) to
+ *   the workers and everything else to the api server
  *   (`deploy/edge/Caddyfile`). It lets MCP servers on
  *   127.0.0.1 through (`--allow-internal-mcp`), and webhooks to private addresses, so that the
  *   gate's fixtures are reachable; stdio MCP servers too.
@@ -294,14 +295,16 @@ function handle(
 }
 
 /**
- * The edge of a deployed setup, as `deploy/edge/Caddyfile` routes: `POST /v1/test` runs a script,
- * so it goes to the workers in turn; everything else goes to the api server, unbuffered (event
- * streams, long polls). A server that is down answers 502, as Caddy does.
+ * The edge of a deployed setup, as `deploy/edge/Caddyfile` routes: what runs tests (`POST /v1/test`,
+ * `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) goes to the workers in turn; everything else
+ * goes to the api server, unbuffered (event streams, long polls). A server that is down answers
+ * 502, as Caddy does.
  */
 async function startEdge(port: number, servers: Map<string, ServerProcess>): Promise<HttpServer> {
   let turn = 0;
   const forward = (req: IncomingMessage, res: ServerResponse, expectContinue: boolean) => {
-    const toWorkers = (req.url ?? "").split("?")[0] === "/v1/test";
+    const path = (req.url ?? "").split("?")[0] ?? "";
+    const toWorkers = req.method === "POST" && /^\/v1\/(test|workflows|runs\/[^/]+\/fork)$/.test(path);
     const targets = toWorkers ? [...servers.values()].filter((s) => s.role === "worker") : [servers.get("api")!];
     const target = new URL(targets[turn++ % targets.length]!.url);
     const upstream = httpRequest(

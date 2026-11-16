@@ -728,7 +728,7 @@ fn work(
     Ran::from(child.wait_with_output().unwrap())
 }
 
-/// `rewind test` replays a run of the embedded server as a scenario, from its cassette; `rewind fork`
+/// `rewind test` replays a run of the embedded server as a test, from its cassette; `rewind fork`
 /// continues a failed run with a corrected script without calling again what it recorded.
 #[test]
 fn a_recorded_run_is_tested_and_its_failure_forked() {
@@ -787,16 +787,19 @@ fn a_recorded_run_is_tested_and_its_failure_forked() {
     ]);
     assert_eq!(ran.code, 0, "{ran:?}");
     project.write(
-        "scenario.json",
-        &json!({
-            "script": "fixed.ts",
-            "toolset": "toolset.json",
-            "cassette": "recorded.json",
-            "expect": { "status": "completed", "output": 1, "calls": { "github.list_issues": 1 } }
-        })
+        "fixed.tests.json",
+        &json!([{
+            "name": "counts the recorded issues",
+            "world": { "cassette": "recorded.json" },
+            "expect": {
+                "status": "completed",
+                "output": 1,
+                "calls": [{ "tool": "github.list_issues", "times": 1 }]
+            }
+        }])
         .to_string(),
     );
-    let ran = project.rewind(&["test", "scenario.json"]);
+    let ran = project.rewind(&["test", "fixed.ts", "--toolset", "toolset.json"]);
     assert_eq!(ran.code, 0, "{ran:?}");
     assert!(ran.stdout.starts_with("PASS"), "{}", ran.stdout);
 

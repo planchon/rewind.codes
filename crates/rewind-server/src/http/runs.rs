@@ -470,9 +470,11 @@ pub(super) async fn fork(
         // The parent's: the caller sees them.
         None => None,
     };
+    let script = Script::new(request.script);
+    super::testing::gate_fork(&app, &parent, &script).await?;
     let fork = rewind_engine::ForkRun {
         parent: parent.run.clone(),
-        script: Script::new(request.script),
+        script,
         at: request.at,
         input: request.input,
         ttl: request.ttl.map(|ttl| ttl.get()),

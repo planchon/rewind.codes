@@ -6,7 +6,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rewind_api::scripts::{CheckResult, TestResult};
+use rewind_api::scripts::CheckResult;
+use rewind_api::testing::TestRun;
 use rewind_cli::{Console, Exit};
 use serde_json::{Value, json};
 
@@ -171,10 +172,10 @@ export default async function main(input: { repo: string }) {
 "#;
 
 #[tokio::test]
-async fn test_runs_a_scenario_with_static_responses_and_mocks() {
+async fn test_runs_tests_with_static_responses_and_mocks() {
     let dir = tempfile::tempdir().unwrap();
-    write(dir.path(), "triage.ts", TRIAGE);
-    // rewind.tools.json next to the scenario; the scenario's `tools` override it tool by tool.
+    let script = write(dir.path(), "triage.ts", TRIAGE);
+    // rewind.tools.json next to the tests: tried after each test's own world.
     write(
         dir.path(),
         "rewind.tools.json",
@@ -185,58 +186,78 @@ async fn test_runs_a_scenario_with_static_responses_and_mocks() {
         "triage.mocks.ts",
         "export default { github: { close_issue: ({ number }) => ({ number, closed: true }) } };\n",
     );
-    let scenario = write(
+    // triage.tests.json next to the script, found by default.
+    write(
         dir.path(),
-        "scenario.json",
-        &json!({
-            "script": "triage.ts",
+        "triage.tests.json",
+        &json!([{
+            "name": "closes the three once approved",
             "input": { "repo": "acme/api" },
-            "mocks": "triage.mocks.ts",
-            "tools": {
-                "github.list_issues": [{ "number": 4 }, { "number": 7 }, { "number": 9 }],
-                "notify": { "ok": true }
+            "world": {
+                "tools": {
+                    "github.list_issues": { "returns": [{ "number": 4 }, { "number": 7 }, { "number": 9 }] },
+                    "notify": { "returns": { "ok": true } }
+                },
+                "mocks": "triage.mocks.ts"
             },
             "signals": [{ "name": "approval", "payload": { "close": true } }],
             "expect": {
                 "status": "completed",
                 "output": { "closed": 3 },
-                "calls": { "github.list_issues": 1, "github.close_issue": 3, "notify": 1 }
+                "calls": [
+                    { "tool": "github.list_issues", "times": 1 },
+                    { "tool": "github.close_issue", "times": 3 },
+                    { "tool": "notify", "times": 1 }
+                ]
             }
-        })
+        }])
         .to_string(),
     );
-    let run = rewind(&["test", scenario.to_str().unwrap()]).await;
+    let run = rewind(&["test", script.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
-    assert!(run.out.starts_with("PASS "), "{}", run.out);
     assert!(
-        run.out.contains("github.close_issue"),
-        "the trace is printed: {}",
+        run.out.starts_with("PASS closes the three once approved"),
+        "{}",
         run.out
     );
+    assert!(run.out.contains("1 of 1 tests passed"), "{}", run.out);
 
-    let run = rewind(&["--json", "test", scenario.to_str().unwrap()]).await;
-    let result: TestResult = serde_json::from_str(&run.out).unwrap();
+    let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
+    let result: TestRun = serde_json::from_str(&run.out).unwrap();
     assert!(result.passed);
     assert_eq!(
-        result.output,
+        result.tests[0].output,
         Some(json!({"closed": 3, "repo": "acme/api"}))
     );
 
     // rewind.tools.json alone: its notify fails, and the expectations say what does not hold.
     let failing = write(
         dir.path(),
-        "failing.json",
-        &json!({
-            "script": "triage.ts",
+        "failing.tests.json",
+        &json!([{
+            "name": "rejects in three days",
             "input": { "repo": "acme/api" },
             "signals": [{ "name": "approval", "when": "3d", "payload": { "close": false } }],
-            "expect": { "status": "completed", "calls": { "github.list_issues": 2 } }
-        })
+            "expect": {
+                "status": "completed",
+                "calls": [{ "tool": "github.list_issues", "times": 2 }]
+            }
+        }])
         .to_string(),
     );
-    let run = rewind(&["test", failing.to_str().unwrap()]).await;
+    let run = rewind(&[
+        "test",
+        script.to_str().unwrap(),
+        "--tests",
+        failing.to_str().unwrap(),
+    ])
+    .await;
     assert_eq!(run.exit, Exit::Failed, "{}{}", run.out, run.err);
-    assert!(run.out.starts_with("FAIL "), "{}", run.out);
+    assert!(
+        run.out.starts_with("FAIL rejects in three days"),
+        "{}",
+        run.out
+    );
     assert!(
         run.out.contains(
             "the run is failed (ToolError: notify failed: slack is down), expected completed"
@@ -246,27 +267,35 @@ async fn test_runs_a_scenario_with_static_responses_and_mocks() {
     );
     assert!(
         run.out
-            .contains("github.list_issues was called 1 times, expected 2"),
+            .contains("github.list_issues was called once, expected 2 times"),
         "{}",
         run.out
     );
+    // The trace of a test that did not pass is printed.
+    assert!(run.out.contains("github.list_issues"), "{}", run.out);
 
-    write(
+    let broken = write(
         dir.path(),
         "broken.ts",
         "export default async function main( {\n",
     );
-    let refused = write(
+    write(
         dir.path(),
-        "refused.json",
-        r#"{"script": "broken.ts", "expect": {"status": "completed"}}"#,
+        "broken.tests.json",
+        r#"[{"name": "starts", "expect": {"status": "completed"}}]"#,
     );
-    let run = rewind(&["test", refused.to_str().unwrap()]).await;
+    let run = rewind(&["test", broken.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::ScriptRefused, "{}{}", run.out, run.err);
     assert!(run.err.contains("the script is invalid"), "{}", run.err);
+
+    // No tests: a usage error that names the file it looked for.
+    let alone = write(dir.path(), "alone.ts", TRIAGE);
+    let run = rewind(&["test", alone.to_str().unwrap()]).await;
+    assert_eq!(run.exit, Exit::Usage, "{}{}", run.out, run.err);
+    assert!(run.err.contains("alone.tests.json"), "{}", run.err);
 }
 
-/// `rewind test` replays a recorded run as a scenario: the run's cassette answers its calls.
+/// `rewind test` replays a recorded run: the run's cassette answers its calls.
 #[tokio::test]
 async fn test_replays_a_recorded_cassette() {
     let dir = tempfile::tempdir().unwrap();
@@ -284,29 +313,39 @@ async fn test_replays_a_recorded_cassette() {
         &rewind_format::encode_cassette(&cassette),
     );
     std::fs::copy(case.join("script.ts"), dir.path().join("script.ts")).unwrap();
-    let scenario = write(
+    write(
         dir.path(),
-        "scenario.json",
-        &json!({
-            "script": "script.ts",
-            "cassette": "recorded.json",
-            // The recorded run stopped at the signal: what comes after has a static response.
-            "tools": { "github.close_issue": { "closed": true } },
+        "script.tests.json",
+        &json!([{
+            "name": "closes once approved",
+            "world": {
+                "cassette": "recorded.json",
+                // The recorded run stopped at the signal: what comes after has a rule.
+                "tools": { "github.close_issue": { "returns": { "closed": true } } }
+            },
             "signals": [{ "name": "approval", "payload": { "close": true } }],
             "expect": {
                 "status": "completed",
                 "output": { "close": true },
-                "calls": { "github.get_issue": 1, "github.close_issue": 1 }
+                "calls": [
+                    { "tool": "github.get_issue", "times": 1 },
+                    { "tool": "github.close_issue", "times": 1 }
+                ]
             }
-        })
+        }])
         .to_string(),
     );
-    let run = rewind(&["--json", "test", scenario.to_str().unwrap()]).await;
+    let script = dir.path().join("script.ts");
+    let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
     assert_eq!(run.exit, Exit::Success, "{}{}", run.out, run.err);
-    let result: TestResult = serde_json::from_str(&run.out).unwrap();
-    assert!(result.passed, "{:?}", result.failures);
+    let result: TestRun = serde_json::from_str(&run.out).unwrap();
+    assert!(result.passed, "{:?}", result.tests[0].failures);
     // The recorded answer: the cassette echoes the args the run sent.
-    assert!(result.trace.contains("get_issue"), "{}", result.trace);
+    assert!(
+        result.tests[0].trace.contains("get_issue"),
+        "{}",
+        result.tests[0].trace
+    );
 }
 
 // -------------------------------------------------------------------------------------------
@@ -470,8 +509,13 @@ async fn the_corpus_runs_through_rewind_test() {
         if let Some(mocks) = &translated.mocks {
             write(&work, "mocks.ts", mocks);
         }
-        let path = write(&work, "scenario.json", &translated.scenario.to_string());
-        let run = rewind(&["--json", "test", path.to_str().unwrap()]).await;
+        write(
+            &work,
+            "script.tests.json",
+            &Value::Array(vec![translated.test.clone()]).to_string(),
+        );
+        let script = work.join("script.ts");
+        let run = rewind(&["--json", "test", script.to_str().unwrap()]).await;
         let expect = &scenario["expect"];
         if let Some(message) = expect.get("start_error").and_then(Value::as_str) {
             assert_ne!(run.exit, Exit::Success, "{name}: the start must be refused");
@@ -485,18 +529,19 @@ async fn the_corpus_runs_through_rewind_test() {
             ran.push(name);
             continue;
         }
-        let result: TestResult = serde_json::from_str(&run.out)
+        let run_result: TestRun = serde_json::from_str(&run.out)
             .unwrap_or_else(|error| panic!("{name}: {error}: {}{}", run.out, run.err));
+        let result = &run_result.tests[0];
         assert!(
             result.passed,
             "{name}: {:?}\n{}",
             result.failures, result.trace
         );
-        // A scenario whose expectations hold passes, however its run ended.
+        // A test whose expectations hold passes, however its run ended.
         assert_eq!(
             run.exit,
             Exit::Success,
-            "{name}: the run is {}",
+            "{name}: the run is {:?}",
             result.status
         );
         if let Some(abort) = expect.get("abort") {
@@ -551,6 +596,7 @@ async fn the_corpus_runs_through_rewind_test() {
             "red/invalid_args",
             "red/mcp_content_that_is_not_json",
             "red/too_many_commands",
+            "red/ttl_too_long",
             "red/webhook_without_the_built_in",
             "red/workflow_input_refused",
             "red/workflow_not_pinned",
@@ -579,25 +625,17 @@ fn cases() -> Vec<(String, PathBuf)> {
 }
 
 struct Translated {
-    scenario: Value,
+    test: Value,
     mocks: Option<String>,
 }
 
-/// A corpus scenario as a scenario of `rewind test`, when it can be one: plain values and
-/// `$error` become static responses; `$echo`, `$sequence` and failures with a kind or data
-/// become TypeScript mock handlers; signals are sent once the run is blocked, without their
-/// idempotency keys unless a key is sent twice.
+/// A corpus scenario as a test of `rewind test`, when it can be one: plain values and `$error`
+/// become rules; `$echo`, `$sequence` and failures with a kind or data become TypeScript mock
+/// handlers; signals are sent once the run is blocked, without their idempotency keys unless a
+/// key is sent twice. A test has no TTL: a scenario that sets one stays with the corpus harness.
 fn translate(scenario: &Value) -> Option<Translated> {
     let fields = scenario.as_object()?;
-    let allowed = [
-        "description",
-        "input",
-        "tools",
-        "steps",
-        "ttl",
-        "expect",
-        "replay",
-    ];
+    let allowed = ["description", "input", "tools", "steps", "expect", "replay"];
     if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
         return None;
     }
@@ -621,7 +659,7 @@ fn translate(scenario: &Value) -> Option<Translated> {
             "payload": signal.get("payload").cloned().unwrap_or(Value::Null),
         }));
     }
-    let mut statics = BTreeMap::new();
+    let mut rules = BTreeMap::new();
     let mut handlers = Vec::new();
     for (tool, response) in scenario["tools"].as_object().cloned().unwrap_or_default() {
         if tool == "http" {
@@ -629,7 +667,11 @@ fn translate(scenario: &Value) -> Option<Translated> {
         }
         match handler(&response)? {
             Handler::Static(value) => {
-                statics.insert(tool, value);
+                let rule = match value.get("$error").and_then(Value::as_str) {
+                    Some(message) => json!({ "error": { "message": message } }),
+                    None => json!({ "returns": value }),
+                };
+                rules.insert(tool, rule);
             }
             Handler::Script(body) => handlers.push(format!("  {}: {body},", json!(tool))),
         }
@@ -642,28 +684,30 @@ fn translate(scenario: &Value) -> Option<Translated> {
     });
     let expect = &scenario["expect"];
     let mut expected = serde_json::Map::new();
-    for key in ["status", "output", "error", "calls"] {
+    for key in ["status", "output", "error"] {
         if let Some(value) = expect.get(key) {
             expected.insert(key.to_owned(), value.clone());
         }
     }
-    let mut translated = json!({
-        "script": "script.ts",
+    if let Some(calls) = expect.get("calls").and_then(Value::as_object) {
+        let calls: Vec<Value> = calls
+            .iter()
+            .map(|(tool, times)| json!({ "tool": tool, "times": times }))
+            .collect();
+        expected.insert("calls".to_owned(), Value::Array(calls));
+    }
+    let mut world = json!({ "tools": rules });
+    if mocks.is_some() {
+        world["mocks"] = json!("mocks.ts");
+    }
+    let test = json!({
+        "name": "corpus",
         "input": scenario.get("input").cloned().unwrap_or(json!({})),
-        "tools": statics,
+        "world": world,
         "signals": signals,
         "expect": expected,
     });
-    if let Some(ttl) = scenario.get("ttl") {
-        translated["ttl"] = ttl.clone();
-    }
-    if mocks.is_some() {
-        translated["mocks"] = json!("mocks.ts");
-    }
-    Some(Translated {
-        scenario: translated,
-        mocks,
-    })
+    Some(Translated { test, mocks })
 }
 
 enum Handler {

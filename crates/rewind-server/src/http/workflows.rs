@@ -16,19 +16,23 @@ use rewind_api::access::Permission;
 use rewind_api::common::{Labels, timestamp};
 use rewind_api::toolsets::Declarations;
 use rewind_api::workflows::{
-    CreateWorkflow, Workflow as ApiWorkflow, WorkflowPage, WorkflowQuery, WorkflowVersions,
+    CreateWorkflow, RetiredTest, SuiteTest, UpdatedTest, Workflow as ApiWorkflow, WorkflowPage,
+    WorkflowQuery, WorkflowVersions,
 };
-use rewind_core::{Script, Toolset, Workflow, WorkflowSchemas};
+use rewind_core::{Script, Toolset, WorkflowSchemas};
 use rewind_engine::ports::{
     JournalStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
+use rewind_engine::suites::{SuiteChanges, TestKit, TestRetirement, TestUpdate, UpdateWith};
+use rewind_engine::testing::TestOptions;
 use rewind_engine::{RegisterError, RegisterWorkflow};
+use rewind_runtime::TsMockLoader;
 
 use crate::app::App;
 use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, Query};
-use crate::http::toolsets;
+use crate::http::{testing, toolsets};
 
 /// Workflows a page of `GET /v1/workflows` holds by default, and at most.
 const PAGE: u32 = 50;
@@ -37,7 +41,8 @@ const MAX_PAGE: u32 = 500;
 /// Hex digits a reference to a version gives at least.
 const MIN_VERSION_DIGITS: usize = 12;
 
-/// `POST /v1/workflows`.
+/// `POST /v1/workflows`: the checks, then the gate: the version's suite runs, and it is saved
+/// only if every test passes.
 pub(super) async fn create(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -52,21 +57,67 @@ pub(super) async fn create(
     };
     let generated = rewind_codegen::workflow_declarations(&request.name, &schemas);
     let script = Script::new(request.script);
-    // Saving a version again returns it with 200.
-    let existed = match Workflow::new(
-        request.name.clone(),
-        request.description.clone(),
-        script.digest(),
-        toolset,
-        schemas.clone(),
-    ) {
-        Ok(candidate) => app
-            .store
-            .get_workflow(&caller.tenant, candidate.version())
-            .await?
-            .is_some(),
-        Err(_) => false,
+    let parent = match &request.parent {
+        Some(reference) => Some(parent_of(&app, &caller, &request.name, reference).await?),
+        None => None,
     };
+    let mut tests = Vec::with_capacity(request.tests.len());
+    for given in request.tests {
+        tests.push(testing::input(given)?);
+    }
+    let mut update = Vec::with_capacity(request.update.len());
+    for given in request.update {
+        let with = match (given.test, given.expect) {
+            (Some(test), None) => UpdateWith::Test(testing::input(test)?),
+            (None, Some(expect)) => UpdateWith::Expect(expect.into_core()),
+            _ => {
+                return Err(ApiError::new(
+                    ProblemType::InvalidTest,
+                    format!(
+                        "the update of {:?} gives `test` or `expect`: one of them",
+                        given.name
+                    ),
+                ));
+            }
+        };
+        update.push(TestUpdate {
+            name: given.name,
+            reason: given.reason,
+            with,
+        });
+    }
+    let suite = SuiteChanges {
+        parent,
+        tests,
+        update,
+        retire: request
+            .retire
+            .into_iter()
+            .map(|retire| TestRetirement {
+                names: retire.names,
+                reason: retire.reason,
+            })
+            .collect(),
+    };
+    // Tests run only on a worker: the suite of the parent, or the tests given.
+    let before = app
+        .store
+        .workflow_versions(&caller.tenant, &request.name, &caller.labels)
+        .await?;
+    let inherited = match suite.parent {
+        Some(version) => app
+            .store
+            .get_workflow(&caller.tenant, version)
+            .await?
+            .is_some_and(|stored| !stored.workflow.suite().tests.is_empty()),
+        None => before
+            .first()
+            .is_some_and(|latest| !latest.workflow.suite().tests.is_empty()),
+    };
+    if inherited || !suite.tests.is_empty() || !suite.update.is_empty() {
+        testing::require_worker(&app, "POST /v1/workflows")?;
+    }
+    let loader = TsMockLoader::default();
     let registered = app
         .engine
         .register_workflow(
@@ -82,17 +133,45 @@ pub(super) async fn create(
                     signals: generated.signals,
                     entry: generated.entry,
                 },
+                suite,
             },
             &app.checker,
+            &TestKit {
+                loader: &loader,
+                format: testing::format(),
+                options: TestOptions::default(),
+            },
         )
         .await
         .map_err(register_error)?;
+    // Saving a version again returns it with 200.
+    let existed = before
+        .iter()
+        .any(|stored| stored.workflow.version() == registered.workflow.version());
     let status = if existed {
         StatusCode::OK
     } else {
         StatusCode::CREATED
     };
     Ok((status, Json(view(&registered))).into_response())
+}
+
+/// The parent a save names: `name@<version>`, or a version of the same workflow.
+async fn parent_of(
+    app: &App,
+    caller: &Caller,
+    name: &str,
+    reference: &str,
+) -> Result<rewind_core::Digest, ApiError> {
+    let reference = if reference.contains('@') {
+        reference.to_owned()
+    } else {
+        format!("{name}@{reference}")
+    };
+    Ok(resolve(app, &caller.tenant, &caller.labels, &reference)
+        .await?
+        .workflow
+        .version())
 }
 
 /// `GET /v1/workflows`.
@@ -235,6 +314,37 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
                 .map(|declaration| declaration.prompt.clone())
                 .unwrap_or_default(),
         },
+        parent: workflow.suite().parent.map(|parent| parent.to_hex()),
+        tests: workflow
+            .suite()
+            .tests
+            .iter()
+            .map(|test| SuiteTest {
+                name: test.name.clone(),
+                digest: test.test.to_hex(),
+            })
+            .collect(),
+        retired: workflow
+            .suite()
+            .retired
+            .iter()
+            .map(|retired| RetiredTest {
+                name: retired.name.clone(),
+                digest: retired.test.to_hex(),
+                reason: retired.reason.clone(),
+            })
+            .collect(),
+        updated: workflow
+            .suite()
+            .updated
+            .iter()
+            .map(|updated| UpdatedTest {
+                name: updated.name.clone(),
+                from: updated.from.to_hex(),
+                to: updated.to.to_hex(),
+                reason: updated.reason.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -263,5 +373,12 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::Checker(error) => error.into(),
         RegisterError::NulCharacter(error) => error.into(),
         RegisterError::Store(error) => error.into(),
+        RegisterError::Blob(error) => error.into(),
+        RegisterError::Suite(error) => testing::suite_error(error.into()),
+        RegisterError::CorruptTest(message) => ApiError::internal(message),
+        RegisterError::TestsFailed(reports) => {
+            testing::tests_failed("the workflow was not saved", &reports)
+        }
+        RegisterError::Tests(error) => testing::test_error(error),
     }
 }

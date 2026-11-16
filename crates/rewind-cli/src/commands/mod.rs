@@ -6,6 +6,7 @@ mod replay;
 mod runs;
 mod test;
 mod toolsets;
+mod workflows;
 
 use rewind_api::Client;
 use rewind_api::headers::API_KEY_PREFIX;
@@ -25,7 +26,7 @@ pub(crate) async fn execute(
     match command {
         Command::Run(args) => runs::run(&server, args, console).await,
         Command::Check(args) => check::check(&server, args, console).await,
-        Command::Test(args) => test::test(args, console).await,
+        Command::Test(args) => test::test(&server, args, console).await,
         Command::Signal(args) => runs::signal(&server, args, console).await,
         Command::Cancel(args) => runs::cancel(&server, args, console).await,
         Command::Status(args) => runs::status(&server, args, console).await,
@@ -37,6 +38,7 @@ pub(crate) async fn execute(
         Command::Export(args) => runs::export(&server, args, console).await,
         Command::Toolsets(command) => toolsets::toolsets(&server, command, console).await,
         Command::Namespaces(command) => namespaces::namespaces(&server, command, console).await,
+        Command::Workflows(command) => workflows::workflows(&server, command, console).await,
     }
 }
 

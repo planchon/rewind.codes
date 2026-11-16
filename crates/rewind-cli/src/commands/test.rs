@@ -1,260 +1,344 @@
-//! `rewind test scenario.json`: runs a scenario in mock mode, in virtual time, in this process
-//! (`archi/05-testing-and-observability.md`, "Testing and mocks").
+//! `rewind test [script.ts] [--tests file] [--workflow name] [--toolset id|file]`: runs tests in
+//! mock mode, in virtual time (`archi/05-testing-and-observability.md`, "Running tests").
 //!
-//! A scenario file holds the fields of `POST /v1/test`, with files instead of their contents:
+//! A tests file is a JSON array of tests, `script.tests.json` next to the script by default:
 //!
 //! ```json
-//! {
-//!   "script": "triage.ts",
-//!   "toolset": "toolset.json",
+//! [{
+//!   "name": "closes the stale issues once approved",
 //!   "input": { "repo": "acme/api" },
-//!   "cassette": "cassettes/triage.json",
-//!   "mocks": "triage.mocks.ts",
-//!   "tools": { "slack.post": { "ok": true } },
-//!   "signals": [{ "name": "approval", "when": "blocked", "payload": { "close": true } }],
-//!   "expect": { "status": "completed", "output": { "closed": 3 }, "calls": { "github.close_issue": 3 } }
-//! }
+//!   "world": {
+//!     "tools": { "github.close_issue": { "returns": {} } },
+//!     "mocks": "triage.mocks.ts",
+//!     "cassette": "cassettes/triage.json"
+//!   },
+//!   "signals": [{ "name": "approval", "payload": { "close": true } }],
+//!   "expect": { "status": "completed", "calls": [{ "tool": "github.close_issue", "times": 3 }] }
+//! }]
 //! ```
 //!
-//! Paths are relative to the scenario's directory. Calls are answered by the cassette, then the
-//! mock handlers, then the static responses: those of `rewind.tools.json` next to the scenario,
-//! overridden tool by tool by the scenario's `tools`. Without a `toolset`, the toolset is the
-//! tools the mocks answer, as host tools.
+//! `world.cassette` given as a string, and `world.mocks` as the name of a `.ts` or `.js` file,
+//! are read from files relative to the tests file. The tests run in this process, the tools'
+//! static responses of `rewind.tools.json` tried last, against the toolset file `--toolset`
+//! names, or else the tools the tests answer, as host tools. They run on the server (embedded
+//! or remote, `POST /v1/test`) when they need what it holds: a workflow's suite (`--workflow`)
+//! or a toolset registered there (`--toolset <id>`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use rewind_api::common::{AbortReason, RunStatus as ApiStatus, ScriptError};
-use rewind_api::scripts::{Expectations, ScenarioSignal, TestResult};
-use rewind_core::{Cassette, RunStatus, Script, Toolset};
-use rewind_engine::adapters::VirtualClock;
-use rewind_engine::mock::{
-    self, ExpectedError, MockDispatcher, Mocks, NoMocks, Scenario, ScenarioError, SignalWhen,
-};
-use rewind_engine::{EngineError, StartError};
-use rewind_runtime::{SandboxLimits, TsMocks, V8Executor};
-use serde::Deserialize;
+use rewind_api::scripts::TestRequest;
+use rewind_api::testing::{Test as ApiTest, TestInput, TestResult, TestRun};
+use rewind_core::{Script, Test};
+use rewind_engine::StartError;
+use rewind_engine::testing::{Subject, TestError, TestOptions, run_tests};
+use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
+use super::Server;
 use crate::args::TestArgs;
 use crate::error::CliError;
 use crate::exit::Exit;
-use crate::input;
+use crate::input::{self, ToolsetRef};
 use crate::output::Console;
 use crate::toolset;
 
-/// The static responses read next to a scenario.
+/// The static responses read next to the tests.
 pub(crate) const TOOLS_FILE: &str = "rewind.tools.json";
 
-/// A scenario file.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ScenarioFile {
-    script: PathBuf,
-    #[serde(default)]
-    toolset: Option<PathBuf>,
-    #[serde(default = "empty_object")]
-    input: Value,
-    #[serde(default)]
-    cassette: Option<PathBuf>,
-    #[serde(default)]
-    mocks: Option<PathBuf>,
-    #[serde(default)]
-    tools: BTreeMap<String, Value>,
-    #[serde(default)]
-    signals: Vec<ScenarioSignal>,
-    #[serde(default)]
-    expect: Expectations,
-    /// The run's TTL, such as `"1h"`. 30 days by default.
-    #[serde(default)]
-    ttl: Option<rewind_api::common::Duration>,
+/// The tests file next to a script: `triage.ts` → `triage.tests.json`.
+fn tests_file_of(script: &Path) -> PathBuf {
+    script.with_extension("tests.json")
 }
 
-fn empty_object() -> Value {
-    Value::Object(serde_json::Map::new())
-}
-
-pub(super) async fn test(args: TestArgs, console: &mut Console) -> Result<Exit, CliError> {
-    let file: ScenarioFile = input::read_json(&args.scenario)?;
-    let base = args
-        .scenario
-        .parent()
-        .map(Path::to_owned)
-        .unwrap_or_default();
-    let tools_file = match &args.tools {
-        Some(path) => Some(path.clone()),
-        None => Some(base.join(TOOLS_FILE)).filter(|path| path.exists()),
-    };
-    let result = run(&file, &base, tools_file.as_deref()).await?;
-    if console.json() {
-        console.print_json(&result)?;
-    } else {
-        let verdict = if result.passed { "PASS" } else { "FAIL" };
-        console.line(format!(
-            "{verdict} {} (the run is {})",
-            args.scenario.display(),
-            result.status
+pub(super) async fn test(
+    server: &Server<'_>,
+    args: TestArgs,
+    console: &mut Console,
+) -> Result<Exit, CliError> {
+    if args.script.is_none() && args.workflow.is_none() {
+        return Err(CliError::usage(
+            "give the script to test, or --workflow to run a workflow's suite",
         ));
-        for failure in &result.failures {
-            console.line(format!("  - {failure}"));
-        }
-        console.line("");
-        console.text(&result.trace);
     }
-    Ok(if result.passed {
+    let tests_file = match (&args.tests, &args.script) {
+        (Some(path), _) => Some(path.clone()),
+        (None, Some(script)) => Some(tests_file_of(script)).filter(|path| path.exists()),
+        (None, None) => None,
+    };
+    let tests = match &tests_file {
+        Some(path) => read_tests(path)?,
+        None => Vec::new(),
+    };
+    if tests.is_empty() && args.workflow.is_none() {
+        return Err(CliError::usage(format!(
+            "no test to run: write them in {}, or give --tests",
+            args.script
+                .as_deref()
+                .map(tests_file_of)
+                .unwrap_or_default()
+                .display()
+        )));
+    }
+    let source = args.script.as_deref().map(input::read_text).transpose()?;
+    let toolset = args.toolset.as_deref().map(ToolsetRef::parse).transpose()?;
+    let run = match toolset {
+        Some(ToolsetRef::Id(id)) => remote(server, source, Some(id), tests, args.workflow).await?,
+        Some(ToolsetRef::File(path)) if args.workflow.is_some() => {
+            let client = server.client().await?;
+            let registered = client.create_toolset(&input::read_json(&path)?).await?;
+            remote(server, source, Some(registered.id), tests, args.workflow).await?
+        }
+        None if args.workflow.is_some() => {
+            remote(server, source, None, tests, args.workflow).await?
+        }
+        toolset => {
+            let base = tests_file
+                .as_deref()
+                .and_then(Path::parent)
+                .map(Path::to_owned)
+                .unwrap_or_default();
+            let statics = match &args.tools {
+                Some(path) => Some(input::read_json::<Value>(path)?),
+                None => {
+                    let path = base.join(TOOLS_FILE);
+                    path.exists()
+                        .then(|| input::read_json::<Value>(&path))
+                        .transpose()?
+                }
+            };
+            let file = match toolset {
+                Some(ToolsetRef::File(path)) => Some(path),
+                _ => None,
+            };
+            local(source.unwrap_or_default(), file.as_deref(), tests, statics).await?
+        }
+    };
+    if console.json() {
+        console.print_json(&run)?;
+    } else {
+        print(&run, console);
+    }
+    Ok(if run.passed {
         Exit::Success
     } else {
         Exit::Failed
     })
 }
 
-async fn run(
-    file: &ScenarioFile,
-    base: &Path,
-    tools_file: Option<&Path>,
-) -> Result<TestResult, CliError> {
-    let script = Script::new(input::read_text(&base.join(&file.script))?);
-
-    let mut statics: BTreeMap<String, Value> = match tools_file {
-        Some(path) => input::read_json(path)?,
-        None => BTreeMap::new(),
+/// The tests of a file, with the cassettes and mock handlers it names read in.
+fn read_tests(path: &Path) -> Result<Vec<ApiTest>, CliError> {
+    let base = path.parent().map(Path::to_owned).unwrap_or_default();
+    let mut tests: Vec<Value> = match input::read_json::<Value>(path)? {
+        Value::Array(tests) => tests,
+        _ => {
+            return Err(CliError::usage(format!(
+                "{}: a tests file is a JSON array of tests",
+                path.display()
+            )));
+        }
     };
-    statics.extend(file.tools.clone());
-    let statics = Value::Object(statics.into_iter().collect());
-    let mut dispatcher = MockDispatcher::new()
-        .with_static_responses(&statics)
-        .map_err(|error| CliError::usage(format!("the static responses: {error}")))?;
-
-    let mut mocked: BTreeSet<String> = statics
-        .as_object()
-        .map(|tools| tools.keys().cloned().collect())
-        .unwrap_or_default();
-    if let Some(path) = &file.cassette {
-        let path = base.join(path);
-        let cassette: Cassette = rewind_format::decode_cassette(&input::read_text(&path)?)
-            .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?;
-        mocked.extend(cassette.calls.iter().map(|call| call.tool.clone()));
-        dispatcher = dispatcher.with_cassette(cassette);
+    for test in &mut tests {
+        let Some(world) = test.get_mut("world").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if let Some(Value::String(file)) = world.get("cassette") {
+            let cassette: Value = input::read_json(&base.join(file))?;
+            world.insert("cassette".into(), cassette);
+        }
+        if let Some(Value::String(mocks)) = world.get("mocks")
+            && !mocks.contains('\n')
+            && (mocks.ends_with(".ts") || mocks.ends_with(".js"))
+        {
+            let source = input::read_text(&base.join(mocks))?;
+            world.insert("mocks".into(), Value::String(source));
+        }
     }
+    serde_json::from_value(Value::Array(tests))
+        .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))
+}
 
+/// On the server: `POST /v1/test`.
+async fn remote(
+    server: &Server<'_>,
+    script: Option<String>,
+    toolset: Option<String>,
+    tests: Vec<ApiTest>,
+    workflow: Option<String>,
+) -> Result<TestRun, CliError> {
+    let client = server.client().await?;
+    Ok(client
+        .test(&TestRequest {
+            script,
+            toolset,
+            tests: tests
+                .into_iter()
+                .map(|test| TestInput::Inline(Box::new(test)))
+                .collect(),
+            workflow,
+        })
+        .await?)
+}
+
+/// In this process.
+async fn local(
+    source: String,
+    toolset_file: Option<&Path>,
+    tests: Vec<ApiTest>,
+    statics: Option<Value>,
+) -> Result<TestRun, CliError> {
+    let tests: Vec<Test> = tests
+        .into_iter()
+        .map(|test| {
+            test.into_core(|cassette| {
+                let mut cassette = cassette.clone();
+                if let Value::Object(fields) = &mut cassette
+                    && !fields.contains_key("v")
+                {
+                    fields.insert("v".into(), Value::from(rewind_format::VERSION));
+                }
+                rewind_format::decode_cassette(&cassette.to_string())
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(CliError::usage)
+        })
+        .collect::<Result<_, _>>()?;
+    let toolset = match toolset_file {
+        Some(path) => toolset::pin_file(path).await?,
+        None => {
+            let mut answered: BTreeSet<String> = tests
+                .iter()
+                .flat_map(|test| {
+                    test.world
+                        .tools
+                        .keys()
+                        .cloned()
+                        .chain(test.world.cassette.iter().flat_map(|cassette| {
+                            cassette.calls.iter().map(|call| call.tool.clone())
+                        }))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            if let Some(Value::Object(statics)) = &statics {
+                answered.extend(statics.keys().cloned());
+            }
+            let loader = TsMockLoader::default();
+            for test in &tests {
+                if let Some(source) = &test.world.mocks {
+                    let mocks = rewind_engine::testing::MockLoader::load(
+                        &loader,
+                        source,
+                        rewind_engine::testing::DEFAULT_START,
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        rewind_engine::testing::MockLoadError::Invalid(message) => {
+                            CliError::usage(format!("test {:?}: the mocks: {message}", test.name))
+                        }
+                        rewind_engine::testing::MockLoadError::Internal(message) => {
+                            CliError::internal(message)
+                        }
+                    })?;
+                    answered.extend(mocks.tools);
+                }
+            }
+            toolset::of_mocks(&answered)?
+        }
+    };
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| CliError::internal(error.to_string()))?;
-    let report = match &file.mocks {
-        Some(path) => {
-            let path = base.join(path);
-            let source = Script::new(input::read_text(&path)?);
-            let clock = Arc::new(VirtualClock::new(Scenario::DEFAULT_START));
-            let handlers = TsMocks::new(&source, clock, SandboxLimits::default())
-                .await
-                .map_err(|error| CliError::usage(format!("{}: {error}", path.display())))?;
-            mocked.extend(handlers.tools().iter().cloned());
-            let tools = handlers.tools().clone();
-            let toolset = scenario_toolset(file, base, &mocked).await?;
-            let scenario = scenario(file, script, toolset)?;
-            let dispatcher = dispatcher.with_mocks(Mocks { handlers, tools });
-            mock::run_scenario(&executor, dispatcher, scenario).await
-        }
-        None => {
-            let toolset = scenario_toolset(file, base, &mocked).await?;
-            let scenario = scenario(file, script, toolset)?;
-            let dispatcher: MockDispatcher<NoMocks> = dispatcher;
-            mock::run_scenario(&executor, dispatcher, scenario).await
-        }
-    };
-    let report = report.map_err(|error| match error {
-        ScenarioError::Start(refused @ StartError::InvalidScript(_)) => CliError::ScriptRefused {
+    let script = Script::new(source);
+    let reports = run_tests(
+        &executor,
+        &TsMockLoader::default(),
+        &Subject {
+            script: &script,
+            toolset: &toolset,
+            interface: None,
+        },
+        &tests,
+        &TestOptions { ttl: None, statics },
+    )
+    .await
+    .map_err(|error| match error {
+        TestError::Start(refused @ StartError::InvalidScript(_)) => CliError::ScriptRefused {
             message: refused.to_string(),
             diagnostics: Vec::new(),
         },
-        ScenarioError::Start(
+        TestError::Start(
             refused @ (StartError::InvalidTtl { .. }
             | StartError::InputTooLarge { .. }
             | StartError::NulCharacter(_)),
         ) => CliError::usage(format!("the run cannot start: {refused}")),
-        ScenarioError::Start(refused @ StartError::QuotaExceeded { .. }) => {
-            CliError::Refused(format!("the run cannot start: {refused}"))
-        }
-        ScenarioError::Start(refused) => {
-            CliError::internal(format!("the run cannot start: {refused}"))
-        }
-        ScenarioError::Engine(error) => engine_error(&error),
+        TestError::Start(refused) => CliError::internal(format!("the run cannot start: {refused}")),
+        TestError::Engine(error) => CliError::internal(format!("the tests could not run: {error}")),
+        TestError::Mocks(message) => CliError::internal(message),
     })?;
-    Ok(TestResult {
-        passed: report.passed,
-        failures: report.failures,
-        status: report.status.into(),
-        output: report.output,
-        error: report.error.as_ref().map(ScriptError::from),
-        abort: report.abort.as_ref().map(AbortReason::from),
-        calls: report.calls,
-        trace: report.trace,
+    let results: Vec<TestResult> = reports
+        .iter()
+        .map(|report| TestResult {
+            name: report.name.clone(),
+            passed: report.passed,
+            problem: report.problem.map(|problem| match problem {
+                rewind_engine::testing::TestProblem::Stale => {
+                    rewind_api::testing::TestProblem::Stale
+                }
+                rewind_engine::testing::TestProblem::Incompatible => {
+                    rewind_api::testing::TestProblem::Incompatible
+                }
+                rewind_engine::testing::TestProblem::Failed => {
+                    rewind_api::testing::TestProblem::Failed
+                }
+            }),
+            failures: report.failures.clone(),
+            status: report.status.map(Into::into),
+            output: report.output.clone(),
+            error: report.error.as_ref().map(Into::into),
+            abort: report.abort.as_ref().map(Into::into),
+            calls: report.calls.clone(),
+            trace: report.trace.clone(),
+        })
+        .collect();
+    Ok(TestRun {
+        passed: results.iter().all(|result| result.passed),
+        tests: results,
     })
 }
 
-/// The scenario's toolset file, pinned; else the tools its mocks answer.
-async fn scenario_toolset(
-    file: &ScenarioFile,
-    base: &Path,
-    mocked: &BTreeSet<String>,
-) -> Result<Toolset, CliError> {
-    match &file.toolset {
-        Some(path) => toolset::pin_file(&base.join(path)).await,
-        None => toolset::of_mocks(mocked),
+/// One line per test, its failures under it, and the trace of each test that did not pass.
+fn print(run: &TestRun, console: &mut Console) {
+    for test in &run.tests {
+        let verdict = if test.passed { "PASS" } else { "FAIL" };
+        let state = match (&test.problem, &test.status) {
+            (Some(problem), None) => format!(" ({}: not run)", problem_name(*problem)),
+            (_, Some(status)) => format!(" (the run is {status})"),
+            (None, None) => String::new(),
+        };
+        console.line(format!("{verdict} {}{state}", test.name));
+        for failure in &test.failures {
+            console.line(format!("  - {failure}"));
+        }
     }
-}
-
-fn engine_error(error: &EngineError) -> CliError {
-    CliError::internal(format!("the scenario could not run: {error}"))
-}
-
-/// The engine's scenario.
-fn scenario(file: &ScenarioFile, script: Script, toolset: Toolset) -> Result<Scenario, CliError> {
-    let mut scenario = Scenario::new(script, toolset, file.input.clone());
-    scenario.ttl = file.ttl.map(|ttl| ttl.get());
-    scenario.signals = file
-        .signals
+    let failed: Vec<&TestResult> = run
+        .tests
         .iter()
-        .map(|signal| {
-            let when = match signal.when.as_deref() {
-                None | Some("blocked") => SignalWhen::Blocked,
-                Some(after) => {
-                    let after: rewind_api::common::Duration = after.parse().map_err(|_| {
-                        CliError::usage(format!(
-                            "the signal {:?}: when is \"blocked\" or a duration such as \"2h\", not {after:?}",
-                            signal.name
-                        ))
-                    })?;
-                    SignalWhen::After(after.get())
-                }
-            };
-            Ok(mock::ScenarioSignal {
-                name: signal.name.clone(),
-                payload: signal.payload.clone(),
-                when,
-            })
-        })
-        .collect::<Result<_, CliError>>()?;
-    scenario.expect = mock::Expectations {
-        status: file.expect.status.map(core_status),
-        output: file.expect.output.clone(),
-        error: file.expect.error.as_ref().map(|error| ExpectedError {
-            name: error.name.clone(),
-            message: error.message.clone(),
-        }),
-        calls: file.expect.calls.clone(),
-    };
-    Ok(scenario)
+        .filter(|test| !test.passed && !test.trace.is_empty())
+        .collect();
+    for test in failed {
+        console.line("");
+        console.line(format!("{}:", test.name));
+        console.text(&test.trace);
+    }
+    let passed = run.tests.iter().filter(|test| test.passed).count();
+    console.line("");
+    console.line(format!("{passed} of {} tests passed", run.tests.len()));
 }
 
-fn core_status(status: ApiStatus) -> RunStatus {
-    match status {
-        ApiStatus::Pending => RunStatus::Pending,
-        ApiStatus::Active => RunStatus::Active,
-        ApiStatus::Completed => RunStatus::Completed,
-        ApiStatus::Failed => RunStatus::Failed,
-        ApiStatus::Cancelled => RunStatus::Cancelled,
-        ApiStatus::Aborted => RunStatus::Aborted,
+fn problem_name(problem: rewind_api::testing::TestProblem) -> &'static str {
+    match problem {
+        rewind_api::testing::TestProblem::Stale => "stale",
+        rewind_api::testing::TestProblem::Incompatible => "incompatible",
+        rewind_api::testing::TestProblem::Failed => "failed",
     }
 }
 
@@ -263,28 +347,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_scenario_file_refuses_unknown_fields() {
-        let file: ScenarioFile = serde_json::from_str(
-            r#"{"script": "a.ts", "signals": [{"name": "go", "when": "2h"}], "expect": {"status": "completed"}}"#,
-        )
-        .unwrap();
-        assert_eq!(file.signals[0].when.as_deref(), Some("2h"));
-        assert!(
-            serde_json::from_str::<ScenarioFile>(r#"{"script": "a.ts", "steps": []}"#).is_err()
+    fn the_tests_file_of_a_script_sits_next_to_it() {
+        assert_eq!(
+            tests_file_of(Path::new("flows/triage.ts")),
+            PathBuf::from("flows/triage.tests.json")
         );
     }
 
     #[test]
-    fn statuses_map_one_to_one() {
-        for status in [
-            ApiStatus::Pending,
-            ApiStatus::Active,
-            ApiStatus::Completed,
-            ApiStatus::Failed,
-            ApiStatus::Cancelled,
-            ApiStatus::Aborted,
-        ] {
-            assert_eq!(ApiStatus::from(core_status(status)), status);
-        }
+    fn a_tests_file_reads_its_cassettes_and_mocks_from_files() {
+        let dir = std::env::temp_dir().join(format!("rewind-cli-tests-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cassette.json"),
+            r#"{"v":1,"matching":"by_args","calls":[],"signals":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.join("mocks.ts"), "export default {};\n").unwrap();
+        std::fs::write(
+            dir.join("t.tests.json"),
+            r#"[{"name":"t","world":{"cassette":"cassette.json","mocks":"mocks.ts"}},
+               {"name":"inline","world":{"mocks":"export default { a: () => 1 };"}}]"#,
+        )
+        .unwrap();
+        let tests = read_tests(&dir.join("t.tests.json")).unwrap();
+        assert_eq!(
+            tests[0].world.mocks.as_deref(),
+            Some("export default {};\n")
+        );
+        assert_eq!(
+            tests[0].world.cassette.as_ref().unwrap()["matching"],
+            "by_args"
+        );
+        assert_eq!(
+            tests[1].world.mocks.as_deref(),
+            Some("export default { a: () => 1 };")
+        );
+        assert!(
+            std::fs::write(dir.join("bad.json"), r#"{"name":"t"}"#).is_ok()
+                && read_tests(&dir.join("bad.json")).is_err(),
+            "a tests file is an array"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

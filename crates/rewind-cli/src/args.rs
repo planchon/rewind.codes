@@ -67,7 +67,7 @@ pub(crate) enum Command {
     Run(RunArgs),
     /// Type-check a script against the sandbox and a toolset's declarations.
     Check(CheckArgs),
-    /// Run a scenario against mocks and cassettes, in virtual time, in this process.
+    /// Run tests in virtual time: in this process, or on the server for a workflow's suite.
     Test(TestArgs),
     /// Send a signal to a run.
     Signal(SignalArgs),
@@ -93,6 +93,29 @@ pub(crate) enum Command {
     /// The namespaces (the end users) and their use; one namespace; their limits; erase one.
     #[command(subcommand)]
     Namespaces(NamespacesCommand),
+    /// Record tests from a workflow's past runs.
+    #[command(subcommand)]
+    Workflows(WorkflowsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkflowsCommand {
+    /// Record tests from the workflow's past runs, one per path they took; print their digests,
+    /// which a save of the workflow takes in `tests`.
+    Record {
+        /// The workflow's name.
+        name: String,
+        /// Which runs, in the query language of `rewind runs`: its completed and failed runs,
+        /// newest first, by default.
+        #[arg(long)]
+        query: Option<String>,
+        /// These runs rather than a query; repeat it for several.
+        #[arg(long = "run", value_name = "ID")]
+        runs: Vec<String>,
+        /// At most this many tests: 20 by default, 100 at most.
+        #[arg(long)]
+        limit: Option<u32>,
+    },
 }
 
 /// What starts a run: `rewind run` and `rewind fork` share them.
@@ -141,9 +164,21 @@ pub(crate) struct CheckArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct TestArgs {
-    /// The scenario: its script, input, mocks, signals and expectations.
-    pub(crate) scenario: PathBuf,
-    /// Static responses per tool. Default: rewind.tools.json next to the scenario, if present.
+    /// The script under test. With --workflow, the version's own when absent.
+    pub(crate) script: Option<PathBuf>,
+    /// The tests: a JSON array of tests. Default: script.tests.json next to the script.
+    #[arg(long, value_name = "FILE")]
+    pub(crate) tests: Option<PathBuf>,
+    /// A workflow, `triage` or `triage@<version>`: its suite runs too, on the server, which
+    /// checks every test against its interface.
+    #[arg(long, value_name = "NAME")]
+    pub(crate) workflow: Option<String>,
+    /// The toolset: a toolset file, or the id of a toolset registered on the server, where the
+    /// tests then run. Default: the workflow's, or else the tools the tests answer.
+    #[arg(long, value_name = "ID|FILE")]
+    pub(crate) toolset: Option<String>,
+    /// Static responses per tool, tried last, in this process. Default: rewind.tools.json next
+    /// to the tests.
     #[arg(long, value_name = "FILE")]
     pub(crate) tools: Option<PathBuf>,
 }
