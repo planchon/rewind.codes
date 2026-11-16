@@ -16,6 +16,7 @@ use rewind_engine::ports::{
     Delivery, Diagnostic, DiagnosticSource, Enqueued, JournalStore, NamespaceName, RunMetadata,
     RunRef, Severity, StartedBy, StoredWorkflow, TenantId, ToolDeclarations, WorkflowDeclarations,
 };
+use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{
     DriveOptions, EngineError, ForkRun, RegisterError, RegisterWorkflow, StartError, StartRun,
     StartWorkflow,
@@ -187,7 +188,11 @@ async fn registered_with(dispatcher: RecordingDispatcher) -> (TestEngine, Stored
         .await
         .unwrap();
     let stored = engine
-        .register_workflow(register("triage", schemas()), &StaticTypeChecker::default())
+        .register_workflow(
+            register("triage", schemas()),
+            &StaticTypeChecker::default(),
+            &kit(),
+        )
         .await
         .unwrap();
     let toolset = Toolset::from_host_tools(["notify"])
@@ -207,6 +212,7 @@ fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
         schemas,
         labels: BTreeMap::new(),
         declarations: WorkflowDeclarations::default(),
+        suite: SuiteChanges::default(),
     }
 }
 
@@ -474,26 +480,26 @@ async fn registering_checks_the_name_the_schemas_the_toolset_and_the_types() {
     let checker = StaticTypeChecker::default();
     assert!(matches!(
         engine
-            .register_workflow(register("default", schemas()), &checker)
+            .register_workflow(register("default", schemas()), &checker, &kit())
             .await,
         Err(RegisterError::Invalid(_))
     ));
     let mut unusable = schemas();
     unusable.output = json!({ "$ref": "https://schemas.example.com/out.json" });
     assert!(matches!(
-        engine.register_workflow(register("triage", unusable), &checker).await,
+        engine.register_workflow(register("triage", unusable), &checker, &kit()).await,
         Err(RegisterError::Schema { which, .. }) if which == "output"
     ));
     let mut elsewhere = register("triage", schemas());
     elsewhere.toolset = Digest::of(b"unknown");
     assert!(matches!(
-        engine.register_workflow(elsewhere, &checker).await,
+        engine.register_workflow(elsewhere, &checker, &kit()).await,
         Err(RegisterError::ToolsetNotFound(_))
     ));
     let mut broken = register("triage", schemas());
     broken.script = Script::new("syntax error here");
     assert!(matches!(
-        engine.register_workflow(broken, &checker).await,
+        engine.register_workflow(broken, &checker, &kit()).await,
         Err(RegisterError::InvalidScript(_))
     ));
     let error = Diagnostic {
@@ -508,20 +514,23 @@ async fn registering_checks_the_name_the_schemas_the_toolset_and_the_types() {
     let refusing = StaticTypeChecker::default().with(&Script::new("triage"), vec![error]);
     assert!(matches!(
         engine
-            .register_workflow(register("triage", schemas()), &refusing)
+            .register_workflow(register("triage", schemas()), &refusing, &kit())
             .await,
         Err(RegisterError::TypeErrors(_))
     ));
 
     // Saving the same version again changes nothing; a new script is a new version.
     let again = engine
-        .register_workflow(register("triage", schemas()), &checker)
+        .register_workflow(register("triage", schemas()), &checker, &kit())
         .await
         .unwrap();
     assert_eq!(again, stored);
     let mut next = register("triage", schemas());
     next.description = None;
-    let next = engine.register_workflow(next, &checker).await.unwrap();
+    let next = engine
+        .register_workflow(next, &checker, &kit())
+        .await
+        .unwrap();
     assert_ne!(next.workflow.version(), stored.workflow.version());
     let versions = engine
         .journal()

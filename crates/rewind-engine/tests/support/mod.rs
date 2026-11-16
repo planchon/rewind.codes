@@ -408,3 +408,48 @@ pub fn result_of(delivery: &Delivery) -> &JsonValue {
         other => panic!("expected a tool result, got {other:?}"),
     }
 }
+
+// Tests and suites
+
+/// The documents of tests, for the engine's tests: the engine does not know the stored format,
+/// so these tests give it one that keeps each document's test in memory. A document is the
+/// test's `Debug` form with its seed, which `Debug` redacts.
+pub fn test_format() -> rewind_engine::suites::TestFormat {
+    rewind_engine::suites::TestFormat {
+        encode: encode_test,
+        decode: decode_test,
+    }
+}
+
+fn documents() -> &'static Mutex<HashMap<String, rewind_core::Test>> {
+    static DOCUMENTS: std::sync::OnceLock<Mutex<HashMap<String, rewind_core::Test>>> =
+        std::sync::OnceLock::new();
+    DOCUMENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn encode_test(test: &rewind_core::Test) -> String {
+    let document = format!("{test:?} seed={:?}", test.seed.map(|seed| *seed.as_bytes()));
+    documents()
+        .lock()
+        .unwrap()
+        .insert(document.clone(), test.clone());
+    document
+}
+
+fn decode_test(document: &str) -> Result<rewind_core::Test, String> {
+    documents()
+        .lock()
+        .unwrap()
+        .get(document)
+        .cloned()
+        .ok_or_else(|| "not a document of this test format".to_owned())
+}
+
+/// What a save needs to run a suite, without TypeScript mock handlers.
+pub fn kit() -> rewind_engine::suites::TestKit<'static, rewind_engine::testing::NoMockLoader> {
+    rewind_engine::suites::TestKit {
+        loader: &rewind_engine::testing::NoMockLoader,
+        format: test_format(),
+        options: rewind_engine::testing::TestOptions::default(),
+    }
+}

@@ -374,3 +374,92 @@ async fn the_read_model_keeps_runs_for_its_retention() {
         1
     );
 }
+
+#[tokio::test]
+async fn unreferenced_tests_go_after_their_grace_and_recorded_ones_with_their_namespace() {
+    use rewind_core::{Test, TestOrigin};
+    use rewind_engine::ports::{NamespaceName, TEST_GRACE, Tenant, TenantId};
+
+    let engine = engine(echo(), RecordingDispatcher::echo());
+    let read_model = MemoryReadModel::new();
+    let housekeeper = Housekeeper {
+        journal: engine.journal(),
+        blobs: engine.blobs(),
+        read_model: &read_model,
+        secrets: engine.secrets(),
+        batch: 100,
+    };
+    let tenant = TenantId::local();
+    let mut recorded = Test::new("recorded");
+    recorded.origin = Some(TestOrigin {
+        run: rewind_core::RunId::from_u128(9),
+        version: Digest::of(b"v1"),
+        namespace: "alice".into(),
+    });
+    let unreferenced = Test::new("never saved");
+    let digests = engine
+        .store_tests(&tenant, &[recorded, unreferenced], test_format())
+        .await
+        .unwrap();
+    assert_eq!(engine.blobs().len(), 2);
+
+    // Within their grace, both stay.
+    assert_eq!(housekeeper.clean_tests(T0).await.unwrap(), 0);
+    // After it, both go: no version references them.
+    let after = T0.saturating_add(TEST_GRACE);
+    assert_eq!(housekeeper.clean_tests(after).await.unwrap(), 2);
+    assert_eq!(engine.blobs().len(), 0);
+    assert!(
+        engine
+            .journal()
+            .get_test(&tenant, digests[0])
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // A recorded test goes with its namespace.
+    let digests = engine
+        .store_tests(
+            &tenant,
+            &[{
+                let mut test = Test::new("recorded again");
+                test.origin = Some(TestOrigin {
+                    run: rewind_core::RunId::from_u128(10),
+                    version: Digest::of(b"v1"),
+                    namespace: "alice".into(),
+                });
+                test
+            }],
+            test_format(),
+        )
+        .await
+        .unwrap();
+    engine
+        .journal()
+        .put_tenant(&Tenant::new(tenant.clone()))
+        .await
+        .unwrap();
+    let alice = NamespaceName::new("alice").unwrap();
+    engine
+        .journal()
+        .put_namespace(&tenant, &alice, None, T0)
+        .await
+        .unwrap();
+    engine
+        .journal()
+        .delete_namespace(&tenant, &alice, T0)
+        .await
+        .unwrap();
+    let erased = housekeeper.erase_namespaces(T0).await.unwrap();
+    assert_eq!(erased.tests, 1);
+    assert!(
+        engine
+            .journal()
+            .get_test(&tenant, digests[0])
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(engine.blobs().len(), 0);
+}

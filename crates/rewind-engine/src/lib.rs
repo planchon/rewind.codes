@@ -17,6 +17,8 @@
 //!   sending of quota alerts.
 //! - [`mock`]: mock mode: the dispatcher that answers from a test's rules, mock handlers,
 //!   cassette and static responses.
+//! - [`suites`]: the suites of workflow versions, composed from their parent's and stored as
+//!   blobs; tests recorded from runs.
 //! - [`testing`]: tests run in virtual time against a script, several at once; the checks of a
 //!   test against its toolset and its workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
@@ -51,6 +53,7 @@ pub mod quotas;
 pub mod replay;
 pub mod retention;
 pub mod schema;
+pub mod suites;
 mod tasks;
 pub mod telemetry;
 pub mod testing;

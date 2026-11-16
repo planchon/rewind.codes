@@ -64,6 +64,8 @@ pub struct Retained {
     pub archived: usize,
     pub deleted: usize,
     pub payloads_deleted: usize,
+    /// Tests no version referenced past their grace.
+    pub tests_deleted: usize,
     pub purged_from_read_model: usize,
     /// Runs of namespaces being erased: erased, and cancelled.
     pub erased_runs: usize,
@@ -81,6 +83,8 @@ pub struct Erased {
     pub cancelled: usize,
     /// Namespaces erased, with their use, alerts and credentials.
     pub namespaces: usize,
+    /// Tests recorded from their runs, erased.
+    pub tests: usize,
 }
 
 /// The retention jobs. They borrow the adapters they need; the archive is written in the stored
@@ -115,6 +119,7 @@ where
             archived: self.archive(now, encode).await?,
             deleted: self.delete_expired(now).await?,
             payloads_deleted: self.clean_payloads(now).await?,
+            tests_deleted: self.clean_tests(now).await?,
             purged_from_read_model: self.purge_read_model(now).await?,
             erased_runs: erased.runs,
             cancelled_runs: erased.cancelled,
@@ -135,6 +140,7 @@ where
             if left > 0 {
                 continue;
             }
+            erased.tests += self.erase_tests(&tenant, &namespace).await?;
             self.secrets.delete_namespace(&tenant, &namespace).await?;
             match self.journal.drop_namespace(&tenant, &namespace).await? {
                 DropNamespace::Dropped => {
@@ -314,6 +320,48 @@ where
             self.blobs.delete(tenant, *digest).await?;
         }
         Ok(self.journal.drop_payloads(&forgotten, now).await?)
+    }
+
+    /// Deletes the tests no version references, stored more than [`TEST_GRACE`] ago: marks
+    /// their rows, deletes their blobs, then drops the rows still marked. Returns how many.
+    ///
+    /// [`TEST_GRACE`]: crate::ports::TEST_GRACE
+    pub async fn clean_tests(&self, now: Timestamp) -> Result<usize, RetentionError> {
+        let marked = self.journal.unreferenced_tests(now, self.batch).await?;
+        if marked.is_empty() {
+            return Ok(0);
+        }
+        for (tenant, digest) in &marked {
+            self.blobs.delete(tenant, *digest).await?;
+        }
+        Ok(self.journal.drop_tests(&marked, false).await?)
+    }
+
+    /// Erases the tests recorded from the runs of a namespace being erased, whatever version
+    /// references them: the end user's data goes with them. Returns how many.
+    async fn erase_tests(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+    ) -> Result<usize, RetentionError> {
+        let mut erased = 0;
+        loop {
+            let digests = self
+                .journal
+                .namespace_tests(tenant, namespace, self.batch.max(1))
+                .await?;
+            if digests.is_empty() {
+                return Ok(erased);
+            }
+            for digest in &digests {
+                self.blobs.delete(tenant, *digest).await?;
+            }
+            let keys: Vec<(TenantId, Digest)> = digests
+                .into_iter()
+                .map(|digest| (tenant.clone(), digest))
+                .collect();
+            erased += self.journal.drop_tests(&keys, true).await?;
+        }
     }
 
     /// Removes from the read model the runs that ended before their tenant's read model
