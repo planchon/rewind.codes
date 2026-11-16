@@ -11,13 +11,15 @@ API `/v1` and of the sign-in `/auth` only.
 | Observability | The runs, looked at and filtered, in four views of the same query: every run (the runs started over time, then the list, ordered by start, activity or next wake), the active ones, the waiting ones (by tab: signals, approvals, timers, tools; grouped by what they wait for, with the line each is paused on and when it wakes, the soonest first; polled every 10 s) and the failures (failed, cancelled and aborted runs of a window grouped by fingerprint: signature, runs, their series, scripts, first and last seen, the line most of them ended at, top labels, the latest run). One query bar: suggestions as you type, the term the server cannot read underlined. Its sidebar holds the view picker with each view's count, the saved searches (kept in the browser) and the filters: the timeline, then each field's values with their counts, the namespaces among them (a click asks for a value, a second excludes it, a third removes it: a filter is a term of the query). |
 | Run | One run, analysed in depth. Its sidebar holds its status and id, its sections, and its details (namespace, workflow and version, the run that started it, detached or not, script, toolset, calls, trace, labels). Its sections: the debugger (the source, with each tool call, timer, signal wait and log next to the line that caused it; the timeline; payloads on demand; a time cursor that steps through the history, `?step=`: the marks of each line, hovers that show a call's arguments and result or a variable's value at that step, watches, a playhead on the timeline), the journal, the logs, the LLM trace, and the runs it started, each with how it ended (`triage.start(…)`, `run.signal("approval", …)` and the `rewind:ended:` signals read as the script wrote them). Live through the event stream while the run goes on. "Back" returns to the list of Observability it was opened from. |
 | Scripts | Every distinct script, with its runs by outcome, its tools and its labels; one script's source and runs. |
+| Workflows | Each workflow by name, with its latest version, its description, the size of its suite and its labels. A workflow's page: its versions, newest first, each with its lineage (the version it derives from, a click away), its script, toolset, input, output and signal schemas, and its suite: the tests it inherited, added (those recorded from a run link to it), updated (the parent's test → the new one, with the reason) and retired (with the reason). A test opens below its suite (`?version=…&test=…`): its input, start and seed, its world (each tool's rules, its mock handlers, its cassette summed up and shown on demand), its signals, its expectations, and for a recorded test the run, namespace and version it comes from. A recorded test the caller may not read (403, the runs of its namespace) or one no longer stored (404) is said so in place. Needs `toolsets:read`; a grant limited to labels sees the workflows carrying them. |
 | Tools | Latency (p50, p95, p99, max), error rate by kind and retries per tool, grouped by namespace, over a window, optionally for one toolset. Not for a grant limited to labels. |
 | Namespaces | The end users of the organization this month: the operator's ceiling with the organization's totals, the default limits, then the namespaces sorted by CPU, runs or scripts of the month (a search by the start of the name, a filter of those at 80 % or more of a limit), each quota a meter, orange from 80 %, red at 100 %, a CPU above its quota full with its share (`160%`); the alerts of the month. Whoever holds `namespaces:write` edits the defaults. Polled every 30 s. |
 | Namespace | One end user, over a month: its cumulative CPU time against its quota (where it reached 80 % and 100 %), its use of every limit, its alerts and whether they were sent, its tokens in use, its exceptions to the defaults; a link to its runs. Edit its limits and erase it (typing its name to confirm) with `namespaces:write`, revoke its tokens with `tokens:write`. |
 | Organization | Opened from the account menu, in its own sidebar: Members (their grant: role and allowed labels; change it, remove a member), Invitations (invite an email with a role and labels, resend, revoke), Roles (built-in and the organization's own, with their permissions; create, edit, delete), API keys (role, labels, creator, dates; create, with the secret shown once; revoke), Settings (name, default role). Each part is shown to whoever holds its permission; the roles offered are those the caller may give. |
 
 The views follow what `GET /v1/whoami` says the caller may do: the run views need `runs:read`,
-the namespace views `namespaces:read`, and a member without them is told so. The query (`q`) and
+the workflow views `toolsets:read`, the namespace views `namespaces:read`, and a member without
+them is told so. The query (`q`) and
 the window follow the reader from the Overview to Observability in the URL. Links of earlier
 versions are read as what they meant: `#/runs`, `#/waiting` and `#/failures` open Observability,
 their filters (`?status=failed&label=…`) as a query, and the namespace filter they named
@@ -25,7 +27,7 @@ their filters (`?status=failed&label=…`) as a query, and the namespace filter 
 
 **The frame** is Geist's, Vercel's design system ([08](../archi/08-decisions.md#taken-for-the-dashboards-redesign-november-2026)):
 one sidebar, with the organization picker and Find (`F`: a run by its id, a view, a saved search)
-at its top, the views below (Overview, Observability, Scripts, Tools, Namespaces) and the account
+at its top, the views below (Overview, Observability, Scripts, Workflows, Tools, Namespaces) and the account
 at its bottom (the organization, the theme, the time zone, the server, the sign-out). Observability,
 a run and the organization turn the sidebar into their own, under a "back"; each page has a
 56 px header with its name in the middle and its actions on the right. No namespace is picked:
@@ -74,7 +76,9 @@ meets the waitlist. "Continue with GitHub" signs in as Ada. A run goes on live, 
 tokens live 5 minutes, as WorkOS's: the event stream is closed at their expiry and resumed. Each
 run acts for an end user: of the tenant's 1,200 or so namespaces, bob is above his CPU quota and
 at his active runs, chen pays for more (exceptions), dana and user_7Kd02 passed 80 %, erin is
-blocked.
+blocked. The workflow triage has three versions, whose suites inherit, add, update and retire
+tests with reasons; its latest adds two tests recorded from runs, one of them from a namespace no
+caller may read (its `GET /v1/tests/{digest}` answers 403).
 
 ## The build
 
@@ -103,8 +107,8 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 - A payload shows its size, digest and preview; its value is shown on demand, and read with
   `GET /v1/payloads/{digest}` when the entry left it out (above 256 KiB).
 - Menus, popovers and dialogs are Base UI's (`@base-ui/react`), unstyled and styled with the
-  tokens. The run's page, a script's, the namespaces' and the organization's are loaded when first
-  opened.
+  tokens. The run's page, a script's, the workflows', the namespaces' and the organization's are
+  loaded when first opened.
 - Lists search with `q` (`GET /v1/runs`, `/v1/runs/stats`, `/v1/runs/failures`); the server
   reads the query and answers `invalid-query` with the position of the term at fault, in
   characters. Suggestions and facets come from `GET /v1/runs/stats?q=…&top=…`.
@@ -114,6 +118,12 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
   `PUT /v1/organization/namespace-defaults`, `DELETE /v1/namespaces/{name}/tokens` and
   `DELETE /v1/namespaces/{name}`. Durations are read and written as the API writes them (`2h`,
   `1h30m`).
+- The workflow views read `GET /v1/workflows` (paged with `after`), `GET /v1/workflows/{name}`
+  (the versions, newest first) and, when a test is opened, `GET /v1/tests/{digest}`, which never
+  changes. Whether a test was inherited or added is found against the parent's suite when the
+  parent is among the workflow's versions; `updated` and `retired` come with the version. A test
+  of a suite is shown as recorded from its name (`recorded <run id>`) until its document, whose
+  `origin` says so, is read.
 - The organization views write: grants, invitations, roles, keys, the organization. Before the
   server enforces them, they follow its rules: only the roles whose permissions the caller holds
   are offered, a role editor's permissions the caller lacks are disabled, a member or role beyond
@@ -132,9 +142,9 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 | Path | Holds |
 | --- | --- |
 | `src/api/` | The client (`/v1` and `/auth`), the event stream, the data hooks (TanStack Query), the DTO names |
-| `src/model/` | Pure code: a run's activities and steps from its journal, the runs it started (`workflows.ts`), callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting, what a caller may do and give, quotas (shares, levels, durations, the month's cumulative CPU) |
-| `src/views/` | Overview, Observability (`observability/`: its views, filters, waiting runs and failures), Run (`run/`, with the time cursor), Scripts, Script, Tools, Namespaces and Namespace (`namespaces/`), Organization (`org/`) |
+| `src/model/` | Pure code: a run's activities and steps from its journal, the runs it started and a workflow version's suite (`workflows.ts`), callsites and bindings in the source, the query language, the timeline's axis, filters, formats, highlighting, what a caller may do and give, quotas (shares, levels, durations, the month's cumulative CPU) |
+| `src/views/` | Overview, Observability (`observability/`: its views, filters, waiting runs and failures), Run (`run/`, with the time cursor), Scripts, Script, Workflows and Workflow (`workflows/`, with a test's document), Tools, Namespaces and Namespace (`namespaces/`), Organization (`org/`) |
 | `src/components/` | Shared pieces: the page's header, statuses, payloads, the source view, the query bar, charts (the cumulative CPU among them), tooltips, refusals explained |
 | `src/app/` | Routes, the session (key or member), the gate, the sign-in pages, the onboarding, the frame (`Layout.tsx`: the sidebar and its two panes; `sidebar.tsx`: a page's own sidebar), the organization picker and the account menu, Find, where a run's "back" leads (`runLinks.tsx`), what the caller may do (`access.tsx`), settings (theme, time zone), saved searches |
-| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run, and a run that starts runs of workflows), a small read model that reads the query language, a world of identity and access (users, organizations, invitations, the waitlist, one browser's session, roles, grants, keys), the namespaces of the tenant (their limits, use day by day, alerts and tokens) and the header that narrows the reads, MSW handlers, the Vite plugin of `dev:mock` |
+| `src/mocks/` | The mocked API: a world of fixtures (with the e2e corpus's `triage_workflow` run, and a run that starts runs of workflows), a small read model that reads the query language, a world of identity and access (users, organizations, invitations, the waitlist, one browser's session, roles, grants, keys), the namespaces of the tenant (their limits, use day by day, alerts and tokens) and the header that narrows the reads, the workflows' versions and the stored tests, MSW handlers, the Vite plugin of `dev:mock` |
 | `src/styles/` | Geist's tokens for light and dark (with the names the views use), the shared styles and the views' |

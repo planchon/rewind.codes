@@ -14,6 +14,7 @@ import type {
   FailuresQuery,
   ListRunsQuery,
   ListScriptsQuery,
+  ListWorkflowsQuery,
   RunStatsQuery,
   RunStatus,
   ToolStatsQuery,
@@ -94,6 +95,40 @@ export function useScript(digest: string | undefined) {
     queryKey: ["script", digest],
     queryFn: ({ signal }) => api.script(digest ?? "", signal),
     enabled: Boolean(digest),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** The workflows, by name: the latest version of each, page after page. */
+export function useWorkflows(query: ListWorkflowsQuery = {}) {
+  const { api } = useScope();
+  return useInfiniteQuery({
+    queryKey: ["workflows", query],
+    queryFn: ({ pageParam, signal }) =>
+      api.workflows(pageParam ? { ...query, after: pageParam } : query, signal),
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next ?? undefined,
+    refetchInterval: 30_000,
+  });
+}
+
+/** A workflow's versions, newest first. */
+export function useWorkflowVersions(name: string) {
+  const { api } = useScope();
+  return useQuery({
+    queryKey: ["workflow", name],
+    queryFn: ({ signal }) => api.workflowVersions(name, signal),
+    refetchInterval: 30_000,
+  });
+}
+
+/** A stored test: named by its digest, it never changes. */
+export function useTest(digest: string | null) {
+  const { api } = useScope();
+  return useQuery({
+    queryKey: ["test", digest],
+    queryFn: ({ signal }) => api.test(digest ?? "", signal),
+    enabled: digest !== null,
     staleTime: Number.POSITIVE_INFINITY,
   });
 }

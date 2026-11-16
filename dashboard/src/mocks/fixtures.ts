@@ -6,6 +6,7 @@ import type { Labels, Quarantine, Run, Waiting } from "../api/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { fakeDigest, JournalBuilder } from "./journal";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
+import { createWorkflowWorld, type RecordedRun, type WorkflowWorld } from "./workflows";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -54,6 +55,8 @@ export interface World {
   access: AccessWorld;
   /** The end users of each tenant, their quotas, use and alerts. */
   namespaces: Map<string, NamespaceWorld>;
+  /** The workflows' versions and their suites, and the stored tests: the tenant's. */
+  workflows: WorkflowWorld;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -382,6 +385,7 @@ function namespaceOf(labels: Labels, n: number): string {
 export function createWorld(options: WorldOptions): World {
   const { now } = options;
   const runs: RunFixture[] = [];
+  const recordedRuns: RecordedRun[] = [];
   let n = 0;
   const run = (
     start: number,
@@ -999,6 +1003,19 @@ export function createWorld(options: WorldOptions): World {
     );
     const [api, web] = children as [RunFixture, RunFixture];
     const closed = [2, 1];
+    // The third version of triage records a test from the first run, and from an older run of
+    // an end user whose runs the caller cannot read.
+    recordedRuns.push(
+      { id: api.id, namespace: api.namespace, start: start + 60, repo: "acme/api", closed: 2 },
+      {
+        id: runId(start - 2 * DAY, 9_001),
+        namespace: "user_9Qx31",
+        start: start - 2 * DAY,
+        repo: "acme/infra",
+        closed: 1,
+        restricted: true,
+      },
+    );
     children.forEach((child, i) => {
       const repo = repos[i] as string;
       child.journal
@@ -1166,6 +1183,16 @@ export function createWorld(options: WorldOptions): World {
     namespaces: new Map([
       [access.tenant, createNamespaceWorld({ now, names: runs.map((r) => r.namespace) })],
     ]),
+    workflows: createWorkflowWorld({
+      now,
+      triageVersion: WORKFLOWS.triage.version,
+      digestVersion: WORKFLOWS.digest.version,
+      triageScript: TRIAGE_REPO.digest,
+      digestScript: DIGEST.digest,
+      triageToolset: TOOLSET_GITHUB,
+      digestToolset: TOOLSET_DIGEST,
+      recorded: recordedRuns,
+    }),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   return world;

@@ -53,6 +53,12 @@ function useViews(): Choice[] {
       kind: "view",
     },
     reads && { key: "scripts", label: "Scripts", to: "/scripts", kind: "view" },
+    access.can("toolsets:read") && {
+      key: "workflows",
+      label: "Workflows",
+      to: "/workflows",
+      kind: "view",
+    },
     reads && access.toolStats && { key: "tools", label: "Tools", to: "/tools", kind: "view" },
     access.can("namespaces:read") && {
       key: "namespaces",

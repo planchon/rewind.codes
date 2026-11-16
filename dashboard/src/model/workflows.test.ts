@@ -1,12 +1,22 @@
 import { describe, expect, it } from "vitest";
+import type { Workflow } from "../api/types";
 import { JournalBuilder, payload } from "../mocks/journal";
 import { buildRunModel } from "./run";
 import {
   callName,
   endedRunOf,
+  expectedTimes,
+  findVersion,
   readRunEnd,
+  recordedRunOf,
+  rulesOf,
+  ruleTimes,
   signalTargetOf,
+  signalWhen,
   startedRuns,
+  suiteCounts,
+  suiteOf,
+  summarizeCassette,
   workflowCallOf,
   workflowRef,
 } from "./workflows";
@@ -95,5 +105,138 @@ describe("workflows in a journal", () => {
       idx: 8,
     });
     expect(runs[1]?.end).toBeNull();
+  });
+});
+
+function version(id: string, overrides: Partial<Workflow> = {}): Workflow {
+  return {
+    name: "triage",
+    version: id.repeat(64).slice(0, 64),
+    toolset: "t",
+    script: "s",
+    input: {},
+    output: {},
+    signals: {},
+    labels: {},
+    createdAt: "2026-11-01T00:00:00Z",
+    declarations: { dts: "", prompt: "" },
+    ...overrides,
+  };
+}
+
+describe("a version's suite", () => {
+  const first = version("1", {
+    tests: [
+      { name: "a", digest: "da" },
+      { name: "b", digest: "db" },
+      { name: "c", digest: "dc" },
+    ],
+  });
+  const recorded = `recorded ${CHILD}`;
+  const second = version("2", {
+    parent: first.version,
+    tests: [
+      { name: "a", digest: "da" },
+      { name: "b", digest: "db2" },
+      { name: recorded, digest: "dr" },
+    ],
+    updated: [{ name: "b", from: "db", to: "db2", reason: "the message changed" }],
+    retired: [{ name: "c", digest: "dc", reason: "deprecated" }],
+  });
+
+  it("says which tests were inherited, added, updated and retired", () => {
+    const suite = suiteOf(second, [second, first]);
+    expect(suite.parent).toBe(first);
+    expect(suite.parentMissing).toBe(false);
+    expect(suite.tests.map((t) => [t.name, t.kind, t.from, t.reason])).toEqual([
+      ["a", "inherited", null, null],
+      ["b", "updated", "db", "the message changed"],
+      [recorded, "added", null, null],
+    ]);
+    expect(suite.tests[2]?.recordedFrom).toBe(CHILD);
+    expect(suite.retired).toEqual([{ name: "c", digest: "dc", reason: "deprecated" }]);
+    expect(suiteCounts(suite)).toEqual({
+      inherited: 1,
+      added: 1,
+      updated: 1,
+      kept: 0,
+      retired: 1,
+    });
+  });
+
+  it("adds every test of a first version", () => {
+    expect(suiteOf(first, [second, first]).tests.map((t) => t.kind)).toEqual([
+      "added",
+      "added",
+      "added",
+    ]);
+  });
+
+  it("cannot tell inherited from added when the parent is not among the versions", () => {
+    const suite = suiteOf(second, [second]);
+    expect(suite.parent).toBeNull();
+    expect(suite.parentMissing).toBe(true);
+    expect(suite.tests.map((t) => t.kind)).toEqual(["kept", "updated", "kept"]);
+  });
+
+  it("shows a test replaced without a reason as an update", () => {
+    const silent = version("3", { parent: first.version, tests: [{ name: "a", digest: "da2" }] });
+    expect(suiteOf(silent, [silent, first]).tests[0]).toMatchObject({
+      kind: "updated",
+      from: "da",
+      reason: null,
+    });
+  });
+
+  it("finds a version by its digest or its first 12 digits", () => {
+    expect(findVersion([second, first], first.version)).toBe(first);
+    expect(findVersion([second, first], first.version.slice(0, 12))).toBe(first);
+    expect(findVersion([second, first], "111")).toBeNull();
+  });
+
+  it("reads the run of a recorded test from its name", () => {
+    expect(recordedRunOf(`recorded ${CHILD}`)).toBe(CHILD);
+    expect(recordedRunOf("recorded by hand")).toBeNull();
+  });
+});
+
+describe("a test, in words", () => {
+  it("says how many calls a rule answers and an expectation asks for", () => {
+    expect(rulesOf({ returns: 1 })).toEqual([{ returns: 1 }]);
+    expect(rulesOf([{ returns: 1 }, { returns: 2 }])).toHaveLength(2);
+    expect(ruleTimes(undefined)).toBe("every call");
+    expect(ruleTimes(1)).toBe("1 call");
+    expect(ruleTimes(3)).toBe("3 calls");
+    expect(expectedTimes({ tool: "a" })).toBe("at least once");
+    expect(expectedTimes({ tool: "a", times: 0 })).toBe("never");
+    expect(expectedTimes({ tool: "a", times: 1 })).toBe("exactly once");
+    expect(expectedTimes({ tool: "a", times: 4 })).toBe("exactly 4 times");
+    expect(signalWhen(undefined)).toBe("once the run is blocked");
+    expect(signalWhen("blocked")).toBe("once the run is blocked");
+    expect(signalWhen("2h")).toBe("after 2h");
+  });
+
+  it("sums a cassette up", () => {
+    expect(
+      summarizeCassette({
+        v: 1,
+        matching: "by_args",
+        calls: [
+          { tool: "github.close_issue", args: {}, outcome: { result: {} } },
+          { tool: "github.list_issues", args: {}, outcome: { result: [] } },
+          { tool: "github.close_issue", args: {}, outcome: { result: {} } },
+        ],
+        signals: [{ name: "approval", payload: true, elapsed_ms: 60_000 }],
+      }),
+    ).toEqual({
+      matching: "by_args",
+      calls: 3,
+      byTool: [
+        { tool: "github.close_issue", count: 2 },
+        { tool: "github.list_issues", count: 1 },
+      ],
+      signals: [{ name: "approval", at: 60_000 }],
+    });
+    expect(summarizeCassette(null)).toBeNull();
   });
 });

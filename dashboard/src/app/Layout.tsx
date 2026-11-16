@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   Search,
   Users,
+  Workflow,
   Wrench,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
@@ -102,15 +103,24 @@ function MainNav() {
             label="Scripts"
             current={pathname.startsWith("/scripts")}
           />
-          {access.toolStats && (
-            <NavItem
-              to="/tools"
-              icon={<Wrench size={16} />}
-              label="Tools"
-              current={pathname.startsWith("/tools")}
-            />
-          )}
         </>
+      )}
+      {access.can("toolsets:read") && (
+        <NavItem
+          to="/workflows"
+          icon={<Workflow size={16} />}
+          label="Workflows"
+          current={pathname.startsWith("/workflows")}
+        />
+      )}
+      {/* Tool statistics need `runs:read`, and a grant not limited to labels. */}
+      {access.toolStats && (
+        <NavItem
+          to="/tools"
+          icon={<Wrench size={16} />}
+          label="Tools"
+          current={pathname.startsWith("/tools")}
+        />
       )}
       {access.can("namespaces:read") && (
         <NavItem

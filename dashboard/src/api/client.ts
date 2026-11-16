@@ -18,6 +18,7 @@ import type {
   ListNamespacesQuery,
   ListRunsQuery,
   ListScriptsQuery,
+  ListWorkflowsQuery,
   Member,
   NamespaceDefaults,
   NamespaceDetail,
@@ -42,10 +43,13 @@ import type {
   ScriptPage,
   ServerInfo,
   SetGrant,
+  Test,
   ToolStatsPage,
   ToolStatsQuery,
   Trace,
   UpdateOrganization,
+  Workflow,
+  WorkflowPage,
 } from "./types";
 
 const PROBLEM_PREFIX = "urn:rewind:problem:";
@@ -260,6 +264,28 @@ export class Api {
   async script(digest: string, signal?: AbortSignal): Promise<Script> {
     return this.unwrap(
       await this.client.GET("/v1/scripts/{digest}", { params: { path: { digest } }, signal }),
+    );
+  }
+
+  /** The latest version of each workflow, by name; `next` reads the page after. */
+  async workflows(query: ListWorkflowsQuery, signal?: AbortSignal): Promise<WorkflowPage> {
+    return this.unwrap(await this.client.GET("/v1/workflows", { params: { query }, signal }));
+  }
+
+  /** A workflow's versions, newest first. */
+  async workflowVersions(name: string, signal?: AbortSignal): Promise<Workflow[]> {
+    return this.unwrap(
+      await this.client.GET("/v1/workflows/{name}", { params: { path: { name } }, signal }),
+    ).versions;
+  }
+
+  /**
+   * A stored test. One recorded from a run holds that run's data and is read like it: `runs:read`
+   * in its namespace, or 403.
+   */
+  async test(digest: string, signal?: AbortSignal): Promise<Test> {
+    return this.unwrap(
+      await this.client.GET("/v1/tests/{digest}", { params: { path: { digest } }, signal }),
     );
   }
 

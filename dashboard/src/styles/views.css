@@ -3133,3 +3133,263 @@ table.grid tr.row-defaults > * {
   flex-direction: column;
   gap: 12px;
 }
+
+/* Workflows: a workflow's versions, their suites, and a test */
+
+.workflow-description {
+  max-width: 48ch;
+  color: var(--ink-2);
+}
+
+.panel.version.current {
+  box-shadow:
+    var(--shadow-card),
+    0 0 0 1px var(--accent-line);
+}
+
+.panel-head h2 .mono {
+  font-size: 14px;
+}
+
+.schema summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.schema summary code {
+  font-size: 12px;
+}
+
+.schema[open] summary {
+  margin-bottom: 6px;
+}
+
+.signal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.signal-list .schema {
+  display: inline-block;
+}
+
+.json-inline {
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.json-box {
+  max-height: 280px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--line);
+  background: var(--code-bg);
+}
+
+.json-box pre {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.suite {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.suite h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  letter-spacing: -0.28px;
+}
+
+.suite h4 {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.suite-summary {
+  font-weight: 400;
+  font-size: 13px;
+}
+
+.suite-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.suite-test {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.suite-test:last-child {
+  border-bottom: 0;
+}
+
+.suite-test.open {
+  background: var(--surface-2);
+}
+
+.suite-name {
+  color: var(--ink);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.suite-test .end,
+.suite-change {
+  margin-left: auto;
+}
+
+.suite-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-3);
+}
+
+.suite-reason {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.test-doc {
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--line);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.test-doc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 6px 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.test-doc-head h3 {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.test-doc-head .end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.test-doc-body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.test-part {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.test-part h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+
+.test-part p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.test-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.table-wrap.flat {
+  box-shadow: 0 0 0 1px var(--line);
+  border-radius: var(--radius-sm);
+}
+
+table.grid.compact td {
+  height: auto;
+  padding: 6px 12px;
+  vertical-align: top;
+}
+
+table.grid.compact th {
+  height: 32px;
+}
+
+.cassette,
+.mocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.cassette > .json-box,
+.mocks > .code-view {
+  align-self: stretch;
+}
+
+.cassette .labels {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.test-unreadable {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 13px;
+}
+
+.test-unreadable p {
+  margin: 0 0 4px;
+}
+
+.test-unreadable p:last-child {
+  margin-bottom: 0;
+}

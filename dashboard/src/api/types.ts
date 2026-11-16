@@ -96,11 +96,29 @@ export type PutNamespace = Schemas["PutNamespace"];
 export type PutNamespaceDefaults = Schemas["PutNamespaceDefaults"];
 export type RevokedTokens = Schemas["RevokedTokens"];
 
+// Workflows: their versions, each with its suite, and the tests (archi/05, "Suites and the gate").
+export type Workflow = Schemas["Workflow"];
+export type WorkflowPage = Schemas["WorkflowPage"];
+export type WorkflowVersions = Schemas["WorkflowVersions"];
+export type SuiteTest = Schemas["SuiteTest"];
+export type RetiredTest = Schemas["RetiredTest"];
+export type UpdatedTest = Schemas["UpdatedTest"];
+/** A test document: the world a run meets, and what must hold at its end. */
+export type Test = Schemas["Test"];
+export type TestWorld = Schemas["World"];
+export type ToolRules = Schemas["ToolRules"];
+export type ToolRule = Schemas["ToolRule"];
+export type TestSignal = Schemas["TestSignal"];
+export type Expectations = Schemas["Expectations"];
+export type ExpectedCall = Schemas["ExpectedCall"];
+export type TestOrigin = Schemas["TestOrigin"];
+
 export type ListRunsQuery = NonNullable<paths["/v1/runs"]["get"]["parameters"]["query"]>;
 export type ListScriptsQuery = NonNullable<paths["/v1/scripts"]["get"]["parameters"]["query"]>;
 export type ToolStatsQuery = NonNullable<paths["/v1/tools/stats"]["get"]["parameters"]["query"]>;
 export type RunStatsQuery = NonNullable<paths["/v1/runs/stats"]["get"]["parameters"]["query"]>;
 export type FailuresQuery = NonNullable<paths["/v1/runs/failures"]["get"]["parameters"]["query"]>;
+export type ListWorkflowsQuery = NonNullable<paths["/v1/workflows"]["get"]["parameters"]["query"]>;
 export type ListNamespacesQuery = NonNullable<
   paths["/v1/namespaces"]["get"]["parameters"]["query"]
 >;
