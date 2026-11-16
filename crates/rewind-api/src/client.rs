@@ -41,7 +41,7 @@ use crate::runs::{
     TraceQuery,
 };
 use crate::scripts::{
-    CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest, TestResult,
+    CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest,
 };
 use crate::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
@@ -235,8 +235,26 @@ impl Client {
     }
 
     /// `POST /v1/test`.
-    pub async fn test(&self, test: &TestRequest) -> Result<TestResult, Error> {
+    pub async fn test(&self, test: &TestRequest) -> Result<crate::testing::TestRun, Error> {
         let request = self.request(Method::POST, routes::TEST, &[])?.json(test);
+        self.json(request).await
+    }
+
+    /// `POST /v1/workflows/{name}/record`.
+    pub async fn record_tests(
+        &self,
+        workflow: &str,
+        record: &crate::workflows::RecordTests,
+    ) -> Result<crate::workflows::RecordedTests, Error> {
+        let request = self
+            .request(Method::POST, routes::WORKFLOW_RECORD, &[workflow])?
+            .json(record);
+        self.json(request).await
+    }
+
+    /// `GET /v1/tests/{digest}`.
+    pub async fn get_test(&self, digest: &str) -> Result<crate::testing::Test, Error> {
+        let request = self.request(Method::GET, routes::TEST_DOCUMENT, &[digest])?;
         self.json(request).await
     }
 
@@ -959,6 +977,7 @@ fn untyped_problem(status: StatusCode, body: &str) -> Problem {
         instance: None,
         diagnostics: Vec::new(),
         query: None,
+        tests: Vec::new(),
         quota: None,
     }
 }

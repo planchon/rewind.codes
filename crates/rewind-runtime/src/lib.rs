@@ -43,4 +43,4 @@ mod watchdog;
 
 pub use executor::{SetupError, V8Executor, V8Instance};
 pub use isolate::SandboxLimits;
-pub use mocks::{MockError, TsMocks};
+pub use mocks::{MockError, TsMockLoader, TsMocks};

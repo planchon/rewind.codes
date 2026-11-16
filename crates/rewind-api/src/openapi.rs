@@ -57,6 +57,8 @@ use crate::webhooks::{
         operations::create_workflow,
         operations::list_workflows,
         operations::get_workflow_versions,
+        operations::record_tests,
+        operations::get_test,
         operations::check_script,
         operations::test_script,
         operations::list_scripts,
@@ -446,9 +448,8 @@ mod operations {
         CancelRun, FailureGroupPage, FailureQuery, ForkRun, GetRunQuery, JournalQuery, Run,
         RunFilter, RunPage, RunStats, RunStatsQuery, SignalAccepted, StartRun, Trace, TraceQuery,
     };
-    use crate::scripts::{
-        CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest, TestResult,
-    };
+    use crate::scripts::{CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest};
+    use crate::testing::{Test, TestRun};
     use crate::tasks::{
         CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
     };
@@ -458,7 +459,8 @@ mod operations {
     };
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
     use crate::workflows::{
-        CreateWorkflow, Workflow, WorkflowPage, WorkflowQuery, WorkflowVersions,
+        CreateWorkflow, RecordTests, RecordedTests, Workflow, WorkflowPage, WorkflowQuery,
+        WorkflowVersions,
     };
 
     // ---------------------------------------------------------------------------------------
@@ -531,16 +533,21 @@ mod operations {
 
     /// Save a workflow (`save_workflow`)
     ///
-    /// Checks the workflow's script against its toolset and its own schemas, and saves it as a
-    /// new version, the workflow's latest. Saving the same version again returns it (200).
+    /// Checks the workflow's script against its toolset and its own schemas, then runs its
+    /// suite: its parent's tests, minus those it retires and with those it updates, each with a
+    /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
+    /// every test passes. Saving the same workflow again returns the version saved first (200).
+    /// Runs the script's tests: served by a server with the worker role (503 on the api role
+    /// when there is a test to run).
     #[utoipa::path(
         post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
         request_body = CreateWorkflow,
         responses(
             (status = 201, description = "Saved as a new version.", body = Workflow),
             (status = 200, description = "Saved earlier.", body = Workflow),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused (`invalid-script`, with `diagnostics`), or the name, a signal's name or a schema (`invalid-workflow`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such toolset, or parent.", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "A server without the worker role, with tests to run (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn create_workflow() {}
@@ -566,6 +573,38 @@ mod operations {
     )]
     pub(super) fn get_workflow_versions() {}
 
+    /// Record tests from past runs (`record_tests`)
+    ///
+    /// Takes the workflow's completed and failed runs the caller sees, those `runs` names or
+    /// those `query` selects (the 1,000 newest at most), groups them by the path they took, and
+    /// records the newest run of each path as a test, up to `limit`. The tests are stored and
+    /// join no suite: a save references them by digest.
+    #[utoipa::path(
+        post, path = "/v1/workflows/{name}/record", tag = "workflows", operation_id = "recordTests",
+        params(("name" = String, Path, description = "The workflow's name.")),
+        request_body = RecordTests,
+        responses(
+            (status = 200, description = "The tests recorded, and the runs left out.", body = RecordedTests),
+            (status = 400, description = "The query cannot be read (`invalid-query`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such workflow, or run.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn record_tests() {}
+
+    /// A stored test
+    ///
+    /// A test of a suite, or one recorded from a run. A recorded test holds its run's data and
+    /// seed: reading it also needs `runs:read` in its namespace.
+    #[utoipa::path(
+        get, path = "/v1/tests/{digest}", tag = "workflows", operation_id = "getTest",
+        params(("digest" = String, Path, description = "The test's digest.")),
+        responses(
+            (status = 200, description = "The test.", body = Test),
+            (status = 404, description = "No such test.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_test() {}
+
     // ---------------------------------------------------------------------------------------
     // Scripts
 
@@ -584,18 +623,19 @@ mod operations {
     )]
     pub(super) fn check_script() {}
 
-    /// Run a scenario in mock mode (`test_script`)
+    /// Run tests in mock mode (`test_script`)
     ///
-    /// In virtual time, against a cassette, mock handlers and static responses. No tool is
-    /// really called.
+    /// In virtual time, each test against its world: rules, mock handlers and a cassette. No
+    /// tool is really called. With `workflow`, the suite of that version runs too, against the
+    /// given script or toolset. Served by a server with the worker role.
     #[utoipa::path(
         post, path = "/v1/test", tag = "scripts", operation_id = "testScript",
         params(("Rewind-Namespace" = Option<String>, Header, description = "The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing.")),
         request_body = TestRequest,
         responses(
-            (status = 200, description = "The outcome and the expectations that do not hold.", body = TestResult),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The script was refused at start (`invalid-script`).", body = Problem, content_type = "application/problem+json"),
+            (status = 200, description = "Each test's outcome, and the expectations that do not hold.", body = TestRun),
+            (status = 404, description = "No such toolset, workflow or stored test.", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The script was refused at start (`invalid-script`), or a test (`invalid-test`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn test_script() {}
@@ -798,8 +838,9 @@ mod operations {
             (status = 201, description = "The fork, a new run.", body = Run),
             (status = 200, description = "Started earlier with the same `Idempotency-Key`.", body = Run),
             (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
-            (status = 422, description = "The corrected script was refused (`invalid-script`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`).", body = Problem, content_type = "application/problem+json"),
             (status = 429, description = "Too many active runs (`quota-exceeded`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "A run of a workflow forked on a server without the worker role (`unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn fork_run() {}

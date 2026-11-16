@@ -74,6 +74,8 @@ The problem types:
 | `invalid-script` | 422 | The script was refused before any run exists |
 | `invalid-toolset` | 422 | An invalid schema, a duplicate tool, a transport this server refuses |
 | `invalid-workflow` | 422 | A workflow's name, a signal's name or a schema that cannot be used |
+| `invalid-test` | 422 | A test or a suite refused: an invalid test, a stored test that does not exist, a retired or updated test that is not inherited or has no reason, two tests of the same name |
+| `tests-failed` | 422 | Tests did not pass: the version was not saved, or the fork not created; `tests` holds each test's outcome |
 | `invalid-input` | 422 | The input of a run of a workflow does not match its input schema |
 | `invalid-signal` | 422 | A signal name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match |
 | `quota-exceeded` | 429 | The namespace or the tenant reached its `activeRuns`, `runsPerMonth` or `scripts` |

@@ -350,6 +350,19 @@ impl fmt::Display for RunStatus {
     }
 }
 
+impl From<RunStatus> for rewind_core::RunStatus {
+    fn from(status: RunStatus) -> Self {
+        match status {
+            RunStatus::Pending => rewind_core::RunStatus::Pending,
+            RunStatus::Active => rewind_core::RunStatus::Active,
+            RunStatus::Completed => rewind_core::RunStatus::Completed,
+            RunStatus::Failed => rewind_core::RunStatus::Failed,
+            RunStatus::Cancelled => rewind_core::RunStatus::Cancelled,
+            RunStatus::Aborted => rewind_core::RunStatus::Aborted,
+        }
+    }
+}
+
 impl From<rewind_core::RunStatus> for RunStatus {
     fn from(status: rewind_core::RunStatus) -> Self {
         match status {
@@ -456,6 +469,17 @@ pub enum ToolFailureKind {
     Timeout,
     /// The call may or may not have taken effect (`ToolError.outcomeUnknown`).
     OutcomeUnknown,
+}
+
+impl From<ToolFailureKind> for rewind_core::ToolFailureKind {
+    fn from(kind: ToolFailureKind) -> Self {
+        match kind {
+            ToolFailureKind::Error => rewind_core::ToolFailureKind::Error,
+            ToolFailureKind::Unavailable => rewind_core::ToolFailureKind::Unavailable,
+            ToolFailureKind::Timeout => rewind_core::ToolFailureKind::Timeout,
+            ToolFailureKind::OutcomeUnknown => rewind_core::ToolFailureKind::OutcomeUnknown,
+        }
+    }
 }
 
 impl From<rewind_core::ToolFailureKind> for ToolFailureKind {

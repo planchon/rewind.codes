@@ -34,7 +34,10 @@ use deno_core::{ModuleSpecifier, PollEventLoopOptions, v8};
 use rewind_core::{
     Annotation, RunId, Script, Seed, Timestamp, ToolFailure, ToolFailureKind, Toolset,
 };
+use rewind_engine::adapters::VirtualClock;
+use rewind_engine::mock::Mocks as Answering;
 use rewind_engine::ports::{Clock, Credentials, Dispatched, Emitted, ToolCall, ToolDispatcher};
+use rewind_engine::testing::{MockLoadError, MockLoader};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -49,6 +52,33 @@ use crate::ops::ExecState;
 const MOCKS_JS: &str = include_str!("js/mocks.js");
 
 /// A module of mock handlers that cannot be used.
+/// Loads the TypeScript mock handlers of a test, for [`rewind_engine::testing`]: each test's
+/// handlers in an isolate of their own, whose clock starts at the test's start.
+#[derive(Debug, Clone, Default)]
+pub struct TsMockLoader {
+    pub limits: SandboxLimits,
+}
+
+impl MockLoader for TsMockLoader {
+    type Handlers = TsMocks;
+
+    async fn load(
+        &self,
+        source: &str,
+        start: Timestamp,
+    ) -> Result<Answering<TsMocks>, MockLoadError> {
+        let clock: Arc<dyn Clock> = Arc::new(VirtualClock::new(start));
+        let handlers = TsMocks::new(&Script::new(source), clock, self.limits.clone())
+            .await
+            .map_err(|error| match error {
+                MockError::Invalid(message) => MockLoadError::Invalid(message),
+                MockError::Internal(message) => MockLoadError::Internal(message),
+            })?;
+        let tools = handlers.tools().clone();
+        Ok(Answering { handlers, tools })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MockError {
     /// A syntax error, an import, a default export that is not an object of handlers, an

@@ -247,6 +247,13 @@
         ],
         "type": "object"
       },
+      "CallOrder": {
+        "enum": [
+          "any",
+          "listed"
+        ],
+        "type": "string"
+      },
       "Callsite": {
         "description": "A position in the script's TypeScript source (`script.ts`), 1-based.",
         "properties": {
@@ -650,6 +657,20 @@
             "description": "JSON Schema of what `main` returns.",
             "type": "object"
           },
+          "parent": {
+            "description": "The version it derives from, `name@<version>` or a version: the latest version of the\nsame name the caller sees when absent. Its suite is inherited.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retire": {
+            "description": "Inherited tests dropped, with a reason: they are deprecated.",
+            "items": {
+              "$ref": "#/components/schemas/TestRetirement"
+            },
+            "type": "array"
+          },
           "script": {
             "description": "The TypeScript source: a single ES module whose default export is the entry point.",
             "type": "string"
@@ -658,9 +679,23 @@
             "description": "The signals its runs accept, by name, each with the JSON Schema of its payload. Names\nstarting with `rewind:` are reserved.",
             "type": "object"
           },
+          "tests": {
+            "description": "New tests: inline, by the digest of a recorded test, or a recorded test with a new\nexpectation.",
+            "items": {
+              "$ref": "#/components/schemas/TestInput"
+            },
+            "type": "array"
+          },
           "toolset": {
             "description": "The id of the toolset its runs call, already registered.",
             "type": "string"
+          },
+          "update": {
+            "description": "Inherited tests replaced, each with a reason: their state or result is out of date.",
+            "items": {
+              "$ref": "#/components/schemas/TestUpdate"
+            },
+            "type": "array"
           }
         },
         "required": [
@@ -1365,22 +1400,14 @@
       },
       "Expectations": {
         "additionalProperties": false,
-        "description": "What must be true at the end of a scenario. Everything not given is not checked.",
+        "description": "What must hold at the end of a test. Everything not given is not checked.",
         "properties": {
           "calls": {
-            "additionalProperties": {
-              "format": "int64",
-              "minimum": 0,
-              "type": "integer"
+            "description": "Calls that must happen: those to `tool` whose args contain `args`, exactly `times` of\nthem, at least one when `times` is absent; `times: 0` forbids them. Calls the world\nanswers that are not listed are allowed.",
+            "items": {
+              "$ref": "#/components/schemas/ExpectedCall"
             },
-            "description": "How many times each tool was called.",
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": [
-              "object",
-              "null"
-            ]
+            "type": "array"
           },
           "error": {
             "oneOf": [
@@ -1393,13 +1420,25 @@
               }
             ]
           },
+          "order": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CallOrder",
+                "description": "`listed`: the first call matching each entry comes in the order of the entries."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "output": {
             "description": "The output contains these values (objects are compared key by key, recursively)."
           },
           "status": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/RunStatus"
+                "$ref": "#/components/schemas/RunStatus",
+                "description": "`active` for a run that can go no further in virtual time without the outside world."
               },
               {
                 "type": "null"
@@ -1407,6 +1446,32 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "ExpectedCall": {
+        "additionalProperties": false,
+        "properties": {
+          "args": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "times": {
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tool": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "tool"
+        ],
         "type": "object"
       },
       "ExpectedError": {
@@ -2878,6 +2943,13 @@
                 "minimum": 0,
                 "type": "integer"
               },
+              "tests": {
+                "description": "With `tests-failed`: every test of the run, those that did not pass with their problem\nand failures.",
+                "items": {
+                  "$ref": "#/components/schemas/TestResult"
+                },
+                "type": "array"
+              },
               "title": {
                 "description": "A short summary of the kind of problem, the same for every occurrence.",
                 "type": "string"
@@ -3240,6 +3312,93 @@
         },
         "type": "object"
       },
+      "RecordTests": {
+        "additionalProperties": false,
+        "description": "`POST /v1/workflows/{name}/record`: tests recorded from the workflow's past runs, one per\npath. They are stored, and join a suite only when a save references them.",
+        "example": {
+          "limit": 20,
+          "query": "status:completed"
+        },
+        "properties": {
+          "limit": {
+            "description": "At most this many tests: 20 by default, 100 at most.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "query": {
+            "description": "Which runs, in the query language of the run lists; the completed and failed runs of the\nworkflow, newest first, the 1,000 newest at most.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "runs": {
+            "description": "These runs, rather than a query.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RecordedTest": {
+        "description": "A test recorded from a run.",
+        "properties": {
+          "digest": {
+            "description": "What `save_workflow` takes in `tests`.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "description": "The path the run took: `github.list_issues · signal approval · github.close_issue×n →\ncompleted`.",
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          }
+        },
+        "required": [
+          "digest",
+          "name",
+          "path",
+          "run",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RecordedTests": {
+        "description": "What a recording stored.",
+        "properties": {
+          "skipped": {
+            "description": "The runs left out, and why.",
+            "items": {
+              "$ref": "#/components/schemas/SkippedRun"
+            },
+            "type": "array"
+          },
+          "tests": {
+            "items": {
+              "$ref": "#/components/schemas/RecordedTest"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "tests",
+          "skipped"
+        ],
+        "type": "object"
+      },
       "RejectTask": {
         "additionalProperties": false,
         "description": "`POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message.",
@@ -3252,6 +3411,26 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "RetiredTest": {
+        "description": "A test of the parent a version does not keep.",
+        "properties": {
+          "digest": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "digest",
+          "reason"
+        ],
         "type": "object"
       },
       "RevokedTokens": {
@@ -3342,6 +3521,31 @@
           "builtin"
         ],
         "type": "string"
+      },
+      "RuleError": {
+        "additionalProperties": false,
+        "description": "A failure a rule answers with.",
+        "properties": {
+          "data": {},
+          "kind": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ToolFailureKind",
+                "description": "`error` when absent."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
       },
       "Run": {
         "description": "The state of a run: a projection of its journal, with its metadata.",
@@ -3964,27 +4168,6 @@
         ],
         "type": "object"
       },
-      "ScenarioSignal": {
-        "additionalProperties": false,
-        "description": "A signal sent during a scenario.",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "payload": {},
-          "when": {
-            "description": "When it is sent: `\"blocked\"` (the default) once the run can advance no further without\nthe outside world; or a duration of virtual time after the start, such as `\"2h\"`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "name"
-        ],
-        "type": "object"
-      },
       "Script": {
         "description": "`GET /v1/scripts/{digest}`: one script's source, and what its runs did.",
         "properties": {
@@ -4358,6 +4541,21 @@
         ],
         "type": "object"
       },
+      "SkippedRun": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "reason"
+        ],
+        "type": "object"
+      },
       "StartRun": {
         "additionalProperties": false,
         "description": "`POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a\nscript that cannot run is refused (`invalid-script`) before any run exists.\n\nWith the `Idempotency-Key` header, a request repeated with the same key returns the run the\nfirst one started, instead of starting a second one.",
@@ -4622,6 +4820,23 @@
         ],
         "type": "object"
       },
+      "SuiteTest": {
+        "description": "A test of a version's suite.",
+        "properties": {
+          "digest": {
+            "description": "Its digest: `GET /v1/tests/{digest}`.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "digest"
+        ],
+        "type": "object"
+      },
       "Task": {
         "description": "A claimed host-tool call. The worker keeps the claim alive with heartbeats, and answers\nwith `/complete` or `/fail`, or `/defer` to answer later.",
         "properties": {
@@ -4736,64 +4951,236 @@
         ],
         "type": "string"
       },
-      "TestRequest": {
+      "Test": {
         "additionalProperties": false,
-        "description": "`POST /v1/test`: runs a script in mock mode, in virtual time, against a cassette, mock\nhandlers and static responses, and checks expectations (`archi/05-testing-and-observability.md`,\n\"Testing and mocks\"). It is what `rewind test scenario.json` runs, with the files inlined.",
-        "properties": {
-          "cassette": {
-            "description": "A cassette of the stored format v1, recorded from a real run\n(`GET /v1/runs/{id}/journal?as=cassette`). Tried first.",
-            "type": [
-              "object",
-              "null"
-            ]
+        "description": "A test: what the run is given (its input, the tools' answers, signals), and what must hold\nat the end. It never names its script.",
+        "example": {
+          "expect": {
+            "calls": [
+              {
+                "times": 1,
+                "tool": "github.close_issue"
+              }
+            ],
+            "output": {
+              "closed": 1
+            },
+            "status": "completed"
           },
+          "input": {
+            "repo": "acme/api"
+          },
+          "name": "closes the stale issues once approved",
+          "signals": [
+            {
+              "name": "approval",
+              "payload": {
+                "close": true
+              }
+            }
+          ],
+          "world": {
+            "tools": {
+              "github.close_issue": {
+                "returns": {}
+              },
+              "github.list_issues": [
+                {
+                  "args": {
+                    "state": "open"
+                  },
+                  "returns": [
+                    {
+                      "number": 4,
+                      "updated_at": "2025-10-01T00:00:00Z"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "properties": {
           "expect": {
             "$ref": "#/components/schemas/Expectations"
           },
           "input": {
             "description": "The run's input. `{}` when absent."
           },
-          "mocks": {
-            "description": "TypeScript mock handlers, run in a separate isolate. Tried after the cassette.",
+          "name": {
+            "description": "Unique within a suite.",
+            "type": "string"
+          },
+          "origin": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestOrigin",
+                "description": "Where a recorded test comes from; set by recording, refused in a test given inline."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "seed": {
+            "description": "The run's seed, 64 lowercase hex digits; the same fixed seed for every test when absent.",
             "type": [
               "string",
               "null"
             ]
           },
-          "script": {
-            "description": "The TypeScript source.",
-            "type": "string"
-          },
           "signals": {
-            "description": "Signals sent to the run, in order.",
+            "description": "Sent to the run in order.",
             "items": {
-              "$ref": "#/components/schemas/ScenarioSignal"
+              "$ref": "#/components/schemas/TestSignal"
             },
             "type": "array"
           },
-          "tools": {
-            "additionalProperties": {},
-            "description": "Static responses per tool, tried last: the result, or `{\"$error\": \"message\"}` for a\nfailure (as in `rewind.tools.json`).",
-            "propertyNames": {
-              "type": "string"
+          "start": {
+            "description": "When the run starts, in virtual time; 2026-01-01T00:00:00Z when absent.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "world": {
+            "$ref": "#/components/schemas/World"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TestFrom": {
+        "additionalProperties": false,
+        "description": "A stored test with a new expectation: a model corrects a recorded test without reading its\ncassette.",
+        "properties": {
+          "expect": {
+            "$ref": "#/components/schemas/Expectations"
+          },
+          "from": {
+            "description": "The digest of the stored test.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "expect"
+        ],
+        "type": "object"
+      },
+      "TestInput": {
+        "description": "A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one\nrecorded from a run), or as a stored test with a new expectation.",
+        "oneOf": [
+          {
+            "description": "The digest of a stored test.",
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/TestFrom"
+          },
+          {
+            "$ref": "#/components/schemas/Test"
+          }
+        ]
+      },
+      "TestOrigin": {
+        "additionalProperties": false,
+        "description": "The run a recorded test comes from. The test holds that run's data, and is read like it.",
+        "properties": {
+          "namespace": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          },
+          "version": {
+            "description": "The workflow version the run executed.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "version",
+          "namespace"
+        ],
+        "type": "object"
+      },
+      "TestProblem": {
+        "description": "Why a test did not pass.",
+        "enum": [
+          "stale",
+          "incompatible",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "TestRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,\n\"Running tests\"). The given tests run against the script; with `workflow`, that version's\nsuite runs too, and its interface checks every test. This is how a candidate is checked\nbefore it is saved: a corrected script, or the version on a new toolset.",
+        "example": {
+          "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+          "tests": [
+            {
+              "expect": {
+                "output": {
+                  "open": 1
+                },
+                "status": "completed"
+              },
+              "input": {
+                "repo": "acme/api"
+              },
+              "name": "counts the open issues",
+              "world": {
+                "tools": {
+                  "github.list_issues": {
+                    "returns": [
+                      {
+                        "number": 4
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "properties": {
+          "script": {
+            "description": "The TypeScript source. With `workflow`, the version's own when absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tests": {
+            "items": {
+              "$ref": "#/components/schemas/TestInput"
             },
-            "type": "object"
+            "type": "array"
           },
           "toolset": {
-            "description": "The toolset the script imports from `rewind:tools`.",
+            "description": "The toolset the script imports from `rewind:tools`. With `workflow`, the version's own\nwhen absent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow": {
+            "description": "A workflow, `triage` (its latest version) or `triage@<version>`: its suite runs too.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "required": [
-          "script"
-        ],
         "type": "object"
       },
       "TestResult": {
-        "description": "The outcome of a scenario.",
+        "description": "The outcome of a test.",
         "properties": {
           "abort": {
             "oneOf": [
@@ -4828,31 +5215,150 @@
             ]
           },
           "failures": {
-            "description": "The expectations that do not hold, one sentence each, written for a model.",
+            "description": "What does not hold, one sentence each, written for a model.",
             "items": {
               "type": "string"
             },
             "type": "array"
           },
+          "name": {
+            "type": "string"
+          },
           "output": {},
           "passed": {
-            "description": "Every expectation holds.",
             "type": "boolean"
           },
+          "problem": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestProblem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
-            "$ref": "#/components/schemas/RunStatus"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RunStatus",
+                "description": "The run's status; absent for a test that was not run."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "trace": {
-            "description": "The LLM trace of the run (as `GET /v1/runs/{id}/trace?format=llm`).",
+            "description": "The LLM trace of the run; empty for a test that was not run.",
             "type": "string"
           }
         },
         "required": [
+          "name",
           "passed",
-          "failures",
-          "status",
-          "calls",
-          "trace"
+          "failures"
+        ],
+        "type": "object"
+      },
+      "TestRetirement": {
+        "additionalProperties": false,
+        "description": "Inherited tests dropped, and why.",
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "reason": {
+            "description": "Why: kept in the lineage.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "names",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "TestRun": {
+        "description": "`POST /v1/test`: what the tests ran against, and their outcomes.",
+        "properties": {
+          "passed": {
+            "description": "Every test passed.",
+            "type": "boolean"
+          },
+          "tests": {
+            "description": "In the order given, then the suite's.",
+            "items": {
+              "$ref": "#/components/schemas/TestResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "passed",
+          "tests"
+        ],
+        "type": "object"
+      },
+      "TestSignal": {
+        "additionalProperties": false,
+        "description": "A signal sent during a test.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "payload": {},
+          "when": {
+            "description": "When it is sent: `\"blocked\"` (the default) once the run can go no further without the\noutside world; or a duration of virtual time after the start, such as `\"2h\"`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TestUpdate": {
+        "additionalProperties": false,
+        "description": "An inherited test replaced: by a whole new test, which takes its name, or by itself with a\nnew expectation.",
+        "properties": {
+          "expect": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Expectations"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why: kept in the lineage.",
+            "type": "string"
+          },
+          "test": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TestInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "reason"
         ],
         "type": "object"
       },
@@ -5124,6 +5630,57 @@
           }
         },
         "type": "object"
+      },
+      "ToolRule": {
+        "additionalProperties": false,
+        "description": "An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or\n`error`, for `times` calls at most.",
+        "properties": {
+          "args": {
+            "description": "The call's args contain these (objects compared key by key); any call when absent.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "error": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuleError",
+                "description": "The call fails with a `ToolError`."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "returns": {
+            "description": "The result."
+          },
+          "times": {
+            "description": "How many calls it answers; any number when absent.",
+            "format": "int32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ToolRules": {
+        "description": "One rule, or several tried in order.",
+        "oneOf": [
+          {
+            "items": {
+              "$ref": "#/components/schemas/ToolRule"
+            },
+            "type": "array"
+          },
+          {
+            "$ref": "#/components/schemas/ToolRule"
+          }
+        ]
       },
       "ToolSchemaChanged": {
         "description": "A call parked because the tool no longer matches its pinned schema\n(`archi/04-tools.md`, \"When a toolset changes during a run\"). Approve the task to continue\nagainst the new schema, reject it, fork the run, or cancel it. The pinned schema is in the\ntoolset; `message` says what changed.",
@@ -5398,6 +5955,30 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "UpdatedTest": {
+        "description": "A test of the parent a version replaced.",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "from",
+          "to",
+          "reason"
+        ],
         "type": "object"
       },
       "User": {
@@ -5921,6 +6502,19 @@
           "output": {
             "type": "object"
           },
+          "parent": {
+            "description": "The version it derives from.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retired": {
+            "items": {
+              "$ref": "#/components/schemas/RetiredTest"
+            },
+            "type": "array"
+          },
           "script": {
             "description": "Digest of its script (`GET /v1/scripts/{digest}`).",
             "type": "string"
@@ -5928,9 +6522,22 @@
           "signals": {
             "type": "object"
           },
+          "tests": {
+            "description": "Its suite: the tests it passed when it was saved, by name.",
+            "items": {
+              "$ref": "#/components/schemas/SuiteTest"
+            },
+            "type": "array"
+          },
           "toolset": {
             "description": "The id of the toolset its runs call.",
             "type": "string"
+          },
+          "updated": {
+            "items": {
+              "$ref": "#/components/schemas/UpdatedTest"
+            },
+            "type": "array"
           },
           "version": {
             "description": "The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its\nfirst 12 digits.",
@@ -5990,6 +6597,37 @@
           "name",
           "versions"
         ],
+        "type": "object"
+      },
+      "World": {
+        "additionalProperties": false,
+        "description": "What answers the run's calls: the rules, then the mock handlers, then the cassette. A call\nno source answers fails, and fails the test.",
+        "properties": {
+          "cassette": {
+            "description": "Calls and signals recorded from a run: a cassette document.",
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "mocks": {
+            "description": "TypeScript mock handlers, run in a separate isolate: a module default-exporting its\nhandlers by tool name or by namespace.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tools": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ToolRules"
+            },
+            "description": "By tool, one answer for every call, or rules tried in order. A start of a workflow\n(`workflows.<name>.start`) is answered with the child's output, or its failure.",
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        },
         "type": "object"
       }
     },
@@ -11572,7 +12210,7 @@
                 }
               }
             },
-            "description": "The corrected script was refused (`invalid-script`)."
+            "description": "The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`)."
           },
           "429": {
             "content": {
@@ -11602,7 +12240,7 @@
                 }
               }
             },
-            "description": "The server cannot serve the request now (`unavailable`)."
+            "description": "A run of a workflow forked on a server without the worker role (`unavailable`)."
           }
         },
         "summary": "Fork a run with a corrected script (`retry_run`)",
@@ -13614,7 +14252,7 @@
     },
     "/v1/test": {
       "post": {
-        "description": "In virtual time, against a cassette, mock handlers and static responses. No tool is\nreally called.",
+        "description": "In virtual time, each test against its world: rules, mock handlers and a cassette. No\ntool is really called. With `workflow`, the suite of that version runs too, against the\ngiven script or toolset. Served by a server with the worker role.",
         "operationId": "testScript",
         "parameters": [
           {
@@ -13645,11 +14283,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/TestResult"
+                  "$ref": "#/components/schemas/TestRun"
                 }
               }
             },
-            "description": "The outcome and the expectations that do not hold."
+            "description": "Each test's outcome, and the expectations that do not hold."
           },
           "400": {
             "content": {
@@ -13689,7 +14327,7 @@
                 }
               }
             },
-            "description": "No such toolset."
+            "description": "No such toolset, workflow or stored test."
           },
           "422": {
             "content": {
@@ -13699,7 +14337,7 @@
                 }
               }
             },
-            "description": "The script was refused at start (`invalid-script`)."
+            "description": "The script was refused at start (`invalid-script`), or a test (`invalid-test`)."
           },
           "500": {
             "content": {
@@ -13722,9 +14360,111 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Run a scenario in mock mode (`test_script`)",
+        "summary": "Run tests in mock mode (`test_script`)",
         "tags": [
           "scripts"
+        ]
+      }
+    },
+    "/v1/tests/{digest}": {
+      "get": {
+        "description": "A test of a suite, or one recorded from a run. A recorded test holds its run's data and\nseed: reading it also needs `runs:read` in its namespace.",
+        "operationId": "getTest",
+        "parameters": [
+          {
+            "description": "The test's digest.",
+            "in": "path",
+            "name": "digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Test"
+                }
+              }
+            },
+            "description": "The test."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such test."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "A stored test",
+        "tags": [
+          "workflows"
         ]
       }
     },
@@ -14605,7 +15345,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's script against its toolset and its own schemas, and saves it as a\nnew version, the workflow's latest. Saving the same version again returns it (200).",
+        "description": "Checks the workflow's script against its toolset and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nRuns the script's tests: served by a server with the worker role (503 on the api role\nwhen there is a test to run).",
         "operationId": "createWorkflow",
         "requestBody": {
           "content": {
@@ -14676,7 +15416,7 @@
                 }
               }
             },
-            "description": "No such toolset."
+            "description": "No such toolset, or parent."
           },
           "422": {
             "content": {
@@ -14686,7 +15426,7 @@
                 }
               }
             },
-            "description": "The script was refused (`invalid-script`, with `diagnostics`), or the name, a signal's name or a schema (`invalid-workflow`)."
+            "description": "The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`)."
           },
           "500": {
             "content": {
@@ -14706,7 +15446,7 @@
                 }
               }
             },
-            "description": "The server cannot serve the request now (`unavailable`)."
+            "description": "A server without the worker role, with tests to run (`unavailable`)."
           }
         },
         "summary": "Save a workflow (`save_workflow`)",
@@ -14802,6 +15542,109 @@
           }
         },
         "summary": "A workflow's versions",
+        "tags": [
+          "workflows"
+        ]
+      }
+    },
+    "/v1/workflows/{name}/record": {
+      "post": {
+        "description": "Takes the workflow's completed and failed runs the caller sees, those `runs` names or\nthose `query` selects (the 1,000 newest at most), groups them by the path they took, and\nrecords the newest run of each path as a test, up to `limit`. The tests are stored and\njoin no suite: a save references them by digest.",
+        "operationId": "recordTests",
+        "parameters": [
+          {
+            "description": "The workflow's name.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordTests"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedTests"
+                }
+              }
+            },
+            "description": "The tests recorded, and the runs left out."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The query cannot be read (`invalid-query`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such workflow, or run."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Record tests from past runs (`record_tests`)",
         "tags": [
           "workflows"
         ]

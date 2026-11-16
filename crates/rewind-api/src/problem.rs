@@ -62,6 +62,13 @@ pub enum ProblemType {
     InvalidWorkflow,
     /// 422: the input of a run of a workflow does not match the workflow's input schema.
     InvalidInput,
+    /// 422: a test, or a suite, was refused: a test that is not valid, a stored test that does
+    /// not exist, a retired or updated test that is not inherited or has no reason, two tests
+    /// of the same name.
+    InvalidTest,
+    /// 422: tests did not pass: the version was not saved, the fork not created; `tests` lists
+    /// each, with its problem and its failures.
+    TestsFailed,
     /// 422: a signal the run does not take: a name starting with `rewind:`, or, for a run of a
     /// workflow, a signal it does not declare or a payload that does not match.
     InvalidSignal,
@@ -79,7 +86,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 24] = [
+    pub const ALL: [ProblemType; 26] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -98,6 +105,8 @@ impl ProblemType {
         ProblemType::InvalidToolset,
         ProblemType::InvalidWorkflow,
         ProblemType::InvalidInput,
+        ProblemType::InvalidTest,
+        ProblemType::TestsFailed,
         ProblemType::InvalidSignal,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
@@ -126,6 +135,8 @@ impl ProblemType {
             ProblemType::InvalidScript => "urn:rewind:problem:invalid-script",
             ProblemType::InvalidToolset => "urn:rewind:problem:invalid-toolset",
             ProblemType::InvalidWorkflow => "urn:rewind:problem:invalid-workflow",
+            ProblemType::InvalidTest => "urn:rewind:problem:invalid-test",
+            ProblemType::TestsFailed => "urn:rewind:problem:tests-failed",
             ProblemType::InvalidInput => "urn:rewind:problem:invalid-input",
             ProblemType::InvalidSignal => "urn:rewind:problem:invalid-signal",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
@@ -155,6 +166,8 @@ impl ProblemType {
             ProblemType::InvalidScript
             | ProblemType::InvalidToolset
             | ProblemType::InvalidWorkflow
+            | ProblemType::InvalidTest
+            | ProblemType::TestsFailed
             | ProblemType::InvalidInput
             | ProblemType::InvalidSignal => 422,
             ProblemType::QuotaExceeded => 429,
@@ -184,6 +197,8 @@ impl ProblemType {
             ProblemType::InvalidScript => "The script was refused",
             ProblemType::InvalidToolset => "The toolset was refused",
             ProblemType::InvalidWorkflow => "The workflow was refused",
+            ProblemType::InvalidTest => "The test was refused",
+            ProblemType::TestsFailed => "Tests did not pass",
             ProblemType::InvalidInput => "The input does not match the workflow",
             ProblemType::InvalidSignal => "The run does not take this signal",
             ProblemType::QuotaExceeded => "A quota is reached",
@@ -232,6 +247,10 @@ pub struct Problem {
     /// With `invalid-query`: where the term at fault is in the query.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<QuerySpan>,
+    /// With `tests-failed`: every test of the run, those that did not pass with their problem
+    /// and failures.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<crate::testing::TestResult>,
     /// With `quota-exceeded`: the quota reached.
     #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
     #[schema(schema_with = quota_reached_fields)]
@@ -299,8 +318,16 @@ impl Problem {
             instance: None,
             diagnostics: Vec::new(),
             query: None,
+            tests: Vec::new(),
             quota: None,
         }
+    }
+
+    /// The `tests-failed` problem: `tests` holds every test's outcome.
+    pub fn tests_failed(detail: impl Into<String>, tests: Vec<crate::testing::TestResult>) -> Self {
+        let mut problem = Self::new(ProblemType::TestsFailed, detail);
+        problem.tests = tests;
+        problem
     }
 
     /// The `quota-exceeded` problem of a quota reached; `detail` is written for a model and

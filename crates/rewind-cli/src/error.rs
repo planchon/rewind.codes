@@ -181,6 +181,7 @@ mod tests {
                 instance: None,
                 diagnostics: Vec::new(),
                 query: None,
+                tests: Vec::new(),
                 quota: None,
             }
             .into(),

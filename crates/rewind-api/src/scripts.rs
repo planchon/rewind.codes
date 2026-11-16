@@ -5,10 +5,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::common::{AbortReason, RunStatus, ScriptError, Timestamp};
+use crate::common::Timestamp;
+use crate::testing::TestInput;
 
 /// `POST /v1/check`: type-checks a script against the sandbox lib and a toolset's
 /// declarations, in strict mode, before anything runs.
@@ -111,106 +111,36 @@ pub struct Location {
 }
 
 // -------------------------------------------------------------------------------------------
-// Scenarios
+// Tests
 
-/// `POST /v1/test`: runs a script in mock mode, in virtual time, against a cassette, mock
-/// handlers and static responses, and checks expectations (`archi/05-testing-and-observability.md`,
-/// "Testing and mocks"). It is what `rewind test scenario.json` runs, with the files inlined.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TestRequest {
-    /// The TypeScript source.
-    pub script: String,
-    /// The toolset the script imports from `rewind:tools`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolset: Option<String>,
-    /// The run's input. `{}` when absent.
-    #[serde(default = "empty_object")]
-    pub input: Value,
-    /// A cassette of the stored format v1, recorded from a real run
-    /// (`GET /v1/runs/{id}/journal?as=cassette`). Tried first.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schema(value_type = Option<Object>)]
-    pub cassette: Option<Value>,
-    /// TypeScript mock handlers, run in a separate isolate. Tried after the cassette.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mocks: Option<String>,
-    /// Static responses per tool, tried last: the result, or `{"$error": "message"}` for a
-    /// failure (as in `rewind.tools.json`).
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<String, Value>,
-    /// Signals sent to the run, in order.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub signals: Vec<ScenarioSignal>,
-    #[serde(default)]
-    pub expect: Expectations,
-}
-
-fn empty_object() -> Value {
-    Value::Object(serde_json::Map::new())
-}
-
-/// A signal sent during a scenario.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ScenarioSignal {
-    pub name: String,
-    #[serde(default)]
-    pub payload: Value,
-    /// When it is sent: `"blocked"` (the default) once the run can advance no further without
-    /// the outside world; or a duration of virtual time after the start, such as `"2h"`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub when: Option<String>,
-}
-
-/// What must be true at the end of a scenario. Everything not given is not checked.
+/// `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
+/// "Running tests"). The given tests run against the script; with `workflow`, that version's
+/// suite runs too, and its interface checks every test. This is how a candidate is checked
+/// before it is saved: a corrected script, or the version on a new toolset.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Expectations {
+#[schema(example = json!({
+    "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+    "tests": [{
+        "name": "counts the open issues",
+        "input": { "repo": "acme/api" },
+        "world": { "tools": { "github.list_issues": { "returns": [{ "number": 4 }] } } },
+        "expect": { "status": "completed", "output": { "open": 1 } }
+    }]
+}))]
+pub struct TestRequest {
+    /// The TypeScript source. With `workflow`, the version's own when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<RunStatus>,
-    /// The output contains these values (objects are compared key by key, recursively).
+    pub script: Option<String>,
+    /// The toolset the script imports from `rewind:tools`. With `workflow`, the version's own
+    /// when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<Value>,
-    /// The run failed with an error of this name, whose message contains `message`.
+    pub toolset: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<TestInput>,
+    /// A workflow, `triage` (its latest version) or `triage@<version>`: its suite runs too.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ExpectedError>,
-    /// How many times each tool was called.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub calls: Option<BTreeMap<String, u64>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ExpectedError {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
-}
-
-/// The outcome of a scenario.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TestResult {
-    /// Every expectation holds.
-    pub passed: bool,
-    /// The expectations that do not hold, one sentence each, written for a model.
-    pub failures: Vec<String>,
-    pub status: RunStatus,
-    #[serde(
-        default,
-        deserialize_with = "crate::common::present",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub output: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ScriptError>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub abort: Option<AbortReason>,
-    /// How many times each tool was called.
-    pub calls: BTreeMap<String, u64>,
-    /// The LLM trace of the run (as `GET /v1/runs/{id}/trace?format=llm`).
-    pub trace: String,
+    pub workflow: Option<String>,
 }
 
 // -------------------------------------------------------------------------------------------

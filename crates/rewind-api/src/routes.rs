@@ -11,6 +11,8 @@ pub const TOOLSET_CREDENTIALS: &str = "/v1/toolsets/{id}/credentials";
 
 pub const WORKFLOWS: &str = "/v1/workflows";
 pub const WORKFLOW: &str = "/v1/workflows/{name}";
+pub const WORKFLOW_RECORD: &str = "/v1/workflows/{name}/record";
+pub const TEST_DOCUMENT: &str = "/v1/tests/{digest}";
 
 pub const CHECK: &str = "/v1/check";
 pub const TEST: &str = "/v1/test";
@@ -92,7 +94,7 @@ pub const AUTH_WAITLIST: &str = "/auth/waitlist";
 pub const AUTH_LOGOUT: &str = "/auth/logout";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 87] = [
+pub const OPERATIONS: [(&str, &str); 89] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -101,6 +103,8 @@ pub const OPERATIONS: [(&str, &str); 87] = [
     ("POST", WORKFLOWS),
     ("GET", WORKFLOWS),
     ("GET", WORKFLOW),
+    ("POST", WORKFLOW_RECORD),
+    ("GET", TEST_DOCUMENT),
     ("POST", CHECK),
     ("POST", TEST),
     ("GET", SCRIPTS),

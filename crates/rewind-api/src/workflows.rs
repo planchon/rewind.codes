@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::{IntoParams, ToSchema};
 
-use crate::common::{Labels, Timestamp};
+use crate::common::{Labels, RunStatus, Timestamp};
+use crate::testing::{Expectations, TestInput};
 use crate::toolsets::Declarations;
 
 /// `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
@@ -47,6 +48,119 @@ pub struct CreateWorkflow {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[schema(value_type = Object)]
     pub signals: BTreeMap<String, Value>,
+    /// The version it derives from, `name@<version>` or a version: the latest version of the
+    /// same name the caller sees when absent. Its suite is inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// New tests: inline, by the digest of a recorded test, or a recorded test with a new
+    /// expectation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tests: Vec<TestInput>,
+    /// Inherited tests replaced, each with a reason: their state or result is out of date.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub update: Vec<TestUpdate>,
+    /// Inherited tests dropped, with a reason: they are deprecated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retire: Vec<TestRetirement>,
+}
+
+/// An inherited test replaced: by a whole new test, which takes its name, or by itself with a
+/// new expectation.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TestUpdate {
+    pub name: String,
+    /// Why: kept in the lineage.
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub test: Option<TestInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<Expectations>,
+}
+
+/// Inherited tests dropped, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TestRetirement {
+    pub names: Vec<String>,
+    /// Why: kept in the lineage.
+    pub reason: String,
+}
+
+/// A test of a version's suite.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SuiteTest {
+    pub name: String,
+    /// Its digest: `GET /v1/tests/{digest}`.
+    pub digest: String,
+}
+
+/// A test of the parent a version does not keep.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RetiredTest {
+    pub name: String,
+    pub digest: String,
+    pub reason: String,
+}
+
+/// A test of the parent a version replaced.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedTest {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+/// `POST /v1/workflows/{name}/record`: tests recorded from the workflow's past runs, one per
+/// path. They are stored, and join a suite only when a save references them.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[schema(example = json!({ "query": "status:completed", "limit": 20 }))]
+pub struct RecordTests {
+    /// Which runs, in the query language of the run lists; the completed and failed runs of the
+    /// workflow, newest first, the 1,000 newest at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// These runs, rather than a query.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runs: Vec<String>,
+    /// At most this many tests: 20 by default, 100 at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// What a recording stored.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedTests {
+    pub tests: Vec<RecordedTest>,
+    /// The runs left out, and why.
+    pub skipped: Vec<SkippedRun>,
+}
+
+/// A test recorded from a run.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedTest {
+    /// What `save_workflow` takes in `tests`.
+    pub digest: String,
+    pub name: String,
+    /// The path the run took: `github.list_issues · signal approval · github.close_issue×n →
+    /// completed`.
+    pub path: String,
+    pub run: String,
+    pub status: RunStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedRun {
+    pub run: String,
+    pub reason: String,
 }
 
 /// A version of a workflow: immutable, identified by its digest.
@@ -76,6 +190,16 @@ pub struct Workflow {
     /// How a script that starts it sees it: its declaration in `rewind:workflows`, and its line
     /// of the prompt rendering.
     pub declarations: Declarations,
+    /// The version it derives from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Its suite: the tests it passed when it was saved, by name.
+    #[serde(default)]
+    pub tests: Vec<SuiteTest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired: Vec<RetiredTest>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub updated: Vec<UpdatedTest>,
 }
 
 /// `GET /v1/workflows`: the latest version of each workflow, by name.
