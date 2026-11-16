@@ -225,8 +225,7 @@ pub struct ScriptFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,
     /// Only scripts that ran with this label, as `key:value`. Repeat to require several.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[param(rename = "label")]
+    #[serde(default, rename = "label", skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
     /// Only scripts that called this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]

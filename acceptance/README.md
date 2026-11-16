@@ -9,6 +9,10 @@ acceptance/run.sh          # every criterion
 acceptance/run.sh 1 7      # some of them
 ```
 
+The release gate, run before any release, lives here too: `acceptance/release.sh` runs these
+criteria (but 4, 6's cargo part and 8) with a spec per area of the product, its failures and the
+attacks it must refuse, and writes a GO or NO-GO report ([release/README.md](release/README.md)).
+
 It needs Rust, Node 22.12 or later with pnpm 10, and Docker. Criterion 8 also needs WorkOS
 Staging: its `WORKOS_API_KEY` and `WORKOS_CLIENT_ID` in the environment (`set -a; . ./staging.env;
 set +a` first, or exported otherwise). Without them, criterion 8 is reported as not run, with the
@@ -39,6 +43,7 @@ criterion), `report.json` and `html/` (Playwright's reports), and each server's 
 | `run.sh` | The one command |
 | `tests/` | One Playwright spec per criterion (3 and 5 share one: 5 replays and forks the runs of 3) |
 | `support/` | Servers and processes, Docker containers, the project directory of the CLI, the Collector's output, WorkOS Staging's API (codes, invitations, clean-up), the summary |
+| `release/`, `release.sh`, `playwright.release.config.ts` | The release gate ([release/README.md](release/README.md)) |
 | `results/` | Not committed: the last run's reports and logs |
 
 Specs can also run one by one, once `rewind` and the SDK are built: `pnpm --dir acceptance exec

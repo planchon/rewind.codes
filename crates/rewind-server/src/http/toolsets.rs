@@ -427,6 +427,23 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
                 host.name
             )));
         }
+        // The harness writes these schemas: one that cannot be compiled is refused here, rather
+        // than refusing every call of the tool later (an MCP server's own schemas are taken as
+        // listed, `archi/08-decisions.md`).
+        let schemas = [
+            Some(("inputSchema", &host.input_schema)),
+            host.output_schema
+                .as_ref()
+                .map(|schema| ("outputSchema", schema)),
+        ];
+        for (field, schema) in schemas.into_iter().flatten() {
+            if let Some(error) = rewind_engine::schema::Validator::compile(schema).unusable() {
+                return Err(invalid_toolset(format!(
+                    "host tool {}: {field} is not a usable JSON Schema: {error}",
+                    host.name
+                )));
+            }
+        }
         let group = host.name.split_once('.').map(|(group, _)| group.to_owned());
         let route = ToolRoute::Host { group };
         let mut tool = Tool::new(host.name.clone(), route.clone(), host.input_schema);

@@ -3,8 +3,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, Payload, RunId, Script, Seq, Timestamp,
-    ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow, end_signal_name,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, Interruption, Payload, RunId, Script,
+    Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow,
+    end_signal_name,
 };
 
 use crate::adapters::random_token;
@@ -525,6 +526,16 @@ fn matches_filter(filter: &TaskFilter, run: &Run, task: &Task) -> bool {
                     .is_none_or(|name| *name == run.record.namespace)
                 && toolset.is_none_or(|digest| digest == run.record.toolset)
                 && (tools.is_empty() || tools.contains(&task.tool))
+        }
+        TaskFilter::Interrupted {
+            tenants,
+            max_attempts,
+        } => {
+            matches!(task.route, ToolRoute::Host { .. })
+                && tenants.contains(&run.record.run.tenant)
+                && matches!(task.state, TaskState::Claimed { .. })
+                && (task.policy.on_interruption == Interruption::AtMostOnce
+                    || task.attempt >= *max_attempts)
         }
     }
 }

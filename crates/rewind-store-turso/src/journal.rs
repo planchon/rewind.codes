@@ -1830,6 +1830,18 @@ impl JournalStore for TursoStore {
                     "t.dispatched = 1 AND {}",
                     scope_clause("r.tenant", tenants, &mut filter_params)
                 ),
+                // Due and claimed: the claim expired.
+                TaskFilter::Interrupted {
+                    tenants,
+                    max_attempts,
+                } => {
+                    filter_params.push(int(u64::from(*max_attempts)));
+                    format!(
+                        "t.dispatched = 0 AND t.state = 'claimed' \
+                         AND (t.on_interruption = 'at_most_once' OR t.attempt >= ?) AND {}",
+                        scope_clause("r.tenant", tenants, &mut filter_params)
+                    )
+                }
                 TaskFilter::Host {
                     tenant: host_tenant,
                     namespace,

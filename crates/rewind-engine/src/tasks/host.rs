@@ -124,6 +124,50 @@ where
         Ok(tasks)
     }
 
+    /// Fails with `outcome_unknown`, at once, the host tasks whose claim expired and that
+    /// cannot be handed out again: `at_most_once`, or `retry` past the maximum of attempts. A
+    /// harness whose worker died may never poll again, and its runs would otherwise wait until
+    /// their deadline (`archi/04-tools.md`, "Tool task lifecycle"). The worker role calls it
+    /// with its scheduler. Returns how many tasks it ended.
+    pub async fn fail_interrupted_host_tasks(&self) -> Result<usize, EngineError> {
+        let filter = TaskFilter::Interrupted {
+            tenants: self.config.tenants.clone(),
+            max_attempts: self.config.max_tool_attempts,
+        };
+        let claimed = self
+            .journal
+            .claim_tool_tasks(
+                &self.config.worker,
+                &filter,
+                self.clock.now(),
+                self.config.scheduler_batch,
+            )
+            .await?;
+        let mut ended = 0;
+        for ClaimedTask {
+            task,
+            token,
+            previous_claim_expired,
+        } in claimed
+        {
+            match self.interrupted(&task, previous_claim_expired) {
+                Some(failure) => {
+                    let update = self
+                        .finish(&task, &token, ToolOutcome::Failure(failure))
+                        .await?;
+                    if update == TaskUpdate::Applied {
+                        ended += 1;
+                    }
+                }
+                // It can be called again after all: back to `ready`, for a harness's worker.
+                None => {
+                    self.retry_later(&task, &token).await?;
+                }
+            }
+        }
+        Ok(ended)
+    }
+
     /// Extends the claim of `token` by its heartbeat timeout. Returns when the claim now ends
     /// (for a deferred task, its unchanged deadline). [`EngineError::TaskGone`] tells the
     /// worker to stop: the task was answered, its run ended, or another worker took it over.

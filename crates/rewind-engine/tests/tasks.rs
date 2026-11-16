@@ -990,6 +990,53 @@ async fn an_interrupted_host_call_is_handed_out_again_unless_at_most_once() {
 }
 
 #[tokio::test]
+async fn an_interrupted_at_most_once_host_call_fails_even_when_no_worker_polls_again() {
+    let engine = engine_with(caller(), RecordingDispatcher::echo(), worker_config());
+    let retried = engine
+        .start_run(calling("ask_user", toolset(|_| {})))
+        .await
+        .unwrap()
+        .run;
+    let at_most_once = toolset(|policy| policy.on_interruption = Interruption::AtMostOnce);
+    let once = engine
+        .start_run(calling("ask_user", at_most_once))
+        .await
+        .unwrap()
+        .run;
+    drive(&engine).await;
+    let tenant = TenantId::local();
+    let claimed = engine.claim_host_tasks(&host_claim(&tenant)).await.unwrap();
+    assert_eq!(claimed.len(), 2);
+    assert_eq!(
+        engine.fail_interrupted_host_tasks().await.unwrap(),
+        0,
+        "the claims are alive"
+    );
+
+    // The harness's worker dies, and none polls again.
+    engine
+        .clock()
+        .advance_to(T0.saturating_add(Duration::from_secs(60)));
+    assert_eq!(engine.fail_interrupted_host_tasks().await.unwrap(), 1);
+    drive(&engine).await;
+    assert_eq!(
+        output(&engine, &once).await["error"],
+        json!("outcome_unknown")
+    );
+    assert!(
+        matches!(
+            task_state(&engine, &retried).await,
+            TaskState::Claimed { .. }
+        ),
+        "a retry call waits for a worker to claim it again"
+    );
+    let again = engine.claim_host_tasks(&host_claim(&tenant)).await.unwrap();
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0].task.run, retried);
+    assert_eq!(again[0].attempt, 2);
+}
+
+#[tokio::test]
 async fn a_result_above_the_payload_limit_is_refused() {
     let big = json!("x".repeat(400));
     let answer = big.clone();

@@ -151,6 +151,14 @@ pub enum TaskFilter {
         /// Empty: every host tool.
         tools: BTreeSet<String>,
     },
+    /// The host tools, of the tenants in scope, whose claim expired and that cannot be handed
+    /// out again: `at_most_once`, or `retry` with `max_attempts` claims made. The worker role
+    /// claims them to fail them with `outcome_unknown` at once, so that a run does not wait for
+    /// a harness's worker that may never poll again (`archi/04-tools.md`).
+    Interrupted {
+        tenants: TenantScope,
+        max_attempts: u32,
+    },
 }
 
 /// What an update of a task did.

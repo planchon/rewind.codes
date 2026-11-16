@@ -3,12 +3,23 @@
     "target": "es2023",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "lib": ["es2023", "dom"],
-    "types": ["node"],
+    "lib": [
+      "es2023",
+      "dom"
+    ],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": false
   },
-  "include": ["support", "tests", "playwright.config.ts"]
+  "include": [
+    "support",
+    "tests",
+    "release",
+    "playwright.config.ts",
+    "playwright.release.config.ts"
+  ]
 }

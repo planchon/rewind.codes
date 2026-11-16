@@ -10,8 +10,8 @@
 use std::collections::BTreeSet;
 
 use deno_ast::swc::ast::{
-    CallExpr, Callee, DefaultDecl, ExportSpecifier, Expr, ImportSpecifier, ModuleDecl,
-    ModuleExportName, ModuleItem, Str, TsModuleRef,
+    BindingIdent, CallExpr, Callee, ClassDecl, DefaultDecl, ExportSpecifier, Expr, FnDecl,
+    ImportSpecifier, ModuleDecl, ModuleExportName, ModuleItem, Str, TsModuleRef,
 };
 use deno_ast::swc::common::Spanned;
 use deno_ast::swc::ecma_visit::{Visit, VisitWith};
@@ -124,6 +124,16 @@ impl Checker<'_> {
             return Err(invalid(format!(
                 "dynamic import() is not available in Rewind scripts ({}): import from \"rewind\", \
                  \"rewind:tools\" and \"rewind:workflows\" at the top of the script",
+                self.at(position)
+            )));
+        }
+
+        let mut requires = Requires::default();
+        self.parsed.program().visit_with(&mut requires);
+        if let Some(position) = requires.first.filter(|_| !requires.bound) {
+            return Err(invalid(format!(
+                "require() is not available in Rewind scripts ({}): use `import` from \"rewind\", \
+                 \"rewind:tools\" and \"rewind:workflows\"",
                 self.at(position)
             )));
         }
@@ -317,6 +327,48 @@ impl Visit for DynamicImports {
     }
 }
 
+/// Finds the first call of `require(…)`, the CommonJS loader the sandbox does not have
+/// (`archi/03-execution.md`, "Starting a run"), unless the script binds the name `require`
+/// itself, as a function or a variable it may call.
+#[derive(Default)]
+struct Requires {
+    first: Option<SourcePos>,
+    bound: bool,
+}
+
+impl Visit for Requires {
+    fn visit_call_expr(&mut self, call: &CallExpr) {
+        if self.first.is_none()
+            && let Callee::Expr(callee) = &call.callee
+            && let Expr::Ident(ident) = &**callee
+            && &*ident.sym == "require"
+        {
+            self.first = Some(SourcePos::unsafely_from_byte_pos(call.span().lo));
+        }
+        call.visit_children_with(self);
+    }
+
+    fn visit_binding_ident(&mut self, ident: &BindingIdent) {
+        if &*ident.id.sym == "require" {
+            self.bound = true;
+        }
+    }
+
+    fn visit_fn_decl(&mut self, decl: &FnDecl) {
+        if &*decl.ident.sym == "require" {
+            self.bound = true;
+        }
+        decl.visit_children_with(self);
+    }
+
+    fn visit_class_decl(&mut self, decl: &ClassDecl) {
+        if &*decl.ident.sym == "require" {
+            self.bound = true;
+        }
+        decl.visit_children_with(self);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +452,25 @@ mod tests {
             refused("import fs = require(\"fs\");\nexport default async () => fs;")
                 .starts_with("require() is not available")
         );
+        assert_eq!(
+            refused("export default async function main() {\n  return require(\"fs\");\n}"),
+            "require() is not available in Rewind scripts (script.ts:2:10): use `import` from \
+             \"rewind\", \"rewind:tools\" and \"rewind:workflows\""
+        );
+    }
+
+    #[test]
+    fn accepts_a_require_the_script_defines() {
+        check(
+            "function require(name: string) { return name; }\n\
+             export default async function main() { return require(\"fs\"); }",
+        )
+        .unwrap();
+        check(
+            "export default async function main() {\n  const require = (n: string) => n.length;\n  \
+             return require(\"fs\");\n}",
+        )
+        .unwrap();
     }
 
     #[test]

@@ -230,6 +230,13 @@ async fn schedule(app: &App) -> Result<usize, ()> {
             return Err(());
         }
     }
+    match app.engine.fail_interrupted_host_tasks().await {
+        Ok(count) => moved += count,
+        Err(error) => {
+            tracing::error!(%error, "interrupted host tasks were not ended");
+            return Err(());
+        }
+    }
     if moved > 0 {
         app.activity.touch();
         app.wake.bump();

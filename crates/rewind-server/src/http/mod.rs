@@ -24,12 +24,12 @@ use std::sync::Arc;
 
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{HeaderValue, header};
-use axum::middleware::{Next, from_fn_with_state};
-use axum::response::Response;
+use axum::middleware::{Next, from_fn, from_fn_with_state};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use rewind_api::headers::REWIND_VERSION;
-use rewind_api::routes;
+use rewind_api::{ProblemType, routes};
 
 use crate::app::App;
 use crate::auth::{Caller, authenticate};
@@ -154,8 +154,9 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
     } else {
         api.layer(from_fn_with_state(app.clone(), authenticate))
     };
-    // The sign-in reads its own cookies, never a Bearer token; 404 without WorkOS.
-    let public = Router::new()
+    // The sign-in reads its own cookies, never a Bearer token. Without WorkOS every route of it
+    // answers 404 before anything reads the request, whatever its body.
+    let sign_in = Router::new()
         .route(routes::AUTH_CONFIG, get(sign_in::config))
         .route(routes::AUTH_GITHUB, get(sign_in::github))
         .route(routes::AUTH_CALLBACK, get(sign_in::callback))
@@ -172,12 +173,49 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::AUTH_SESSION, post(sign_in::session_state))
         .route(routes::AUTH_WAITLIST, post(sign_in::waitlist))
         .route(routes::AUTH_LOGOUT, post(sign_in::logout))
+        .route_layer(from_fn_with_state(app.clone(), with_sign_in))
+        .with_state(app.clone());
+    let public = Router::new()
         .route(routes::HOOK, post(hooks::post))
         .fallback(dashboard::serve)
-        .with_state(app.clone());
+        .with_state(app.clone())
+        .merge(sign_in);
     api.merge(public)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
+        .layer(from_fn(refuse_oversized))
         .layer(from_fn_with_state(app, every_response))
+}
+
+/// A body whose `Content-Length` is above the limit: 413 `payload-too-large` at once, before
+/// any handler reads it. The body is never polled, so a client that sent
+/// `Expect: 100-continue` gets the refusal instead of `100 Continue`, and uploads nothing.
+async fn refuse_oversized(request: Request, next: Next) -> Response {
+    let length = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
+    match length {
+        Some(length) if length > BODY_LIMIT as u64 => ApiError::new(
+            ProblemType::PayloadTooLarge,
+            format!(
+                "the body is {length} bytes, above this server's limit of {} MiB: send less, and \
+                 put large values in fewer, smaller requests",
+                BODY_LIMIT / (1024 * 1024)
+            ),
+        )
+        .into_response(),
+        _ => next.run(request).await,
+    }
+}
+
+/// The routes of `/auth` on a server without WorkOS: 404 `not-found`, before a body or a cookie
+/// is read (`archi/08-decisions.md`: without WorkOS, `/auth/*` answers 404).
+async fn with_sign_in(State(app): State<Arc<App>>, request: Request, next: Next) -> Response {
+    match app.sign_in() {
+        Ok(_) => next.run(request).await,
+        Err(error) => error.into_response(),
+    }
 }
 
 /// Refuses a filter holding a NUL character (U+0000): no text the stores keep holds one, so the

@@ -9,6 +9,7 @@
 //! | --- | --- |
 //! | The engine's dispatcher loop: MCP tools and built-ins (every tool in mock mode) | `claim_tool_tasks`, `run_tool_task`, `heartbeat_tool_claims`, `expire_deferred_tool_tasks` |
 //! | The harness's SDK worker, for host tools (`/v1/tasks`) | `claim_host_tasks`, `heartbeat_task`, `defer_task`, `complete_task`, `fail_task` |
+//! | The worker role's scheduler, for host tools whose worker died | `fail_interrupted_host_tasks` |
 //! | The harness, for a task that waits for it | `approve_task`, `reject_task`, `set_toolset_credentials`, `set_run_credentials` |
 //!
 //! ```text

@@ -1162,6 +1162,7 @@ impl PostgresStore {
         let mut tx = self.pool.begin().await?;
         // $1 now, $2 page size, $3–$5 the last task read; the filter's values from $6.
         let mut selection = String::new();
+        let mut max_attempts = None;
         let mut scope_tenants = None;
         let mut host: Option<HostSelection<'_>> = None;
         match filter {
@@ -1169,6 +1170,20 @@ impl PostgresStore {
             TaskFilter::Dispatched { tenants } => {
                 selection.push_str(" AND dispatched");
                 let (clause, bound) = scope_clause("tenant", tenants, 6);
+                selection.push_str(&clause);
+                scope_tenants = bound;
+            }
+            TaskFilter::Interrupted {
+                tenants,
+                max_attempts: attempts,
+            } => {
+                // Due and claimed: the claim expired.
+                selection.push_str(
+                    " AND NOT dispatched AND state = 'claimed' \
+                     AND (on_interruption = 'at_most_once' OR attempt >= $6)",
+                );
+                max_attempts = Some(i64::from(*attempts));
+                let (clause, bound) = scope_clause("tenant", tenants, 7);
                 selection.push_str(&clause);
                 scope_tenants = bound;
             }
@@ -1224,6 +1239,9 @@ impl PostgresStore {
                 .bind(after.map(|(due_at, ..)| due_at))
                 .bind(after.map(|(_, run, _)| run))
                 .bind(after.map(|(.., seq)| seq));
+            if let Some(attempts) = max_attempts {
+                statement = statement.bind(attempts);
+            }
             if let Some(tenants) = &scope_tenants {
                 statement = statement.bind(tenants.clone());
             }

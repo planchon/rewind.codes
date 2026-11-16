@@ -135,6 +135,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        expired_host_claims_that_cannot_be_handed_out_again_are_interrupted
+    );
+    check!(
+        "journal",
+        new_store(),
         transient_failures_wait_for_their_next_attempt
     );
     check!(
@@ -2059,6 +2064,80 @@ pub async fn an_expired_claim_is_claimed_again_and_its_token_dies<S: JournalStor
         TaskUpdate::Applied
     );
     assert_eq!(inbox(store, &run, expired).await.len(), 1);
+}
+
+pub async fn expired_host_claims_that_cannot_be_handed_out_again_are_interrupted<
+    S: JournalStore,
+>(
+    store: &S,
+) {
+    let other = tenant("other");
+    let at_most_once = |mut task: NewToolTask| {
+        task.policy.on_interruption = rewind_core::Interruption::AtMostOnce;
+        task
+    };
+    start_with_tasks(
+        store,
+        run_ref(1),
+        vec![
+            at_most_once(host_task(1, "pay")),
+            host_task(2, "lookup"),
+            at_most_once(mcp_task(3, "github.a", "github", 8)),
+        ],
+    )
+    .await;
+    start_with_tasks(
+        store,
+        run_in(&other, 2),
+        vec![at_most_once(host_task(1, "pay"))],
+    )
+    .await;
+    let interrupted = TaskFilter::Interrupted {
+        tenants: TenantScope::Only(BTreeSet::from([acme()])),
+        max_attempts: 2,
+    };
+    assert!(
+        claim(store, "s", &interrupted, T0, 10).await.is_empty(),
+        "a task never claimed was not interrupted"
+    );
+    let first = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(first.len(), 4);
+    let heartbeat = first[0].task.policy.heartbeat_timeout;
+    assert!(
+        claim(store, "s", &interrupted, T0, 10).await.is_empty(),
+        "the claims are alive"
+    );
+
+    // The claims expire: only acme's at_most_once host task cannot be handed out again.
+    let expired = T0.saturating_add(heartbeat);
+    let swept = claim(store, "s", &interrupted, expired, 10).await;
+    assert_eq!(seqs(&swept), [1]);
+    assert_eq!(swept[0].task.task.run.tenant, acme());
+    assert!(swept[0].previous_claim_expired);
+    assert_eq!(swept[0].task.attempt, 2);
+    assert_eq!(
+        store
+            .complete_tool_task(&swept[0].token, result(1), expired)
+            .await
+            .expect("complete"),
+        TaskUpdate::Applied
+    );
+
+    // The retry task is claimed again, its second attempt, and that claim expires too: it has
+    // had its attempts.
+    let host = TaskFilter::Host {
+        tenant: acme(),
+        namespace: None,
+        toolset: None,
+        tools: BTreeSet::new(),
+    };
+    let second = claim(store, "a", &host, expired, 10).await;
+    assert_eq!(seqs(&second), [2]);
+    assert_eq!(second[0].task.attempt, 2);
+    let expired_again = expired.saturating_add(heartbeat);
+    let swept = claim(store, "s", &interrupted, expired_again, 10).await;
+    assert_eq!(seqs(&swept), [2]);
+    assert_eq!(swept[0].task.attempt, 3);
 }
 
 pub async fn transient_failures_wait_for_their_next_attempt<S: JournalStore>(store: &S) {

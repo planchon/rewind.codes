@@ -490,13 +490,14 @@ impl Threshold {
     }
 
     /// The thresholds `before` and `after` cross, of a limit: those `after` reaches and `before`
-    /// did not.
+    /// did not. Exact, in integers: a use reaches 80 % of a limit when `use × 100 ≥ limit × 80`,
+    /// so 80 % of 4 is reached at 4, not 3, and 80 % of 1 at 1.
     pub fn crossed(before: u64, after: u64, limit: u64) -> Vec<Threshold> {
         [Threshold::Near, Threshold::Reached]
             .into_iter()
             .filter(|threshold| {
-                let at = u128::from(limit) * u128::from(threshold.percent()) / 100;
-                u128::from(before) < at && u128::from(after) >= at
+                let at = u128::from(limit) * u128::from(threshold.percent());
+                u128::from(before) * 100 < at && u128::from(after) * 100 >= at
             })
             .collect()
     }
