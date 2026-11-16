@@ -29,8 +29,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Digest, Interruption, McpServer, McpTransport, PinnedWorkflow, Tool, ToolPolicy,
-    ToolRoute, Toolset, Workflow, WorkflowSchemas,
+    Builtin, Digest, Interruption, McpServer, McpTransport, PinnedWorkflow, RetiredTest, Suite,
+    SuiteTest, Tool, ToolPolicy, ToolRoute, Toolset, UpdatedTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -71,6 +71,38 @@ struct WorkflowV1 {
     script: String,
     toolset: String,
     schemas: WorkflowSchemasV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    tests: Vec<SuiteTestV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<RetiredTestV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    updated: Vec<UpdatedTestV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SuiteTestV1 {
+    name: String,
+    test: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetiredTestV1 {
+    name: String,
+    test: String,
+    reason: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatedTestV1 {
+    name: String,
+    from: String,
+    to: String,
+    reason: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -205,12 +237,41 @@ pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
 /// The workflow version document as a JSON value, `"v"` included. The caller writes it in
 /// canonical form.
 pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
+    let suite = workflow.suite();
     let dto = WorkflowV1 {
         name: workflow.name().to_owned(),
         description: workflow.description().map(str::to_owned),
         script: workflow.script().to_hex(),
         toolset: workflow.toolset().to_hex(),
         schemas: schemas_dto(workflow.schemas()),
+        parent: suite.parent.map(|parent| parent.to_hex()),
+        tests: suite
+            .tests
+            .iter()
+            .map(|test| SuiteTestV1 {
+                name: test.name.clone(),
+                test: test.test.to_hex(),
+            })
+            .collect(),
+        retired: suite
+            .retired
+            .iter()
+            .map(|retired| RetiredTestV1 {
+                name: retired.name.clone(),
+                test: retired.test.to_hex(),
+                reason: retired.reason.clone(),
+            })
+            .collect(),
+        updated: suite
+            .updated
+            .iter()
+            .map(|updated| UpdatedTestV1 {
+                name: updated.name.clone(),
+                from: updated.from.to_hex(),
+                to: updated.to.to_hex(),
+                reason: updated.reason.clone(),
+            })
+            .collect(),
     };
     let mut document = serde_json::to_value(dto).expect("workflow DTOs always serialize");
     if let Value::Object(fields) = &mut document {
@@ -222,6 +283,45 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
 /// Decodes the fields of a v1 workflow version document, its version already taken out.
 pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
     let dto: WorkflowV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
+    let suite = Suite {
+        parent: dto
+            .parent
+            .map(|parent| digest(&parent, "\"parent\""))
+            .transpose()?,
+        tests: dto
+            .tests
+            .into_iter()
+            .map(|test| {
+                Ok(SuiteTest {
+                    test: digest(&test.test, "a test's \"test\"")?,
+                    name: test.name,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        retired: dto
+            .retired
+            .into_iter()
+            .map(|retired| {
+                Ok(RetiredTest {
+                    test: digest(&retired.test, "a retired test's \"test\"")?,
+                    name: retired.name,
+                    reason: retired.reason,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+        updated: dto
+            .updated
+            .into_iter()
+            .map(|updated| {
+                Ok(UpdatedTest {
+                    from: digest(&updated.from, "an updated test's \"from\"")?,
+                    to: digest(&updated.to, "an updated test's \"to\"")?,
+                    name: updated.name,
+                    reason: updated.reason,
+                })
+            })
+            .collect::<Result<_, String>>()?,
+    };
     Workflow::new(
         dto.name,
         dto.description,
@@ -229,6 +329,7 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         digest(&dto.toolset, "\"toolset\"")?,
         schemas_from_dto(dto.schemas),
     )
+    .and_then(|workflow| workflow.with_suite(suite))
     .map_err(|err| err.to_string())
 }
 

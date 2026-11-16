@@ -620,7 +620,7 @@ pub(crate) fn digest(hex: &str) -> Result<Digest, String> {
         .ok_or_else(|| format!("invalid digest {hex:?}: expected 64 lowercase hex digits"))
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -631,7 +631,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// 64 lowercase hex digits → 32 bytes. Uppercase is rejected: one value, one spelling.
-fn unhex(text: &str) -> Option<[u8; 32]> {
+pub(crate) fn unhex(text: &str) -> Option<[u8; 32]> {
     let digits = text.as_bytes();
     if digits.len() != 64 {
         return None;

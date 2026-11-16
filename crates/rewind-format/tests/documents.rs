@@ -1,4 +1,4 @@
-//! The cassette, pinned toolset and workflow version documents v1 are frozen like events: these
+//! The cassette, pinned toolset, workflow version and test documents v1 are frozen like events: these
 //! fixtures were written once and must decode forever, to the same domain values, and re-encode
 //! to the same bytes.
 
@@ -8,13 +8,15 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Cassette, Digest, Interruption, Matching, McpServer, McpTransport, RecordedCall,
-    RecordedSignal, Tool, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute,
-    Toolset, Workflow, WorkflowSchemas,
+    Builtin, CallOrder, Cassette, Digest, Expectations, ExpectedCall, ExpectedError, Interruption,
+    Matching, McpServer, McpTransport, RecordedCall, RecordedSignal, RetiredTest, RunStatus, Seed,
+    SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp, Tool, ToolFailure,
+    ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule, Toolset, UpdatedTest, Workflow,
+    WorkflowSchemas, World,
 };
 use rewind_format::{
-    FormatError, decode_cassette, decode_toolset, decode_workflow, encode_cassette, encode_toolset,
-    encode_workflow,
+    FormatError, decode_cassette, decode_test, decode_toolset, decode_workflow, encode_cassette,
+    encode_test, encode_toolset, encode_workflow, test_digest,
 };
 use serde_json::json;
 
@@ -397,4 +399,256 @@ fn rejects_workflows_v1_does_not_define() {
         decode_toolset(&pinned_twice),
         Err(FormatError::InvalidToolset(_))
     ));
+}
+
+// -------------------------------------------------------------------------------------------
+// Suites and tests
+
+const WORKFLOW_WITH_SUITE: &str = include_str!("fixtures/workflow-suite.v1.json");
+const TEST: &str = include_str!("fixtures/test.v1.json");
+
+/// A version with every field of a suite.
+fn workflow_with_suite() -> Workflow {
+    workflow()
+        .with_suite(Suite {
+            parent: Some(digest_of("parent")),
+            tests: vec![
+                SuiteTest {
+                    name: "closes once approved".into(),
+                    test: digest_of("a"),
+                },
+                SuiteTest {
+                    name: "closes nothing without approval".into(),
+                    test: digest_of("b2"),
+                },
+            ],
+            retired: vec![RetiredTest {
+                name: "asks before closing".into(),
+                test: digest_of("c"),
+                reason: "under 5 stale issues, it closes without asking".into(),
+            }],
+            updated: vec![UpdatedTest {
+                name: "closes nothing without approval".into(),
+                from: digest_of("b"),
+                to: digest_of("b2"),
+                reason: "the message names the repository".into(),
+            }],
+        })
+        .unwrap()
+}
+
+/// Every field and variant of a test.
+fn test_document() -> Test {
+    let mut tools = BTreeMap::new();
+    tools.insert(
+        "github.list_issues".to_owned(),
+        vec![
+            ToolRule {
+                args: Some(json!({ "state": "open" })),
+                answer: ToolOutcome::Result(json!([{ "number": 4 }])),
+                times: Some(1),
+            },
+            ToolRule {
+                args: None,
+                answer: ToolOutcome::Result(json!(null)),
+                times: None,
+            },
+        ],
+    );
+    tools.insert(
+        "slack.post_message".to_owned(),
+        vec![ToolRule {
+            args: None,
+            answer: ToolOutcome::Failure(ToolFailure {
+                kind: ToolFailureKind::Unavailable,
+                message: "rate limited".into(),
+                data: Some(json!({ "retryAfter": 30 })),
+            }),
+            times: None,
+        }],
+    );
+    tools.insert(
+        "workflows.notify.start".to_owned(),
+        vec![ToolRule::always(ToolOutcome::Failure(ToolFailure {
+            kind: ToolFailureKind::Error,
+            message: "the child failed".into(),
+            data: None,
+        }))],
+    );
+    Test {
+        name: "closes once approved".into(),
+        input: json!({ "repo": "acme/api" }),
+        start: Some(Timestamp(1_767_225_600_000)),
+        seed: Some(Seed::from_bytes([7; 32])),
+        world: World {
+            tools,
+            mocks: Some("export default {};\n".into()),
+            cassette: Some(Cassette {
+                calls: vec![RecordedCall {
+                    tool: "github.close_issue".into(),
+                    args: json!({ "number": 4 }),
+                    outcome: ToolOutcome::Result(json!({})),
+                }],
+                signals: vec![RecordedSignal {
+                    name: "approval".into(),
+                    payload: json!({ "close": true }),
+                    elapsed_ms: 3_600_000,
+                }],
+                matching: Matching::ByArgs,
+            }),
+        },
+        signals: vec![
+            TestSignal {
+                name: "approval".into(),
+                payload: json!({ "close": true }),
+                when: SignalWhen::Blocked,
+            },
+            TestSignal {
+                name: "pr merged".into(),
+                payload: json!(null),
+                when: SignalWhen::After(Duration::from_secs(7_200)),
+            },
+        ],
+        expect: Expectations {
+            status: Some(RunStatus::Completed),
+            output: Some(json!({ "closed": 1 })),
+            error: Some(ExpectedError {
+                name: "ToolError".into(),
+                message: Some("rate limited".into()),
+            }),
+            calls: vec![
+                ExpectedCall {
+                    tool: "slack.post_message".into(),
+                    args: Some(json!({ "channel": "#triage" })),
+                    times: Some(1),
+                },
+                ExpectedCall {
+                    tool: "github.delete_repo".into(),
+                    args: None,
+                    times: Some(0),
+                },
+                ExpectedCall {
+                    tool: "github.close_issue".into(),
+                    args: None,
+                    times: None,
+                },
+            ],
+            order: CallOrder::Listed,
+        },
+        origin: Some(TestOrigin {
+            run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".parse().unwrap(),
+            version: digest_of("version"),
+            namespace: "alice".into(),
+        }),
+    }
+}
+
+#[test]
+fn a_version_without_a_suite_keeps_its_digest() {
+    // The fixture of before suites existed decodes to a version with an empty suite.
+    let decoded = decode_workflow(WORKFLOW).unwrap();
+    assert!(decoded.suite().is_empty());
+    assert_eq!(decoded.version(), Digest::of(WORKFLOW.as_bytes()));
+}
+
+#[test]
+fn the_workflow_suite_fixture_decodes_re_encodes_and_hashes_to_its_version() {
+    let decoded = decode_workflow(WORKFLOW_WITH_SUITE).unwrap();
+    assert_eq!(decoded, workflow_with_suite());
+    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_SUITE);
+    assert_eq!(
+        Digest::of(WORKFLOW_WITH_SUITE.as_bytes()),
+        workflow_with_suite().version()
+    );
+    assert_ne!(workflow_with_suite().version(), workflow().version());
+}
+
+#[test]
+fn the_test_fixture_decodes_re_encodes_and_hashes_to_its_digest() {
+    let decoded = decode_test(TEST).unwrap();
+    assert_eq!(decoded, test_document());
+    assert_eq!(encode_test(&decoded), TEST);
+    assert_eq!(test_digest(&decoded), Digest::of(TEST.as_bytes()));
+}
+
+#[test]
+fn a_test_is_written_one_way() {
+    // A single rule without its array, the default `when`, `order` and input: the same test,
+    // written back in one way.
+    let given = r#"{"v":1,"name":"t","input":{},"world":{"tools":{"a.b":{"returns":1}}},
+        "signals":[{"name":"go","when":"blocked"}],"expect":{"order":"any"}}"#;
+    let decoded = decode_test(given).unwrap();
+    assert_eq!(
+        encode_test(&decoded),
+        r#"{"name":"t","signals":[{"name":"go"}],"v":1,"world":{"tools":{"a.b":[{"returns":1}]}}}"#
+    );
+    // A result of `null` is a result.
+    let null =
+        decode_test(r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":null}}}}"#).unwrap();
+    assert_eq!(
+        null.world.tools["a.b"][0].answer,
+        ToolOutcome::Result(json!(null))
+    );
+}
+
+#[test]
+fn rejects_tests_v1_does_not_define() {
+    let invalid = [
+        r#"{"name":"t"}"#,
+        r#"{"v":1}"#,
+        r#"{"v":1,"name":"t","x":1}"#,
+        r#"{"v":1,"name":""}"#,
+        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{}}}}"#,
+        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":1,"error":{"message":"m"}}}}}"#,
+        r#"{"v":1,"name":"t","world":{"tools":{"a.b":{"returns":1,"times":0}}}}"#,
+        r#"{"v":1,"name":"t","world":{"cassette":{"v":1,"matching":"by_args","calls":[],"signals":[]}}}"#,
+        r#"{"v":1,"name":"t","signals":[{"name":"rewind:ended:x"}]}"#,
+        r#"{"v":1,"name":"t","signals":[{"name":"go","when":"soon"}]}"#,
+        r#"{"v":1,"name":"t","seed":"ABC"}"#,
+        r#"{"v":1,"name":"t","expect":{"status":"waiting"}}"#,
+        r#"{"v":1,"name":"t","expect":{"order":"sorted"}}"#,
+    ];
+    for document in invalid {
+        assert!(
+            decode_test(document).is_err(),
+            "{document} should be refused"
+        );
+    }
+    assert!(matches!(
+        decode_test(r#"{"v":2,"name":"t"}"#),
+        Err(FormatError::UnsupportedVersion(_))
+    ));
+}
+
+#[test]
+fn rejects_suites_v1_does_not_define() {
+    let digest = "0".repeat(64);
+    let base = format!(
+        r#""name":"triage","script":"{digest}","toolset":"{digest}","schemas":{{"input":{{}},"output":{{}},"signals":{{}}}}"#
+    );
+    let document = |fields: &str| format!(r#"{{"v":1,{base},{fields}}}"#);
+    assert!(
+        decode_workflow(&document(&format!(
+            r#""tests":[{{"name":"a","test":"{digest}"}}]"#
+        )))
+        .is_ok()
+    );
+    let invalid = [
+        document(&format!(
+            r#""tests":[{{"name":"a","test":"{digest}"}},{{"name":"a","test":"{digest}"}}]"#
+        )),
+        document(&format!(
+            r#""retired":[{{"name":"a","test":"{digest}","reason":" "}}]"#
+        )),
+        document(r#""parent":"abc""#),
+        document(&format!(
+            r#""tests":[{{"name":"a","test":"{digest}","x":1}}]"#
+        )),
+    ];
+    for document in invalid {
+        assert!(
+            decode_workflow(&document).is_err(),
+            "{document} should be refused"
+        );
+    }
 }

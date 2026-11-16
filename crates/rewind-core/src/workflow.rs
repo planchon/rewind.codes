@@ -5,7 +5,8 @@
 //! Workflow (a version: immutable, content-addressed)
 //! ├── name, description?
 //! ├── script, toolset            digests: what its runs execute
-//! └── schemas                    { input, output, signals: { <name>: schema } }
+//! ├── schemas                    { input, output, signals: { <name>: schema } }
+//! └── suite                      parent?, tests, retired, updated: the tests it passed
 //!
 //! PinnedWorkflow (what a toolset pins: the interface, without the script)
 //! └── name, version (the Workflow's digest), description?, schemas
@@ -83,7 +84,139 @@ pub struct Workflow {
     script: Digest,
     toolset: Digest,
     schemas: WorkflowSchemas,
+    suite: Suite,
 }
+
+/// The tests a version passed when it was saved, and how they derive from its parent's
+/// (`archi/05-testing-and-observability.md`, "Suites and the gate"). Tests are referenced by
+/// the digest of their document.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Suite {
+    /// The version it derives from.
+    pub parent: Option<Digest>,
+    /// Every test of the suite, by name.
+    pub tests: Vec<SuiteTest>,
+    /// The parent's tests it does not keep.
+    pub retired: Vec<RetiredTest>,
+    /// The parent's tests it replaced.
+    pub updated: Vec<UpdatedTest>,
+}
+
+impl Suite {
+    pub fn is_empty(&self) -> bool {
+        self.parent.is_none()
+            && self.tests.is_empty()
+            && self.retired.is_empty()
+            && self.updated.is_empty()
+    }
+
+    /// The digest of the test named `name`.
+    pub fn test(&self, name: &str) -> Option<Digest> {
+        self.tests
+            .iter()
+            .find(|test| test.name == name)
+            .map(|test| test.test)
+    }
+
+    /// Sorts every list by name, so that the same suite always writes the same document, and
+    /// checks that names are unique and reasons given.
+    fn normalize(mut self) -> Result<Self, InvalidWorkflow> {
+        self.tests.sort_by(|a, b| a.name.cmp(&b.name));
+        self.retired.sort_by(|a, b| a.name.cmp(&b.name));
+        self.updated.sort_by(|a, b| a.name.cmp(&b.name));
+        for pair in self.tests.windows(2) {
+            if pair[0].name == pair[1].name {
+                return Err(InvalidWorkflow::DuplicateTest(pair[0].name.clone()));
+            }
+        }
+        let reasons = self
+            .retired
+            .iter()
+            .map(|retired| (&retired.name, &retired.reason))
+            .chain(
+                self.updated
+                    .iter()
+                    .map(|updated| (&updated.name, &updated.reason)),
+            );
+        for (name, reason) in reasons {
+            if reason.trim().is_empty() {
+                return Err(InvalidWorkflow::NoReason(name.clone()));
+            }
+        }
+        Ok(self)
+    }
+
+    fn insert_into(&self, object: &mut Map<String, Value>) {
+        if let Some(parent) = &self.parent {
+            object.insert("parent".into(), json!(parent.to_hex()));
+        }
+        if !self.tests.is_empty() {
+            let tests: Vec<Value> = self
+                .tests
+                .iter()
+                .map(|test| json!({ "name": test.name, "test": test.test.to_hex() }))
+                .collect();
+            object.insert("tests".into(), Value::Array(tests));
+        }
+        if !self.retired.is_empty() {
+            let retired: Vec<Value> = self
+                .retired
+                .iter()
+                .map(|retired| {
+                    json!({
+                        "name": retired.name,
+                        "test": retired.test.to_hex(),
+                        "reason": retired.reason,
+                    })
+                })
+                .collect();
+            object.insert("retired".into(), Value::Array(retired));
+        }
+        if !self.updated.is_empty() {
+            let updated: Vec<Value> = self
+                .updated
+                .iter()
+                .map(|updated| {
+                    json!({
+                        "name": updated.name,
+                        "from": updated.from.to_hex(),
+                        "to": updated.to.to_hex(),
+                        "reason": updated.reason,
+                    })
+                })
+                .collect();
+            object.insert("updated".into(), Value::Array(updated));
+        }
+    }
+}
+
+/// A test of a suite.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuiteTest {
+    pub name: String,
+    pub test: Digest,
+}
+
+/// A test of the parent a version does not keep, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RetiredTest {
+    pub name: String,
+    pub test: Digest,
+    pub reason: String,
+}
+
+/// A test of the parent a version replaced, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdatedTest {
+    pub name: String,
+    pub from: Digest,
+    pub to: Digest,
+    pub reason: String,
+}
+
+/// Why a test of the parent is left out without being retired by the version: its namespace
+/// was erased with the end user's data.
+pub const ERASED_TEST_REASON: &str = "recorded from an erased namespace";
 
 /// A workflow that breaks an invariant. The messages are written for whoever registers it, a
 /// harness developer or a model.
@@ -100,6 +233,10 @@ pub enum InvalidWorkflow {
     ReservedSignalName(String),
     #[error("the {0} schema must be a JSON Schema: an object or a boolean")]
     Schema(String),
+    #[error("the suite has two tests named {0:?}: names are unique in a suite")]
+    DuplicateTest(String),
+    #[error("the test {0:?} is retired or updated without a reason: say why")]
+    NoReason(String),
 }
 
 impl Workflow {
@@ -119,7 +256,18 @@ impl Workflow {
             script,
             toolset,
             schemas,
+            suite: Suite::default(),
         })
+    }
+
+    /// The same version with a suite.
+    pub fn with_suite(mut self, suite: Suite) -> Result<Self, InvalidWorkflow> {
+        self.suite = suite.normalize()?;
+        Ok(self)
+    }
+
+    pub fn suite(&self) -> &Suite {
+        &self.suite
     }
 
     pub fn name(&self) -> &str {
@@ -171,6 +319,7 @@ impl Workflow {
         object.insert("script".into(), json!(self.script.to_hex()));
         object.insert("toolset".into(), json!(self.toolset.to_hex()));
         object.insert("schemas".into(), self.schemas.to_json());
+        self.suite.insert_into(&mut object);
         Value::Object(object)
     }
 }

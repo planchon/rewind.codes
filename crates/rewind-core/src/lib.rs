@@ -10,7 +10,9 @@
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
 //! - [`Shape`]: the type of a tool's results, as observed in journals.
 //! - [`Workflow`]: a script with a name and a typed interface, that scripts start and signal;
-//!   [`RunEnd`], how a run's end reaches the runs that watch it.
+//!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
+//! - [`Test`]: the world a run meets and what the outside must see at the end; [`RunPath`],
+//!   the path a run took.
 //!
 //! This crate is the domain and nothing else: no I/O, no async, no V8, no serde, no telemetry.
 //! It knows nothing about how events are stored or transported, nor where time, ids and seeds
@@ -30,6 +32,7 @@ mod payload;
 mod replay;
 mod shape;
 mod state;
+mod test;
 mod time;
 mod toolset;
 mod workflow;
@@ -50,14 +53,20 @@ pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
 pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
+pub use test::{
+    CallOrder, Expectations, ExpectedCall, ExpectedError, InvalidTest, Observed, ObservedCall,
+    PathStep, RecordError, RunPath, SignalWhen, StepKind, Test, TestOrigin, TestSignal, ToolRule,
+    World, contains,
+};
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use toolset::{
     Builtin, Interruption, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute,
     Toolset, ToolsetError,
 };
 pub use workflow::{
-    InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RunEnd, WORKFLOWS_NAMESPACE, Workflow,
-    WorkflowOp, WorkflowSchemas, end_signal_name, ended_run, is_reserved_signal, starter_ended,
+    ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RetiredTest,
+    RunEnd, Suite, SuiteTest, UpdatedTest, WORKFLOWS_NAMESPACE, Workflow, WorkflowOp,
+    WorkflowSchemas, end_signal_name, ended_run, is_reserved_signal, starter_ended,
 };
 
 /// The JSON value type carried by payloads.

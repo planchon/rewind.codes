@@ -6,7 +6,7 @@
 //! converted to versioned DTOs at the edge, and a stored v1 journal must always decode.
 //! A future v2 gets its own module and an explicit migration from v1.
 //!
-//! Five documents are defined (`archi/02-journal.md`, "Stored format v1"):
+//! Six documents are defined (`archi/02-journal.md`, "Stored format v1"):
 //!
 //! - one **event**, as stored in a row (`history.event`, `inbox.event`):
 //!   `{"v":1,"type":"schedule_tool_call","seq":1,…}`;
@@ -21,7 +21,10 @@
 //!   `"workflows":[…]` when it pins workflows, in its canonical form, so that its bytes hash to
 //!   the toolset's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
-//!   "toolset":…,"v":1}`, in its canonical form, so that its bytes hash to the version.
+//!   "toolset":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
+//!   one, in its canonical form, so that its bytes hash to the version;
+//! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
+//!   its canonical form, so that its bytes hash to the test's digest.
 //!
 //! In events, payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`; in
 //! cassettes, as plain values. Seeds and digests are lowercase hex, times and durations are
@@ -32,7 +35,8 @@
 mod v1;
 
 use rewind_core::{
-    Cassette, Event, JournalDocument, RunId, Script, Toolset, Workflow, canonical_json,
+    Cassette, Digest, Event, JournalDocument, RunId, Script, Test, Toolset, Workflow,
+    canonical_json,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -62,6 +66,8 @@ pub enum FormatError {
     InvalidToolset(String),
     #[error("invalid workflow version: {0}")]
     InvalidWorkflow(String),
+    #[error("invalid test: {0}")]
+    InvalidTest(String),
 }
 
 /// One event, as stored in a row: `{"v":1,"type":…,…}`.
@@ -205,6 +211,25 @@ pub fn decode_workflow(json: &str) -> Result<Workflow, FormatError> {
         Version::V1 => {
             v1::decode_workflow(Value::Object(object)).map_err(FormatError::InvalidWorkflow)
         }
+    }
+}
+
+/// The test document, in its canonical form (RFC 8785): its bytes hash to [`test_digest`].
+pub fn encode_test(test: &Test) -> String {
+    canonical_json(&v1::test_document(test))
+}
+
+/// The digest of a test: SHA-256 of its canonical document, the key of its blob.
+pub fn test_digest(test: &Test) -> Digest {
+    Digest::of(encode_test(test).as_bytes())
+}
+
+/// Decodes a test document, of any supported version. A tool's single rule may be given without
+/// its array, and the test's invariants are checked ([`Test::check`]).
+pub fn decode_test(json: &str) -> Result<Test, FormatError> {
+    let mut object = parse_object(json)?;
+    match take_version(&mut object)? {
+        Version::V1 => v1::decode_test(Value::Object(object)).map_err(FormatError::InvalidTest),
     }
 }
 

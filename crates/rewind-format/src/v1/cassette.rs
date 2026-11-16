@@ -50,11 +50,40 @@ enum MatchingV1 {
     ByArgs,
 }
 
-pub(crate) fn encode_cassette(cassette: &Cassette) -> String {
-    let matching = match cassette.matching {
+/// A cassette's fields without its version, as a test document holds its world's cassette.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CassetteBodyV1 {
+    matching: MatchingV1,
+    calls: Vec<CallV1>,
+    signals: Vec<SignalV1>,
+}
+
+impl From<&Cassette> for CassetteBodyV1 {
+    fn from(cassette: &Cassette) -> Self {
+        Self {
+            matching: matching_dto(cassette.matching),
+            calls: cassette.calls.iter().map(call_dto).collect(),
+            signals: cassette.signals.iter().map(signal_dto).collect(),
+        }
+    }
+}
+
+impl From<CassetteBodyV1> for Cassette {
+    fn from(body: CassetteBodyV1) -> Self {
+        from_dtos(body.matching, body.calls, body.signals)
+    }
+}
+
+fn matching_dto(matching: Matching) -> MatchingV1 {
+    match matching {
         Matching::Sequential => MatchingV1::Sequential,
         Matching::ByArgs => MatchingV1::ByArgs,
-    };
+    }
+}
+
+pub(crate) fn encode_cassette(cassette: &Cassette) -> String {
+    let matching = matching_dto(cassette.matching);
     let mut out = format!(
         "{{\"v\":{},\"matching\":{},\"calls\":[",
         crate::VERSION,
@@ -75,7 +104,11 @@ pub(crate) fn decode_cassette(mut fields: Map<String, Value>) -> Result<Cassette
     if let Some(unknown) = fields.keys().next() {
         return Err(format!("unknown field {unknown:?}"));
     }
-    Ok(Cassette {
+    Ok(from_dtos(matching, calls, signals))
+}
+
+fn from_dtos(matching: MatchingV1, calls: Vec<CallV1>, signals: Vec<SignalV1>) -> Cassette {
+    Cassette {
         calls: calls
             .into_iter()
             .map(|call| RecordedCall {
@@ -99,7 +132,7 @@ pub(crate) fn decode_cassette(mut fields: Map<String, Value>) -> Result<Cassette
             MatchingV1::Sequential => Matching::Sequential,
             MatchingV1::ByArgs => Matching::ByArgs,
         },
-    })
+    }
 }
 
 fn call_dto(call: &RecordedCall) -> CallV1 {
