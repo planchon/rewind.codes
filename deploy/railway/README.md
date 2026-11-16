@@ -84,6 +84,8 @@ through WorkOS's waitlist: the operator approves people in WorkOS's dashboard, w
 an invitation; a member then creates an organization, or joins one by an invitation of its
 members, and gets their rights from their grant in Rewind
 ([`archi/06-storage-and-scale.md`](../../archi/06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
+The WorkOS environment is set as [`deploy/`](../README.md#sign-in) says, with
+`https://app.rewind.codes/` as its *User invitation URL*.
 
 Vercel rewrites `/auth/*` to the API like `/v1/*`, and the edge sends both to the api. The
 browser's address does not reach the api: Vercel's rewrite and Railway's proxy stand between,

@@ -21,6 +21,10 @@ use crate::convert;
 /// Waitlist is enabled on WorkOS Staging (`archi/08-decisions.md`).
 pub const SIGN_UP_CLOSED: &[&str] = &["sign_up_not_allowed"];
 
+/// The code of a waitlist entry for an email that already has a user: someone who signed up, or
+/// whom an invitation (the waitlist's approval included) already created (measured on Staging).
+pub(crate) const ALREADY_A_USER: &str = "user_already_exists";
+
 /// The codes of a refresh token that is unknown, or whose session ended or was revoked.
 pub(crate) const INVALID_REFRESH_TOKEN: &[&str] = &[
     "invalid_grant",

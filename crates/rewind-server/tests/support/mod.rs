@@ -182,7 +182,8 @@ impl Browser {
         .await
     }
 
-    /// Signs in with the code the fake provider sent to `email`.
+    /// Signs in with the code the fake provider sent to `email`; the step `POST /auth/magic-auth`
+    /// answers when it sends none.
     pub(crate) async fn sign_in(
         &mut self,
         identity: &MemoryIdentity,
@@ -194,6 +195,9 @@ impl Browser {
             request["invitationToken"] = token.into();
         }
         let sent = self.post("/auth/magic-auth", request.clone()).await;
+        if sent.status() == 200 {
+            return answer(sent).await;
+        }
         assert_eq!(sent.status(), 202);
         request["code"] = identity.last_code(email).unwrap().into();
         self.step("/auth/magic-auth/verify", request).await

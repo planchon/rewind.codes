@@ -76,7 +76,7 @@ async fn a_code_by_email_signs_in_and_a_member_without_organization_only_onboard
         json!({ "methods": ["github", "magic_auth"], "waitlist": true })
     );
 
-    // The same answer whatever the email.
+    // Sign-ups open: a code for any email.
     for email in ["nobody@example.net", "ada@example.net"] {
         let sent = browser
             .post("/auth/magic-auth", json!({ "email": email }))
@@ -342,6 +342,8 @@ async fn closed_sign_ups_send_people_to_the_waitlist() {
             email: Some("new@example.net".into())
         }
     );
+    // No code was sent; the step is kept, as the others.
+    assert_eq!(identity.last_code("new@example.net"), None);
     assert_eq!(browser.session().await.unwrap(), closed);
     let joined = browser
         .post("/auth/waitlist", json!({ "email": "new@example.net" }))

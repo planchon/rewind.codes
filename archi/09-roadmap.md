@@ -118,7 +118,7 @@ The six were approved in November 2026, access and identity and namespaces on th
 | Engine | `rewind-engine` | Nothing beyond what `rewind-server` wires: the worker, scheduler, projector and retention loops | Engine ports, stored format v1, pinned toolset, namespaces |
 | Runtime (V8) | `rewind-runtime` | Nothing | Engine ports, pinned toolset, sandbox lib, namespaces |
 | Stores | `rewind-store-turso`, `rewind-store-postgres` | Nothing | Engine ports, stored format v1, access and identity, namespaces |
-| Identity | `rewind-workos` | Confirming WorkOS's code for a closed sign-up, and that an invited person's code is sent without the invitation's token, once the Waitlist is enabled on WorkOS Staging ([08](08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)) | Access and identity |
+| Identity | `rewind-workos` | Measuring how WorkOS refuses an unknown GitHub account while its Waitlist is on: at the callback (`error=`), or when the code is exchanged. The code by email was measured on Production on 16 November 2026 ([08](08-decisions.md#taken-for-accounts-organizations-and-access-november-2026)) | Access and identity |
 | Blobs | `rewind-blob` | Files and S3; the `payloads` table with size and preview; workers' local cache; cleanup | Engine ports |
 | Tools | `rewind-codegen`, `rewind-mcp` | `rewind-codegen`: JSON Schema → TypeScript, prompt rendering, observed types. `rewind-mcp`: stdio and HTTP, idempotency key and trace context in `_meta`. Built-ins `http` and `webhook`; credentials | Engine ports, pinned toolset |
 | Type-checking | `rewind-check` | tsgo; the checker's own rules; the sandbox lib | Engine ports, pinned toolset, sandbox lib |

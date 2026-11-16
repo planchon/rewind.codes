@@ -120,8 +120,9 @@ export interface paths {
         put?: never;
         /**
          * Send a code by email
-         * @description A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the
-         *     email has an account or not.
+         * @description A 6-digit code, to give to `POST /auth/magic-auth/verify`. While sign-ups are closed, an
+         *     email without an account gets no code: the answer is `sign_up_closed`, and the person
+         *     may join the waitlist.
          */
         post: operations["sendMagicCode"];
         delete?: never;
@@ -4284,6 +4285,17 @@ export interface operations {
             };
         };
         responses: {
+            /** @description No code sent: sign-ups are closed and the email has no account (`sign_up_closed`). */
+            200: {
+                headers: {
+                    /** @description `rewind_session`, holding the step. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthState"];
+                };
+            };
             /** @description Sent. */
             202: {
                 headers: {

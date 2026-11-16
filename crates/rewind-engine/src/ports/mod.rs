@@ -60,8 +60,8 @@ pub use executor::{
 };
 pub use identity::{
     AccessClaims, Authentication, Client, IdentityError, IdentityProvider, Invitation,
-    InvitationId, InvitationState, Membership, MembershipId, MembershipStatus, Organization,
-    OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
+    InvitationId, InvitationState, MagicCode, Membership, MembershipId, MembershipStatus,
+    Organization, OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
 pub use journal::{
     AcquireRunnable, Activation, Archive, ClaimedTask, CreateRun, Created, Enqueued, ExpiredRuns,

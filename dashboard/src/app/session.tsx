@@ -110,11 +110,11 @@ function takeAuthError(): string | null {
     window.history.replaceState(window.history.state, "", url.toString());
     switch (code) {
       case "state_mismatch":
-        return "The sign-in with GitHub took too long, or started in another tab: try again.";
+        return "The sign-in did not start on this page, or took too long: sign in again.";
       case "provider_error":
-        return "GitHub or WorkOS refused the sign-in: try again, or sign in with a code by email.";
+        return "GitHub or WorkOS refused the sign-in: try again, or sign in with a code by email. New to Rewind? Join the waitlist below.";
       default:
-        return "The sign-in with GitHub did not go through: try again, or sign in with a code by email.";
+        return "The sign-in with GitHub did not go through: try again, or sign in with a code by email. New to Rewind? Join the waitlist below.";
     }
   } catch {
     return null;

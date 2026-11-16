@@ -6417,7 +6417,7 @@
     },
     "/auth/magic-auth": {
       "post": {
-        "description": "A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the\nemail has an account or not.",
+        "description": "A 6-digit code, to give to `POST /auth/magic-auth/verify`. While sign-ups are closed, an\nemail without an account gets no code: the answer is `sign_up_closed`, and the person\nmay join the waitlist.",
         "operationId": "sendMagicCode",
         "requestBody": {
           "content": {
@@ -6430,6 +6430,24 @@
           "required": true
         },
         "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthState"
+                }
+              }
+            },
+            "description": "No code sent: sign-ups are closed and the email has no account (`sign_up_closed`).",
+            "headers": {
+              "Set-Cookie": {
+                "description": "`rewind_session`, holding the step.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "202": {
             "description": "Sent."
           },

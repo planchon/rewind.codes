@@ -222,6 +222,16 @@ pub enum Authentication {
     },
 }
 
+/// What became of a code asked for by email.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MagicCode {
+    /// Sent: the person checks it with `authenticate_magic_code`.
+    Sent,
+    /// None sent: sign-ups are closed and the email has no user. The person may join the
+    /// waitlist.
+    SignUpClosed,
+}
+
 /// The browser behind a sign-in, as the provider records it on the session.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Client {
@@ -279,12 +289,14 @@ pub trait IdentityProvider: Send + Sync {
         client: &Client,
     ) -> impl Future<Output = Result<Authentication, IdentityError>> + Send;
 
-    /// Sends a 6-digit code to the email, whether it has an account or not.
+    /// Sends a 6-digit code to the email. When sign-ups are closed, an email without a user
+    /// gets none: an invitation creates its invitee's user, so only someone neither signed up
+    /// nor invited is answered [`MagicCode::SignUpClosed`].
     fn send_magic_code(
         &self,
         email: &str,
         invitation_token: Option<&str>,
-    ) -> impl Future<Output = Result<(), IdentityError>> + Send;
+    ) -> impl Future<Output = Result<MagicCode, IdentityError>> + Send;
 
     fn authenticate_magic_code(
         &self,

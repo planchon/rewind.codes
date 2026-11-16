@@ -1,5 +1,6 @@
 // The sign-in pages, with WorkOS: GitHub, or a 6-digit code sent by email; then whatever step
-// the server answers (an organization to choose, an email to verify, the waitlist).
+// the server answers (an organization to choose, an email to verify, the waitlist). Someone new
+// may also open the waitlist from the first page.
 import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Building2, Check, LogOut, Mail } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
@@ -22,7 +23,7 @@ export function SignIn() {
     case "email_verification_required":
       return <VerifyEmail email={state.email} />;
     case "sign_up_closed":
-      return <Waitlist email={state.email ?? ""} />;
+      return <Waitlist email={state.email ?? ""} refused footer={<UseAnotherAccount />} />;
   }
 }
 
@@ -101,12 +102,14 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
   const [email, setEmail] = useState("");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
+  const [joining, setJoining] = useState(false);
   const github = config.methods.includes("github");
   const magic = config.methods.includes("magic_auth");
 
   const send = useMutation({
     mutationFn: (to: string) => api.sendMagicCode(to, invitationToken),
-    onSuccess: (_, to) => setSentTo(to),
+    // No code for someone new while sign-ups are closed: the waitlist instead.
+    onSuccess: (answer, to) => (answer ? advance(answer) : setSentTo(to)),
   });
   const verify = useMutation({
     mutationFn: ({ to, code }: { to: string; code: string }) =>
@@ -162,6 +165,22 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
     );
   }
 
+  if (joining) {
+    return (
+      <Waitlist
+        email={email.trim()}
+        refused={false}
+        footer={
+          <div className="gate-actions">
+            <button type="button" className="link-btn" onClick={() => setJoining(false)}>
+              <ArrowLeft size={12} /> Back to sign in
+            </button>
+          </div>
+        }
+      />
+    );
+  }
+
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const to = email.trim();
@@ -178,7 +197,7 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
       )}
       {invitationToken && (
         <div className="gate-note" role="status">
-          You were invited to an organization: sign in to join it.
+          You were invited to Rewind: sign in to accept the invitation.
         </div>
       )}
       {github && (
@@ -211,10 +230,13 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
         </form>
       )}
       {send.error && <ErrorNote error={send.error} />}
-      {config.waitlist && (
+      {config.waitlist && !invitationToken && (
         <p className="gate-foot">
-          Sign-ups go through a waitlist: someone new is asked to join it, and gets an invitation
-          once approved.
+          New to Rewind? Sign-ups go through a waitlist, and approved people get an invitation by
+          email.{" "}
+          <button type="button" className="link-btn" onClick={() => setJoining(true)}>
+            Join the waitlist
+          </button>
         </p>
       )}
     </Card>
@@ -305,7 +327,19 @@ function VerifyEmail({ email }: { email: string }) {
   );
 }
 
-function Waitlist({ email: given }: { email: string }) {
+/**
+ * The waitlist's form: after a sign-in refused because sign-ups are closed (`refused`), or opened
+ * from the first page by someone new.
+ */
+function Waitlist({
+  email: given,
+  refused,
+  footer,
+}: {
+  email: string;
+  refused: boolean;
+  footer: ReactNode;
+}) {
   const { api, waitlisted } = useSession();
   const [email, setEmail] = useState(given);
   const join = useMutation({
@@ -319,16 +353,19 @@ function Waitlist({ email: given }: { email: string }) {
   };
   return (
     <Card label="Join the waitlist">
-      <h1>Sign-ups are closed</h1>
+      <h1>{refused ? "Sign-ups are closed" : "Join the waitlist"}</h1>
       <p>
-        {given ? (
-          <>
-            <strong>{given}</strong> has no account here, and no invitation.
-          </>
-        ) : (
-          "This account is not known here, and has no invitation."
-        )}{" "}
-        Join the waitlist: once the operator approves you, an invitation arrives by email.
+        {refused &&
+          (given ? (
+            <>
+              <strong>{given}</strong> has no account here, and no invitation.{" "}
+            </>
+          ) : (
+            "This account is not known here, and has no invitation. "
+          ))}
+        {refused
+          ? "Join the waitlist: once the operator approves you, an invitation arrives by email."
+          : "Rewind opens to new people through a waitlist. Once the operator approves you, an invitation arrives by email."}
       </p>
       <form className="stack" onSubmit={submit}>
         <label className="field col">
@@ -351,7 +388,7 @@ function Waitlist({ email: given }: { email: string }) {
         </button>
       </form>
       {join.error && <ErrorNote error={join.error} />}
-      <UseAnotherAccount />
+      {footer}
     </Card>
   );
 }
@@ -370,7 +407,8 @@ function OnTheList({ email }: { email: string }) {
       </h1>
       <p>
         When the operator approves <strong>{email}</strong>, an invitation arrives there by email.
-        Open its link to sign in.
+        Then sign in here with that email, by a code or with GitHub. If it already has an account,
+        sign in now.
       </p>
       <div className="gate-actions">
         <button type="button" className="link-btn" onClick={backToSignIn}>

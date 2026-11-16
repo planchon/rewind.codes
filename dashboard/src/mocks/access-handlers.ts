@@ -151,7 +151,17 @@ export function accessHandlers(world: World) {
       const body = await json<{ email?: string }>(request);
       if (body instanceof Response) return body;
       if (!body.email?.includes("@")) return problem(400, "invalid-request", "Give an email.");
-      sendCode(access, body.email.trim());
+      const email = body.email.trim();
+      // As WorkOS with its waitlist: no code for an email with neither a user nor an
+      // invitation (WorkOS creates an invitee's user with the invitation).
+      const invited = access.invitations.some(
+        (i) => i.state === "pending" && i.email.toLowerCase() === email.toLowerCase(),
+      );
+      if (access.workos?.waitlist && !userByEmail(access, email) && !invited) {
+        access.session = { step: "sign_up_closed", email };
+        return HttpResponse.json({ status: "sign_up_closed", email });
+      }
+      sendCode(access, email);
       return noContent(202);
     }),
 

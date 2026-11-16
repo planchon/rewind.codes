@@ -310,13 +310,19 @@ export class Api {
     );
   }
 
-  /** Sends a 6-digit code to the email. */
-  async sendMagicCode(email: string, invitationToken: string | null): Promise<void> {
-    this.unwrap(
-      await this.client.POST("/auth/magic-auth", {
-        body: { email, ...(invitationToken ? { invitationToken } : {}) },
-      }),
-    );
+  /**
+   * Sends a 6-digit code to the email: `null` once sent. While sign-ups are closed, an email
+   * without an account gets none, and the answer is the step `sign_up_closed`.
+   */
+  async sendMagicCode(email: string, invitationToken: string | null): Promise<AuthAnswer | null> {
+    const answer = await this.client.POST("/auth/magic-auth", {
+      body: { email, ...(invitationToken ? { invitationToken } : {}) },
+    });
+    if (answer.response.status === 202) {
+      this.unwrap(answer);
+      return null;
+    }
+    return this.authState(answer);
   }
 
   async verifyMagicCode(

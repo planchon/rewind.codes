@@ -32,8 +32,8 @@ use rewind_api::organization::{Organization, User};
 use rewind_core::Timestamp;
 use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{
-    self, Authentication, Client, Clock, IdentityError, IdentityProvider, MembershipStatus,
-    OrganizationId, PendingToken, Provider, SessionId, UserId,
+    self, Authentication, Client, Clock, IdentityError, IdentityProvider, MagicCode,
+    MembershipStatus, OrganizationId, PendingToken, Provider, SessionId, UserId,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -664,21 +664,28 @@ pub(super) async fn callback(
     Ok(response)
 }
 
-/// `POST /auth/magic-auth`: sends a 6-digit code; the same answer whether the email has an
-/// account or not.
+/// `POST /auth/magic-auth`: sends a 6-digit code (202). When sign-ups are closed and the email
+/// has no account, no code is sent: the answer is `sign_up_closed`, kept in the session cookie
+/// as the other steps.
 pub(super) async fn send_magic_code(
     State(app): State<Arc<App>>,
     JsonBody(request): JsonBody<MagicAuthRequest>,
 ) -> Result<Response, Refusal> {
     let sign_in = app.sign_in()?;
-    sign_in
+    let email = email(&request.email)?;
+    let sent = sign_in
         .identity
-        .send_magic_code(
-            email(&request.email)?,
-            invitation_token(request.invitation_token.as_ref()),
-        )
+        .send_magic_code(email, invitation_token(request.invitation_token.as_ref()))
         .await?;
-    Ok(respond(StatusCode::ACCEPTED, None, &[]))
+    match sent {
+        MagicCode::Sent => Ok(respond(StatusCode::ACCEPTED, None, &[])),
+        MagicCode::SignUpClosed => answer(
+            sign_in,
+            &Stored::SignUpClosed {
+                email: Some(email.to_owned()),
+            },
+        ),
+    }
 }
 
 /// `POST /auth/magic-auth/verify`: signs in with the code.

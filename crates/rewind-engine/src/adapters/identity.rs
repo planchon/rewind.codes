@@ -8,8 +8,8 @@ use rewind_core::Timestamp;
 use super::random_token;
 use crate::ports::{
     AccessClaims, Authentication, Client, Clock, IdentityError, IdentityProvider, Invitation,
-    InvitationId, InvitationState, Membership, MembershipId, MembershipStatus, Organization,
-    OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
+    InvitationId, InvitationState, MagicCode, Membership, MembershipId, MembershipStatus,
+    Organization, OrganizationId, PendingToken, Provider, Session, SessionId, Tokens, User, UserId,
 };
 
 /// How long an access token lives: WorkOS's setting, measured on its staging environment
@@ -514,13 +514,20 @@ impl IdentityProvider for MemoryIdentity {
         state.sign_in(&user.id, invitation, None, now)
     }
 
+    /// As WorkOS: with sign-ups closed, no code for an email without a user (an invitation
+    /// created its invitee's).
     async fn send_magic_code(
         &self,
         email: &str,
         _invitation_token: Option<&str>,
-    ) -> Result<(), IdentityError> {
-        self.lock()?.send_code(&normalize(email));
-        Ok(())
+    ) -> Result<MagicCode, IdentityError> {
+        let email = normalize(email);
+        let mut state = self.lock()?;
+        if state.sign_ups_closed && state.user_by_email(&email).is_none() {
+            return Ok(MagicCode::SignUpClosed);
+        }
+        state.send_code(&email);
+        Ok(MagicCode::Sent)
     }
 
     async fn authenticate_magic_code(
@@ -910,7 +917,10 @@ mod tests {
         email: &str,
         invitation: Option<&str>,
     ) -> Authentication {
-        identity.send_magic_code(email, invitation).await.unwrap();
+        assert_eq!(
+            identity.send_magic_code(email, invitation).await.unwrap(),
+            MagicCode::Sent
+        );
         let code = identity.last_code(email).unwrap();
         identity
             .authenticate_magic_code(email, &code, invitation, &Client::default())
@@ -949,8 +959,22 @@ mod tests {
     async fn closed_sign_ups_let_only_the_invited_in() {
         let (identity, _) = provider();
         identity.set_sign_ups_closed(true);
+        // No code for an email without a user.
         assert_eq!(
-            magic(&identity, "eve@example.net", None).await,
+            identity
+                .send_magic_code("Eve@example.net", None)
+                .await
+                .unwrap(),
+            MagicCode::SignUpClosed
+        );
+        assert_eq!(identity.last_code("eve@example.net"), None);
+        // GitHub's sign-up is refused when its code is exchanged.
+        let code = identity.github_code("eve@example.net", true);
+        assert_eq!(
+            identity
+                .authenticate_code(&code, None, &Client::default())
+                .await
+                .unwrap(),
             Authentication::SignUpClosed {
                 email: Some("eve@example.net".into())
             }
@@ -965,6 +989,14 @@ mod tests {
             .await
             .unwrap();
         let token = identity.invitation_token(&invitation.id).unwrap();
+        // The invitation created her user: a code is sent.
+        assert_eq!(
+            identity
+                .send_magic_code("eve@example.net", None)
+                .await
+                .unwrap(),
+            MagicCode::Sent
+        );
         // Through GitHub, with another email than the invited one.
         let code = identity.github_code("eve@github.example.net", true);
         let signed_in = session(

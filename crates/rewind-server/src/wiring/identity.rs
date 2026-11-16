@@ -12,8 +12,8 @@
 use rewind_engine::adapters::MemoryIdentity;
 use rewind_engine::ports::{
     AccessClaims, Authentication, Client, IdentityError, IdentityProvider, Invitation,
-    InvitationId, Membership, MembershipId, Organization, OrganizationId, PendingToken, Provider,
-    SessionId, User, UserId,
+    InvitationId, MagicCode, Membership, MembershipId, Organization, OrganizationId, PendingToken,
+    Provider, SessionId, User, UserId,
 };
 use rewind_workos::WorkOs;
 
@@ -56,7 +56,7 @@ impl IdentityProvider for Identity {
         &self,
         email: &str,
         invitation_token: Option<&str>,
-    ) -> Result<(), IdentityError> {
+    ) -> Result<MagicCode, IdentityError> {
         each!(self, identity => identity.send_magic_code(email, invitation_token).await)
     }
 

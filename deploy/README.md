@@ -142,6 +142,20 @@ some of them; without them the server accepts only API keys). Add them to the `a
 | `WORKOS_COOKIE_PASSWORD` | 32 random bytes in hexadecimal (`openssl rand -hex 32`) |
 | `WORKOS_REDIRECT_URI` | The dashboard's origin and `/auth/callback` (`http://localhost:8080/auth/callback`), registered in WorkOS |
 
+In the WorkOS environment, set:
+
+- **Authentication methods**: GitHub OAuth and Magic Auth, the two the sign-in page offers.
+  Without Magic Auth, a code by email is refused (`authentication_method_not_allowed`).
+- **Sign-ups**: the Waitlist. Without it, anyone who signs in gets an account.
+- **Redirects**: the redirect URI above, and the *User invitation URL* set to the dashboard's
+  origin (`http://localhost:8080/`). WorkOS adds `?invitation_token=…`, which the sign-in page
+  reads. Left unset, members' invitations link to WorkOS's hosted AuthKit.
+
+The invitation WorkOS sends when the operator approves someone on the waitlist links to hosted
+AuthKit whatever the *User invitation URL*. The approval creates the person's account: tell them
+to sign in on the dashboard with the approved email. A sign-in completed on AuthKit comes back to
+`/auth/callback` without the dashboard's `state`; the page then asks to sign in again.
+
 The sign-in's cookies are `Secure`: browsers keep them on `https://` origins and on
 `localhost`. The api passes WorkOS the address of each browser that signs in: the last of
 `X-Forwarded-For`, which the edge writes with the address that reached it (Caddy ignores the one

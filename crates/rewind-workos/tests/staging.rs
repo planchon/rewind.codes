@@ -534,22 +534,56 @@ async fn scenario(staging: Arc<Staging>) {
         "invitation_invalid"
     );
 
-    // An invitation to the deployment, as the operator's approval sends.
+    // An invitation to the deployment, as the operator's approval sends, accepted by a code
+    // with its token as the dashboard does: WorkOS refuses the token of an invitation without
+    // organization, which the adapter therefore does not send.
     let carol_email = format!("rewind-test-carol-{tag}@example.net");
     let to_deployment = identity.invite(None, &carol_email, None).await.unwrap();
     staging.record(|created| created.invitations.push(to_deployment.id.0.clone()));
     assert_eq!(to_deployment.organization, None);
     assert_eq!(to_deployment.inviter, None);
-    staging
+    let carol = staging
         .user_by_email(&carol_email)
         .await
         .expect("an invitation creates its user");
-    assert_eq!(
+    let token = staging
+        .sdk
+        .user_management()
+        .get_invitation(&to_deployment.id.0)
+        .await
+        .expect("the invitation")
+        .token
+        .expose()
+        .to_owned();
+    identity
+        .send_magic_code(&carol_email, Some(&token))
+        .await
+        .unwrap();
+    let code = staging.magic_code(&carol_email).await;
+    let approved = session(
         identity
-            .revoke_invitation(&to_deployment.id)
+            .authenticate_magic_code(&carol_email, &code, Some(&token), &browser)
             .await
-            .unwrap()
-            .state,
+            .unwrap(),
+    );
+    assert_eq!(approved.user.id, carol);
+    assert_eq!(approved.organization, None);
+    let accepted = identity
+        .invitation(&to_deployment.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.state, InvitationState::Accepted);
+    // Another one, revoked.
+    let erin_email = format!("rewind-test-erin-{tag}@example.net");
+    let to_erin = identity.invite(None, &erin_email, None).await.unwrap();
+    staging.record(|created| created.invitations.push(to_erin.id.0.clone()));
+    staging
+        .user_by_email(&erin_email)
+        .await
+        .expect("an invitation creates its user");
+    assert_eq!(
+        identity.revoke_invitation(&to_erin.id).await.unwrap().state,
         InvitationState::Revoked
     );
 
@@ -581,6 +615,8 @@ async fn scenario(staging: Arc<Staging>) {
     let dave_email = format!("rewind-test-dave-{tag}@example.net");
     staging.record(|created| created.waitlist.push(dave_email.clone()));
     identity.join_waitlist(&dave_email).await.unwrap();
+    // Ada has a user: WorkOS refuses her entry (`user_already_exists`), and the answer is the same.
+    identity.join_waitlist(&ada_email).await.unwrap();
 
     // Signing out: the session's refresh token stops working.
     identity.remove_member(&in_beta.id).await.unwrap();

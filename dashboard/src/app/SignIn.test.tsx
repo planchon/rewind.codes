@@ -98,9 +98,11 @@ describe("sign-in", () => {
     const user = userEvent.setup();
     const world = withWorkos();
     renderApp("/runs", { world });
-    await sendCode(user, "newcomer@example.org");
-    await user.type(screen.getByLabelText("Code"), codeFor(world, "newcomer@example.org"));
+    // No code is sent to someone new: the waitlist at once.
+    await user.type(await screen.findByLabelText("Email"), "newcomer@example.org");
+    await user.click(screen.getByRole("button", { name: /send me a code/i }));
     expect(await screen.findByRole("heading", { name: "Sign-ups are closed" })).toBeVisible();
+    expect(world.access.codes.size).toBe(0);
     expect(screen.getByLabelText("Email")).toHaveValue("newcomer@example.org");
 
     await user.click(screen.getByRole("button", { name: "Join the waitlist" }));
@@ -111,10 +113,27 @@ describe("sign-in", () => {
     expect(await screen.findByRole("heading", { name: "Sign in to Rewind" })).toBeVisible();
   });
 
+  it("lets someone new join the waitlist from the first page", async () => {
+    const user = userEvent.setup();
+    const world = withWorkos();
+    renderApp("/runs", { world });
+    await user.type(await screen.findByLabelText("Email"), "early@example.org");
+    await user.click(screen.getByRole("button", { name: "Join the waitlist" }));
+    expect(await screen.findByRole("heading", { name: "Join the waitlist" })).toBeVisible();
+    expect(screen.getByLabelText("Email")).toHaveValue("early@example.org");
+
+    await user.click(screen.getByRole("button", { name: /back to sign in/i }));
+    await user.click(await screen.findByRole("button", { name: "Join the waitlist" }));
+    await user.click(await screen.findByRole("button", { name: "Join the waitlist" }));
+    expect(await screen.findByRole("heading", { name: "You're on the list" })).toBeVisible();
+    expect(world.access.waitlist).toEqual(["early@example.org"]);
+    expect(world.access.codes.size).toBe(0);
+  });
+
   it("says why a sign-in with GitHub failed, then takes the reason out of the address", async () => {
     window.history.replaceState(null, "", "/?auth_error=state_mismatch");
     renderApp("/", { world: withWorkos() });
-    expect(await screen.findByText(/took too long, or started in another tab/i)).toBeVisible();
+    expect(await screen.findByText(/did not start on this page, or took too long/i)).toBeVisible();
     expect(window.location.search).toBe("");
   });
 

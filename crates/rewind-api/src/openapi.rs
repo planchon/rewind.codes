@@ -1560,14 +1560,18 @@ mod operations {
 
     /// Send a code by email
     ///
-    /// A 6-digit code, to give to `POST /auth/magic-auth/verify`. The same answer whether the
-    /// email has an account or not.
+    /// A 6-digit code, to give to `POST /auth/magic-auth/verify`. While sign-ups are closed, an
+    /// email without an account gets no code: the answer is `sign_up_closed`, and the person
+    /// may join the waitlist.
     #[utoipa::path(
         post, path = "/auth/magic-auth", tag = "auth", operation_id = "sendMagicCode",
         security(()),
         request_body = MagicAuthRequest,
         responses(
             (status = 202, description = "Sent."),
+            (status = 200, description = "No code sent: sign-ups are closed and the email has no account (`sign_up_closed`).", body = AuthState, headers(
+                ("Set-Cookie" = String, description = "`rewind_session`, holding the step."),
+            )),
             (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]

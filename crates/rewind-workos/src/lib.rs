@@ -33,8 +33,8 @@ use std::sync::Arc;
 use futures_util::TryStreamExt as _;
 use rewind_engine::ports::{
     AccessClaims, Authentication, Client, IdentityError, IdentityProvider, Invitation,
-    InvitationId, Membership, MembershipId, Organization, OrganizationId, PendingToken, Provider,
-    Session, SessionId, Tokens, User, UserId,
+    InvitationId, MagicCode, Membership, MembershipId, Organization, OrganizationId, PendingToken,
+    Provider, Session, SessionId, Tokens, User, UserId,
 };
 use workos::SecretString;
 use workos::organization_membership::{
@@ -134,6 +134,27 @@ impl WorkOs {
 
     fn users(&self) -> UserManagementApi<'_> {
         self.client.user_management()
+    }
+
+    /// The invitation's token to give WorkOS with a sign-in. None for an invitation to the
+    /// deployment (no organization, as the waitlist's approval sends): WorkOS refuses a sign-in
+    /// that carries its token (`invitation_invalid`), while its invitee, whose user the
+    /// invitation created, signs in without it, which accepts it (measured on Staging and on
+    /// Production on 16 November 2026). A token WorkOS does not find is given as it is, for
+    /// WorkOS to refuse with the sign-in.
+    async fn invitation_token<'a>(
+        &self,
+        token: Option<&'a str>,
+    ) -> Result<Option<&'a str>, IdentityError> {
+        let Some(token) = token else {
+            return Ok(None);
+        };
+        match self.users().find_invitation_by_token(token).await {
+            Ok(invitation) if invitation.organization_id.is_none() => Ok(None),
+            Ok(_) => Ok(Some(token)),
+            Err(error) if error.is_not_found() => Ok(Some(token)),
+            Err(error) => Err(refusal(error, &[token])),
+        }
     }
 
     /// A session WorkOS opened, with the claims of its access token.
@@ -301,7 +322,7 @@ impl IdentityProvider for WorkOs {
         client: &Client,
     ) -> Result<Authentication, IdentityError> {
         let mut params = AuthenticateWithCodeParams::new(code);
-        params.invitation_token = secret(invitation_token);
+        params.invitation_token = secret(self.invitation_token(invitation_token).await?);
         params.ip_address = client.ip_address.clone();
         params.user_agent = client.user_agent.clone();
         let answer = self.users().authenticate_with_code(params).await;
@@ -325,7 +346,7 @@ impl IdentityProvider for WorkOs {
         &self,
         email: &str,
         _invitation_token: Option<&str>,
-    ) -> Result<(), IdentityError> {
+    ) -> Result<MagicCode, IdentityError> {
         let body = workos::CreateMagicCodeAndReturn {
             email: email.trim().to_owned(),
             invitation_token: None,
@@ -341,10 +362,11 @@ impl IdentityProvider for WorkOs {
             .create_magic_auth(CreateMagicAuthParams::new(body))
             .await
         {
-            Ok(_) => Ok(()),
-            // The same answer whether the email has an account or not: the closed sign-up is
-            // answered when the code is checked.
-            Err(error) if errors::is_sign_up_closed(&error) => Ok(()),
+            Ok(_) => Ok(MagicCode::Sent),
+            // WorkOS refuses to create the Magic Auth of an email without a user while sign-ups
+            // are closed (400, `{"error": "sign_up_not_allowed"}`, measured on Production on
+            // 16 November 2026): no code is sent.
+            Err(error) if errors::is_sign_up_closed(&error) => Ok(MagicCode::SignUpClosed),
             Err(error) => Err(refusal(error, &[])),
         }
     }
@@ -357,7 +379,7 @@ impl IdentityProvider for WorkOs {
         client: &Client,
     ) -> Result<Authentication, IdentityError> {
         let mut params = AuthenticateWithMagicAuthParams::new(code, email.trim());
-        params.invitation_token = secret(invitation_token);
+        params.invitation_token = secret(self.invitation_token(invitation_token).await?);
         params.ip_address = client.ip_address.clone();
         params.user_agent = client.user_agent.clone();
         let answer = self.users().authenticate_with_magic_auth(params).await;
@@ -466,6 +488,8 @@ impl IdentityProvider for WorkOs {
             .map_err(|error| failure(error, || format!("session {session}"), &[]))
     }
 
+    /// The same answer whether the email has a user or not, as for a code: someone who already
+    /// has one signs in, and an approved person's invitation already created theirs.
     async fn join_waitlist(&self, email: &str) -> Result<(), IdentityError> {
         let params = CreateWaitlistEntryParams::new(workos::CreateWaitlistEntry {
             email: email.trim().to_owned(),
@@ -473,11 +497,11 @@ impl IdentityProvider for WorkOs {
             // WorkOS sends it only when the environment's confirmation email is enabled.
             send_confirmation_email: Some(true),
         });
-        self.users()
-            .create_waitlist_entry(WAITLIST, params)
-            .await
-            .map(|_| ())
-            .map_err(|error| failure(error, || "the waitlist".into(), &[]))
+        match self.users().create_waitlist_entry(WAITLIST, params).await {
+            Ok(_) => Ok(()),
+            Err(error) if error.code() == Some(errors::ALREADY_A_USER) => Ok(()),
+            Err(error) => Err(failure(error, || "the waitlist".into(), &[])),
+        }
     }
 
     async fn create_organization(&self, name: &str) -> Result<Organization, IdentityError> {

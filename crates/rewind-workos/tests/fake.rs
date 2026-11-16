@@ -11,8 +11,8 @@ use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine as _};
 use rewind_core::Timestamp;
 use rewind_engine::ports::{
     AccessClaims, Authentication, Client, IdentityError, IdentityProvider, InvitationId,
-    InvitationState, MembershipId, MembershipStatus, Organization, OrganizationId, PendingToken,
-    Provider, Session, SessionId, UserId,
+    InvitationState, MagicCode, MembershipId, MembershipStatus, Organization, OrganizationId,
+    PendingToken, Provider, Session, SessionId, UserId,
 };
 use rewind_workos::{ISSUER, WorkOs};
 use serde_json::{Value, json};
@@ -374,6 +374,16 @@ async fn a_code_by_email_signs_in_with_the_browser_and_the_invitation() {
         .expect(1)
         .mount(&fake.server)
         .await;
+    fake.answer(
+        "GET",
+        "/user_management/invitations/by_token/inv-token",
+        ResponseTemplate::new(200).set_body_json(invitation_json(
+            "invitation_1",
+            "pending",
+            Some("org_acme"),
+        )),
+    )
+    .await;
     fake.authenticate(
         json!({
             "grant_type": "urn:workos:oauth:grant-type:magic-auth:code",
@@ -393,10 +403,13 @@ async fn a_code_by_email_signs_in_with_the_browser_and_the_invitation() {
     )
     .await;
 
-    fake.identity
-        .send_magic_code(" ada@example.net ", Some("inv-token"))
-        .await
-        .unwrap();
+    assert_eq!(
+        fake.identity
+            .send_magic_code(" ada@example.net ", Some("inv-token"))
+            .await
+            .unwrap(),
+        MagicCode::Sent
+    );
     let signed_in = session(
         fake.identity
             .authenticate_magic_code("ada@example.net", "123456", Some("inv-token"), &browser())
@@ -428,6 +441,62 @@ async fn a_code_by_email_signs_in_with_the_browser_and_the_invitation() {
         signed_in.claims.organization,
         Some(OrganizationId::new("org_acme"))
     );
+}
+
+#[tokio::test]
+async fn the_token_of_an_invitation_to_the_deployment_is_not_sent() {
+    let fake = Fake::start().await;
+    fake.answer(
+        "GET",
+        "/user_management/invitations/by_token/approval-token",
+        ResponseTemplate::new(200).set_body_json(invitation_json("invitation_2", "pending", None)),
+    )
+    .await;
+    // WorkOS refuses a sign-in with the token of an invitation without organization (measured on
+    // Staging and Production), and signs its invitee in without it.
+    Mock::given(method("POST"))
+        .and(path(AUTHENTICATE))
+        .and(body_partial_json(
+            json!({ "invitation_token": "approval-token" }),
+        ))
+        .respond_with(oauth_error(
+            400,
+            "invitation_invalid",
+            "The invitation is not found, expired, or has already been used.",
+        ))
+        .with_priority(1)
+        .mount(&fake.server)
+        .await;
+    fake.authenticate(
+        json!({ "grant_type": "urn:workos:oauth:grant-type:magic-auth:code", "code": "654321" }),
+        ResponseTemplate::new(200).set_body_json(fake.signed_in("user_ada", "session_2", None)),
+    )
+    .await;
+    fake.authenticate(
+        json!({ "grant_type": "authorization_code", "code": "github-code" }),
+        ResponseTemplate::new(200).set_body_json(fake.signed_in("user_ada", "session_3", None)),
+    )
+    .await;
+
+    let by_code = session(
+        fake.identity
+            .authenticate_magic_code(
+                "ada@example.net",
+                "654321",
+                Some("approval-token"),
+                &browser(),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(by_code.organization, None);
+    let by_github = session(
+        fake.identity
+            .authenticate_code("github-code", Some("approval-token"), &browser())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(by_github.claims.session, SessionId::new("session_3"));
 }
 
 #[tokio::test]
@@ -571,20 +640,26 @@ async fn an_unverified_email_is_verified_with_a_code() {
 #[tokio::test]
 async fn a_closed_sign_up_is_an_answer() {
     let fake = Fake::start().await;
+    // WorkOS Production's answer to a Magic Auth for an email without a user, its Waitlist on
+    // (16 November 2026).
     let closed = oauth_error(
-        403,
+        400,
         "sign_up_not_allowed",
-        "The request failed due to: invitation_invalid.",
+        "Creating new users is not allowed.",
     );
     fake.answer("POST", "/user_management/magic_auth", closed.clone())
         .await;
     fake.authenticate(json!({}), closed).await;
 
-    // The same answer as for an email with an account.
-    fake.identity
-        .send_magic_code("eve@example.net", None)
-        .await
-        .unwrap();
+    // No code is sent.
+    assert_eq!(
+        fake.identity
+            .send_magic_code("eve@example.net", None)
+            .await
+            .unwrap(),
+        MagicCode::SignUpClosed
+    );
+    // A code checked, or GitHub's, refused the same way is the same answer.
     assert_eq!(
         fake.identity
             .authenticate_magic_code(" Eve@Example.net ", "123456", None, &browser())
@@ -1026,8 +1101,11 @@ async fn sessions_are_revoked_and_the_waitlist_joined() {
         .join_waitlist(" eve@example.net")
         .await
         .unwrap();
-    let (code, _) = refused(fake.identity.join_waitlist("ada@example.net").await);
-    assert_eq!(code, "user_already_exists");
+    // An email that already has a user gets the same answer.
+    fake.identity
+        .join_waitlist("ada@example.net")
+        .await
+        .unwrap();
 }
 
 // ---------------------------------------------------------------------------------------------

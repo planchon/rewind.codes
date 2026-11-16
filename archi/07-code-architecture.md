@@ -314,7 +314,8 @@ Contracts, all covered by the conformance suite:
   accepted it, unless the user already has one. `set_default_role(tenant, role) /
   default_role(tenant)`. Built-in roles are not stored: the server knows them.
 - **`IdentityProvider`** (`crates/rewind-engine/src/ports/identity.rs`): `authorization_url`
-  (GitHub), `authenticate_code`, `send_magic_code`, `authenticate_magic_code`, `verify_email`,
+  (GitHub), `authenticate_code`, `send_magic_code` (`Sent`, or `SignUpClosed` without a code),
+  `authenticate_magic_code`, `verify_email`,
   `select_organization`, `refresh`, each answering `Authenticated` (the user, the organization if
   one is selected, the tokens) or the next step the provider asks for
   (`OrganizationSelectionRequired`, `EmailVerificationRequired`, `SignUpClosed`);
@@ -629,16 +630,16 @@ described in the OpenAPI document like `/v1`.
 | `GET /auth/config` | The sign-in methods (`github`, `magic_auth`) and whether sign-ups go through the waitlist; 404 without WorkOS, and the dashboard asks for an API key |
 | `GET /auth/github` | Redirects to WorkOS for GitHub, with a random `state` and the `invitation_token` of the page, both kept in the cookie `rewind_oauth` (5 minutes) |
 | `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/#/`); when the sign-in did not go through, to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`), never with a token or WorkOS's message |
-| `POST /auth/magic-auth` | Sends the 6-digit code to an email; the same answer whether the email has an account or not |
+| `POST /auth/magic-auth` | Sends the 6-digit code to an email. While sign-ups are closed, an email without an account gets none: the answer is `sign_up_closed`, and the person may join the waitlist |
 | `POST /auth/magic-auth/verify` | Checks the code |
 | `POST /auth/email-verification` | The code WorkOS sends when it requires the email to be verified |
 | `POST /auth/organization` | The organization chosen when WorkOS asks for one |
 | `POST /auth/session` | The current state: a valid access token, refreshed when less than a minute is left; with `organizationId`, switches organization. Writes a member's first grant in an organization |
-| `POST /auth/waitlist` | Puts an email on the waitlist |
+| `POST /auth/waitlist` | Puts an email on the waitlist; the same answer whether the email has an account or not |
 | `POST /auth/logout` | Revokes the session in WorkOS and clears the cookie |
 
-- `POST /auth/magic-auth` and `POST /auth/waitlist` answer 202 and `POST /auth/logout` 204, with no
-  body. Every other answer but the redirects is an `AuthState`: `authenticated` (the access token, its
+- `POST /auth/magic-auth` answers 202 when it sent a code, `POST /auth/waitlist` 202 and
+  `POST /auth/logout` 204, with no body. Every other answer but the redirects is an `AuthState`: `authenticated` (the access token, its
   expiry, the user, the organization or none), `organization_selection_required` (the
   organizations), `email_verification_required` (the email), `sign_up_closed` (the email, for the
   waitlist), or 401 without a session.
@@ -762,7 +763,7 @@ Its build is what `rewind-server` serves:
 | Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
 | Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
-| Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
+| Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist, which someone new also opens from the first page. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read` |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
