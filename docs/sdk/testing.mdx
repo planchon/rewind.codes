@@ -1,10 +1,11 @@
 ---
 title: "Testing"
-description: "Type-check scripts, run scenarios against mocks in virtual time, test against the calls of real runs, and fix failed runs with forks."
+description: "Type-check scripts, test them end to end against a world of mocks in virtual time, keep a workflow's suite green, and fix failed runs with forks."
 ---
 
 A run's behavior depends only on its script, its input and what the outside world answered. So a script is tested by
-answering its calls with mocks: no tool is called, and time is virtual. The complete program of this page is in
+giving it a world: the answers to its calls, the signals it receives, a start time and a seed. No tool is called, and
+time is virtual. The complete program of this page is in
 [`examples/testing`](https://github.com/planchon/rewind.codes/tree/main/examples/testing).
 
 ## Type-check
@@ -25,57 +26,103 @@ error TS2322 Type 'number' is not assignable to type 'string'.
 
 A script with only warnings passes. `runs.start` checks the script anyway, unless you pass `check: false`.
 
-## Scenarios
+## Tests
 
-A scenario runs a script in **mock mode**: its calls are answered by mocks, its signals are sent on a schedule, and
-time is virtual, so a 3-day timeout or a 10-day sleep passes at once. It reports a trace and the expectations that do
-not hold.
+A **test** describes the world a script meets and what the outside must see at the end. It never names the script: the
+script under test is a parameter, so a test written for one version of a script runs unchanged against the next. Tests
+are always end to end. They check how the run ended and the tool calls it made, never a variable, a helper or a log
+line, so a refactor breaks nothing it should not.
 
-```ts
-const result = await ci.scripts.test({
-  toolset: toolset.id,
-  script,
-  input: { repo: "acme/api" },
-  tools: {
-    "github.list_issues": issues,
-    "slack.post_message": { ok: true },
-    "github.close_issue": { closed: true },
+```json closes-once-approved.json
+{
+  "name": "closes the stale issues once approved",
+  "input": { "repo": "acme/api" },
+  "world": {
+    "tools": {
+      "github.list_issues": [
+        { "args": { "state": "open" },
+          "returns": [{ "number": 4, "updated_at": "2025-10-01T00:00:00Z" }] },
+        { "args": { "labels": "reopened" }, "returns": [] }
+      ],
+      "github.close_issue": { "returns": {} },
+      "slack.post_message": { "returns": { "ok": true } }
+    }
   },
-  signals: [{ name: "approval", payload: { close: true }, when: "1h" }],
-  expect: {
-    status: "completed",
-    output: { closed: 2 },
-    calls: { "github.list_issues": 1, "slack.post_message": 1, "github.close_issue": 2 },
-  },
-});
-
-result.passed; // every expectation holds
-result.failures; // one sentence each, written for a model
-result.trace; // the run's trace
+  "signals": [{ "name": "approval", "payload": { "close": true } }],
+  "expect": {
+    "status": "completed",
+    "output": { "closed": 1, "reopened": 0 },
+    "calls": [
+      { "tool": "slack.post_message", "args": { "channel": "#triage" }, "times": 1 },
+      { "tool": "github.close_issue", "times": 1 }
+    ],
+    "order": "listed"
+  }
+}
 ```
 
-<ParamField body="tools" type="Record<string, unknown>">
-  Static responses per tool: the result, or `{ "$error": "message" }` for a failure.
-</ParamField>
-<ParamField body="mocks" type="string">
-  TypeScript mock handlers, run in an isolate of their own so they cannot break the script's determinism. The module
-  default-exports its handlers by full tool name or by namespace; each receives the arguments and
-  `{ tool, runId, seq, attempt, idempotencyKey }`, and returns the result or throws.
-</ParamField>
-<ParamField body="cassette" type="object">
-  The calls and signals of a real run (below). Tried first, then the mock handlers, then the static responses.
-</ParamField>
-<ParamField body="signals" type="{ name, payload?, when? }[]">
-  Signals sent during the run, in order. `when` is `"blocked"` (the default: once the run can advance no further
-  without the outside world), or a duration of virtual time after the start, such as `"2h"`.
-</ParamField>
-<ParamField body="expect" type="Expectations">
-  What must be true at the end; what is not given is not checked. `status`; `output`, which the output must contain
-  (objects compared key by key); `error`, the name of the error and part of its message; `calls`, the number of calls
-  per tool: list every tool the script calls.
-</ParamField>
+Run tests against a script with `scripts.test`. Each test runs in its own engine, in virtual time, so a 3-day timeout or
+a 10-day sleep passes at once; several run at the same time.
 
-```ts Mock handlers
+```ts
+const result = await ci.scripts.test({ toolset: toolset.id, script, tests: [closesOnceApproved] });
+
+result.passed; // every test passed
+for (const test of result.tests) {
+  console.log(test.passed ? "PASS" : "FAIL", test.name, test.problem ?? "");
+  for (const failure of test.failures) console.log(`  ${failure}`); // one sentence each, written for a model
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Unique within a suite |
+| `input` | The run's input; `{}` when absent |
+| `start` | When the run starts, in virtual time; `2026-01-01T00:00:00Z` when absent |
+| `seed` | The run's seed, 64 lowercase hexadecimal digits; the same fixed seed for every test when absent |
+| `world.tools` | For each tool, one answer for every call, or a list of rules tried in order (below) |
+| `world.mocks` | TypeScript mock handlers, for answers that compute |
+| `world.cassette` | The calls and signals recorded from a run (below) |
+| `signals` | Sent to the run, in order. `when` is `"blocked"` (the default: once the run can go no further without the outside world), or a duration of virtual time after the start, such as `"2h"` |
+| `expect` | What must hold at the end; what is not given is not checked |
+| `origin` | For a test [recorded from a run](/sdk/workflows#record-tests-from-runs): the run, the workflow version it ran and its namespace |
+
+A test starts at a fixed time with a fixed seed: its result depends only on the script, the toolset, the test and the
+[determinism epoch](/concepts/journal#determinism-epochs). The same four give the same report, so a test cannot be
+flaky.
+
+## The world
+
+**The world is the list of what the script may touch.** A call is answered by the first source that has an answer: the
+rules of `world.tools`, then the mock handlers, then the cassette. A call that no source answers fails with a
+`ToolError` (`no recorded response for github.delete_repo({…})`) and fails the test, even if the script catches the
+error.
+
+A rule answers the calls whose args contain its `args` (objects compared key by key), or every call when it has none.
+It gives `returns`, the result, or `error`, a failure: `{ message, kind?, data? }`, where `kind` is that of a tool
+failure (`error` when absent). `times` says how many calls it answers; any number when absent.
+
+```json
+"world": {
+  "tools": {
+    "github.list_issues": [
+      { "args": { "state": "open" }, "returns": [{ "number": 4 }], "times": 1 },
+      { "returns": [] }
+    ],
+    "slack.post_message": { "error": { "message": "rate limited", "kind": "unavailable", "data": { "retryAfter": 30 } } },
+    "workflows.notify.start": { "returns": { "sent": true } }
+  }
+}
+```
+
+A start of a [workflow](/sdk/workflows) is answered like any call: `returns` is the child's output, `error` its
+failure, and no child runs. Each child workflow has its own suite.
+
+Mock handlers run in an isolate of their own, so they cannot break the script's determinism. The module default-exports
+its handlers by full tool name or by namespace; each receives the arguments and
+`{ tool, runId, seq, attempt, idempotencyKey }`, and returns the result or throws.
+
+```ts Mock handlers, as world.mocks
 const mocks = `export default {
   "github.list_issues": ({ repo }) => [{ number: 4, title: "Crash", repo, updated_at: "2025-01-01T00:00:00Z", labels: [] }],
   slack: {
@@ -86,9 +133,49 @@ const mocks = `export default {
 
 <Warning>
   A run that waits for a signal **with a timeout** is never blocked: virtual time moves straight to the timeout. Give
-  such a signal a `when` shorter than the timeout, like `"1h"` above; with the default `"blocked"`, it would arrive
-  after the timeout fired.
+  such a signal a `when` shorter than the timeout, such as `"1h"`; with the default `"blocked"`, it would arrive after
+  the timeout fired.
 </Warning>
+
+## Expectations
+
+Everything `expect` does not give is not checked.
+
+| Expectation | Holds when |
+| --- | --- |
+| `status` | The run is in this state: `completed`, `failed`, `cancelled`, `aborted`, or `active` for a run that can go no further in virtual time without the outside world (a test of "waits for approval") |
+| `output` | The output contains it: objects key by key, recursively; other values equal as JavaScript sees them |
+| `error` | The run failed with an error of this `name`, whose message contains `message` |
+| `calls` | For each entry, the calls to `tool` whose args contain `args`: exactly `times` of them, or at least one when `times` is absent. `times: 0` says a call must not happen |
+| `order` | `any` (the default), or `listed`: the first call matching each entry comes in the order of the entries (those with `times: 0` aside) |
+
+Calls the world answers that `calls` does not list are allowed: a fix that adds a harmless read breaks no test. To
+forbid a side effect, list it with `times: 0`.
+
+## What a test reports
+
+Each entry of `result.tests`, in the order given:
+
+| Field | What |
+| --- | --- |
+| `passed` | Every expectation holds |
+| `problem` | Why it did not pass: `stale`, `incompatible` or `failed` |
+| `failures` | What does not hold, one sentence each, written for a model |
+| `status`, `output`, `error`, `abort` | How the run ended; no status for a test that was not run |
+| `calls` | How many times each tool was called |
+| `trace` | The LLM trace of the run, as `runs.trace` writes it |
+
+Before a test runs, it is checked against what it runs with, without starting the script. A test that fails a check is
+reported with its problem, and is not run:
+
+- **`stale`**: a tool of `world.tools` or of `expect.calls` is not in the toolset; a rule's `returns` does not match the
+  tool's output schema, when it declares one; a rule's `args` has a key the tool's input schema does not declare. An MCP
+  server that changed its tools makes the tests written for the old ones stale.
+- **`incompatible`**, for a test of a workflow: the workflow's input schema refuses the input, or a signal is not one
+  the workflow declares, or its schema refuses the payload. A version that changed its interface makes the tests
+  written for the old one incompatible.
+
+A test that runs and does not meet its expectations is **`failed`**.
 
 ## Test against a real run
 
@@ -101,13 +188,40 @@ const cassette = await rewind.runs.journal(run.id, { as: "cassette" });
 const replayed = await ci.scripts.test({
   toolset: toolset.id,
   script: nextVersion,
-  input: { repo: "acme/api" },
-  cassette, // it holds the run's signals too
-  expect: { status: "completed", output: { closed: 2 } },
+  tests: [
+    {
+      name: "does what the run of Monday did",
+      input: { repo: "acme/api" },
+      world: { cassette }, // its signals are sent when they arrived in the run
+      expect: { status: "completed", output: { closed: 2 } },
+    },
+  ],
 });
 ```
 
-The model does the same with the agent tool `test_script` and `scenario.from_run`.
+A cassette is matched `sequential` (strict order of the calls) or `by_args` (the tool and its args, in any order). For
+a workflow, [record tests from its runs](/sdk/workflows#record-tests-from-runs) instead: Rewind picks one run per path,
+and keeps the run's start and seed, so `Date.now()` and random values are what they were.
+
+## Workflow suites
+
+A workflow version carries a **suite**: the tests it passed, which every version derived from it must pass too. Saving a
+version runs its suite, and a version is saved only if every test passes. See
+[Tests and the gate](/sdk/workflows#tests-and-the-gate).
+
+With `workflow`, `scripts.test` runs that version's suite too, and checks every test against its interface. The script
+and the toolset default to the version's. This is how a candidate is checked before it is saved:
+
+```ts
+// A corrected script, against the suite of the latest version of triage:
+await ci.scripts.test({ workflow: "triage", script: corrected, tests: [newTest] });
+
+// The same version on a new toolset, whose MCP server changed:
+await ci.scripts.test({ workflow: "triage", toolset: upgraded.id });
+```
+
+The tests of a script that is not a workflow are not stored. They become a suite when the script is saved as a
+workflow.
 
 ## Fix a failed run
 
@@ -133,28 +247,51 @@ calls the worker executed, both runs together: [
 ]
 ```
 
-## In CI, without a server
+The fork of a run of a workflow runs the suite of the run's version against the corrected script first. If a test does
+not pass, no fork is created: `runs.fork` throws a `tests-failed` error, whose `tests` say which tests failed and why.
+A fix that breaks another behavior never reaches production calls.
 
-The `rewind` CLI runs scenarios and replays in its own process, without a server. A scenario file holds the same fields,
-with paths instead of contents:
-
-```json triage.scenario.json
-{
-  "script": "triage.ts",
-  "toolset": "toolset.json",
-  "input": { "repo": "acme/api" },
-  "cassette": "cassettes/triage.json",
-  "mocks": "triage.mocks.ts",
-  "tools": { "slack.post_message": { "ok": true } },
-  "signals": [{ "name": "approval", "when": "1h", "payload": { "close": true } }],
-  "expect": { "status": "completed", "output": { "closed": 3 } }
+```ts
+try {
+  await ci.runs.fork(failed.id, { script: v2 });
+} catch (error) {
+  if (!isProblem(error, "tests-failed")) throw error;
+  for (const test of error.tests.filter((t) => !t.passed)) console.log(test.name, test.failures);
 }
 ```
 
-```bash
-rewind test triage.scenario.json            # exits 0 when every expectation holds
-rewind replay journal.json                  # re-executes an exported run and checks determinism
-rewind replay journal.json --script v2.ts   # is v2 compatible with that history? where does it diverge?
+## In CI, without a server
+
+The `rewind` CLI runs tests in its own process, without a server. A tests file is a JSON array of tests; their
+`world.mocks` and `world.cassette` may name files, relative to the tests file:
+
+```json triage.tests.json
+[
+  {
+    "name": "closes the stale issues once approved",
+    "input": { "repo": "acme/api" },
+    "world": { "mocks": "triage.mocks.ts", "tools": { "github.close_issue": { "returns": {} } } },
+    "signals": [{ "name": "approval", "payload": { "close": true } }],
+    "expect": { "status": "completed", "output": { "closed": 1 } }
+  },
+  {
+    "name": "does what the run of Monday did",
+    "input": { "repo": "acme/api" },
+    "world": { "cassette": "cassettes/monday.json" },
+    "expect": { "status": "completed", "output": { "closed": 2 } }
+  }
+]
 ```
 
-See [the CLI](/sdk/cli).
+```bash
+rewind test triage.ts                                 # the tests of triage.tests.json, next to the script
+rewind test triage.ts --tests ci.tests.json --toolset toolset.json
+rewind test triage.ts --workflow triage               # and the suite of the workflow, read from the server
+rewind test --workflow triage --toolset toolset.json  # the version's own script, on a new toolset
+rewind replay journal.json                            # re-executes an exported run and checks determinism
+rewind replay journal.json --script v2.ts             # is v2 compatible with that history? where does it diverge?
+```
+
+`rewind test` answers a call with the test's rules, its mock handlers, its cassette, then the static responses of
+`rewind.tools.json`, last. Without a toolset, the toolset is the tools the tests answer, as host tools. It exits with 0
+when every test passes, and 1 otherwise. See [the CLI](/sdk/cli).

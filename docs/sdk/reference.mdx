@@ -9,8 +9,9 @@ Every call takes an `AbortSignal` as `signal`. The types are those of the API, g
 | Resource | Calls |
 | --- | --- |
 | `rewind.toolsets` | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials` |
-| `rewind.workflows` | `create`, `list` and `listAll` (the latest version of each), `versions` (newest first) |
-| `rewind.scripts` | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get` (a script's source by its digest) |
+| `rewind.workflows` | `create` (`tests`, `update`, `retire`, `parent`: saved once its suite passes), `list` and `listAll` (the latest version of each), `versions` (newest first, with their suites and lineage), `record` (tests from past runs) |
+| `rewind.scripts` | `check`, `test` (tests in virtual time, and a workflow's suite), `list`, `listAll`, `get` (a script's source by its digest) |
+| `rewind.tests` | `get`: a stored test by its digest |
 | `rewind.runs` | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`, `sort`, `workflow`, `startedBy`…), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
 | `rewind.tasks` | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`: host-tool tasks at the level of the API |
 | `rewind.approvals` | `pending(run)`, `args`, `approve`, `reject` |

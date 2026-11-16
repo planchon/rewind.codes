@@ -1,0 +1,33 @@
+---
+title: "Workflows"
+description: "Each workflow, its versions and their lineage, and the suite of tests each version passed, with the reasons tests were updated or retired."
+---
+
+The Workflows view lists every [workflow](/concepts/workflows) of your organization, by name, with its latest version.
+
+Open a workflow to read its versions, the newest first. Each version shows its digest, when it was saved, its
+description, and its **parent**: the version it derives from, which opens in turn. The versions of a workflow form its
+lineage.
+
+A version's **suite** is the tests it passed when it was saved:
+
+| Group | What |
+| --- | --- |
+| **Inherited** | The parent's tests the version kept as they were |
+| **Added** | The tests the version brought, written by hand or [recorded from runs](/sdk/workflows#record-tests-from-runs) |
+| **Updated** | The parent's tests the version replaced, from the old test to the new one, with the reason given |
+| **Retired** | The parent's tests the version dropped, with the reason given |
+
+The reasons are what changed on purpose: read them before you change a behavior a test pins.
+
+Open a test to read its document:
+
+- **World**: the rules each tool answers with (the args they match, what they return or the error, how many times),
+  the mock handlers, and a summary of the cassette (its calls and signals).
+- **Signals**: the signals sent to the run, and when.
+- **Expectations**: the status, the output or the error, and the calls that must or must not happen.
+- **Origin**: for a recorded test, the run it was recorded from, which opens on its [Run](/dashboard/run) page.
+
+A recorded test holds its run's data, so it is read like the run: it needs `runs:read` in the namespace it was recorded
+from. When you cannot read it, the view says so in place of the test, and shows the rest of the suite. The view itself
+needs `toolsets:read`.

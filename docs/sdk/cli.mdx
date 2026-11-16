@@ -5,7 +5,8 @@ description: "rewind: run, check, test, replay and fork scripts from a terminal,
 
 The `rewind` binary is also a command-line client of the API. It talks to a remote server, or to an **embedded server**
 it starts on demand in a `.rewind/` directory, for local work without any setup. `rewind check`, `rewind test` and the
-replay of an exported journal run in the CLI's own process, without a server.
+replay of an exported journal run in the CLI's own process, without a server; `rewind test --workflow` only reads the
+workflow's suite from it.
 
 ```bash
 export REWIND_URL=https://api.rewind.codes     # leave it unset to use the embedded server
@@ -24,7 +25,8 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 | --- | --- |
 | `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v]` | Starts a run and waits for it, up to `--wait` |
 | `rewind check script.ts [--toolset …]` | Type-checks a script against the sandbox and a toolset's declarations |
-| `rewind test scenario.json` | Runs a [scenario](/sdk/testing#in-ci-without-a-server) against mocks and cassettes, in virtual time |
+| `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` | Runs [tests](/sdk/testing#in-ci-without-a-server) in virtual time, in the CLI's process: those of `--tests` (`script.tests.json` next to the script by default), and with `--workflow` the suite of that workflow, read from the server, against the script or the version's own |
+| `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | [Records tests](/sdk/workflows#record-tests-from-runs) from a workflow's past runs, one per path; prints their digests, names and paths |
 | `rewind signal <run> <name> [payload]` | Sends a signal |
 | `rewind cancel <run>` | Cancels a run |
 | `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
@@ -38,7 +40,9 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 | `rewind namespaces list\|show\|quotas\|delete` | The end users and their use, one end user, their limits (or the defaults with `--defaults`), erasure |
 | `rewind server` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
 
-A toolset file holds what `rewind.toolsets.create` takes, as JSON. Every command takes `--json`: the result as JSON on
+A toolset file holds what `rewind.toolsets.create` takes, as JSON. A tests file is a JSON array of
+[tests](/sdk/testing#tests), whose `world.mocks` and `world.cassette` may name files relative to it; without a toolset,
+`rewind test` takes the tools the tests answer as host tools. Every command takes `--json`: the result as JSON on
 standard output, errors as problem+json on standard error.
 
 ```bash
@@ -53,8 +57,8 @@ Scripts in CI branch on the exit code:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | The run completed, or the command succeeded (every expectation of a scenario holds) |
-| 1 | The run failed (an expectation of a scenario does not hold) |
+| 0 | The run completed, or the command succeeded (every test passes) |
+| 1 | The run failed (a test does not pass) |
 | 2 | The run was cancelled |
 | 3 | The run was aborted |
 | 4 | The run is still waiting: `--wait` elapsed, or it waits for the outside world |
@@ -74,6 +78,7 @@ minutes without requests or work in progress; a sleeping run resumes at the next
 ```text
 project/
   script.ts
-  rewind.tools.json   static responses per tool, for mock mode
+  script.tests.json   the tests of script.ts, for rewind test
+  rewind.tools.json   static responses per tool, answered last in tests
   .rewind/            created by the first command: journal.db, blobs/, server.sock…
 ```

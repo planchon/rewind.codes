@@ -5,7 +5,8 @@ description: "Named scripts with a typed input, output and signals, that scripts
 
 A **workflow** is a script with a name and a typed interface: JSON Schemas for its input, its output and each signal
 it accepts. Your harness registers workflows, and so does the model, with the agent tool `save_workflow`: a procedure
-it wrote once becomes a building block of its later scripts.
+it wrote once becomes a building block of its later scripts. Each version carries a suite of tests that every later
+version must pass.
 
 ## Typed end to end
 
@@ -36,6 +37,42 @@ export default async function main(input: { repos: string[] }) {
 Each registration is a new immutable **version**, identified by its digest (`repo_check@9fbd13f4bb9b`). A toolset that
 names a workflow pins its latest version when it is registered, as it pins the schemas of MCP tools. Runs that are
 already going keep their version: changing a workflow never breaks a run in flight.
+
+A version derives from a **parent**, the version before it: the versions of a workflow form its lineage.
+
+## A suite that follows the versions
+
+A **test** gives a script a world (its input, the answers to its calls, the signals it receives) and says what the
+outside must see at the end: how the run ends and the calls it makes. It never names its script, so a test written for
+one version runs unchanged against the next. It runs in virtual time, with a fixed start and seed, so it cannot be
+flaky. The world is the list of what the script may touch: a call nothing in it answers fails the test, even if the
+script catches the error. See [Testing](/sdk/testing#tests).
+
+Each version carries a **suite**: the tests it passed when it was saved. A new version inherits its parent's suite, and
+saving it runs every test against its script and toolset. It is saved only if every test passes; there is no way
+around it.
+
+```mermaid
+%%{init: {'flowchart': {'defaultRenderer': 'elk'}}}%%
+flowchart LR
+  v1["triage v1<br/>suite: A, B, C"] -- "retires C, with a reason<br/>updates B to B′, with a reason<br/>adds D" --> v2["triage v2<br/>suite: A, B′, D<br/>saved once every test passes"]
+```
+
+To change a behavior a test pins, the new version **retires** the test, because it is deprecated, or **updates** it,
+because its state or its result is out of date, and says why in both cases. The reasons stay in the lineage: whoever
+reads a version, a person in the dashboard or a model with `get_workflow`, learns what changed on purpose.
+
+Past runs become tests too. **Recording** takes the completed and failed runs of a workflow, groups them by the path
+they took (the tools they called, the signals they waited for, how they ended), and keeps the newest run of each path
+as a test: its real input, the real answers of its tools, and what it returned. A recorded test joins a suite only when
+a save names it. See [Record tests from runs](/sdk/workflows#record-tests-from-runs).
+
+A fix of a failed run of a workflow, with `retry_run` or `runs.fork`, runs the suite of the run's version against the
+corrected script first: a fix that breaks another behavior never reaches production calls.
+
+Tests are stored as content-addressed documents, and a version holds their digests: "this version passed these tests"
+never changes. A recorded test holds its run's data: only those who may read the runs of its namespace read it, and it
+is erased with that namespace.
 
 ## Attached and detached runs
 

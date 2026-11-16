@@ -1,6 +1,6 @@
 ---
 title: "Workflows"
-description: "Register named, typed scripts; let scripts start, signal and wait for their runs; start them from your harness."
+description: "Register named, typed scripts; let scripts start, signal and wait for their runs; keep their behavior with a suite of tests; start them from your harness."
 ---
 
 A workflow is a script with a name and JSON Schemas for its input, its output and the signals it accepts. See
@@ -106,8 +106,129 @@ const done = await team.runs.get(run.id, { wait: "30s" });
 least). An input that does not match the schema is refused with `invalid-input`, and a signal the workflow does not
 declare, or whose payload does not match, with `invalid-signal`.
 
+## Tests and the gate
+
+A version carries a **suite**: the [tests](/sdk/testing#tests) it passed, which every version derived from it must pass
+too. Give the first version its tests when you save it:
+
+```ts
+const triage = {
+  name: "triage",
+  description: "Triage the stale issues of a repository, after approval.",
+  toolset: toolset.id,
+  input,
+  output,
+  signals,
+};
+const v1 = await rewind.workflows.create({
+  ...triage,
+  script: triageV1,
+  tests: [closesOnceApproved, closesNothingWithoutApproval],
+});
+
+v1.tests; // [{ name: "closes nothing without approval", digest: "…" }, { name: "closes the stale issues once approved", … }]
+```
+
+Saving a version goes through a gate:
+
+1. Its parent is the version named by `parent` (`"triage@4be1c07a9d3e"`), or the latest version of the same name, or
+   none.
+2. Its suite is the parent's tests, minus those `retire` names, with those `update` names replaced, plus `tests`.
+3. Every test is checked, then runs against the version's script and toolset.
+4. The version is stored only if every test passes. Otherwise nothing is stored, and `create` throws a `tests-failed`
+   error whose `tests` holds each test's outcome, with its problem and its failures.
+
+```ts
+try {
+  await rewind.workflows.create({ ...triage, script: triageV2 });
+} catch (error) {
+  if (!isProblem(error, "tests-failed")) throw error;
+  for (const test of error.tests.filter((t) => !t.passed)) {
+    console.log(test.name, test.problem, test.failures);
+  }
+}
+```
+
+There is no way around the gate. To save a behavior an inherited test refuses, the new version **retires** the test,
+because it is deprecated, or **updates** it, because its state or its result is out of date, and says why:
+
+```ts
+await rewind.workflows.create({
+  ...triage,
+  script: triageV2,
+  retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
+  update: [
+    {
+      name: "closes nothing without approval",
+      reason: "the message names the repository",
+      expect: { calls: [{ tool: "slack.post_message", args: { text: "acme/api: 3 stale issues" }, times: 1 }] },
+    },
+  ],
+});
+```
+
+An update gives a whole new test (`test`), or only a new `expect` for the inherited one. `retire` and `update` name
+inherited tests, each with a reason; names are unique in a suite. A refused suite (a test that is not valid, a retired
+or updated test that is not inherited or has no reason, two tests of the same name) is `invalid-test`.
+
+The reasons stay in the lineage: each version of `rewind.workflows.versions(name)` has its `parent`, its suite
+(`tests`), the parent's tests it `retired` and those it `updated` (`from` and `to` digests), each with its reason. A
+person reading a version learns what changed on purpose. The dashboard's [Workflows](/dashboard/workflows) view shows
+them.
+
+A test is given to a save inline, by the digest of a stored test, or as `{ from: "<digest>", expect: { … } }`: a stored
+test with a new expectation. Read a stored test with `rewind.tests.get(digest)`.
+
+Check a candidate before saving it with [`scripts.test({ workflow })`](/sdk/testing#workflow-suites), which runs the
+version's suite against the given script or toolset. The fork of a run of a workflow runs its version's suite too, and
+is refused with `tests-failed` when a test does not pass.
+
+## Record tests from runs
+
+Past runs of a workflow have met the real world: real inputs, real tool answers, real signal timings. Recording turns
+them into tests, so a new version must keep doing what the old one did on those inputs.
+
+```ts
+const recorded = await rewind.workflows.record("triage", { query: "status:completed", limit: 20 });
+
+for (const test of recorded.tests) console.log(test.digest, test.name, test.path, test.run);
+for (const skipped of recorded.skipped) console.log(skipped.run, skipped.reason);
+
+await rewind.workflows.create({ ...triage, script: triageV2, tests: recorded.tests.map((test) => test.digest) });
+```
+
+Recording takes the completed and failed runs of the workflow, of any version, that you can see: those `runs` names, or
+those `query` selects in the [query language](/dashboard/query-language), the 1,000 newest at most. It groups them by
+**path**: the tools a run called in order, the signals it waited for, and how it ended, with consecutive repeats
+collapsed (`github.close_issue×2` and `×9` are one path). It keeps the newest run of each path, up to `limit` tests (20
+by default, 100 at most). A few hundred runs usually follow a handful of paths.
+
+| Field of the test | Taken from the run |
+| --- | --- |
+| `name` | `recorded <run id>` |
+| `input` | Its input |
+| `start`, `seed` | Its start time and its seed, so `Date.now()` and random values are what they were |
+| `world.cassette` | Its calls, matched by tool and args, the outcomes of the children it started included, and its signals at the time they arrived |
+| `expect` | Its status, its output or its error, and how many times it called each tool |
+| `origin` | The run, its version and its namespace |
+
+A recorded test says: on this real input, the new version makes the same calls with the same args and returns the same
+output. Any difference fails it. For a failed run, give the expectation it should have met,
+`{ from: digest, expect: { status: "completed", … } }`, and the run becomes a regression test. After an intended
+change, retire the recorded tests it affects, with one reason, and record again from the new version's runs.
+
+Recording stores the tests and adds them to no suite: a test joins a suite only when a save names it, through the gate.
+A run whose test would be larger than 4 MiB is skipped, and named in `skipped`. A recorded test holds its run's data,
+so it is read like the run: `tests.get` answers only a caller who may read the runs of its namespace. The gate runs it
+whoever saves.
+
+Tests are stored by the digest of their content. A test lives as long as a version references it; one that no version
+references is deleted a day after it was stored. A recorded test is erased with the namespace it came from, and the
+next save leaves it out, listed as retired with the reason `recorded from an erased namespace`.
+
 ## Workflows the model writes
 
 Give the model the agent tool `save_workflow`, and it saves procedures it wrote as workflows of its own. The agent tools
-then derive a toolset that pins the new version, and its later scripts import it from `rewind:workflows`. See
-[Agent tools](/sdk/agent-tools#workflows-the-model-saves).
+then derive a toolset that pins the new version, and its later scripts import it from `rewind:workflows`. The same gate
+applies: the model reads a workflow's suite and lineage with `get_workflow`, records tests with `record_tests`, and
+retires or updates tests with a reason. See [Agent tools](/sdk/agent-tools#tests-and-suites).

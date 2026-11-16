@@ -90,7 +90,7 @@
           },
           {
             "group": "Code, tools and end users",
-            "pages": ["dashboard/scripts", "dashboard/tools", "dashboard/namespaces"]
+            "pages": ["dashboard/scripts", "dashboard/workflows", "dashboard/tools", "dashboard/namespaces"]
           },
           {
             "group": "Your organization",

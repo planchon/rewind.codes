@@ -58,9 +58,9 @@ A fork keeps its parent's seed, input, toolset and namespace, and has its own id
 
 ## Cassettes: tests from real runs
 
-A run's calls and signals, exported as a **cassette**, become the mocks of a test. A test against a cassette answers
-each tool call with what the real tool answered, in virtual time, without calling anything. See
-[Testing](/sdk/testing).
+A run's calls and signals, exported as a **cassette**, become the world of a test. A test against a cassette answers
+each tool call with what the real tool answered, in virtual time, without calling anything. A workflow records tests
+from its runs this way, one per path they took. See [Testing](/sdk/testing#test-against-a-real-run).
 
 ```ts
 const cassette = await rewind.runs.journal(run.id, { as: "cassette" });

@@ -22,14 +22,16 @@ from a client holding [the end user's token](/sdk/end-users#tokens).
 | --- | --- |
 | `run_script({ code, input?, wait? })` | Type-checks the script and starts a run; returns its output, its error, or what it waits for |
 | `check_script({ code })` | Type-checks only |
-| `test_script({ code, scenario })` | Runs against mocks, in virtual time; `scenario.from_run` replays the calls a run recorded |
+| `test_script({ code, tests?, workflow? })` | Runs [tests](/sdk/testing#tests) against the script, in virtual time: those given, and the suite of `workflow` when it names one |
 | `get_run({ run_id, entry?, offset?, wait? })` | A run's state and trace; one journal entry in full; the next page of a long output |
 | `list_runs({ status? })` | The runs started with the same labels: this conversation's |
 | `signal_run({ run_id, name, payload? })` | Sends a signal |
 | `cancel_run({ run_id })` | Cancels a run |
-| `retry_run({ run_id, code })` | Forks the run with a corrected script: the calls already made are not made again |
+| `retry_run({ run_id, code })` | Forks the run with a corrected script: the calls already made are not made again. For a run of a workflow, its version's suite must pass first |
 | `search_tools({ query })` | The declarations of the matching tools, for toolsets too large for the prompt (with a toolset) |
-| `save_workflow({ name, description, code, input, output, signals? })` | Saves a [workflow](/sdk/workflows) the model's later scripts can start (with a toolset) |
+| `save_workflow({ name, description, code, input, output, signals?, tests?, update?, retire?, parent? })` | Saves a [workflow](/sdk/workflows) the model's later scripts can start, once its suite passes (with a toolset) |
+| `get_workflow({ name })` | A workflow's source, schemas, suite and lineage, with the reasons its tests were updated or retired (with a toolset) |
+| `record_tests({ workflow, query?, runs?, limit? })` | Records tests from a workflow's past runs, one per path, and returns their digests for `save_workflow` (with a toolset) |
 
 ## Plug them into your model
 
@@ -149,6 +151,8 @@ Results are plain text written for the model, and bounded, because they go into 
 - **Waiting**: the run's id and what it waits for, such as a signal, an approval or a host tool.
 - **Failed**: the error with its line and code frame, the call that failed, and the trace up to the failure.
 - **Refused**: the type-checker's diagnostics, with their code frames.
+- **Tested**: each test with `PASS` or `FAIL`, its problem (`stale`, `incompatible` or `failed`) and its failures, one
+  sentence each; the outcome, the calls and the trace only for the tests that did not pass.
 
 Mistakes the model can fix (a bad argument, a refused script, a run that has ended, a quota reached) come back as a
 result with `isError`. Faults of the platform or of your harness (an unreachable server, a 401, a 5xx, a key's client
@@ -173,7 +177,7 @@ carrying them, and the server enforces the scope too.
 
 | Option | Default | What |
 | --- | --- | --- |
-| `toolset` | | The toolset scripts import from `rewind:tools`. `search_tools` and `save_workflow` need one |
+| `toolset` | | The toolset scripts import from `rewind:tools`. `search_tools`, `save_workflow`, `get_workflow` and `record_tests` need one |
 | `labels` | | Set on every run; scope `list_runs` and the run ids the tools accept |
 | `tools` | all | A subset of the tools, such as `["run_script", "get_run"]` |
 | `wait` | `"30s"` | How long `run_script`, `retry_run` and `cancel_run` wait for the run to end |
@@ -191,3 +195,31 @@ If your harness creates the agent tools for each turn, keep `agentTools.toolset`
 `toolset` the next time. The derived toolset has a new id: a worker started with `toolset: <first id>` does not claim
 the tasks of its runs (start it without `toolset`), and credentials set on the first toolset must be set on the
 derived one too.
+
+## Tests and suites
+
+`test_script` runs [tests](/sdk/testing#tests) against the model's script, with the agent's toolset. A test is a test
+document, the digest of a stored test (one that `record_tests` returned), or `{ from: "<digest>", expect: { … } }`: a
+stored test with a new expectation. With `workflow`, the suite of that workflow runs too, against the model's script:
+the model checks a correction before it saves it. The result lists each test as `PASS` or `FAIL`, with its problem
+(`stale`, `incompatible` or `failed`) and its failures, one sentence each; the outcome, the calls and the trace come
+only for the tests that did not pass.
+
+`save_workflow` goes through the [gate](/sdk/workflows#tests-and-the-gate): the parent's tests, minus those it retires,
+with those it updates, plus its new `tests`, must all pass, or nothing is saved. When a test does not pass, the model
+gets the failing tests as `test_script` shows them, and either fixes the script or changes the suite on purpose:
+
+- `retire: [{ names, reason }]` drops inherited tests that are deprecated;
+- `update: [{ name, reason, test?, expect? }]` replaces an inherited test whose state or result is out of date, by a
+  whole new test or by a new `expect`.
+
+The reasons stay in the workflow's lineage. `get_workflow` reads it back: the latest version's source and schemas, each
+test of its suite in full, and every version's retired and updated tests with their reasons, newest first. A model
+repairs or extends a workflow it did not write from there.
+
+`record_tests` [records tests](/sdk/workflows#record-tests-from-runs) from the workflow's past runs, one per path, and
+returns each test's digest, name, path and run, and the runs it skipped with the reason. The model passes the digests
+in `save_workflow`'s `tests`, or gives a failed run the expectation it should have met with `{ from, expect }`.
+
+`retry_run` of a run of a workflow runs its version's suite against the corrected script first. If a test does not
+pass, no fork is created, and the model gets the failing tests, as with `save_workflow`.
