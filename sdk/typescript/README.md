@@ -78,11 +78,47 @@ const triageRun = await rewind.namespace(user.id).runs.start({
 // triageRun.workflow: { name, version }; a run a script started has `startedBy: { run, seq, detached }`
 ```
 
+A version carries a **suite**: the tests it passed, which every version derived from it must pass too. A test gives the
+world a run meets (its input, the answers of the tools it may call, the signals sent to it) and what the outside must
+see at the end; it never names its script. Saving a version runs the parent's tests, minus those it `retire`s, with
+those it `update`s replaced, plus its new `tests`, and saves it only if every test passes (otherwise `tests-failed`,
+whose `error.tests` holds each outcome). Tests can also be recorded from past runs, one per path, and referenced by
+digest.
+
+```ts
+const recorded = await rewind.workflows.record("triage", { query: "status:completed", limit: 20 });
+
+const next = await rewind.workflows.create({
+  name: "triage",
+  description: triage.description,
+  toolset: toolset.id,
+  script: fixedSource,
+  input: triage.input,
+  output: triage.output,
+  signals: triage.signals,
+  tests: [
+    ...recorded.tests.map((test) => test.digest),
+    {
+      name: "closes nothing without approval",
+      input: { repo: "acme/api" },
+      world: { tools: { "github.list_issues": { returns: [{ number: 4 }] } } },
+      signals: [{ name: "approval", payload: { close: false } }],
+      expect: { status: "completed", output: { closed: 0 }, calls: [{ tool: "github.close_issue", times: 0 }] },
+    },
+  ],
+  retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
+});
+
+// Check a candidate first: the given tests, plus the suite of the latest version of triage, against the new script.
+const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSource, workflow: "triage" });
+```
+
 | Resource                     | Calls                                                                                                                                                                                                                                                                                   |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rewind.toolsets`            | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials`                                                                                                                                                                        |
-| `rewind.workflows`           | `create`, `list` and `listAll` (the latest version of each), `versions` (newest first)                                                                                                                                                                                                  |
-| `rewind.scripts`             | `check`, `test` (mock mode, virtual time), `list`, `listAll`, `get`                                                                                                                                                                                                                     |
+| `rewind.workflows`           | `create` (through the gate of its suite: `parent`, `tests`, `update`, `retire`), `list` and `listAll` (the latest version of each), `versions` (newest first), `record` (tests from past runs)                                                                                          |
+| `rewind.tests`               | `get`: a stored test, by digest                                                                                                                                                                                                                                                         |
+| `rewind.scripts`             | `check`, `test` (tests in mock mode, virtual time, and the suite of a `workflow`), `list`, `listAll`, `get`                                                                                                                                                                             |
 | `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
 | `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                  |
 | `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                             |
@@ -101,10 +137,10 @@ Every call takes an `AbortSignal` (`signal`). The types are those of the API, ge
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
-`status`, `slug` (`"run-ended"`, `"invalid-script"`, `"invalid-workflow"`, `"invalid-input"`, `"invalid-signal"`…),
-`detail` (written for a model), `diagnostics` (for a refused script), `query` (for a query that cannot be read: where
-the term at fault is) and `quota` (for `quota-exceeded`: which quota, at which scope, its limit, the use and when it
-frees). `isProblem(error, "task-gone")` tests the kind. A key's client that starts a run, checks or tests a script
+`status`, `slug` (`"run-ended"`, `"invalid-script"`, `"invalid-workflow"`, `"tests-failed"`, `"invalid-signal"`…),
+`detail` (written for a model), `diagnostics` (for a refused script), `tests` (for `tests-failed`: each test's outcome),
+`query` (for a query that cannot be read: where the term at fault is) and `quota` (for `quota-exceeded`: which quota,
+at which scope, its limit, the use and when it frees). `isProblem(error, "task-gone")` tests the kind. A key's client that starts a run, checks or tests a script
 without naming a namespace gets the server's 400 as a `NamespaceRequiredError`. A server that cannot be reached gives a
 `RewindConnectionError`.
 
@@ -283,18 +319,20 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
 // Any other API:           agentTools.definitions and agentTools.handle(name, input, { toolCallId })
 ```
 
-| Tool                                                                  | Does                                                                                                |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `run_script({ code, input?, wait? })`                                 | Type-checks and starts a run; returns its output, its error, or what it waits for                   |
-| `check_script({ code })`                                              | Type-check only                                                                                     |
-| `test_script({ code, scenario })`                                     | Mock mode, virtual time; `scenario.from_run` replays the calls a run recorded                       |
-| `get_run({ run_id, entry?, offset?, wait? })`                         | The run's state and trace; one journal entry in full; the next page of a long output                |
-| `list_runs({ status? })`                                              | The runs started with the same labels                                                               |
-| `signal_run({ run_id, name, payload? })`                              | Sends a signal                                                                                      |
-| `cancel_run({ run_id })`                                              | Cancels a run                                                                                       |
-| `retry_run({ run_id, code })`                                         | Forks the run with a corrected script: the calls already made are not made again                    |
-| `search_tools({ query })`                                             | The declarations of the matching tools (only with a toolset)                                        |
-| `save_workflow({ name, description, code, input, output, signals? })` | Saves a workflow; the model's later scripts import it from `rewind:workflows` (only with a toolset) |
+| Tool                                                                                                     | Does                                                                                                                      |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `run_script({ code, input?, wait? })`                                                                    | Type-checks and starts a run; returns its output, its error, or what it waits for                                         |
+| `check_script({ code })`                                                                                 | Type-check only                                                                                                           |
+| `test_script({ code, tests?, workflow? })`                                                               | Runs tests against the script in mock mode, in virtual time, and the suite of `workflow`; each test's outcome             |
+| `get_run({ run_id, entry?, offset?, wait? })`                                                            | The run's state and trace; one journal entry in full; the next page of a long output                                      |
+| `list_runs({ status? })`                                                                                 | The runs started with the same labels                                                                                     |
+| `signal_run({ run_id, name, payload? })`                                                                 | Sends a signal                                                                                                            |
+| `cancel_run({ run_id })`                                                                                 | Cancels a run                                                                                                             |
+| `retry_run({ run_id, code })`                                                                            | Forks the run with a corrected script: the calls already made are not made again; a workflow's suite must pass first      |
+| `search_tools({ query })`                                                                                | The declarations of the matching tools (only with a toolset)                                                              |
+| `save_workflow({ name, description, code, input, output, signals?, tests?, update?, retire?, parent? })` | Saves a workflow once its suite passes; the model's later scripts import it from `rewind:workflows` (only with a toolset) |
+| `get_workflow({ name })`                                                                                 | The latest version's source and schemas, its suite with each test, and the lineage with its reasons (only with a toolset) |
+| `record_tests({ workflow, query?, runs?, limit? })`                                                      | Records tests from past runs, one per path, and returns their digests for `save_workflow` (only with a toolset)           |
 
 - Results are plain text written for the model, and bounded: `run_script` returns at most 256 KiB of output, with the
   call that reads the rest (`get_run` with `offset`); a failure shows the error with its line and code frame, the call
@@ -320,6 +358,11 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   toolset has another id: a worker that claims tasks `toolset: <id>` does not claim those of its runs (start it
   without `toolset`, with its `tools`), and credentials set on the first toolset are not carried over (set them on the
   derived one with `toolsets.setCredentials`). A refused script comes back with its diagnostics.
+- `save_workflow` and `retry_run` (of a run of a workflow) run the suite first. When a test does not pass, the model
+  reads each test's problem (`stale`, `incompatible` or `failed`), its failures and the trace of the run, and is told
+  that there is no way around the gate: it fixes the script, or retires or updates the test with a reason.
+  `result.tests` holds the outcomes, as it does for `test_script`. `get_workflow` reads each test of the suite in full,
+  a recorded run's calls summarized; a test recorded from a namespace whose runs the agent cannot read is said so.
 - Options: `tools` (a subset), `wait` (30 s), `maxWait` (2 min, the longest wait the model may ask for), `ttl`,
   `traceparent` (a string, or a function giving the current one), `outputLimit`.
 

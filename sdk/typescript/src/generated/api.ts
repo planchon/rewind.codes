@@ -1338,11 +1338,33 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Run a scenario in mock mode (`test_script`)
-         * @description In virtual time, against a cassette, mock handlers and static responses. No tool is
-         *     really called.
+         * Run tests in mock mode (`test_script`)
+         * @description In virtual time, each test against its world: rules, mock handlers and a cassette. No
+         *     tool is really called. With `workflow`, the suite of that version runs too, against the
+         *     given script or toolset. Served by a server with the worker role.
          */
         post: operations["testScript"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tests/{digest}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A stored test
+         * @description A test of a suite, or one recorded from a run. A recorded test holds its run's data and
+         *     seed: reading it also needs `runs:read` in its namespace.
+         */
+        get: operations["getTest"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1504,8 +1526,12 @@ export interface paths {
         put?: never;
         /**
          * Save a workflow (`save_workflow`)
-         * @description Checks the workflow's script against its toolset and its own schemas, and saves it as a
-         *     new version, the workflow's latest. Saving the same version again returns it (200).
+         * @description Checks the workflow's script against its toolset and its own schemas, then runs its
+         *     suite: its parent's tests, minus those it retires and with those it updates, each with a
+         *     reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
+         *     every test passes. Saving the same workflow again returns the version saved first (200).
+         *     Runs the script's tests: served by a server with the worker role (503 on the api role
+         *     when there is a test to run).
          */
         post: operations["createWorkflow"];
         delete?: never;
@@ -1525,6 +1551,29 @@ export interface paths {
         get: operations["getWorkflowVersions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/workflows/{name}/record": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record tests from past runs (`record_tests`)
+         * @description Takes the workflow's completed and failed runs the caller sees, those `runs` names or
+         *     those `query` selects (the 1,000 newest at most), groups them by the path they took, and
+         *     records the newest run of each path as a test, up to `limit`. The tests are stored and
+         *     join no suite: a save references them by digest.
+         */
+        post: operations["recordTests"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1802,6 +1851,8 @@ export interface components {
             /** Format: int32 */
             seq: number;
         };
+        /** @enum {string} */
+        CallOrder: "any" | "listed";
         /** @description A position in the script's TypeScript source (`script.ts`), 1-based. */
         Callsite: {
             /** Format: int32 */
@@ -2029,6 +2080,13 @@ export interface components {
             name: string;
             /** @description JSON Schema of what `main` returns. */
             output: Record<string, unknown>;
+            /**
+             * @description The version it derives from, `name@<version>` or a version: the latest version of the
+             *     same name the caller sees when absent. Its suite is inherited.
+             */
+            parent?: string | null;
+            /** @description Inherited tests dropped, with a reason: they are deprecated. */
+            retire?: components["schemas"]["TestRetirement"][];
             /** @description The TypeScript source: a single ES module whose default export is the entry point. */
             script: string;
             /**
@@ -2036,8 +2094,15 @@ export interface components {
              *     starting with `rewind:` are reserved.
              */
             signals?: Record<string, unknown>;
+            /**
+             * @description New tests: inline, by the digest of a recorded test, or a recorded test with a new
+             *     expectation.
+             */
+            tests?: components["schemas"]["TestInput"][];
             /** @description The id of the toolset its runs call, already registered. */
             toolset: string;
+            /** @description Inherited tests replaced, each with a reason: their state or result is out of date. */
+            update?: components["schemas"]["TestUpdate"][];
         };
         /**
          * @description `PUT /v1/toolsets/{id}/credentials` and `PUT /v1/runs/{id}/credentials`: secrets injected
@@ -2264,16 +2329,25 @@ export interface components {
             /** @enum {string} */
             type: "signal_awaited";
         };
-        /** @description What must be true at the end of a scenario. Everything not given is not checked. */
+        /** @description What must hold at the end of a test. Everything not given is not checked. */
         Expectations: {
-            /** @description How many times each tool was called. */
-            calls?: {
-                [key: string]: number;
-            } | null;
+            /**
+             * @description Calls that must happen: those to `tool` whose args contain `args`, exactly `times` of
+             *     them, at least one when `times` is absent; `times: 0` forbids them. Calls the world
+             *     answers that are not listed are allowed.
+             */
+            calls?: components["schemas"]["ExpectedCall"][];
             error?: components["schemas"]["ExpectedError"] | null;
+            order?: components["schemas"]["CallOrder"] | null;
             /** @description The output contains these values (objects are compared key by key, recursively). */
             output?: unknown;
             status?: components["schemas"]["RunStatus"] | null;
+        };
+        ExpectedCall: {
+            args?: Record<string, unknown> | null;
+            /** Format: int32 */
+            times?: number | null;
+            tool: string;
         };
         ExpectedError: {
             message?: string | null;
@@ -2822,6 +2896,11 @@ export interface components {
              * @description The HTTP status code.
              */
             status: number;
+            /**
+             * @description With `tests-failed`: every test of the run, those that did not pass with their problem
+             *     and failures.
+             */
+            tests?: components["schemas"]["TestResult"][];
             /** @description A short summary of the kind of problem, the same for every occurrence. */
             title: string;
             /** @description Identifies the kind of problem: `urn:rewind:problem:<slug>`. */
@@ -2982,10 +3061,57 @@ export interface components {
              */
             scripts?: number | null;
         };
+        /**
+         * @description `POST /v1/workflows/{name}/record`: tests recorded from the workflow's past runs, one per
+         *     path. They are stored, and join a suite only when a save references them.
+         * @example {
+         *       "limit": 20,
+         *       "query": "status:completed"
+         *     }
+         */
+        RecordTests: {
+            /**
+             * Format: int32
+             * @description At most this many tests: 20 by default, 100 at most.
+             */
+            limit?: number | null;
+            /**
+             * @description Which runs, in the query language of the run lists; the completed and failed runs of the
+             *     workflow, newest first, the 1,000 newest at most.
+             */
+            query?: string | null;
+            /** @description These runs, rather than a query. */
+            runs?: string[];
+        };
+        /** @description A test recorded from a run. */
+        RecordedTest: {
+            /** @description What `save_workflow` takes in `tests`. */
+            digest: string;
+            name: string;
+            /**
+             * @description The path the run took: `github.list_issues · signal approval · github.close_issue×n →
+             *     completed`.
+             */
+            path: string;
+            run: string;
+            status: components["schemas"]["RunStatus"];
+        };
+        /** @description What a recording stored. */
+        RecordedTests: {
+            /** @description The runs left out, and why. */
+            skipped: components["schemas"]["SkippedRun"][];
+            tests: components["schemas"]["RecordedTest"][];
+        };
         /** @description `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message. */
         RejectTask: {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
             message?: string | null;
+        };
+        /** @description A test of the parent a version does not keep. */
+        RetiredTest: {
+            digest: string;
+            name: string;
+            reason: string;
         };
         /** @description `DELETE /v1/namespaces/{name}/tokens`. */
         RevokedTokens: {
@@ -3027,6 +3153,12 @@ export interface components {
          * @enum {string}
          */
         Route: "mcp" | "host" | "builtin";
+        /** @description A failure a rule answers with. */
+        RuleError: {
+            data?: unknown;
+            kind?: components["schemas"]["ToolFailureKind"] | null;
+            message: string;
+        };
         /** @description The state of a run: a projection of its journal, with its metadata. */
         Run: {
             abort?: components["schemas"]["AbortReason"] | null;
@@ -3234,16 +3366,6 @@ export interface components {
             name: string;
             version: string;
         };
-        /** @description A signal sent during a scenario. */
-        ScenarioSignal: {
-            name: string;
-            payload?: unknown;
-            /**
-             * @description When it is sent: `"blocked"` (the default) once the run can advance no further without
-             *     the outside world; or a duration of virtual time after the start, such as `"2h"`.
-             */
-            when?: string | null;
-        };
         /** @description `GET /v1/scripts/{digest}`: one script's source, and what its runs did. */
         Script: {
             digest: string;
@@ -3391,6 +3513,10 @@ export interface components {
             /** @description The namespace. */
             sub: components["schemas"]["NamespaceName"];
         };
+        SkippedRun: {
+            reason: string;
+            run: string;
+        };
         /**
          * @description `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
          *     script that cannot run is refused (`invalid-script`) before any run exists.
@@ -3498,6 +3624,12 @@ export interface components {
         SubscriptionList: {
             subscriptions: components["schemas"]["Subscription"][];
         };
+        /** @description A test of a version's suite. */
+        SuiteTest: {
+            /** @description Its digest: `GET /v1/tests/{digest}`. */
+            digest: string;
+            name: string;
+        };
         /**
          * @description A claimed host-tool call. The worker keeps the claim alive with heartbeats, and answers
          *     with `/complete` or `/fail`, or `/defer` to answer later.
@@ -3552,51 +3684,196 @@ export interface components {
          */
         TaskState: "approval" | "ready" | "claimed" | "deferred" | "parked" | "done";
         /**
-         * @description `POST /v1/test`: runs a script in mock mode, in virtual time, against a cassette, mock
-         *     handlers and static responses, and checks expectations (`archi/05-testing-and-observability.md`,
-         *     "Testing and mocks"). It is what `rewind test scenario.json` runs, with the files inlined.
+         * @description A test: what the run is given (its input, the tools' answers, signals), and what must hold
+         *     at the end. It never names its script.
+         * @example {
+         *       "expect": {
+         *         "calls": [
+         *           {
+         *             "times": 1,
+         *             "tool": "github.close_issue"
+         *           }
+         *         ],
+         *         "output": {
+         *           "closed": 1
+         *         },
+         *         "status": "completed"
+         *       },
+         *       "input": {
+         *         "repo": "acme/api"
+         *       },
+         *       "name": "closes the stale issues once approved",
+         *       "signals": [
+         *         {
+         *           "name": "approval",
+         *           "payload": {
+         *             "close": true
+         *           }
+         *         }
+         *       ],
+         *       "world": {
+         *         "tools": {
+         *           "github.close_issue": {
+         *             "returns": {}
+         *           },
+         *           "github.list_issues": [
+         *             {
+         *               "args": {
+         *                 "state": "open"
+         *               },
+         *               "returns": [
+         *                 {
+         *                   "number": 4,
+         *                   "updated_at": "2025-10-01T00:00:00Z"
+         *                 }
+         *               ]
+         *             }
+         *           ]
+         *         }
+         *       }
+         *     }
          */
-        TestRequest: {
-            /**
-             * @description A cassette of the stored format v1, recorded from a real run
-             *     (`GET /v1/runs/{id}/journal?as=cassette`). Tried first.
-             */
-            cassette?: Record<string, unknown> | null;
+        Test: {
             expect?: components["schemas"]["Expectations"];
             /** @description The run's input. `{}` when absent. */
             input?: unknown;
-            /** @description TypeScript mock handlers, run in a separate isolate. Tried after the cassette. */
-            mocks?: string | null;
-            /** @description The TypeScript source. */
-            script: string;
-            /** @description Signals sent to the run, in order. */
-            signals?: components["schemas"]["ScenarioSignal"][];
+            /** @description Unique within a suite. */
+            name: string;
+            origin?: components["schemas"]["TestOrigin"] | null;
+            /** @description The run's seed, 64 lowercase hex digits; the same fixed seed for every test when absent. */
+            seed?: string | null;
+            /** @description Sent to the run in order. */
+            signals?: components["schemas"]["TestSignal"][];
             /**
-             * @description Static responses per tool, tried last: the result, or `{"$error": "message"}` for a
-             *     failure (as in `rewind.tools.json`).
+             * Format: date-time
+             * @description When the run starts, in virtual time; 2026-01-01T00:00:00Z when absent.
              */
-            tools?: {
-                [key: string]: unknown;
-            };
-            /** @description The toolset the script imports from `rewind:tools`. */
-            toolset?: string | null;
+            start?: string | null;
+            world?: components["schemas"]["World"];
         };
-        /** @description The outcome of a scenario. */
+        /**
+         * @description A stored test with a new expectation: a model corrects a recorded test without reading its
+         *     cassette.
+         */
+        TestFrom: {
+            expect: components["schemas"]["Expectations"];
+            /** @description The digest of the stored test. */
+            from: string;
+        };
+        /**
+         * @description A test given to `POST /v1/test` or to a save: inline, by the digest of a stored test (one
+         *     recorded from a run), or as a stored test with a new expectation.
+         */
+        TestInput: string | components["schemas"]["TestFrom"] | components["schemas"]["Test"];
+        /** @description The run a recorded test comes from. The test holds that run's data, and is read like it. */
+        TestOrigin: {
+            namespace: string;
+            run: string;
+            /** @description The workflow version the run executed. */
+            version: string;
+        };
+        /**
+         * @description Why a test did not pass.
+         * @enum {string}
+         */
+        TestProblem: "stale" | "incompatible" | "failed";
+        /**
+         * @description `POST /v1/test`: runs tests in mock mode, in virtual time (`archi/05-testing-and-observability.md`,
+         *     "Running tests"). The given tests run against the script; with `workflow`, that version's
+         *     suite runs too, and its interface checks every test. This is how a candidate is checked
+         *     before it is saved: a corrected script, or the version on a new toolset.
+         * @example {
+         *       "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  const issues = await github.list_issues({ repo: input.repo, state: \"open\" });\n  return { open: issues.length };\n}\n",
+         *       "tests": [
+         *         {
+         *           "expect": {
+         *             "output": {
+         *               "open": 1
+         *             },
+         *             "status": "completed"
+         *           },
+         *           "input": {
+         *             "repo": "acme/api"
+         *           },
+         *           "name": "counts the open issues",
+         *           "world": {
+         *             "tools": {
+         *               "github.list_issues": {
+         *                 "returns": [
+         *                   {
+         *                     "number": 4
+         *                   }
+         *                 ]
+         *               }
+         *             }
+         *           }
+         *         }
+         *       ]
+         *     }
+         */
+        TestRequest: {
+            /** @description The TypeScript source. With `workflow`, the version's own when absent. */
+            script?: string | null;
+            tests?: components["schemas"]["TestInput"][];
+            /**
+             * @description The toolset the script imports from `rewind:tools`. With `workflow`, the version's own
+             *     when absent.
+             */
+            toolset?: string | null;
+            /** @description A workflow, `triage` (its latest version) or `triage@<version>`: its suite runs too. */
+            workflow?: string | null;
+        };
+        /** @description The outcome of a test. */
         TestResult: {
             abort?: components["schemas"]["AbortReason"] | null;
             /** @description How many times each tool was called. */
-            calls: {
+            calls?: {
                 [key: string]: number;
             };
             error?: components["schemas"]["ScriptError"] | null;
-            /** @description The expectations that do not hold, one sentence each, written for a model. */
+            /** @description What does not hold, one sentence each, written for a model. */
             failures: string[];
+            name: string;
             output?: unknown;
-            /** @description Every expectation holds. */
             passed: boolean;
-            status: components["schemas"]["RunStatus"];
-            /** @description The LLM trace of the run (as `GET /v1/runs/{id}/trace?format=llm`). */
-            trace: string;
+            problem?: components["schemas"]["TestProblem"] | null;
+            status?: components["schemas"]["RunStatus"] | null;
+            /** @description The LLM trace of the run; empty for a test that was not run. */
+            trace?: string;
+        };
+        /** @description Inherited tests dropped, and why. */
+        TestRetirement: {
+            names: string[];
+            /** @description Why: kept in the lineage. */
+            reason: string;
+        };
+        /** @description `POST /v1/test`: what the tests ran against, and their outcomes. */
+        TestRun: {
+            /** @description Every test passed. */
+            passed: boolean;
+            /** @description In the order given, then the suite's. */
+            tests: components["schemas"]["TestResult"][];
+        };
+        /** @description A signal sent during a test. */
+        TestSignal: {
+            name: string;
+            payload?: unknown;
+            /**
+             * @description When it is sent: `"blocked"` (the default) once the run can go no further without the
+             *     outside world; or a duration of virtual time after the start, such as `"2h"`.
+             */
+            when?: string | null;
+        };
+        /**
+         * @description An inherited test replaced: by a whole new test, which takes its name, or by itself with a
+         *     new expectation.
+         */
+        TestUpdate: {
+            expect?: components["schemas"]["Expectations"] | null;
+            name: string;
+            /** @description Why: kept in the lineage. */
+            reason: string;
+            test?: components["schemas"]["TestInput"] | null;
         };
         /** @description An end user's opaque token. */
         Token: {
@@ -3687,6 +3964,24 @@ export interface components {
             onInterruption?: components["schemas"]["OnInterruption"] | null;
             timeout?: components["schemas"]["Duration"] | null;
         };
+        /**
+         * @description An answer to the calls whose args contain `args`: `returns` (the result, `null` included) or
+         *     `error`, for `times` calls at most.
+         */
+        ToolRule: {
+            /** @description The call's args contain these (objects compared key by key); any call when absent. */
+            args?: Record<string, unknown> | null;
+            error?: components["schemas"]["RuleError"] | null;
+            /** @description The result. */
+            returns?: unknown;
+            /**
+             * Format: int32
+             * @description How many calls it answers; any number when absent.
+             */
+            times?: number | null;
+        };
+        /** @description One rule, or several tried in order. */
+        ToolRules: components["schemas"]["ToolRule"][] | components["schemas"]["ToolRule"];
         /**
          * @description A call parked because the tool no longer matches its pinned schema
          *     (`archi/04-tools.md`, "When a toolset changes during a run"). Approve the task to continue
@@ -3788,6 +4083,13 @@ export interface components {
             /** @description A built-in role or a role of the organization. */
             defaultRole?: string | null;
             name?: string | null;
+        };
+        /** @description A test of the parent a version replaced. */
+        UpdatedTest: {
+            from: string;
+            name: string;
+            reason: string;
+            to: string;
         };
         /** @description A person, as the identity provider knows them. */
         User: {
@@ -3943,11 +4245,17 @@ export interface components {
             labels: components["schemas"]["Labels"];
             name: string;
             output: Record<string, unknown>;
+            /** @description The version it derives from. */
+            parent?: string | null;
+            retired?: components["schemas"]["RetiredTest"][];
             /** @description Digest of its script (`GET /v1/scripts/{digest}`). */
             script: string;
             signals: Record<string, unknown>;
+            /** @description Its suite: the tests it passed when it was saved, by name. */
+            tests?: components["schemas"]["SuiteTest"][];
             /** @description The id of the toolset its runs call. */
             toolset: string;
+            updated?: components["schemas"]["UpdatedTest"][];
             /**
              * @description The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
              *     first 12 digits.
@@ -3964,6 +4272,26 @@ export interface components {
         WorkflowVersions: {
             name: string;
             versions: components["schemas"]["Workflow"][];
+        };
+        /**
+         * @description What answers the run's calls: the rules, then the mock handlers, then the cassette. A call
+         *     no source answers fails, and fails the test.
+         */
+        World: {
+            /** @description Calls and signals recorded from a run: a cassette document. */
+            cassette?: Record<string, unknown> | null;
+            /**
+             * @description TypeScript mock handlers, run in a separate isolate: a module default-exporting its
+             *     handlers by tool name or by namespace.
+             */
+            mocks?: string | null;
+            /**
+             * @description By tool, one answer for every call, or rules tried in order. A start of a workflow
+             *     (`workflows.<name>.start`) is answered with the child's output, or its failure.
+             */
+            tools?: {
+                [key: string]: components["schemas"]["ToolRules"];
+            };
         };
     };
     responses: never;
@@ -8316,7 +8644,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The corrected script was refused (`invalid-script`). */
+            /** @description The corrected script was refused (`invalid-script`); or, for a run of a workflow, its version's suite did not pass against it (`tests-failed`, with `tests`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -8343,7 +8671,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The server cannot serve the request now (`unavailable`). */
+            /** @description A run of a workflow forked on a server without the worker role (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -9921,13 +10249,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The outcome and the expectations that do not hold. */
+            /** @description Each test's outcome, and the expectations that do not hold. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TestResult"];
+                    "application/json": components["schemas"]["TestRun"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -9957,7 +10285,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset. */
+            /** @description No such toolset, workflow or stored test. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -9966,8 +10294,88 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused at start (`invalid-script`). */
+            /** @description The script was refused at start (`invalid-script`), or a test (`invalid-test`). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getTest: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+            };
+            path: {
+                /** @description The test's digest. */
+                digest: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Test"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such test. */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10751,7 +11159,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such toolset. */
+            /** @description No such toolset, or parent. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -10760,7 +11168,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The script was refused (`invalid-script`, with `diagnostics`), or the name, a signal's name or a schema (`invalid-workflow`). */
+            /** @description The script was refused (`invalid-script`, with `diagnostics`); the name, a signal's name or a schema (`invalid-workflow`); a test or the suite (`invalid-test`); or tests did not pass (`tests-failed`, with `tests`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -10778,7 +11186,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The server cannot serve the request now (`unavailable`). */
+            /** @description A server without the worker role, with tests to run (`unavailable`). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -10838,6 +11246,87 @@ export interface operations {
                 };
             };
             /** @description No such workflow. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    recordTests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The workflow's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordTests"];
+            };
+        };
+        responses: {
+            /** @description The tests recorded, and the runs left out. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordedTests"];
+                };
+            };
+            /** @description The query cannot be read (`invalid-query`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such workflow, or run. */
             404: {
                 headers: {
                     [name: string]: unknown;

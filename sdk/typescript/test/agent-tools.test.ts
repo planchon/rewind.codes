@@ -55,14 +55,18 @@ function serveRun(state: Run): void {
 }
 
 describe("the agent tools' definitions", () => {
-  it("are all there with a toolset, and search_tools only with one", () => {
+  it("are all there with a toolset, and the tools of the toolset and its workflows only with one", () => {
     expect(tools.definitions.map((d) => d.name)).toEqual([...AGENT_TOOL_NAMES]);
     const withoutToolset = rewind.agentTools({ labels: LABELS });
-    expect(withoutToolset.has("search_tools")).toBe(false);
-    expect(withoutToolset.has("save_workflow")).toBe(false);
+    for (const name of ["search_tools", "save_workflow", "get_workflow", "record_tests"]) {
+      expect(withoutToolset.has(name)).toBe(false);
+    }
     expect(withoutToolset.has("run_script")).toBe(true);
+    expect(withoutToolset.has("test_script")).toBe(true);
     expect(() => rewind.agentTools({ tools: ["search_tools"] })).toThrow(TypeError);
     expect(() => rewind.agentTools({ tools: ["save_workflow"] })).toThrow("save_workflow needs a toolset");
+    expect(() => rewind.agentTools({ tools: ["get_workflow"] })).toThrow("get_workflow needs a toolset");
+    expect(() => rewind.agentTools({ tools: ["record_tests"] })).toThrow("record_tests needs a toolset");
     expect(() => rewind.agentTools({ tools: ["nope" as never] })).toThrow(TypeError);
     expect(rewind.agentTools({ tools: ["run_script", "get_run"] }).definitions.map((d) => d.name)).toEqual([
       "run_script",
@@ -91,6 +95,48 @@ describe("the agent tools' definitions", () => {
     for (const definition of tools.definitions) {
       expect(definition.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
     }
+  });
+
+  it("describe the test document: its world, its signals and its expectations, or a recorded test", () => {
+    const testScript = tools.definitions.find((d) => d.name === "test_script")!;
+    expect(testScript.inputSchema.required).toEqual(["code"]);
+    const tests = testScript.inputSchema.properties?.["tests"] as { items: { anyOf: Array<Record<string, any>> } };
+    const [inline, digest, from] = tests.items.anyOf;
+    expect(Object.keys(inline?.["properties"])).toEqual([
+      "name",
+      "input",
+      "start",
+      "seed",
+      "world",
+      "signals",
+      "expect",
+    ]);
+    expect(Object.keys(inline?.["properties"].world.properties)).toEqual(["tools", "mocks"]);
+    const rule = inline?.["properties"].world.properties.tools.additionalProperties.anyOf[0];
+    expect(Object.keys(rule.properties)).toEqual(["args", "returns", "error", "times"]);
+    expect(Object.keys(inline?.["properties"].signals.items.properties)).toEqual(["name", "payload", "when"]);
+    const expectations = inline?.["properties"].expect;
+    expect(Object.keys(expectations.properties)).toEqual(["status", "output", "error", "calls", "order"]);
+    expect(Object.keys(expectations.properties.calls.items.properties)).toEqual(["tool", "args", "times"]);
+    expect(digest).toMatchObject({ type: "string" });
+    expect(from).toMatchObject({ type: "object", required: ["from", "expect"] });
+
+    const save = tools.definitions.find((d) => d.name === "save_workflow")!;
+    expect(Object.keys(save.inputSchema.properties ?? {})).toEqual([
+      "name",
+      "description",
+      "code",
+      "input",
+      "output",
+      "signals",
+      "tests",
+      "update",
+      "retire",
+      "parent",
+    ]);
+    expect(save.description).toContain("saved only if every test passes");
+    expect(save.description).toContain("retire the test when the behavior is deprecated");
+    expect(save.description).toContain("update it when its state or its expected result is out of date");
   });
 });
 
@@ -334,15 +380,25 @@ describe("the agent's namespace", () => {
     server
       .on("POST", "/v1/runs", started())
       .on("POST", "/v1/check", json({ ok: true, diagnostics: [] }))
-      .on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }))
-      .on("GET", "/v1/runs", json({ runs: [] }));
+      .on("POST", "/v1/test", json({ passed: true, tests: [] }))
+      .on("GET", "/v1/runs", json({ runs: [] }))
+      .on("POST", "/v1/workflows/{name}/record", json({ tests: [], skipped: [] }))
+      .on(
+        "GET",
+        "/v1/workflows/{name}",
+        json({ name: "triage", versions: [workflow({ tests: [{ name: "t", digest: "ab".repeat(32) }] })] }),
+      )
+      .on("GET", "/v1/scripts/{digest}", json({ digest: "cd".repeat(32), source: "src" }))
+      .on("GET", "/v1/tests/{digest}", json({ name: "t" }));
     serveRun(run());
     await tools.handle("run_script", { code: "x" }, { toolCallId: "call_0" });
     await tools.handle("check_script", { code: "x" });
-    await tools.handle("test_script", { code: "x", scenario: {} });
+    await tools.handle("test_script", { code: "x", tests: ["ab"] });
     await tools.handle("list_runs", {});
     await tools.handle("get_run", { run_id: RUN_ID });
-    expect(server.requests.length).toBeGreaterThanOrEqual(5);
+    await tools.handle("record_tests", { workflow: "triage" });
+    await tools.handle("get_workflow", { name: "triage" });
+    expect(server.requests.length).toBeGreaterThanOrEqual(9);
     for (const request of server.requests) {
       expect(request.headers["rewind-namespace"], `${request.method} ${request.path}`).toBe(NAMESPACE);
     }
@@ -473,19 +529,19 @@ describe("a tool result", () => {
     server.on("POST", "/v1/check", json({ ok: false, diagnostics }));
     expect(bytes((await tools.handle("check_script", { code: "x" })).content)).toBeLessThan(BOUND);
 
-    server.on(
-      "POST",
-      "/v1/test",
-      json({
-        passed: false,
-        status: "failed",
-        calls: {},
-        failures: [huge, huge],
-        error: { name: "Error", message: huge },
-        trace: "",
-      }),
-    );
-    expect(bytes((await tools.handle("test_script", { code: "x", scenario: {} })).content)).toBeLessThan(BOUND);
+    const large = "x".repeat(500_000);
+    const failed = {
+      name: large,
+      passed: false,
+      problem: "failed",
+      status: "failed",
+      calls: {},
+      failures: [large, large],
+      error: { name: "Error", message: large },
+      trace: large,
+    };
+    server.on("POST", "/v1/test", json({ passed: false, tests: Array.from({ length: 20 }, () => failed) }));
+    expect(bytes((await tools.handle("test_script", { code: "x", workflow: "triage" })).content)).toBeLessThan(BOUND);
 
     server.on("GET", "/v1/runs/{id}", problem(400, "invalid-request", huge));
     expect(bytes((await tools.handle("get_run", { run_id: RUN_ID })).content)).toBeLessThan(BOUND);
@@ -657,6 +713,49 @@ describe("the tools that take a run id", () => {
     expect(fork?.headers["idempotency-key"]).toBe(runKey("call_9"));
     expect(fork?.body).toEqual({ script: "fixed", labels: LABELS, wait: "30s" });
   });
+
+  it("retry_run: says which tests of the workflow's suite refused the fix", async () => {
+    serveRun(run({ status: "failed", workflow: { name: "triage", version: VERSION } }));
+    const tests = [
+      { name: "closes once approved", passed: true, status: "completed", calls: {}, failures: [], trace: "#0 ok" },
+      {
+        name: "closes nothing without approval",
+        passed: false,
+        problem: "failed",
+        status: "completed",
+        output: { closed: 1 },
+        calls: { "github.close_issue": 1, "github.list_issues": 1 },
+        failures: ["github.close_issue was called 1 time, expected 0"],
+        trace: "#0 run_started\n#1 tool github.close_issue",
+      },
+    ];
+    server.on(
+      "POST",
+      "/v1/runs/{id}/fork",
+      problem(422, "tests-failed", "1 test of the suite of triage did not pass against the corrected script", {
+        tests,
+      }),
+    );
+    const result = await tools.handle("retry_run", { run_id: RUN_ID, code: "fixed" });
+    expect(result.isError).toBe(true);
+    expect(result.tests).toEqual(tests);
+    expect(result.run?.id).toBe(RUN_ID);
+    expect(result.content).toBe(
+      [
+        `Run ${RUN_ID} was not retried: 1 test of the suite of triage did not pass against the corrected script`,
+        "1 of 2 tests did not pass.",
+        'PASS "closes once approved"',
+        'FAIL "closes nothing without approval" (failed): it ran, and expectations do not hold:',
+        "  - github.close_issue was called 1 time, expected 0",
+        "  The run completed.",
+        '  Output: {"closed":1}',
+        "  Calls: github.close_issue ×1, github.list_issues ×1",
+        "  Trace:",
+        "#0 run_started\n#1 tool github.close_issue",
+        'A fix must keep every behavior the suite of triage@4be1c07a9d3e pins: there is no way around it. Fix the script, and check it with test_script({"code":"…","workflow":"triage@4be1c07a9d3e"}) before you try again. If a behavior must change on purpose, save a new version of the workflow with save_workflow, retiring or updating its tests with a reason, and start a new run of it.',
+      ].join("\n"),
+    );
+  });
 });
 
 describe("the other tools", () => {
@@ -767,55 +866,150 @@ describe("the other tools", () => {
     expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });
   });
 
-  it("test_script: runs the scenario, against a recorded run when asked", async () => {
-    serveRun(run());
-    server.on("GET", "/v1/runs/{id}/journal", (request) => json({ version: 1, kind: request.query.get("as") }));
+  it("test_script: runs the tests, and the suite of a workflow, against the script", async () => {
+    const recorded = "9f".repeat(32);
     server.on(
       "POST",
       "/v1/test",
       json({
         passed: false,
-        status: "completed",
-        output: { closed: 2 },
-        calls: { "github.close_issue": 2 },
-        failures: ["the output's closed is 2, expected 3"],
-        trace: "#0 run_started",
+        tests: [
+          {
+            name: "closes the stale issues once approved",
+            passed: true,
+            status: "completed",
+            output: { closed: 1 },
+            calls: { "github.close_issue": 1 },
+            failures: [],
+            trace: "#0 run_started (a passing test's trace is not shown)",
+          },
+          {
+            name: `recorded ${RUN_ID}`,
+            passed: false,
+            problem: "failed",
+            status: "completed",
+            output: { closed: 2 },
+            calls: { "github.close_issue": 2, "github.list_issues": 1 },
+            failures: ["the output's closed is 2, expected 3", "github.delete_repo has no recorded response"],
+            trace: "#0 run_started\n#1 tool github.list_issues",
+          },
+          {
+            name: "posts to slack",
+            passed: false,
+            problem: "stale",
+            calls: {},
+            failures: ["slack.post_message is not one of the tools"],
+            trace: "",
+          },
+          {
+            name: "refuses a bad repo",
+            passed: false,
+            problem: "incompatible",
+            calls: {},
+            failures: ["the input does not match the input schema of triage: repo must be a string"],
+            trace: "",
+          },
+          {
+            name: "fails when GitHub is down",
+            passed: false,
+            problem: "failed",
+            status: "failed",
+            error: { name: "ToolError", message: "GitHub is down" },
+            calls: { "github.list_issues": 1 },
+            failures: ["the run failed with ToolError, expected completed"],
+            trace: "#0 run_started\n#1 tool github.list_issues → error",
+          },
+        ],
       }),
     );
-    const result = await tools.handle("test_script", {
-      code: "x",
-      scenario: {
+    const tests = [
+      {
+        name: "closes the stale issues once approved",
         input: { repo: "acme/api" },
-        from_run: RUN_ID,
-        tools: { "github.list_issues": [] },
+        world: {
+          tools: {
+            "github.list_issues": [{ args: { state: "open" }, returns: [{ number: 4 }] }],
+            "github.close_issue": { returns: {} },
+          },
+        },
         signals: [{ name: "approval", payload: { close: true } }],
-        expect: { status: "completed", output: { closed: 3 } },
+        expect: { status: "completed", output: { closed: 1 }, calls: [{ tool: "github.close_issue", times: 1 }] },
       },
-    });
+      recorded,
+      { from: recorded, expect: { status: "completed" } },
+    ];
+    const result = await tools.handle("test_script", { code: "x", tests, workflow: "triage" });
     expect(result.isError).toBe(true);
+    expect(result.tests).toHaveLength(5);
     expect(result.content).toBe(
       [
-        "The test failed: 1 expectation do not hold:",
-        "- the output's closed is 2, expected 3",
-        "The run completed.",
-        'Output: {"closed":2}',
-        "Calls: github.close_issue ×2",
-        "Trace:",
-        "#0 run_started",
+        "4 of 5 tests did not pass.",
+        'PASS "closes the stale issues once approved"',
+        `FAIL "recorded ${RUN_ID}" (failed): it ran, and expectations do not hold:`,
+        "  - the output's closed is 2, expected 3",
+        "  - github.delete_repo has no recorded response",
+        "  The run completed.",
+        '  Output: {"closed":2}',
+        "  Calls: github.close_issue ×2, github.list_issues ×1",
+        "  Trace:",
+        "#0 run_started\n#1 tool github.list_issues",
+        'FAIL "posts to slack" (stale): it names tools, answers or args the toolset no longer has; it was not run.',
+        "  - slack.post_message is not one of the tools",
+        `FAIL "refuses a bad repo" (incompatible): the workflow's input or signal schemas refuse its input or its signals; it was not run.`,
+        "  - the input does not match the input schema of triage: repo must be a string",
+        'FAIL "fails when GitHub is down" (failed): it ran, and expectations do not hold:',
+        "  - the run failed with ToolError, expected completed",
+        "  The run failed.",
+        "  ToolError: GitHub is down",
+        "  Calls: github.list_issues ×1",
+        "  Trace:",
+        "#0 run_started\n#1 tool github.list_issues → error",
       ].join("\n"),
     );
     expect(server.calls("POST", "/v1/test")[0]?.body).toEqual({
       script: "x",
       toolset: TOOLSET,
-      input: { repo: "acme/api" },
-      tools: { "github.list_issues": [] },
-      signals: [{ name: "approval", payload: { close: true } }],
-      expect: { status: "completed", output: { closed: 3 } },
-      cassette: { version: 1, kind: "cassette" },
+      tests,
+      workflow: "triage",
     });
-    expect((await tools.handle("test_script", { code: "x", scenario: [] })).content).toBe(
-      "test_script: `scenario` must be an object.",
+  });
+
+  it("test_script: all passed, and the tests refused before running", async () => {
+    server.on(
+      "POST",
+      "/v1/test",
+      json({
+        passed: true,
+        tests: [
+          { name: "a", passed: true, status: "completed", calls: {}, failures: [], trace: "#0" },
+          { name: "b", passed: true, status: "active", calls: {}, failures: [], trace: "#0" },
+        ],
+      }),
     );
+    expect(await tools.handle("test_script", { code: "x", workflow: "triage" })).toEqual({
+      content: 'All 2 tests passed.\nPASS "a"\nPASS "b"',
+      isError: false,
+      tests: expect.any(Array),
+    });
+    server.on("POST", "/v1/test", problem(422, "invalid-test", 'no stored test "00"; record one with record_tests'));
+    expect(await tools.handle("test_script", { code: "x", tests: ["00"] })).toEqual({
+      content: 'The tests were refused before running: no stored test "00"; record one with record_tests',
+      isError: true,
+    });
+  });
+
+  it("test_script: tells the model what is wrong with its arguments", async () => {
+    expect((await tools.handle("test_script", { code: "x" })).content).toBe(
+      "test_script: give `tests`, or a `workflow` whose suite runs against the script, or both.",
+    );
+    expect((await tools.handle("test_script", { code: "x", tests: {} })).content).toBe(
+      "test_script: `tests` must be an array of tests: each one an object, or the digest of a recorded test as a string.",
+    );
+    expect((await tools.handle("test_script", { code: "x", tests: [1] })).isError).toBe(true);
+    expect((await tools.handle("test_script", { code: "x", workflow: 3 })).content).toBe(
+      "test_script: `workflow` must be a non-empty string.",
+    );
+    expect(server.requests).toHaveLength(0);
   });
 
   it("search_tools: the declarations of the matching tools", async () => {
@@ -900,7 +1094,7 @@ describe("save_workflow", () => {
     deriveToolsets();
     server.on("POST", "/v1/runs", started({ output: payload({ closed: 1 }) }));
     server.on("POST", "/v1/check", json({ ok: true, diagnostics: [] }));
-    server.on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }));
+    server.on("POST", "/v1/test", json({ passed: true, tests: [] }));
     server.on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }));
 
     await tools.handle("save_workflow", definition);
@@ -909,7 +1103,7 @@ describe("save_workflow", () => {
     const ran = await tools.handle("run_script", { code });
     expect(ran.content).toBe(`Run ${RUN_ID} completed.\nOutput:\n{"closed":1}`);
     await tools.handle("check_script", { code });
-    await tools.handle("test_script", { code, scenario: {} });
+    await tools.handle("test_script", { code, workflow: "triage" });
     await tools.handle("search_tools", { query: "triage" });
 
     expect(server.calls("POST", "/v1/runs")[0]?.body).toMatchObject({ script: code, toolset: DERIVED });
@@ -1017,6 +1211,321 @@ describe("save_workflow", () => {
     const result = await tools.handle("save_workflow", definition);
     expect(Buffer.byteLength(result.content)).toBeLessThan(512 * 1024);
     expect(result.content).toContain('import { triage } from "rewind:workflows";');
+  });
+
+  it("sends the suite: new tests, those it updates and retires with their reasons, and its parent", async () => {
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    deriveToolsets();
+    const suite = {
+      tests: [
+        "9f".repeat(32),
+        { from: "8e".repeat(32), expect: { status: "completed", output: { closed: 0 } } },
+        {
+          name: "closes nothing without approval",
+          world: { tools: { "github.list_issues": { returns: [] } } },
+          signals: [{ name: "approval", payload: { close: false } }],
+          expect: { output: { closed: 0 }, calls: [{ tool: "github.close_issue", times: 0 }] },
+        },
+      ],
+      update: [
+        { name: "closes once approved", reason: "the message names the repository", expect: { output: { closed: 1 } } },
+      ],
+      retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
+      parent: `triage@${VERSION.slice(0, 12)}`,
+    };
+    const result = await tools.handle("save_workflow", { ...definition, ...suite });
+    expect(result.isError).toBe(false);
+    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual({
+      name: "triage",
+      description: saved.description,
+      toolset: TOOLSET,
+      script: source,
+      input: saved.input,
+      output: saved.output,
+      signals: saved.signals,
+      ...suite,
+    });
+  });
+
+  it("returns the tests of the suite that refused the save, and keeps the toolset", async () => {
+    const tests = [
+      {
+        name: "closes nothing without approval",
+        passed: false,
+        problem: "failed",
+        status: "completed",
+        output: { closed: 1 },
+        calls: { "github.close_issue": 1 },
+        failures: ["github.close_issue was called 1 time, expected 0"],
+        trace: "#0 run_started\n#1 signal approval\n#2 tool github.close_issue",
+      },
+      { name: "closes once approved", passed: true, status: "completed", calls: {}, failures: [], trace: "#0" },
+    ];
+    server.on(
+      "POST",
+      "/v1/workflows",
+      problem(422, "tests-failed", "1 test of 2 did not pass: the version was not saved", { tests }),
+    );
+    const result = await tools.handle("save_workflow", definition);
+    expect(result).toEqual({
+      content: [
+        "The workflow was not saved: 1 test of 2 did not pass: the version was not saved",
+        "1 of 2 tests did not pass.",
+        'FAIL "closes nothing without approval" (failed): it ran, and expectations do not hold:',
+        "  - github.close_issue was called 1 time, expected 0",
+        "  The run completed.",
+        '  Output: {"closed":1}',
+        "  Calls: github.close_issue ×1",
+        "  Trace:",
+        "#0 run_started\n#1 signal approval\n#2 tool github.close_issue",
+        'PASS "closes once approved"',
+        'Every test must pass: there is no way around it. If the script is wrong, fix it, and check it with test_script({"code":"…","workflow":"triage"}) before you save it again. If a test pins a behavior you change on purpose, retire it in `retire` (the behavior is deprecated) or update it in `update` (its state or its expected result is out of date), with a reason.',
+      ].join("\n"),
+      isError: true,
+      tests,
+    });
+    expect(server.calls("POST", "/v1/toolsets")).toHaveLength(0);
+    expect(tools.toolset).toBe(TOOLSET);
+  });
+
+  it("returns why the suite was refused before any test ran", async () => {
+    server.on(
+      "POST",
+      "/v1/workflows",
+      problem(422, "invalid-test", 'retire names "asks first", which is not a test of the parent'),
+    );
+    const result = await tools.handle("save_workflow", {
+      ...definition,
+      retire: [{ names: ["asks first"], reason: "deprecated" }],
+    });
+    expect(result).toEqual({
+      content: 'The workflow was not saved: retire names "asks first", which is not a test of the parent',
+      isError: true,
+    });
+  });
+
+  it("asks for a reason to update or retire a test", async () => {
+    expect((await tools.handle("save_workflow", { ...definition, retire: [{ names: ["a"] }] })).content).toBe(
+      "save_workflow: `retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
+    );
+    expect(
+      (await tools.handle("save_workflow", { ...definition, retire: [{ names: ["a"], reason: " " }] })).isError,
+    ).toBe(true);
+    expect((await tools.handle("save_workflow", { ...definition, update: [{ name: "a", expect: {} }] })).content).toBe(
+      "save_workflow: `update` must be an array of { name, reason, test?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
+    );
+    expect((await tools.handle("save_workflow", { ...definition, tests: "abc" })).isError).toBe(true);
+    expect((await tools.handle("save_workflow", { ...definition, parent: 4 })).content).toBe(
+      "save_workflow: `parent` must be a non-empty string.",
+    );
+    expect(server.requests).toHaveLength(0);
+  });
+});
+
+describe("get_workflow", () => {
+  const SCRIPT = "cd".repeat(32);
+  const PARENT = "e4".repeat(32);
+  const FIRST = "a1".repeat(32);
+  const INLINE = "4814d92093ac" + "0".repeat(52);
+  const RECORDED = "ca978112ca1b" + "0".repeat(52);
+  const FOREIGN = "b2".repeat(32);
+  const latest = workflow({
+    parent: PARENT,
+    tests: [
+      { name: "closes nothing without approval", digest: INLINE },
+      { name: `recorded ${RUN_ID}`, digest: RECORDED },
+      { name: "recorded 0193a5c4-0000-7000-8000-000000000000", digest: FOREIGN },
+    ],
+    updated: [
+      {
+        name: "closes nothing without approval",
+        from: "3e".repeat(32),
+        to: INLINE,
+        reason: "the message names the repository",
+      },
+    ],
+    retired: [
+      {
+        name: "asks before closing",
+        digest: "2e".repeat(32),
+        reason: "under 5 stale issues, it closes without asking",
+      },
+    ],
+  });
+  const parent = workflow({
+    version: PARENT,
+    createdAt: "2026-11-11T10:00:00Z",
+    parent: FIRST,
+    tests: [{ name: "asks before closing", digest: "2e".repeat(32) }],
+  });
+  const first = workflow({ version: FIRST, createdAt: "2026-11-10T10:00:00Z", tests: [] });
+  const inline = {
+    name: "closes nothing without approval",
+    input: { repo: "acme/api" },
+    world: { tools: { "github.list_issues": [{ returns: [{ number: 4 }] }] } },
+    signals: [{ name: "approval", payload: { close: false } }],
+    expect: { output: { closed: 0 }, calls: [{ tool: "github.close_issue", times: 0 }] },
+  };
+  const recordedTest = {
+    name: `recorded ${RUN_ID}`,
+    input: { repo: "acme/api" },
+    seed: "07".repeat(32),
+    world: {
+      cassette: {
+        v: 1,
+        matching: "by_args",
+        calls: [
+          { tool: "github.list_issues", args: { repo: "acme/api" }, outcome: { result: [] } },
+          { tool: "github.close_issue", args: { number: 4 }, outcome: { result: {} } },
+          { tool: "github.close_issue", args: { number: 5 }, outcome: { result: {} } },
+        ],
+        signals: [{ name: "approval", payload: { close: true }, elapsed_ms: 3_600_000 }],
+      },
+    },
+    expect: { status: "completed", output: { closed: 2 } },
+    origin: { run: RUN_ID, version: PARENT, namespace: NAMESPACE },
+  };
+
+  function serveWorkflow(): void {
+    server.on("GET", "/v1/workflows/{name}", (request) =>
+      request.params["name"] === "triage"
+        ? json({ name: "triage", versions: [latest, parent, first] })
+        : problem(404, "not-found", `no workflow ${request.params["name"]}`),
+    );
+    server.on(
+      "GET",
+      "/v1/scripts/{digest}",
+      json({ digest: SCRIPT, source: "export default async () => ({ closed: 0 });\n" }),
+    );
+    server.on("GET", "/v1/tests/{digest}", (request) => {
+      switch (request.params["digest"]) {
+        case INLINE:
+          return json(inline);
+        case RECORDED:
+          return json(recordedTest);
+        default:
+          return problem(403, "forbidden", "reading this test needs runs:read in the namespace it was recorded from");
+      }
+    });
+  }
+
+  it("reads the source, the schemas, every test of the suite and the lineage", async () => {
+    serveWorkflow();
+    const result = await tools.handle("get_workflow", { name: "triage" });
+    expect(result.isError).toBe(false);
+    expect(result.workflow).toEqual(latest);
+    expect(result.content).toBe(
+      [
+        "The workflow triage@4be1c07a9d3e, saved 2026-11-12T10:00:00Z: its latest version, of 3 versions.",
+        `It derives from the version triage@${PARENT.slice(0, 12)}.`,
+        "Description: Triage the stale issues of a repository, after approval.",
+        `Input schema: ${JSON.stringify(latest.input)}`,
+        `Output schema: ${JSON.stringify(latest.output)}`,
+        "Signals:",
+        `- "approval": ${JSON.stringify(latest.signals["approval"])}`,
+        "Source:",
+        "export default async () => ({ closed: 0 });",
+        "Its suite, 3 tests, which every version derived from it must pass (give a digest in save_workflow's `tests` or `update` to reuse a test):",
+        `Test "closes nothing without approval" (${INLINE}):`,
+        JSON.stringify(inline),
+        `Test "recorded ${RUN_ID}" (${RECORDED}), recorded from run ${RUN_ID} of triage@${PARENT.slice(0, 12)}:`,
+        JSON.stringify({
+          ...recordedTest,
+          world: {
+            cassette: {
+              summary:
+                "3 recorded calls matched by_args (github.list_issues ×1, github.close_issue ×2), 1 signal (approval)",
+            },
+          },
+        }),
+        `Test "recorded 0193a5c4-0000-7000-8000-000000000000" (${FOREIGN}): it cannot be read: reading this test needs runs:read in the namespace it was recorded from`,
+        "Lineage, newest first:",
+        `- triage@4be1c07a9d3e, saved 2026-11-12T10:00:00Z, from triage@${PARENT.slice(0, 12)}: 3 tests.`,
+        '  updated "closes nothing without approval": the message names the repository',
+        '  retired "asks before closing": under 5 stale issues, it closes without asking',
+        `- triage@${PARENT.slice(0, 12)}, saved 2026-11-11T10:00:00Z, from triage@${FIRST.slice(0, 12)}: 1 test.`,
+        `- triage@${FIRST.slice(0, 12)}, saved 2026-11-10T10:00:00Z, the first version: 0 tests.`,
+      ].join("\n"),
+    );
+    expect(server.calls("GET", `/v1/scripts/${SCRIPT}`)).toHaveLength(1);
+  });
+
+  it("reports a workflow that does not exist, and stays bounded whatever the tests hold", async () => {
+    serveWorkflow();
+    expect(await tools.handle("get_workflow", { name: "nope" })).toEqual({
+      content: "get_workflow failed: no workflow nope",
+      isError: true,
+    });
+    const huge = "x".repeat(3_000_000);
+    server.on("GET", "/v1/scripts/{digest}", json({ digest: SCRIPT, source: huge }));
+    server.on("GET", "/v1/tests/{digest}", json({ ...inline, input: { huge } }));
+    const result = await tools.handle("get_workflow", { name: "triage" });
+    expect(Buffer.byteLength(result.content)).toBeLessThan(512 * 1024);
+    expect(result.content).toContain("Lineage, newest first:");
+    expect((await tools.handle("get_workflow", {})).content).toBe("get_workflow: `name` must be a non-empty string.");
+  });
+});
+
+describe("record_tests", () => {
+  it("records tests from the workflow's runs, and says how to add them to its suite", async () => {
+    server.on(
+      "POST",
+      "/v1/workflows/{name}/record",
+      json({
+        tests: [
+          {
+            digest: "9f".repeat(32),
+            name: `recorded ${RUN_ID}`,
+            path: "github.list_issues · signal approval · github.close_issue×n → completed",
+            run: RUN_ID,
+            status: "completed",
+          },
+          {
+            digest: "8e".repeat(32),
+            name: "recorded r-2",
+            path: "github.list_issues → failed",
+            run: "r-2",
+            status: "failed",
+          },
+        ],
+        skipped: [{ run: "r-big", reason: "its test would be larger than 4 MiB" }],
+      }),
+    );
+    const result = await tools.handle("record_tests", { workflow: "triage", query: "status:completed", limit: 10 });
+    expect(result.isError).toBe(false);
+    expect(result.content).toBe(
+      [
+        "Recorded 2 tests from the runs of triage, one per path:",
+        `- ${"9f".repeat(32)} "recorded ${RUN_ID}", from run ${RUN_ID} (completed): github.list_issues · signal approval · github.close_issue×n → completed`,
+        `- ${"8e".repeat(32)} "recorded r-2", from run r-2 (failed): github.list_issues → failed`,
+        "Skipped 1 run:",
+        "- r-big: its test would be larger than 4 MiB",
+        'They join no suite yet: pass their digests in save_workflow\'s `tests` to add them to the suite of triage\'s next version, or { "from": "<digest>", "expect": {…} } to give a failed run the expectation it should have met.',
+      ].join("\n"),
+    );
+    await tools.handle("record_tests", { workflow: "triage", runs: [RUN_ID] });
+    expect(server.calls("POST", "/v1/workflows/triage/record").map((r) => r.body)).toEqual([
+      { query: "status:completed", limit: 10 },
+      { runs: [RUN_ID] },
+    ]);
+  });
+
+  it("says when no run was recorded, and what is wrong with its arguments", async () => {
+    server.on("POST", "/v1/workflows/{name}/record", json({ tests: [], skipped: [] }));
+    expect((await tools.handle("record_tests", { workflow: "triage" })).content).toBe(
+      "No test was recorded: no completed or failed run of triage was selected.",
+    );
+    server.on("POST", "/v1/workflows/{name}/record", problem(400, "invalid-query", "unknown field stauts"));
+    expect(await tools.handle("record_tests", { workflow: "triage", query: "stauts:x" })).toEqual({
+      content: "record_tests failed: unknown field stauts",
+      isError: true,
+    });
+    expect((await tools.handle("record_tests", { workflow: "triage", limit: 0 })).content).toBe(
+      "record_tests: `limit` must be an integer, 1 or more.",
+    );
+    expect((await tools.handle("record_tests", { workflow: "triage", runs: "r" })).content).toBe(
+      "record_tests: `runs` must be an array of non-empty strings.",
+    );
   });
 });
 

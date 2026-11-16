@@ -1,6 +1,6 @@
 import type { Transport } from "../http.js";
 import { labelParams } from "../params.js";
-import type { CheckResult, Labels, Script, ScriptPage, ScriptSummary, TestRequest, TestResult } from "../types.js";
+import type { CheckResult, Labels, Script, ScriptPage, ScriptSummary, TestRequest, TestRun } from "../types.js";
 import type { RequestOptions } from "./toolsets.js";
 
 export interface CheckParams extends RequestOptions {
@@ -20,7 +20,7 @@ export interface ListScriptsParams extends RequestOptions {
   cursor?: string | undefined;
 }
 
-/** Scripts: type-checking, scenarios in mock mode, and the distinct scripts executed. */
+/** Scripts: type-checking, tests in mock mode, and the distinct scripts executed. */
 export class Scripts {
   constructor(private readonly transport: Transport) {}
 
@@ -38,11 +38,20 @@ export class Scripts {
   }
 
   /**
-   * Runs a scenario in mock mode, in virtual time, under the limits of the client's namespace: against a cassette,
-   * mock handlers and static responses, and checks its expectations. No tool is really called. A key's client without
-   * a namespace is refused (`NamespaceRequiredError`).
+   * Runs tests against a script in mock mode, in virtual time, under the limits of the client's namespace. Each test
+   * gives the run's world (its input, the tools' answers by rules, mock handlers or a cassette, its signals) and what
+   * must hold at the end; a call the world does not answer fails the test. No tool is really called.
+   *
+   * A test is given inline, by the digest of a stored test (one `workflows.record` recorded), or as
+   * `{ from: digest, expect }`. With `workflow` (`"triage"` or `"triage@<version>"`), that version's suite runs too,
+   * checked against its interface, and `script` and `toolset` default to the version's: give a corrected `script`, or
+   * a new `toolset`, to check a candidate before it is saved. The tests are not stored.
+   *
+   * Returns each test's outcome, in the order given, then the suite's. A test refused before running (an invalid test,
+   * a digest that does not exist) is `invalid-test`. A key's client without a namespace is refused
+   * (`NamespaceRequiredError`).
    */
-  test(request: TestRequest, options: RequestOptions = {}): Promise<TestResult> {
+  test(request: TestRequest, options: RequestOptions = {}): Promise<TestRun> {
     return this.transport.send(
       () =>
         this.transport.api.POST("/v1/test", {

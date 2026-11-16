@@ -2,6 +2,45 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+For workflow test suites: tests that describe the world a run meets and what the outside must see at the end, the
+suite a workflow version carries and every derived version must pass, and tests recorded from past runs.
+
+- `scripts.test({ script?, toolset?, tests?, workflow? })` runs tests against a script and answers a `TestRun`
+  (`passed`, and each test's `TestResult`: its `problem`, `stale`, `incompatible` or `failed`, its `failures`, the
+  run's status, output or error, its calls per tool and its trace). A test is given inline, by the digest of a stored
+  test, or as `{ from, expect }`. With `workflow`, that version's suite runs too, and the script and the toolset
+  default to the version's.
+- `workflows.create` takes `parent`, `tests`, `update` (`{ name, reason, test?, expect? }`) and `retire`
+  (`{ names, reason }`), and saves the version only if every test of its suite passes. `Workflow` has `parent`,
+  `tests` (its suite, by name and digest), `retired` and `updated`, with their reasons.
+- `workflows.record(name, { query?, runs?, limit? })` records tests from the workflow's completed and failed runs, one
+  per path, and answers their digests, names, paths and runs, and the runs it skipped.
+- `rewind.tests.get(digest)`: a stored test. A test recorded from a run is read like the run.
+- The problem slugs `invalid-test` and `tests-failed`; `RewindApiError.tests` holds each test's outcome of a
+  `tests-failed` refusal, which `workflows.create` and `runs.fork` (of a run of a workflow) may answer.
+- The types of tests, suites and recordings: `Test`, `TestInput`, `TestFrom`, `TestRun`, `TestResult`, `TestProblem`,
+  `World`, `ToolRule`, `ToolRules`, `RuleError`, `TestSignal`, `Expectations`, `ExpectedCall`, `ExpectedError`,
+  `CallOrder`, `TestOrigin`, `TestUpdate`, `TestRetirement`, `SuiteTest`, `RetiredTest`, `UpdatedTest`, `RecordTests`,
+  `RecordedTests`, `RecordedTest`, `SkippedRun`.
+- The agent tools `get_workflow({ name })` (the latest version's source and schemas, its suite with each test, and the
+  lineage with the reasons tests were updated or retired) and `record_tests({ workflow, query?, runs?, limit? })` (the
+  digests of the tests recorded, for `save_workflow`), given with a toolset, like `save_workflow`.
+- `save_workflow` takes `tests`, `update`, `retire` and `parent`, and tells the model that its suite must pass, and how
+  to retire or update a test with a reason. A refusal (`tests-failed`) shows each test that did not pass, its problem,
+  its failures and its trace. `retry_run` shows the same when the suite of a run's workflow refuses the fix.
+  `AgentToolResult.tests` holds the outcomes for the harness.
+
+Breaking changes:
+
+- `scripts.test` takes `{ script?, toolset?, tests?, workflow? }` and answers a `TestRun`; the scenario fields
+  (`input`, `cassette`, `mocks`, `tools`, `signals`, `expect`) and `ScenarioSignal` are gone: they are a test's.
+  `Expectations.calls` is a list of `{ tool, args?, times? }`, no longer a count by tool.
+- The agent tool `test_script` takes `{ code, tests?, workflow? }` instead of `{ code, scenario }`; `scenario.from_run`
+  is replaced by `record_tests`, whose digests `test_script` and `save_workflow` take.
+- `AgentToolsClient` needs `tests`.
+
 ## 0.2.0 (2026-11-15)
 
 For the HTTP API `/v1` with namespaces (the end users of a harness, their tokens and their quotas) and workflows

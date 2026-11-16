@@ -7,6 +7,7 @@ import { Namespaces, TokenKeys } from "./resources/namespaces.js";
 import { Runs } from "./resources/runs.js";
 import { Scripts } from "./resources/scripts.js";
 import { Tasks } from "./resources/tasks.js";
+import { Tests } from "./resources/tests.js";
 import { Toolsets } from "./resources/toolsets.js";
 import { Workflows } from "./resources/workflows.js";
 import type { WebhookEvent } from "./types.js";
@@ -46,6 +47,8 @@ export interface Webhooks {
 export class Rewind {
   readonly toolsets: Toolsets;
   readonly workflows: Workflows;
+  /** The stored tests: those of the workflows' suites, and those recorded from runs. */
+  readonly tests: Tests;
   readonly scripts: Scripts;
   readonly runs: Runs;
   readonly tasks: Tasks;
@@ -74,6 +77,7 @@ export class Rewind {
     this.transport = new Transport(this.options);
     this.toolsets = new Toolsets(this.transport);
     this.workflows = new Workflows(this.transport);
+    this.tests = new Tests(this.transport);
     this.scripts = new Scripts(this.transport);
     this.runs = new Runs(this.transport);
     this.tasks = new Tasks(this.transport);

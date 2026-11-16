@@ -341,7 +341,9 @@ export class Runs {
   /**
    * Forks a run with a corrected script (`retry_run`): a new run, in its parent's namespace, that reuses the parent's
    * recorded results while its commands match, and continues live at the first difference, at `at`, or at the end of
-   * the parent's history.
+   * the parent's history. For a run of a workflow, the suite of the run's version runs against the corrected script
+   * first: if a test does not pass, no fork is created, and the refusal is `tests-failed`, whose `tests` holds each
+   * test's outcome.
    */
   async fork(id: string, params: ForkRunParams): Promise<Run> {
     const { signal, idempotencyKey, wait, ...body } = params;

@@ -1,4 +1,4 @@
-import type { Diagnostic, Problem, QuerySpan, QuotaReached } from "./types.js";
+import type { Diagnostic, Problem, QuerySpan, QuotaReached, TestResult } from "./types.js";
 
 /** The kinds of problem the API answers with: the slug of `urn:rewind:problem:<slug>`. */
 export type ProblemSlug =
@@ -19,6 +19,8 @@ export type ProblemSlug =
   | "invalid-script"
   | "invalid-toolset"
   | "invalid-workflow"
+  | "invalid-test"
+  | "tests-failed"
   | "invalid-input"
   | "invalid-signal"
   | "quota-exceeded"
@@ -61,6 +63,15 @@ export class RewindApiError extends RewindError {
   /** With `invalid-script`: why the script was refused. Empty otherwise. */
   get diagnostics(): Diagnostic[] {
     return this.problem.diagnostics ?? [];
+  }
+
+  /**
+   * With `tests-failed`: the outcome of every test that ran (a workflow's save or a fork of a run of a workflow was
+   * refused). Those that did not pass have their `problem` (`stale`, `incompatible` or `failed`) and their `failures`.
+   * Empty otherwise.
+   */
+  get tests(): TestResult[] {
+    return this.problem.tests ?? [];
   }
 
   /** With `invalid-query`: where the term at fault is in the query, in characters. */

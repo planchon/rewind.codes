@@ -5,6 +5,7 @@ import { hasLabels } from "../params.js";
 import type { Payloads } from "../resources/admin.js";
 import type { Runs } from "../resources/runs.js";
 import type { Scripts } from "../resources/scripts.js";
+import type { Tests } from "../resources/tests.js";
 import type { Toolsets } from "../resources/toolsets.js";
 import type { Workflows } from "../resources/workflows.js";
 import type {
@@ -12,9 +13,13 @@ import type {
   Labels,
   Run,
   RunStatus,
-  ScenarioSignal,
   SignalAccepted,
+  TestInput,
   TestRequest,
+  TestResult,
+  TestRetirement,
+  TestRun,
+  TestUpdate,
   Toolset,
   Workflow,
 } from "../types.js";
@@ -45,16 +50,22 @@ import {
   describeCheck,
   describeMatches,
   describePage,
+  describeRecorded,
   describeRefusal,
+  describeRetryRefused,
   describeRun,
   describeRuns,
-  describeTest,
+  describeSaveRefused,
+  describeTestResults,
   describeWorkflow,
+  describeWorkflowDetails,
   describeWorkflowRefusal,
   entryText,
   json,
   limitsFor,
+  workflowRef,
   type Limits,
+  type WorkflowDetails,
 } from "./render.js";
 
 /**
@@ -66,14 +77,15 @@ export interface AgentToolsClient {
   scripts: Scripts;
   toolsets: Toolsets;
   workflows: Workflows;
+  tests: Tests;
   payloads: Payloads;
 }
 
 export interface AgentToolsOptions {
   /**
-   * The toolset the model's scripts import from `rewind:tools`. `search_tools` and
-   * `save_workflow` need one. Each workflow `save_workflow` saves derives a new toolset from it,
-   * which the later calls use: read it from `agentTools.toolset`.
+   * The toolset the model's scripts import from `rewind:tools`. `search_tools`, `save_workflow`,
+   * `get_workflow` and `record_tests` need one. Each workflow `save_workflow` saves derives a new
+   * toolset from it, which the later calls use: read it from `agentTools.toolset`.
    */
   toolset?: string | undefined;
   /**
@@ -83,8 +95,8 @@ export interface AgentToolsOptions {
    */
   labels?: Labels | undefined;
   /**
-   * The tools to give the model. All of them by default; `search_tools` and `save_workflow` only
-   * with a toolset.
+   * The tools to give the model. All of them by default; `search_tools`, `save_workflow`,
+   * `get_workflow` and `record_tests` only with a toolset.
    */
   tools?: readonly AgentToolName[] | undefined;
   /** How long `run_script`, `retry_run` and `cancel_run` wait for the run to end. 30 s by default. */
@@ -124,6 +136,11 @@ export interface AgentToolResult {
   workflow?: Workflow | undefined;
   /** The toolset `save_workflow` derived: the one the agent tools use from then on. */
   toolset?: Toolset | undefined;
+  /**
+   * The outcome of each test: those `test_script` ran, or those of the suite that refused a save
+   * (`save_workflow`) or a fork (`retry_run`).
+   */
+  tests?: TestResult[] | undefined;
 }
 
 class InputError extends Error {}
@@ -275,6 +292,10 @@ export class AgentTools {
         return this.searchTools(values, options);
       case "save_workflow":
         return this.saveWorkflow(values, options);
+      case "get_workflow":
+        return this.getWorkflow(values, options);
+      case "record_tests":
+        return this.recordTests(values, options);
     }
   }
 
@@ -308,48 +329,34 @@ export class AgentTools {
 
   private async testScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const code = requireString(input, "code");
-    const scenario = input["scenario"];
-    if (!isObject(scenario)) {
-      throw new InputError("`scenario` must be an object.");
+    const tests = optionalTests(input, "tests");
+    const workflow = optionalString(input, "workflow");
+    if (tests === undefined && workflow === undefined) {
+      throw new InputError("give `tests`, or a `workflow` whose suite runs against the script, or both.");
     }
     const request: TestRequest = { script: code };
     if (this.currentToolset !== undefined) {
       request.toolset = this.currentToolset;
     }
-    if (scenario["input"] !== undefined) {
-      request.input = scenario["input"];
+    if (tests !== undefined) {
+      request.tests = tests;
     }
-    if (scenario["tools"] !== undefined) {
-      if (!isObject(scenario["tools"])) {
-        throw new InputError("`scenario.tools` must be an object of responses by tool name.");
+    if (workflow !== undefined) {
+      request.workflow = workflow;
+    }
+    let run: TestRun;
+    try {
+      run = await this.client.scripts.test(request, { signal: options.signal });
+    } catch (error) {
+      if (isProblem(error, "invalid-test")) {
+        return {
+          content: `The tests were refused before running: ${truncateEnd(error.detail, this.limits.value)}`,
+          isError: true,
+        };
       }
-      request.tools = scenario["tools"];
+      throw error;
     }
-    if (scenario["mocks"] !== undefined) {
-      request.mocks = requireString(scenario, "mocks", "scenario.mocks");
-    }
-    if (scenario["signals"] !== undefined) {
-      if (
-        !Array.isArray(scenario["signals"]) ||
-        !scenario["signals"].every((s) => isObject(s) && typeof s["name"] === "string")
-      ) {
-        throw new InputError("`scenario.signals` must be an array of { name, payload?, when? }.");
-      }
-      request.signals = scenario["signals"] as ScenarioSignal[];
-    }
-    if (scenario["expect"] !== undefined) {
-      if (!isObject(scenario["expect"])) {
-        throw new InputError("`scenario.expect` must be an object.");
-      }
-      request.expect = scenario["expect"];
-    }
-    if (scenario["from_run"] !== undefined) {
-      const runId = requireString(scenario, "from_run", "scenario.from_run");
-      await this.scopedRun(runId, options.signal);
-      request.cassette = await this.client.runs.journal(runId, { as: "cassette", signal: options.signal });
-    }
-    const result = await this.client.scripts.test(request, { signal: options.signal });
-    return { content: describeTest(result, this.limits), isError: !result.passed };
+    return { content: describeTestResults(run.tests, this.limits), isError: !run.passed, tests: run.tests };
   }
 
   private async getRun(input: Values, options: HandleOptions): Promise<AgentToolResult> {
@@ -436,17 +443,31 @@ export class AgentTools {
   private async retryRun(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const runId = requireString(input, "run_id");
     const code = requireString(input, "code");
-    await this.scopedRun(runId, options.signal);
+    const parent = await this.scopedRun(runId, options.signal);
     const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
-    const run = await this.client.runs.fork(runId, {
-      script: code,
-      labels: this.options.labels,
-      wait: this.defaultWaitMs,
-      idempotencyKey,
-      ttl: this.options.ttl,
-      ...this.traceContext(options),
-      signal: options.signal,
-    });
+    let run: Run;
+    try {
+      run = await this.client.runs.fork(runId, {
+        script: code,
+        labels: this.options.labels,
+        wait: this.defaultWaitMs,
+        idempotencyKey,
+        ttl: this.options.ttl,
+        ...this.traceContext(options),
+        signal: options.signal,
+      });
+    } catch (error) {
+      if (isProblem(error, "tests-failed")) {
+        const workflow = parent.workflow ? workflowRef(parent.workflow) : undefined;
+        return {
+          content: describeRetryRefused(runId, error.detail, error.tests, workflow, this.limits),
+          isError: true,
+          run: parent,
+          tests: error.tests,
+        };
+      }
+      throw error;
+    }
     await this.checkAnswered(run, code, idempotencyKey, options.toolCallId);
     return this.report(run, { errorWhenFailed: true, trace: run.status === "failed", signal: options.signal });
   }
@@ -474,6 +495,12 @@ export class AgentTools {
     if (signals !== undefined && !isObject(signals)) {
       throw new InputError("`signals` must be an object of JSON Schemas by signal name.");
     }
+    const suite = {
+      ...optionalField("tests", optionalTests(input, "tests")),
+      ...optionalField("update", optionalUpdates(input)),
+      ...optionalField("retire", optionalRetirements(input)),
+      ...optionalField("parent", optionalString(input, "parent")),
+    };
     const toolset = this.currentToolset;
     if (toolset === undefined) {
       throw new RewindError("save_workflow needs a toolset");
@@ -481,12 +508,31 @@ export class AgentTools {
     let workflow: Workflow;
     try {
       workflow = await this.client.workflows.create(
-        { name, description, toolset, script: code, ...schemas, ...(signals === undefined ? {} : { signals }) },
+        {
+          name,
+          description,
+          toolset,
+          script: code,
+          ...schemas,
+          ...(signals === undefined ? {} : { signals }),
+          ...suite,
+        },
         { signal: options.signal },
       );
     } catch (error) {
-      if (isProblem(error, "invalid-script") || isProblem(error, "invalid-workflow")) {
+      if (
+        isProblem(error, "invalid-script") ||
+        isProblem(error, "invalid-workflow") ||
+        isProblem(error, "invalid-test")
+      ) {
         return { content: describeWorkflowRefusal(error.detail, error.diagnostics, this.limits), isError: true };
+      }
+      if (isProblem(error, "tests-failed")) {
+        return {
+          content: describeSaveRefused(error.detail, error.tests, name, this.limits),
+          isError: true,
+          tests: error.tests,
+        };
       }
       throw error;
     }
@@ -505,6 +551,60 @@ export class AgentTools {
       throw error;
     }
     return { content: describeWorkflow(workflow, this.limits), isError: false, workflow, toolset: derived };
+  }
+
+  /**
+   * A workflow for the model to repair or extend: the latest version's source and schemas, its suite with each test
+   * (a test it may not read, recorded from a namespace whose runs it cannot read, is said so), and the lineage.
+   */
+  private async getWorkflow(input: Values, options: HandleOptions): Promise<AgentToolResult> {
+    const name = requireString(input, "name");
+    const { signal } = options;
+    const versions = await this.client.workflows.versions(name, { signal });
+    const latest = versions[0];
+    if (latest === undefined) {
+      throw new InputError(`the workflow ${name} has no version.`);
+    }
+    const [script, tests] = await Promise.all([
+      this.client.scripts.get(latest.script, { signal }),
+      mapLimited(
+        latest.tests ?? [],
+        8,
+        async ({ name: testName, digest }): Promise<WorkflowDetails["tests"][number]> => {
+          try {
+            return { name: testName, digest, test: await this.client.tests.get(digest, { signal }) };
+          } catch (error) {
+            if (error instanceof RewindApiError && (error.status === 403 || error.status === 404)) {
+              return { name: testName, digest, unreadable: error.detail };
+            }
+            throw error;
+          }
+        },
+      ),
+    ]);
+    return {
+      content: describeWorkflowDetails({ versions, source: script.source, tests }, this.limits),
+      isError: false,
+      workflow: latest,
+    };
+  }
+
+  /** Tests recorded from the workflow's past runs, for `save_workflow`'s `tests`. */
+  private async recordTests(input: Values, options: HandleOptions): Promise<AgentToolResult> {
+    const workflow = requireString(input, "workflow");
+    const query = optionalString(input, "query");
+    const runs = optionalStrings(input, "runs");
+    const limit = input["limit"];
+    if (limit !== undefined && limit !== null && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)) {
+      throw new InputError("`limit` must be an integer, 1 or more.");
+    }
+    const recorded = await this.client.workflows.record(workflow, {
+      query,
+      runs,
+      limit: typeof limit === "number" ? limit : undefined,
+      signal: options.signal,
+    });
+    return { content: describeRecorded(workflow, recorded, this.limits), isError: false };
   }
 
   /**
@@ -617,7 +717,12 @@ export class AgentTools {
 type Values = Record<string, unknown>;
 
 /** The tools that need a toolset. */
-const NEEDS_TOOLSET: ReadonlySet<AgentToolName> = new Set(["search_tools", "save_workflow"]);
+const NEEDS_TOOLSET: ReadonlySet<AgentToolName> = new Set([
+  "search_tools",
+  "save_workflow",
+  "get_workflow",
+  "record_tests",
+]);
 
 function parseInput(name: AgentToolName, input: unknown): Values {
   let values = input;
@@ -662,6 +767,113 @@ function requireString(values: Values, key: string, label = key): string {
     throw new InputError(`\`${label}\` must be a non-empty string.`);
   }
   return value;
+}
+
+function optionalString(values: Values, key: string): string | undefined {
+  const value = values[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "string" || value === "") {
+    throw new InputError(`\`${key}\` must be a non-empty string.`);
+  }
+  return value;
+}
+
+function optionalStrings(values: Values, key: string): string[] | undefined {
+  const value = values[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string" && item !== "")) {
+    throw new InputError(`\`${key}\` must be an array of non-empty strings.`);
+  }
+  return value as string[];
+}
+
+/** Tests as the model gave them: each an object (in full, or `{ from, expect }`) or a digest. The server checks them. */
+function optionalTests(values: Values, key: string): TestInput[] | undefined {
+  const value = values[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || !value.every(isTestInput)) {
+    throw new InputError(
+      `\`${key}\` must be an array of tests: each one an object, or the digest of a recorded test as a string.`,
+    );
+  }
+  return value as TestInput[];
+}
+
+function isTestInput(value: unknown): boolean {
+  return (typeof value === "string" && value !== "") || isObject(value);
+}
+
+function optionalUpdates(values: Values): TestUpdate[] | undefined {
+  const value = values["update"];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const valid =
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isObject(item) &&
+        typeof item["name"] === "string" &&
+        typeof item["reason"] === "string" &&
+        item["reason"].trim() !== "" &&
+        (item["test"] === undefined || isTestInput(item["test"])) &&
+        (item["expect"] === undefined || isObject(item["expect"])),
+    );
+  if (!valid) {
+    throw new InputError(
+      "`update` must be an array of { name, reason, test?, expect? }: the name of an inherited test, why it changes, and the test that replaces it or its new expectation.",
+    );
+  }
+  return value as TestUpdate[];
+}
+
+function optionalRetirements(values: Values): TestRetirement[] | undefined {
+  const value = values["retire"];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  const valid =
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isObject(item) &&
+        Array.isArray(item["names"]) &&
+        item["names"].every((name) => typeof name === "string") &&
+        typeof item["reason"] === "string" &&
+        item["reason"].trim() !== "",
+    );
+  if (!valid) {
+    throw new InputError(
+      "`retire` must be an array of { names, reason }: the names of inherited tests, and why they no longer hold.",
+    );
+  }
+  return value as TestRetirement[];
+}
+
+/** `{ [key]: value }`, or nothing when the value is absent. */
+function optionalField<K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
+
+/** `items` mapped by `map`, at most `limit` at a time, in their order. */
+async function mapLimited<T, R>(items: readonly T[], limit: number, map: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await map(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function requireObject(values: Values, key: string): Values {

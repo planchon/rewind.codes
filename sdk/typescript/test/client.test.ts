@@ -426,12 +426,26 @@ describe("the client", () => {
   it("checks and tests scripts, and reads the scripts executed", async () => {
     server
       .on("POST", "/v1/check", json({ ok: true, diagnostics: [] }))
-      .on("POST", "/v1/test", json({ passed: true, status: "completed", calls: {}, failures: [], trace: "" }))
+      .on(
+        "POST",
+        "/v1/test",
+        json({
+          passed: true,
+          tests: [{ name: "waits", passed: true, status: "active", calls: {}, failures: [], trace: "" }],
+        }),
+      )
       .on("GET", "/v1/scripts", json({ scripts: [] }))
       .on("GET", "/v1/scripts/{digest}", (r) => json({ digest: r.params["digest"], source: "src" }));
     expect((await rewind.scripts.check({ script: "x", toolset: TOOLSET })).ok).toBe(true);
     expect(server.requests[0]?.body).toEqual({ script: "x", toolset: TOOLSET });
-    expect((await rewind.scripts.test({ script: "x", signals: [{ name: "approval", when: "2h" }] })).passed).toBe(true);
+    const tests = [
+      { name: "waits", signals: [{ name: "approval", when: "2h" }], expect: { status: "active" as const } },
+      "9f".repeat(32),
+    ];
+    const tested = await rewind.scripts.test({ script: "x", tests, workflow: "triage" });
+    expect(tested.passed).toBe(true);
+    expect(tested.tests.map((t) => t.name)).toEqual(["waits"]);
+    expect(server.requests[1]?.body).toEqual({ script: "x", tests, workflow: "triage" });
     expect((await rewind.scripts.list({ labels: { agent: "a" } })).scripts).toEqual([]);
     expect(server.requests[2]?.query.getAll("label")).toEqual(["agent:a"]);
     expect((await rewind.scripts.get("dd")).source).toBe("src");
@@ -499,6 +513,89 @@ describe("the client", () => {
     const invalid = await rewind.workflows.create({ ...definition, name: "class" }).catch((e: unknown) => e);
     expect(isProblem(invalid, "invalid-workflow")).toBe(true);
     expect((invalid as RewindApiError).detail).toBe('"class" is a reserved word');
+    expect((invalid as RewindApiError).tests).toEqual([]);
+  });
+
+  it("saves a workflow through the gate of its suite, with the tests it retires and updates", async () => {
+    const recorded = "9f".repeat(32);
+    const definition = {
+      name: "triage",
+      toolset: TOOLSET,
+      script: "x",
+      input: {},
+      output: {},
+      parent: `triage@${VERSION}`,
+      tests: [recorded, { from: recorded, expect: { status: "completed" as const, output: { closed: 0 } } }],
+      update: [{ name: "closes once approved", reason: "the message names the repository", expect: { output: {} } }],
+      retire: [{ names: ["asks before closing"], reason: "under 5 stale issues, it closes without asking" }],
+    };
+    const outcomes = [
+      { name: "closes once approved", passed: true, status: "completed" as const, calls: {}, failures: [], trace: "" },
+      {
+        name: "closes nothing without approval",
+        passed: false,
+        problem: "failed" as const,
+        status: "completed" as const,
+        output: { closed: 1 },
+        calls: { "github.close_issue": 1 },
+        failures: ["github.close_issue was called 1 time, expected 0"],
+        trace: "#0 run_started",
+      },
+    ];
+    server.on("POST", "/v1/workflows", problem(422, "tests-failed", "1 test of 2 did not pass", { tests: outcomes }));
+    const refused = await rewind.workflows.create(definition).catch((e: unknown) => e);
+    expect(isProblem(refused, "tests-failed")).toBe(true);
+    expect((refused as RewindApiError).tests).toEqual(outcomes);
+    expect(server.calls("POST", "/v1/workflows")[0]?.body).toEqual(definition);
+
+    const saved = workflow({
+      parent: VERSION,
+      tests: [{ name: "closes once approved", digest: "ab".repeat(32) }],
+      retired: [{ name: "asks before closing", digest: "cd".repeat(32), reason: "deprecated" }],
+      updated: [{ name: "closes once approved", from: "ef".repeat(32), to: "ab".repeat(32), reason: "out of date" }],
+    });
+    server.on("POST", "/v1/workflows", json(saved, 201));
+    expect(await rewind.workflows.create(definition)).toEqual(saved);
+  });
+
+  it("records tests from the runs of a workflow, and reads a stored test", async () => {
+    const recorded = {
+      tests: [
+        {
+          digest: "9f".repeat(32),
+          name: `recorded ${RUN_ID}`,
+          path: "github.list_issues · signal approval · github.close_issue×n → completed",
+          run: RUN_ID,
+          status: "completed",
+        },
+      ],
+      skipped: [{ run: "r-big", reason: "its test would be larger than 4 MiB" }],
+    };
+    server.on("POST", "/v1/workflows/{name}/record", json(recorded));
+    expect(await rewind.workflows.record("triage", { query: "status:completed", limit: 20 })).toEqual(recorded);
+    await rewind.workflows.record("triage", { runs: [RUN_ID] });
+    await rewind.workflows.record("triage");
+    expect(server.calls("POST", "/v1/workflows/triage/record").map((r) => r.body)).toEqual([
+      { query: "status:completed", limit: 20 },
+      { runs: [RUN_ID] },
+      {},
+    ]);
+
+    const test = {
+      name: `recorded ${RUN_ID}`,
+      input: { repo: "acme/api" },
+      world: { cassette: { v: 1, matching: "by_args", calls: [], signals: [] } },
+      expect: { status: "completed" },
+      origin: { run: RUN_ID, version: VERSION, namespace: "alice" },
+    };
+    server.on("GET", "/v1/tests/{digest}", (request) =>
+      request.params["digest"] === "9f".repeat(32)
+        ? json(test)
+        : problem(403, "forbidden", "reading this test needs runs:read in the namespace it was recorded from"),
+    );
+    expect(await rewind.tests.get("9f".repeat(32))).toEqual(test);
+    const forbidden = await rewind.tests.get("00".repeat(32)).catch((e: unknown) => e);
+    expect(isProblem(forbidden, "forbidden")).toBe(true);
   });
 
   it("manages subscriptions, API keys and the server", async () => {
