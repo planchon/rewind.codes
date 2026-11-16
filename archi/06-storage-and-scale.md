@@ -36,6 +36,9 @@ namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, 
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
 workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
                                                            index on (tenant, name, created_at)
+tests      (tenant, digest, namespace, size, created_at)  PK (tenant, digest)
+                                                           index (tenant, namespace)  -- the document is a blob
+workflow_tests (tenant, version, digest)                   PK (tenant, version, digest)
 runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on,
             runnable_at, expires_at, quarantine, failures, attempts, lease_owner, lease_until,
             fence, sticky_worker,
@@ -73,7 +76,10 @@ tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, comple
 `trace_context`, `idempotency_key`, `parent`, `workflow`, `workflow_version`, `started_by`,
 `started_seq`, `detached` and `scope` are run metadata: stored with the run, never in its events
 ([05](05-testing-and-observability.md#run-metadata)). A `workflows` row holds a
-[workflow version](02-journal.md#stored-format-v1) document. `run_watchers` lists the runs that
+[workflow version](02-journal.md#stored-format-v1) document. A `tests` row indexes a
+[test](05-testing-and-observability.md#testing-and-mocks) whose document is a blob of the
+`BlobStore`; `namespace` is the one a recorded test came from, none for a test written by hand.
+`workflow_tests` lists the tests of each version's suite, written with the version. `run_watchers` lists the runs that
 receive a run's end ([workflows](03-execution.md#workflows-across-runs)): the run that started
 it (`attached` unless it was started detached), and the forks that copied that start.
 `namespaces`, `namespace_scripts`, `usage` and `quota_alerts` belong to the `JournalStore`, which
@@ -434,6 +440,7 @@ Active runs are never touched. Defaults, configurable per tenant:
 | The read model | 90 days |
 | Payloads | As long as a run's journal, live or archived, references them; deleted 24 h after the last reference is gone |
 | An end user's opaque token | Until 24 h after it expired or was revoked; a namespace's erasure revokes its tokens |
+| A test | As long as a workflow version references it; one no version references is deleted 24 h after it was stored. A recorded test outlives its run, and is erased with its namespace |
 
 - `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
   rows, its credentials, its payload references and its count in `namespace_scripts`. Tool
@@ -441,11 +448,16 @@ Active runs are never touched. Defaults, configurable per tenant:
 - `DELETE /v1/namespaces/{name}` erases an end user and answers 202. The namespace stops taking
   runs and tokens (409 `namespace-deleting`); its tokens are revoked and its active runs
   cancelled through the normal path; then, in the background, its runs are erased as `DELETE
-  /v1/runs/{id}` erases one, then its credentials, its usage and alerts, and the namespace. The
+  /v1/runs/{id}` erases one, then the tests recorded from them, then its credentials, its usage
+  and alerts, and the namespace. A version keeps the digest of an erased test in its document;
+  the next version's gate leaves the test out
+  ([suites](05-testing-and-observability.md#suites-and-the-gate)). The
   tenant's own usage row keeps what the namespace consumed: deleting an end user gives nothing
   back to the tenant's ceiling.
 - A `payload_refs` table, filled at commit, records which runs reference a payload. Cleanup
   deletes the payloads that no run has referenced for 24 h, per tenant.
+- Tests and payloads share the `BlobStore`'s keys, by digest: the cleanup of payloads keeps a
+  blob that a `tests` row holds, and the cleanup of tests one that a `payloads` row holds.
 - A blob delete cannot be undone or fenced, so no commit may count on a blob being deleted. A
   large payload's row is reserved before its blob is written, which restarts its grace; cleanup
   marks a row, deletes its blob, then the row. A payload whose deletion has started is

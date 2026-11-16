@@ -2,6 +2,14 @@
 
 ## Testing and mocks
 
+A **test** describes the world a script meets and what the outside must see at the end. It
+never names the script: the script under test is a parameter, so a test written for one version
+of a workflow runs unchanged against the next. Tests are always end to end. The engine runs the
+script in mock mode, and a test checks only how the run ended and the tool calls it made, never
+a variable, a helper or a log line.
+
+### Mock mode
+
 A run has a mode: `live` or `mock`. In `mock` mode the dispatcher is replaced and time
 is virtual (timers fire immediately, and logical time jumps to `fire_at`).
 
@@ -9,39 +17,198 @@ Because the engine is deterministic given its ports, mock mode is not a separate
 system: it is the same engine wired with in-memory adapters and a virtual clock. The
 test harness of the engine itself is built the same way.
 
-Mock sources, tried in order:
+A test starts at a fixed time with a fixed seed, in virtual time: its result is a function of
+the script, the toolset, the test and the epoch. The same four give the same report, so a test
+cannot be flaky.
 
-1. **Cassettes recorded from real runs.** Any run's journal can be exported as a
-   cassette (`GET /v1/runs/{id}/journal?as=cassette`): tool calls with args and outcomes,
-   and the timeline of signals. Matching is `sequential` (strict `seq` order) or `by_args`
-   (tool + canonical args). A cassette is a document of the
-   [stored format v1](02-journal.md#stored-format-v1).
-2. **TypeScript mock handlers**, executed in a separate isolate so they cannot break the
-   script's determinism.
-3. Otherwise the call fails with "no recorded response for `github.close_issue({…})`".
-
-A scenario ties it together:
+### The test document
 
 ```json
 {
-  "script": "triage.ts",
+  "name": "closes the stale issues once approved",
   "input": { "repo": "acme/api" },
-  "cassette": "cassettes/triage-2026-11-09.json",
-  "mocks": "triage.mocks.ts",
-  "signals": [{ "name": "approval", "when": "blocked", "payload": { "close": true } }],
-  "expect": { "status": "completed", "output": { "closed": 3 }, "calls": { "github.close_issue": 3 } }
+  "world": {
+    "tools": {
+      "github.list_issues": [
+        { "args": { "state": "open" },
+          "returns": [{ "number": 4, "updated_at": "2025-10-01T00:00:00Z" }] },
+        { "args": { "labels": "reopened" }, "returns": [] }
+      ],
+      "github.close_issue": { "returns": {} },
+      "slack.post_message": { "returns": { "ok": true } }
+    }
+  },
+  "signals": [{ "name": "approval", "payload": { "close": true } }],
+  "expect": {
+    "status": "completed",
+    "output": { "closed": 1, "reopened": 0 },
+    "calls": [
+      { "tool": "slack.post_message", "args": { "channel": "#triage" }, "times": 1 },
+      { "tool": "github.close_issue", "times": 1 }
+    ],
+    "order": "listed"
+  }
 }
 ```
 
-`rewind test scenario.json` runs it in the CLI process, without a server, and reports a trace
-plus the failed expectations. `POST /v1/test` does the same on a server.
+| Field | Meaning |
+| --- | --- |
+| `name` | Unique within a suite. |
+| `input` | The run's input; `{}` when absent. |
+| `start` | When the run starts, in virtual time; 2026-01-01T00:00:00Z when absent. |
+| `seed` | The run's seed, 64 hex digits; the same fixed seed for every test when absent. |
+| `world.tools` | For each tool, one answer for every call, or a list of rules tried in order. A rule has `args` (the call's args contain them), `returns` (the result) or `error` (`{ message, kind?, data? }`, `kind` as a tool failure's), and `times` (how many calls it answers; any number when absent). |
+| `world.mocks` | TypeScript mock handlers, executed in a separate isolate so they cannot break the script's determinism. |
+| `world.cassette` | Calls and signals recorded from a run: a [cassette](02-journal.md#stored-format-v1), matched `sequential` (strict `seq` order) or `by_args` (tool and canonical args). Its signals are sent at the time they arrived in the recorded run. |
+| `signals` | Sent to the run in order. `when` is `"blocked"` (the default: once the run can go no further without the outside world) or a duration of virtual time after the start, such as `"2h"`. |
+| `expect` | What must hold at the end; everything not given is not checked. |
+| `origin` | For a [recorded test](#tests-recorded-from-runs): the run, the workflow version it ran and its namespace. |
 
-In mock mode, the CLI also takes static responses per tool from `rewind.tools.json`
-(`{"$error": "message"}` for a failure).
+A call is answered by the first source that has an answer: the rules of `world.tools`, then the
+mock handlers, then the cassette. `rewind test` adds the static responses of `rewind.tools.json`
+last. A start of a [workflow](01-product.md#workflows) is answered like any call: `returns` is
+the child's output, `error` its failure, and no child runs
+([execution](03-execution.md#workflows-across-runs)).
 
-A script that starts [workflows](01-product.md#workflows) is tested the same way: the mock
-sources answer `workflows.triage.start` with the child's output (or its failure), and no
-child runs ([execution](03-execution.md#workflows-across-runs)).
+**The world is the list of what the script may touch.** A call no source answers fails with a
+`ToolError` ("no recorded response for `github.delete_repo({…})`"), and fails the test, even if
+the script catches the error.
+
+| Expectation | Holds when |
+| --- | --- |
+| `status` | The run is in this state: `completed`, `failed`, `cancelled`, `aborted`, or `active` for a run that can go no further in virtual time without the outside world. |
+| `output` | The output contains it: objects key by key, recursively; other values equal as JavaScript sees them (`2` and `2.0` are the same number). |
+| `error` | The run failed with an error of this `name`, whose message contains `message`. |
+| `calls` | For each entry, the calls to `tool` whose args contain `args`: exactly `times` of them, or at least one when `times` is absent. `times: 0` says a call must not happen. Calls the world answers that `calls` does not list are allowed: a fix that adds a harmless read breaks no test. |
+| `order` | `any` (the default), or `listed`: the first call matching each entry comes in the order of the entries (those with `times: 0` aside). |
+
+### Checked before running
+
+Before a test runs, it is checked against what it runs with, without starting an isolate. A test
+that fails a check is reported with its problem and is not run:
+
+- **`stale`**: a tool of `world.tools` or of `expect.calls` is not in the toolset (the
+  `workflows.<name>.start` and `.signal` of the workflows it pins count); a rule's `returns`
+  does not match the tool's output schema, when the tool declares one; a rule's `args` has a
+  key that the tool's input schema does not declare, when it declares `properties`. An MCP
+  server that changed its tools makes the fixtures written for the old ones stale.
+- **`incompatible`**, for a test of a workflow: the workflow's input schema refuses the input;
+  a signal is not one the workflow declares, or its schema refuses the payload. A version that
+  changed its interface makes the tests written for the old one incompatible.
+
+A test that runs and does not meet its expectations is **`failed`**.
+
+### Running tests
+
+`rewind test`, `POST /v1/test` and the agent tool `test_script` run tests against a script: in
+the CLI process, or on a server with the worker role. Each test runs in its own engine with
+in-memory adapters; several run at once. A test's report says whether it passed, its problem,
+its failures (one sentence each, written for a model), the run's status, output or error, how
+many times each tool was called, and the LLM trace of the run.
+
+```
+POST /v1/test   { "script": "…", "toolset": "…", "tests": [ … ], "workflow": "triage" }
+```
+
+With `workflow`, the suite of that version runs too, and checks for incompatibility against
+its interface; the script and the toolset default to the version's. For `rewind test`, a tests
+file is a JSON array of tests, whose `world.mocks` and `world.cassette` may name files relative
+to it; without a toolset, the toolset is the tools the tests answer, as host tools. This is how a candidate
+is checked before it is saved: a corrected script (`script`), or the version on a new toolset
+whose MCP server changed (`toolset`).
+
+### Suites and the gate
+
+A workflow version carries a **suite**: the tests it passed, which every version derived from it
+must pass too. The [workflow version document](02-journal.md#stored-format-v1) holds, besides its
+script, toolset and schemas:
+
+| Field | Holds |
+| --- | --- |
+| `parent` | The version it derives from. |
+| `tests` | The name and digest of each test of its suite. |
+| `retired` | The parent's tests it does not keep: name, digest and reason. |
+| `updated` | The parent's tests it replaced: name, the old and the new digest, and the reason. |
+
+Saving a version (`POST /v1/workflows`, the agent tool `save_workflow`) goes through a gate:
+
+1. Its parent is the version named by `parent`, or the latest version of the same name that the
+   caller sees, or none.
+2. Its suite is the parent's tests, minus those `retire` names, with those `update` names
+   replaced, plus `tests`. `retire` and `update` name inherited tests and give a reason. An
+   update gives a whole new test, or only a new `expect` for the inherited one. Names are unique
+   in a suite. A test recorded from a namespace erased since is left out, and listed as retired
+   with the reason `recorded from an erased namespace`.
+3. Every test is checked, then runs against the version's script and toolset.
+4. The version is stored only if every test passes. Otherwise nothing is stored, and the answer
+   (422 `tests-failed`) lists each test that did not pass, with its problem and its failures.
+
+There is no way around the gate. To save a behavior an inherited test refuses, the version
+retires the test because it is deprecated, or updates it because its state or its result is
+out of date, and says why. The reasons stay in the lineage: a person reading a version learns
+what changed on purpose.
+
+A test is given to a save inline, by the digest of a stored test (one [recorded from a
+run](#tests-recorded-from-runs)), or as `{ "from": "<digest>", "expect": { … } }`: a stored test
+with a new expectation, so a model corrects a recorded test without reading its cassette.
+
+`retry_run` of a run of a workflow (`POST /v1/runs/{id}/fork`) runs the suite of the run's
+version against the corrected script first; the fork is refused (422 `tests-failed`) if a test
+does not pass. A fix that breaks another behavior never reaches production calls.
+
+The tests of a script that is not a workflow are not stored: they run through `test_script`,
+and become a suite when the script is saved as a workflow.
+
+### Tests recorded from runs
+
+Past runs of a workflow have already met the real world: real inputs, real tool answers, real
+signal timings. Recording turns them into tests, so a new version must keep doing what the old
+one did on those inputs.
+
+```
+POST /v1/workflows/triage/record   { "query": "status:completed", "limit": 20 }
+POST /v1/workflows/triage/record   { "runs": ["0193a5c4-…"] }
+```
+
+It takes the completed and failed runs of the workflow, of any version, that the caller sees
+(its namespace, then its labels): those `runs` names, or those `query` selects, in the [query
+language](#query-language), the 1,000 newest at most. It groups them by **path**: the tools a run called in
+`seq` order, the signals it waited for, and how it ended, with consecutive repeats collapsed
+(`github.close_issue×2` and `×9` are one path). It keeps the newest run of each path, up to
+`limit` tests (20 by default, 100 at most). A few hundred runs usually follow a handful of paths.
+
+| Field of the test | Taken from the run |
+| --- | --- |
+| `name` | `recorded <run id>` |
+| `input` | Its input. |
+| `start`, `seed` | Its start time and its seed, so `Date.now()` and random values are what they were. |
+| `world.cassette` | Its calls, matched `by_args`, the outcomes of the children it started included, and its signal timeline. |
+| `expect` | Its status, its output or its error, and how many times it called each tool. |
+| `origin` | The run, its version and its namespace. |
+
+A recorded test says: on this real input, the new version makes the same calls with the same
+args and returns the same output. Any difference fails it. For a failed run, the model gives the
+expectation it should have met (`{ from, expect }`), which turns the run into a regression test.
+After an intended change, the model retires the recorded tests it affects, with one reason, and
+records again from the new version's runs.
+
+Recording stores the tests and returns, for each, its digest, name, path and run. It adds them
+to no suite: a test joins a suite only when a save references it, through the gate. A run whose
+test would be larger than 4 MiB is skipped, and named in the answer.
+
+A recorded test holds the run's data and its seed, with which the run's random values (tokens a
+script generated included) can be computed again. It is read like the run: only a caller who may
+read the runs of its namespace reads it. The gate runs it whoever saves.
+
+### Where tests are stored
+
+A test is a document of the [stored format v1](02-journal.md#stored-format-v1), stored as a blob
+in the `BlobStore` (S3 in production) under the digest of its canonical JSON. A workflow version
+holds digests only. The `tests` table indexes the blobs, with the namespace a recorded test came
+from, and `workflow_tests` the tests each version references
+([tables](06-storage-and-scale.md#tables)). A test lives as long as a version references it; one
+no version references is deleted 24 hours after it was stored. A recorded test is erased with
+its namespace ([retention](06-storage-and-scale.md#retention-and-deletion)).
 
 ## Replay, debugging and forks
 
@@ -81,6 +248,10 @@ Reported per model and per prompt rendering:
 
 Mock mode makes this cheap: runs are hermetic and take no wall-clock time. The suite also
 replays cassettes recorded from real runs.
+
+Repair tasks give the model a workflow with its suite and a failed run of it: it succeeds when
+its fix passes the gate. They also measure whether models write tests with their scripts
+unprompted, and how often the gate refuses a fix they believed correct.
 
 The models evaluated are Claude Opus, Sonnet and Haiku, and one OpenAI model. The suite runs
 on demand, not in CI: each run costs model tokens.
@@ -263,6 +434,7 @@ single-page application, served by `rewind-server`.
 | Observability | The runs, looked at and filtered. Four views: every run (the query bar, with suggestions drawn from the values that exist, the runs over time and the results), the active ones, those waiting on the outside world (grouped by what they wait for: signals, approvals, timers, tools; with the line each is paused on and when it wakes) and the failures (failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run). Its sidebar holds the views, the saved searches and the filters: the values of each field with their counts (facets), which add or remove their term in the query |
 | Run | One run, analysed in depth. Its sidebar holds its status, its identifiers and details (namespace, workflow and the run that started it, script, toolset, labels) and its sections: the debugger (the source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor), the journal, the logs, the LLM trace, and the runs it started |
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used |
+| Workflows | Each workflow and its versions. A version shows its lineage and its [suite](#suites-and-the-gate): the tests it inherited, added, recorded, updated and retired, with their reasons; a test opens on its world and its expectations |
 | Tools | Latency, error rate and retries, per tool and per toolset |
 | Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search, and a filter of those above 80 %. A namespace's page: its cumulative CPU against its quota over the month, its alerts, its tokens in use, its exceptions, and the actions its permissions allow (change its limits, revoke its tokens, delete it) |
 | Organization | Opened from the member's menu: the members and their grants, the invitations, the roles and their permissions, the API keys, the settings; each part shown to whoever holds its permission |

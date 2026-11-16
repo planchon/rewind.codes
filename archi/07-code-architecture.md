@@ -90,7 +90,7 @@ observable through the port alone (the egress rules, an identity provider): thei
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts, toolsets and workflow versions by digest; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `JournalStore` | Scripts, toolsets and workflow versions by digest, the index of tests and the suite of each version; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role; end users' tokens and the keys that sign them | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
@@ -116,6 +116,9 @@ put_script(tenant, script, compiled) / get_script(tenant, digest)
 put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
 put_workflow(tenant, workflow, labels, now) -> StoredWorkflow / get_workflow(tenant, version)
 workflow_versions(tenant, name, labels) / latest_workflows(WorkflowFilter { tenant, labels, after, limit })
+reserve_tests(tenant, [TestRecord { digest, namespace?, size }], now) -> [digest being deleted]
+get_test(tenant, digest) -> TestRecord    namespace_tests(tenant, namespace, limit) -> [digest]
+unreferenced_tests(now, limit) -> [(tenant, digest)]    drop_tests([(tenant, digest)], erased) -> count
 create_run(NewRun { run: (tenant, id), namespace, started, metadata, created_at }, key?)
     -> Created { run, created } | QuotaExceeded { quota, scope, limit, used, resets_at } | NamespaceDeleting
 watch_run(run, watcher, seq) -> Watched { ended }
@@ -249,6 +252,16 @@ Contracts, all covered by the conformance suite:
   of a version changes nothing and returns the first. `workflow_versions` lists a name's
   versions carrying `labels`, newest first (created last first, then stored last first): the
   first is the latest; `latest_workflows` gives the latest version of each name, by name.
+- Tests ([suites](05-testing-and-observability.md#suites-and-the-gate)): the documents are
+  blobs; the store indexes them. `reserve_tests` inserts a test's row, or makes an existing one
+  new again, before its blob is written, and returns the digests whose deletion has started.
+  `put_workflow` writes the rows of `workflow_tests` from the version's suite, and refuses
+  (`Conflict`) a version that references a test without a row, or whose deletion has started.
+  `unreferenced_tests` marks the rows no version references, stored more than 24 hours ago,
+  whose digest is not also a payload's, and returns them; their blobs are deleted, then
+  `drop_tests` removes the rows still marked. With `erased`, it removes the given rows whatever
+  references them: a namespace's erasure takes the tests `namespace_tests` lists. The cleanup of
+  payloads leaves out a digest that has a test row.
 - Tool tasks follow the [lifecycle](04-tools.md#tool-task-lifecycle). A new task starts in
   `approval` when its policy asks for it, else `ready`. `claim_tool_tasks` only hands out
   `ready` tasks whose `next_attempt_at` has passed, and `claimed` tasks whose claim expired
@@ -547,11 +560,13 @@ Conventions:
 |  | `GET /v1/toolsets/{id}/search` | `toolsets:read` | `search_tools`, for large toolsets |
 |  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
 |  | `PUT /v1/namespaces/{name}/toolsets/{id}/credentials` | `credentials:write` | Sets or renews an end user's credentials for the toolset |
-| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, and saves it as a new version; returns its declarations |
+| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, runs its suite through the [gate](05-testing-and-observability.md#suites-and-the-gate), and saves it as a new version; returns its declarations. 422 `tests-failed` lists the tests that did not pass |
 |  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version |
-|  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first |
+|  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first, each with its suite |
+|  | `POST /v1/workflows/{name}/record` | `runs:read` | Records tests from the workflow's past runs, one per path ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)); stores them, adds them to no suite |
+|  | `GET /v1/tests/{digest}` | `toolsets:read` | A test document; a recorded one also needs `runs:read` in its namespace |
 | Scripts | `POST /v1/check` | `runs:start` | Type-check only |
-|  | `POST /v1/test` | `runs:start` | Runs a scenario in mock mode, in virtual time |
+|  | `POST /v1/test` | `runs:start` | Runs tests in mock mode, in virtual time: the given ones, and a workflow's suite ([testing](05-testing-and-observability.md#running-tests)) |
 | Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script and a toolset, or a `workflow` (`triage` or `triage@<version>`) |
 |  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
 |  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
@@ -562,7 +577,7 @@ Conventions:
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
 |  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
-|  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)) |
+|  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
 |  | `GET /v1/runs/{id}/journal` | `runs:read` | Exports the journal document; `?as=cassette` exports a cassette |
 |  | `POST /v1/runs/{id}/release` | `runs:quarantine` | Takes the run out of quarantine |
 |  | `POST /v1/runs/{id}/give-up` | `runs:quarantine` | Gives up a quarantined run |
@@ -692,7 +707,8 @@ and worker.
 - `rewind server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
   when another server holds the directory's lock.
 - Local-only commands run in the CLI process, without a server: `rewind check`, `rewind test`, and
-  the replay of an exported journal.
+  the replay of an exported journal. `rewind test --workflow` only reads the workflow's suite
+  from the server.
 
 The `.rewind/` directory:
 
@@ -717,7 +733,8 @@ Commands:
 | --- | --- |
 | `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d]` | Starts a run and waits for it, up to `--wait` |
 | `rewind check script.ts` | Type-checks a script against the toolset's declarations ([tools](04-tools.md#type-checking)) |
-| `rewind test scenario.json` | Runs a scenario against mocks and cassettes, in virtual time ([testing](05-testing-and-observability.md#testing-and-mocks)) |
+| `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` | Runs tests in virtual time, in the process ([testing](05-testing-and-observability.md#testing-and-mocks)): those of `--tests` (`script.tests.json` next to the script by default), and with `--workflow` the suite of that workflow, fetched from the server, against the script or the version's own |
+| `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | Records tests from a workflow's past runs; prints their digests, names and paths |
 | `rewind signal <run> <name> [payload]` | Sends a signal |
 | `rewind cancel <run>` | Cancels a run |
 | `rewind replay <run> [--script fixed.ts]` | Replays locally and checks determinism; `<run>` is a run id or an exported journal |

@@ -141,14 +141,16 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | --- | --- |
 | `run_script({ code, input?, wait? })` | Type-checks, starts the run, returns the output or the run's state. |
 | `check_script({ code })` | Type-check only. |
-| `test_script({ code, scenario })` | Runs against mocks and cassettes with virtual time. |
+| `test_script({ code, tests?, workflow? })` | Runs [tests](05-testing-and-observability.md#testing-and-mocks) against the script, in mock mode and virtual time: the tests given, and the suite of `workflow` when it names one. |
 | `get_run({ run_id, entry? })` | Status and LLM trace, or one journal entry in full. |
 | `list_runs({ status? })` | Runs started with the same labels (for example the same conversation). |
 | `signal_run({ run_id, name, payload })` | Sends a signal. |
 | `cancel_run({ run_id })` | Cancels a run. |
-| `retry_run({ run_id, code })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). |
+| `retry_run({ run_id, code })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). For a run of a workflow, the suite of its version must pass first. |
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
-| `save_workflow({ name, description, code, input, output, signals })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. The agent's later scripts can start it and signal its runs. |
+| `save_workflow({ name, description, code, input, output, signals, tests?, update?, retire?, parent? })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. Its suite runs first (the parent's tests, updated and retired with reasons, plus the new ones), and it is saved only if every test passes. The agent's later scripts can start it and signal its runs. |
+| `get_workflow({ name })` | A workflow's source, schemas, suite and lineage, with the reasons its tests were updated or retired: what the model reads to repair or extend a workflow it did not write. |
+| `record_tests({ workflow, query?, runs?, limit? })` | Records tests from past runs of a workflow, one per path, and returns their digests for `save_workflow` ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)). |
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
 the lifecycle webhooks. A token or an API key limited to these labels makes the scope hold for
@@ -285,6 +287,12 @@ await rewind.workflows.create({
   signals: { approval: { type: "object", properties: { close: { type: "boolean" } }, required: ["close"] } },
 });
 ```
+
+Each version carries a **suite**: end-to-end tests that give its runs a world (input, tool
+answers, signals) and check what leaves them (how they end, the calls they make). A new version
+inherits its parent's suite and is saved only if every test passes; it retires or updates a test
+only with a reason. Past runs of a workflow can be recorded as tests
+([testing](05-testing-and-observability.md#testing-and-mocks)).
 
 Each registration is a new immutable **version**, identified by its digest
 (`triage@9f2c4e1a07b3`). A toolset lists the workflows its scripts may start, and pins their

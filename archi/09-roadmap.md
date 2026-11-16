@@ -101,7 +101,7 @@ permissions `toolsets:read` and `toolsets:write`.
 | Contract | Specified in | Implemented by | Consumed by |
 | --- | --- | --- | --- |
 | Engine ports (traits and conformance suites) | [07](07-code-architecture.md#ports) | The adapters: runtime, stores, blobs, MCP, checker, OpenTelemetry, secrets, webhooks | `rewind-engine` |
-| Stored format v1 (events, journal documents, cassettes, pinned toolsets) | [02](02-journal.md#stored-format-v1) | `rewind-format` | The stores, `rewind test`, the e2e corpus, journal export and archive |
+| Stored format v1 (events, journal documents, cassettes, pinned toolsets, workflow versions, tests) | [02](02-journal.md#stored-format-v1) | `rewind-format` | The stores, `rewind test`, the e2e corpus, journal export and archive, suites |
 | Pinned toolset (schemas, policies, declarations) | [04](04-tools.md#toolsets-and-code-generation) | `rewind-codegen` | The runtime (`rewind:tools`), the checker, the dispatcher, the SDK, the model's prompt |
 | HTTP API `/v1` (OpenAPI) | [07](07-code-architecture.md#http-api-v1) | `rewind-api` (DTOs, OpenAPI document, Rust client), `rewind-server` | The CLI, the SDK and its agent tools, the dashboard, the evals |
 | Sandbox lib (`rewind.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `rewind-runtime` (the globals that exist) | `rewind-check`, the prompt |
@@ -166,6 +166,9 @@ specified.
 - **Workflows across runs**: named, typed workflows that scripts start and signal, the end of a
   run coming back as a signal, attached and detached runs, scopes
   ([01](01-product.md#workflows), [03](03-execution.md#workflows-across-runs)).
+- **Workflow test suites**: end-to-end tests that give a run its world and check what leaves it,
+  suites inherited along a workflow's versions, the gate on save, tests recorded from past runs
+  ([05](05-testing-and-observability.md#testing-and-mocks)).
 
 ## Out of 0.1
 

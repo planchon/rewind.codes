@@ -101,7 +101,7 @@ the history.
 ## Stored format v1
 
 What is replayed or exported is written in the stored format, defined by `crates/rewind-format`:
-JSON, versioned `"v": 1`, every value in its canonical form. It covers four documents:
+JSON, versioned `"v": 1`, every value in its canonical form. It covers six documents:
 
 | Document | Fields | Where it lives |
 | --- | --- | --- |
@@ -109,7 +109,8 @@ JSON, versioned `"v": 1`, every value in its canonical form. It covers four docu
 | Journal document | `v`, `run` (the run id), `script` (the TypeScript source), `toolset` (the pinned toolset document), `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
 | Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `rewind test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
 | Pinned toolset | `v`, `servers[{name, transport, concurrency}]`, `tools[{name, route, description?, schemas, policy}]`, and `workflows[{name, version, description?, schemas}]` when it pins workflows | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
-| Workflow version | `v`, `name`, `description?`, `script` and `toolset` (digests), `schemas: { input, output, signals: { <name>: schema } }` | The `workflows` table; its digest is the version ([workflows](01-product.md#workflows)) |
+| Workflow version | `v`, `name`, `description?`, `script` and `toolset` (digests), `schemas: { input, output, signals: { <name>: schema } }`; its suite: `parent?` (a version), `tests?[{name, test}]`, `retired?[{name, test, reason}]`, `updated?[{name, from, to, reason}]` (`test`, `from` and `to` are test digests), each left out when empty | The `workflows` table; its digest is the version ([workflows](01-product.md#workflows), [suites](05-testing-and-observability.md#suites-and-the-gate)) |
+| Test | `v`, `name`, `input?`, `start?` (milliseconds), `seed?`, `world?: { tools?: { <tool>: rule \| [rule] }, mocks?, cassette? }` (a rule: `args?`, `returns` or `error`, `times?`; the cassette as above, without its `v`), `signals?[{name, payload?, when?}]`, `expect?: { status?, output?, error?, calls?[{tool, args?, times?}], order? }`, `origin?: { run, version, namespace }` | A blob in the `BlobStore`, under the digest of its canonical JSON ([tests](05-testing-and-observability.md#testing-and-mocks)) |
 
 A reader refuses an unknown version, type or field. Every change of the format comes with
 an explicit migration.
