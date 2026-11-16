@@ -12,7 +12,7 @@ use rewind_api::access::BuiltInRole;
 use rewind_api::common::RunStatus;
 use rewind_api::runs::{ForkRun, StartRun};
 use rewind_api::scripts::TestRequest;
-use rewind_api::testing::{Expectations, Test, TestFrom, TestInput, TestProblem};
+use rewind_api::testing::{Test, TestFrom, TestInput, TestProblem};
 use rewind_api::toolsets::CreateToolset;
 use rewind_api::workflows::{CreateWorkflow, RecordTests, TestRetirement, TestUpdate};
 use rewind_api::{Problem, ProblemType};

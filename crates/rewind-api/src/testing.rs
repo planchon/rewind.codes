@@ -94,14 +94,14 @@ impl World {
 #[serde(untagged)]
 pub enum ToolRules {
     Many(Vec<ToolRule>),
-    One(ToolRule),
+    One(Box<ToolRule>),
 }
 
 impl ToolRules {
     fn into_vec(self) -> Vec<ToolRule> {
         match self {
             ToolRules::Many(rules) => rules,
-            ToolRules::One(rule) => vec![rule],
+            ToolRules::One(rule) => vec![*rule],
         }
     }
 }

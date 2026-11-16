@@ -66,7 +66,7 @@ struct WorldV1 {
 #[serde(untagged)]
 enum RulesV1 {
     Many(Vec<RuleV1>),
-    One(RuleV1),
+    One(Box<RuleV1>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -276,7 +276,7 @@ fn world_from_dto(world: WorldV1) -> Result<World, String> {
     for (tool, rules) in world.tools {
         let rules = match rules {
             RulesV1::Many(rules) => rules,
-            RulesV1::One(rule) => vec![rule],
+            RulesV1::One(rule) => vec![*rule],
         };
         let rules = rules
             .into_iter()
