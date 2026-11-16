@@ -55,7 +55,7 @@
               every one of them: durable, isolated, observable.
             </p>
             <div class="actions">
-              <a class="button" href="https://docs.rewind.codes/quickstart">Get started</a>
+              <a class="button" href="#waitlist">Join the waitlist</a>
               <a class="button ghost" href="https://app.rewind.codes">Open the dashboard</a>
             </div>
           </div>
@@ -294,14 +294,48 @@
         </div>
       </section>
 
-      <!-- Get started -->
-      <section id="start" class="start" aria-label="Get started">
+      <!-- Join the waitlist, without leaving the page: the email goes to /auth/waitlist, which
+           vercel.json rewrites to the API (main.js). -->
+      <section id="waitlist" class="start" aria-labelledby="waitlist-title">
         <div class="wrap">
           <div class="cta" data-reveal>
-            <p class="cta-title">Your agents are ready to write.<br />Let them run.</p>
-            <div class="cta-actions">
-              <a class="button big" href="https://docs.rewind.codes/quickstart">Get started</a>
-              <a class="button ghost" href="mailto:paul@planchon.io?subject=Rewind%20for%20our%20infrastructure">Looking for an enterprise solution?</a>
+            <div class="cta-copy">
+              <h2 id="waitlist-title" class="cta-title">Your agents are ready to write.<br />Let them run.</h2>
+              <p class="cta-lead">
+                Rewind opens through a waitlist. Leave your email: once you are approved, an
+                invitation arrives there and you can sign in.
+              </p>
+            </div>
+            <div class="join" data-waitlist>
+              <form class="join-form">
+                <label class="sr-only" for="waitlist-email">Your email</label>
+                <div class="join-field">
+                  <input
+                    id="waitlist-email"
+                    name="email"
+                    type="email"
+                    required
+                    autocomplete="email"
+                    spellcheck="false"
+                    placeholder="you@company.com"
+                  />
+                  <button class="button" type="submit">Join the waitlist</button>
+                </div>
+                <p class="join-error" role="alert" hidden></p>
+              </form>
+              <div class="join-done" role="status" tabindex="-1" hidden>
+                <p class="join-done-title"><i class="m done"></i>You are on the waitlist.</p>
+                <p>
+                  Once <strong data-waitlist-email></strong> is approved, an invitation arrives
+                  there. Then sign in to the dashboard with that email.
+                </p>
+                <button type="button" class="join-again">Use another email</button>
+              </div>
+              <p class="join-more">
+                <a href="https://app.rewind.codes">Already approved? Sign in</a>
+                <a href="https://docs.rewind.codes">Read the docs</a>
+                <a href="mailto:paul@planchon.io?subject=Rewind%20for%20our%20infrastructure">Enterprise? Talk to us</a>
+              </p>
             </div>
           </div>
         </div>

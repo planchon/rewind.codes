@@ -635,7 +635,7 @@ described in the OpenAPI document like `/v1`.
 | `POST /auth/email-verification` | The code WorkOS sends when it requires the email to be verified |
 | `POST /auth/organization` | The organization chosen when WorkOS asks for one |
 | `POST /auth/session` | The current state: a valid access token, refreshed when less than a minute is left; with `organizationId`, switches organization. Writes a member's first grant in an organization |
-| `POST /auth/waitlist` | Puts an email on the waitlist; the same answer whether the email has an account or not |
+| `POST /auth/waitlist` | Puts an email on the waitlist; the same answer whether the email has an account or not. The landing's form posts here too, through its own origin ([08](08-decisions.md#taken-while-deploying-rewind-on-railway-and-vercel-november-2026)) |
 | `POST /auth/logout` | Revokes the session in WorkOS and clears the cookie |
 
 - `POST /auth/magic-auth` answers 202 when it sent a code, `POST /auth/waitlist` 202 and

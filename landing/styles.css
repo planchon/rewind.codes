@@ -693,7 +693,7 @@ button:focus-visible {
   padding-top: 1px;
 }
 
-/* ---------- get started ---------- */
+/* ---------- join the waitlist ---------- */
 
 .start {
   padding-block: clamp(72px, 9vw, 120px);
@@ -706,7 +706,7 @@ button:focus-visible {
   flex-wrap: wrap;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 32px;
+  gap: 40px 56px;
   padding: clamp(28px, 4.5vw, 56px);
   border: 1px solid var(--line-strong);
   border-radius: 24px;
@@ -715,23 +715,177 @@ button:focus-visible {
     var(--bg-card);
 }
 
+.cta-copy {
+  flex: 1 1 380px;
+  min-width: 0;
+}
+
 .cta-title {
   font-size: clamp(36px, 4vw, 56px);
   line-height: 1.02;
 }
 
-.cta-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 12px;
-  min-width: min(100%, 300px);
+.cta-lead {
+  max-width: 440px;
+  margin-top: 20px;
+  font-size: 17px;
+  line-height: 1.55;
 }
 
-.button.big {
-  min-height: 60px;
-  padding: 0 36px;
-  font-size: 18px;
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.join {
+  flex: 0 1 460px;
+  min-width: min(100%, 340px);
+}
+
+.join [hidden] {
+  display: none !important;
+}
+
+/* The field and its button in one pill, lit by the accent while typing. */
+.join-field {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
+}
+
+.join-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+
+.join-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0 12px 0 18px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: 16px var(--sans);
+  outline: none;
+}
+
+.join-field input::placeholder {
+  color: var(--ink-3);
+}
+
+.join-field input:-webkit-autofill {
+  -webkit-text-fill-color: var(--ink);
+  box-shadow: 0 0 0 100px var(--bg) inset;
+  caret-color: var(--ink);
+}
+
+.join-field .button {
+  flex: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.join-field .button:disabled {
+  cursor: progress;
+  opacity: 0.7;
+  box-shadow: none;
+}
+
+.join-error {
+  margin-top: 14px;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #fca5a5;
+}
+
+.join-error small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+.join-done {
+  padding: 18px 22px 20px;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  border-radius: 18px;
+  background: var(--accent-soft);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.join-done:focus {
+  outline: none;
+}
+
+.join-done-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-family: var(--serif);
+  font-size: 26px;
+  line-height: 1.15;
+  color: var(--ink);
+}
+
+.join-done strong {
+  font-weight: 500;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.join-again {
+  margin-top: 10px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: 13.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.join-again:hover {
+  color: var(--ink);
+}
+
+.join-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-top: 18px;
+  padding-left: 18px;
+  font-size: 13.5px;
+  color: var(--ink-3);
+}
+
+.join-more a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.join-more a:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* ---------- footer ---------- */
@@ -876,8 +1030,44 @@ button:focus-visible {
   .stories {
     grid-template-columns: 1fr;
   }
-  .cta-actions {
-    width: 100%;
+  .join {
+    flex-basis: 100%;
+  }
+}
+
+/* On a phone, the button goes under the field, both full width. */
+@media (max-width: 480px) {
+  .join-field {
+    flex-direction: column;
+    gap: 10px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .join-field:focus-within {
+    box-shadow: none;
+  }
+  .join-field input {
+    min-height: 52px;
+    padding: 0 20px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    background: var(--bg);
+    transition:
+      border-color 0.2s,
+      box-shadow 0.2s;
+  }
+  .join-field input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
+  .join-field .button {
+    min-height: 52px;
+  }
+  .join-error,
+  .join-more {
+    padding-left: 0;
   }
 }
 

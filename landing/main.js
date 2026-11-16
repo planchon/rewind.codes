@@ -1,4 +1,4 @@
-// rewind.codes: the hero drawing, reveal on scroll, and the copy button.
+// rewind.codes: the hero drawing, reveal on scroll, the waitlist form, and the copy button.
 "use strict";
 
 (() => {
@@ -286,6 +286,87 @@
     reveals.forEach((el) => io.observe(el));
   } else {
     reveals.forEach((el) => el.classList.add("is-in"));
+  }
+
+  /* ---------------- join the waitlist ---------------- */
+
+  const join = document.querySelector("[data-waitlist]");
+  if (join) waitlist(join);
+
+  // The email goes to POST /auth/waitlist on this origin, which vercel.json rewrites to the API:
+  // 202 once it is on the list, whether it already has an account or not.
+  function waitlist(root) {
+    const form = root.querySelector("form");
+    const input = form.querySelector("input");
+    const submit = form.querySelector("button[type=submit]");
+    const error = form.querySelector(".join-error");
+    const done = root.querySelector(".join-done");
+    const label = submit.textContent;
+
+    const fail = (message, detail) => {
+      error.textContent = message;
+      if (detail) {
+        const small = document.createElement("small");
+        small.textContent = detail;
+        error.append(small);
+      }
+      error.hidden = false;
+    };
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = input.value.trim();
+      if (!email || submit.disabled) return;
+      error.hidden = true;
+      submit.disabled = true;
+      submit.textContent = "Joining…";
+      try {
+        const response = await fetch("/auth/waitlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        if (response.ok) {
+          done.querySelector("[data-waitlist-email]").textContent = email;
+          form.hidden = true;
+          done.hidden = false;
+          done.focus();
+          return;
+        }
+        // A problem+json: the API's 400 says what it refused (the identity provider's own
+        // message, for an address it does not take).
+        const problem = await response.json().catch(() => null);
+        if (response.status === 400) {
+          fail("This email was not accepted. Check it and try again.", problem?.detail);
+        } else {
+          fail("The waitlist cannot be reached right now. Try again in a moment.");
+        }
+      } catch {
+        fail("The waitlist cannot be reached. Check your connection and try again.");
+      } finally {
+        submit.disabled = false;
+        submit.textContent = label;
+      }
+    });
+
+    input.addEventListener("input", () => (error.hidden = true));
+
+    done.querySelector(".join-again").addEventListener("click", () => {
+      done.hidden = true;
+      form.hidden = false;
+      input.focus();
+      input.select();
+    });
+
+    // The hero's button scrolls here; with a mouse, the field takes the focus on the way. After
+    // the click's navigation to the fragment, which would take it back.
+    if (window.matchMedia("(pointer: fine)").matches) {
+      for (const link of document.querySelectorAll('a[href="#waitlist"]')) {
+        link.addEventListener("click", () => {
+          setTimeout(() => !form.hidden && input.focus({ preventScroll: true }));
+        });
+      }
+    }
   }
 
   /* ---------------- copy the install command ---------------- */

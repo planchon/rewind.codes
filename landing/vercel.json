@@ -5,6 +5,9 @@
   "redirects": [
     { "source": "/dashboard", "destination": "https://app.rewind.codes", "permanent": false }
   ],
+  "rewrites": [
+    { "source": "/auth/waitlist", "destination": "https://api.rewind.codes/auth/waitlist" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
