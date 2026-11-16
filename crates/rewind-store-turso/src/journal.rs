@@ -1,7 +1,7 @@
 //! `JournalStore` on Turso. The in-memory `MemoryJournal` of `rewind-engine` is the reference of
 //! every behavior here; both pass the same conformance suite.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
@@ -15,9 +15,10 @@ use rewind_engine::ports::{
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
     RunRecord, RunRef, RunWorkflow, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
-    TenantId, TenantScope, ToolDeclarations, ToolTask, TraceContext, Trigger, Watched,
-    WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
+    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
+    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -639,6 +640,19 @@ fn nothing(limit: usize) -> bool {
     limit == 0
 }
 
+/// A version referencing a test the store cannot keep for it.
+fn missing_test(test: Digest) -> StoreError {
+    StoreError::Conflict(format!(
+        "the test {test} has no row, or its deletion has started: reserve it and write its blob \
+         again before saving the version"
+    ))
+}
+
+fn namespace_name(name: String) -> Result<NamespaceName, Error> {
+    NamespaceName::new(name.clone())
+        .map_err(|_| Error::Corrupt(format!("invalid namespace {name:?}")))
+}
+
 impl JournalStore for TursoStore {
     // ---------------------------------------------------------------------------------------
     // Scripts and toolsets
@@ -806,6 +820,29 @@ impl JournalStore for TursoStore {
             .await?;
             if let Some(existing) = existing {
                 return Ok(workflow_from_row(&existing)?);
+            }
+            // A new version references only tests whose blobs are kept: rows not being deleted.
+            for test in &workflow.suite().tests {
+                let live = sql::query_row(
+                    connection,
+                    "SELECT 1 FROM tests WHERE tenant = ? AND digest = ? \
+                     AND deletion_started_at IS NULL",
+                    vec![tenant(tenant_id), digest(test.test)],
+                )
+                .await?;
+                if live.is_none() {
+                    return Err(missing_test(test.test));
+                }
+            }
+            let tests: BTreeSet<Digest> = workflow.suite().tests.iter().map(|t| t.test).collect();
+            for test in tests {
+                sql::execute(
+                    connection,
+                    "INSERT OR IGNORE INTO workflow_tests (tenant, version, digest) \
+                     VALUES (?, ?, ?)",
+                    vec![tenant(tenant_id), digest(version), digest(test)],
+                )
+                .await?;
             }
             // Only the versions of one workflow are compared by the order they were stored in.
             let order = sql::query_row(
@@ -2379,6 +2416,196 @@ impl JournalStore for TursoStore {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Tests
+
+    async fn reserve_tests(
+        &self,
+        tenant_id: &TenantId,
+        tests: &[TestRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let mut deleting = Vec::new();
+            for record in tests {
+                let row = sql::query_row(
+                    connection,
+                    "SELECT deletion_started_at IS NOT NULL FROM tests \
+                     WHERE tenant = ? AND digest = ?",
+                    vec![tenant(tenant_id), digest(record.digest)],
+                )
+                .await?;
+                match row {
+                    Some(row) if row.boolean(0)? => deleting.push(record.digest),
+                    // An existing row starts its grace again.
+                    Some(_) => {
+                        sql::execute(
+                            connection,
+                            "UPDATE tests SET reserved_at = ? WHERE tenant = ? AND digest = ?",
+                            vec![ts(now), tenant(tenant_id), digest(record.digest)],
+                        )
+                        .await?;
+                    }
+                    None => {
+                        sql::execute(
+                            connection,
+                            "INSERT INTO tests (tenant, digest, namespace, size, reserved_at, \
+                             deletion_started_at) VALUES (?, ?, ?, ?, ?, NULL)",
+                            vec![
+                                tenant(tenant_id),
+                                digest(record.digest),
+                                opt_text(record.namespace.as_ref().map(NamespaceName::as_str)),
+                                int(record.size),
+                                ts(now),
+                            ],
+                        )
+                        .await?;
+                    }
+                }
+            }
+            Ok(deleting)
+        })
+        .await
+    }
+
+    async fn get_test(
+        &self,
+        tenant_id: &TenantId,
+        digest_of: Digest,
+    ) -> Result<Option<TestRecord>, StoreError> {
+        let connection = self.connection().await?;
+        let row = sql::query_row(
+            &connection,
+            "SELECT namespace, size FROM tests \
+             WHERE tenant = ? AND digest = ? AND deletion_started_at IS NULL",
+            vec![tenant(tenant_id), digest(digest_of)],
+        )
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(TestRecord {
+            digest: digest_of,
+            namespace: row.opt_text(0)?.map(namespace_name).transpose()?,
+            size: row.u64(1)?,
+        }))
+    }
+
+    async fn namespace_tests(
+        &self,
+        tenant_id: &TenantId,
+        namespace: &NamespaceName,
+        max: usize,
+    ) -> Result<Vec<Digest>, StoreError> {
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let rows = sql::query(
+            &connection,
+            "SELECT digest FROM tests WHERE tenant = ? AND namespace = ? ORDER BY digest LIMIT ?",
+            vec![tenant(tenant_id), text(namespace.as_str()), limit(max)],
+        )
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| row.digest(0))
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn unreferenced_tests(
+        &self,
+        now: Timestamp,
+        max: usize,
+    ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            // Tests and payloads share the blobs' keys: a payload's row keeps the blob.
+            let rows = sql::query(
+                connection,
+                "SELECT t.tenant, t.digest FROM tests t \
+                 WHERE t.reserved_at <= ? - ? \
+                 AND (t.deletion_started_at IS NULL OR t.deletion_started_at <= ? - ?) \
+                 AND NOT EXISTS (SELECT 1 FROM workflow_tests w \
+                                 WHERE w.tenant = t.tenant AND w.digest = t.digest) \
+                 AND NOT EXISTS (SELECT 1 FROM payloads p \
+                                 WHERE p.tenant = t.tenant AND p.digest = t.digest) \
+                 ORDER BY t.tenant, t.digest LIMIT ?",
+                vec![
+                    ts(now),
+                    ms(TEST_GRACE),
+                    ts(now),
+                    ms(PAYLOAD_DELETION_TIMEOUT),
+                    limit(max),
+                ],
+            )
+            .await?;
+            let due = rows
+                .iter()
+                .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+                .collect::<Result<Vec<_>, Error>>()?;
+            for (owner, test) in &due {
+                sql::execute(
+                    connection,
+                    "UPDATE tests SET deletion_started_at = ? WHERE tenant = ? AND digest = ?",
+                    vec![ts(now), tenant(owner), digest(*test)],
+                )
+                .await?;
+            }
+            Ok(due)
+        })
+        .await
+    }
+
+    async fn drop_tests(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> Result<usize, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            let mut dropped = 0;
+            for (owner, test) in tests {
+                let deleted = if erased {
+                    // A namespace's erasure: whatever references the test.
+                    sql::execute(
+                        connection,
+                        "DELETE FROM workflow_tests WHERE tenant = ? AND digest = ?",
+                        vec![tenant(owner), digest(*test)],
+                    )
+                    .await?;
+                    sql::execute(
+                        connection,
+                        "DELETE FROM tests WHERE tenant = ? AND digest = ?",
+                        vec![tenant(owner), digest(*test)],
+                    )
+                    .await?
+                } else {
+                    sql::execute(
+                        connection,
+                        "DELETE FROM tests WHERE tenant = ? AND digest = ? \
+                         AND deletion_started_at IS NOT NULL \
+                         AND NOT EXISTS (SELECT 1 FROM workflow_tests w \
+                                         WHERE w.tenant = tests.tenant \
+                                         AND w.digest = tests.digest)",
+                        vec![tenant(owner), digest(*test)],
+                    )
+                    .await?
+                };
+                dropped += usize::try_from(deleted).unwrap_or(usize::MAX);
+            }
+            Ok(dropped)
+        })
+        .await
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Payloads
 
     async fn get_payload(
@@ -2479,6 +2706,8 @@ impl JournalStore for TursoStore {
              AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= ? - ?) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
+             AND NOT EXISTS (SELECT 1 FROM tests x \
+                             WHERE x.tenant = p.tenant AND x.digest = p.digest) \
              ORDER BY p.tenant, p.digest LIMIT ?",
             vec![
                 ts(now),
@@ -2516,7 +2745,10 @@ impl JournalStore for TursoStore {
                      AND (deletion_started_at IS NULL OR deletion_started_at <= ? - ?) \
                      AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                                      WHERE r.tenant = payloads.tenant \
-                                     AND r.digest = payloads.digest)",
+                                     AND r.digest = payloads.digest) \
+                     AND NOT EXISTS (SELECT 1 FROM tests x \
+                                     WHERE x.tenant = payloads.tenant \
+                                     AND x.digest = payloads.digest)",
                     vec![
                         ts(now),
                         tenant(owner),

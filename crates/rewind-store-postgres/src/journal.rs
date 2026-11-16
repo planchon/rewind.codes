@@ -14,6 +14,10 @@
 //!   reaches (`run_watchers`): it locks them with its run, all by id, before anything else.
 //! - The concurrency limits of tool tasks hold across claimers: a claim decides for a run's tool
 //!   (or a worker's MCP server) only while it holds a transaction-scoped advisory lock on it.
+//! - Test rows are locked by tenant and digest. A new workflow version locks the rows of its
+//!   suite (`FOR SHARE`) until it has written its references; the cleanup of tests marks only
+//!   rows it holds (`FOR UPDATE SKIP LOCKED`), and checks their references again once it holds
+//!   them. A row is never marked while a version that references it is being written.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
@@ -29,9 +33,10 @@ use rewind_engine::ports::{
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
     RunRecord, RunRef, RunWorkflow, Secret, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant,
-    TenantId, TenantScope, ToolDeclarations, ToolTask, TraceContext, Trigger, Watched,
-    WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
+    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
+    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -114,6 +119,20 @@ macro_rules! task_columns {
 macro_rules! unflushed {
     () => {
         "WITH unflushed AS (SELECT set_config('synchronous_commit', 'off', true)) "
+    };
+}
+
+/// A test (`t`) the cleanup may start deleting at `$1`: stored or reserved at least its grace
+/// (`$2`) before, not being deleted, or for at least `$3`, referenced by no version, and whose
+/// digest is not also a payload's (they share the blobs' keys).
+macro_rules! test_due {
+    () => {
+        "t.reserved_at <= $1 - $2 \
+         AND (t.deletion_started_at IS NULL OR t.deletion_started_at <= $1 - $3) \
+         AND NOT EXISTS (SELECT 1 FROM workflow_tests w \
+                         WHERE w.tenant = t.tenant AND w.digest = t.digest) \
+         AND NOT EXISTS (SELECT 1 FROM payloads p \
+                         WHERE p.tenant = t.tenant AND p.digest = t.digest)"
     };
 }
 
@@ -324,6 +343,23 @@ fn fenced(lease: &Lease) -> StoreError {
 /// A call with a limit of 0 does nothing, and opens no transaction.
 fn nothing(limit: usize) -> bool {
     limit == 0
+}
+
+/// A version referencing a test the store cannot keep for it.
+fn missing_test(test: Digest) -> StoreError {
+    StoreError::Conflict(format!(
+        "the test {test} has no row, or its deletion has started: reserve it and write its blob \
+         again before saving the version"
+    ))
+}
+
+/// The tenants and digests of `keys`, sorted (the order rows are locked in), to bind as arrays.
+fn sorted_keys(keys: &[(TenantId, Digest)]) -> (Vec<&str>, Vec<Vec<u8>>) {
+    let sorted: BTreeSet<&(TenantId, Digest)> = keys.iter().collect();
+    sorted
+        .into_iter()
+        .map(|(owner, digest)| (tenant(owner), bytes(*digest)))
+        .unzip()
 }
 
 /// What the lock of a run reads of it.
@@ -1691,6 +1727,238 @@ impl PostgresStore {
         Ok(WebhookToken(token))
     }
 
+    async fn put_workflow_once(
+        &self,
+        tenant_id: &TenantId,
+        workflow: &Workflow,
+        labels: &BTreeMap<String, String>,
+        now: Timestamp,
+    ) -> Result<Option<StoredWorkflow>, Fail> {
+        let version = workflow.version();
+        let mut tx = self.pool.begin().await?;
+        let inserted = sqlx::query(concat!(
+            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING RETURNING ",
+            workflow_columns!()
+        ))
+        .bind(tenant(tenant_id))
+        .bind(bytes(version))
+        .bind(workflow.name())
+        .bind(rewind_format::encode_workflow(workflow))
+        .bind(encode_labels(labels))
+        .bind(ts(now))
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(row) = inserted else {
+            // Stored before: nothing changes.
+            return Ok(None);
+        };
+        let tests: BTreeSet<Digest> = workflow.suite().tests.iter().map(|t| t.test).collect();
+        if !tests.is_empty() {
+            let digests: Vec<Vec<u8>> = tests.iter().map(|test| bytes(*test)).collect();
+            // The suite's rows not being deleted, locked by digest until the commit: no cleanup
+            // marks them before the references below are written.
+            let rows = sqlx::query(
+                "SELECT digest FROM tests WHERE tenant = $1 AND digest = ANY($2) \
+                 AND deletion_started_at IS NULL ORDER BY digest FOR SHARE",
+            )
+            .bind(tenant(tenant_id))
+            .bind(&digests)
+            .fetch_all(&mut *tx)
+            .await?;
+            let live: BTreeSet<Digest> = rows
+                .iter()
+                .map(|row| row.digest(0))
+                .collect::<Result<_, Error>>()?;
+            if let Some(missing) = workflow
+                .suite()
+                .tests
+                .iter()
+                .find(|test| !live.contains(&test.test))
+            {
+                return Err(missing_test(missing.test).into());
+            }
+            sqlx::query(
+                "INSERT INTO workflow_tests (tenant, version, digest) \
+                 SELECT $1, $2, digest FROM unnest($3::bytea[]) AS t(digest) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(tenant(tenant_id))
+            .bind(bytes(version))
+            .bind(digests)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let stored = workflow_from_row(&row)?;
+        tx.commit().await?;
+        Ok(Some(stored))
+    }
+
+    async fn reserve_tests_once(
+        &self,
+        tenant_id: &TenantId,
+        tests: &[TestRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, Fail> {
+        // One row per digest, in digest order: the order every writer locks test rows in.
+        let by_digest: BTreeMap<Digest, &TestRecord> =
+            tests.iter().map(|test| (test.digest, test)).collect();
+        let digests: Vec<Vec<u8>> = by_digest.keys().map(|digest| bytes(*digest)).collect();
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query(
+            "SELECT digest, deletion_started_at IS NOT NULL FROM tests \
+             WHERE tenant = $1 AND digest = ANY($2) ORDER BY digest FOR UPDATE",
+        )
+        .bind(tenant(tenant_id))
+        .bind(digests)
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut deleting = BTreeSet::new();
+        for row in &rows {
+            if row.boolean(1)? {
+                deleting.insert(row.digest(0)?);
+            }
+        }
+        let kept: Vec<&TestRecord> = by_digest
+            .values()
+            .filter(|test| !deleting.contains(&test.digest))
+            .copied()
+            .collect();
+        if !kept.is_empty() {
+            // A missing row is created; an existing one starts its grace again. A row created
+            // since the lock above is not being deleted either.
+            sqlx::query(
+                "INSERT INTO tests (tenant, digest, namespace, size, reserved_at) \
+                 SELECT $1, digest, namespace, size, $5 \
+                 FROM unnest($2::bytea[], $3::text[], $4::bigint[]) \
+                     WITH ORDINALITY AS t(digest, namespace, size, n) \
+                 ORDER BY n \
+                 ON CONFLICT (tenant, digest) DO UPDATE SET reserved_at = $5 \
+                 WHERE tests.deletion_started_at IS NULL",
+            )
+            .bind(tenant(tenant_id))
+            .bind(
+                kept.iter()
+                    .map(|test| bytes(test.digest))
+                    .collect::<Vec<_>>(),
+            )
+            .bind(
+                kept.iter()
+                    .map(|test| test.namespace.as_ref().map(NamespaceName::as_str))
+                    .collect::<Vec<_>>(),
+            )
+            .bind(kept.iter().map(|test| int(test.size)).collect::<Vec<_>>())
+            .bind(ts(now))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        // In the order asked.
+        Ok(tests
+            .iter()
+            .map(|test| test.digest)
+            .filter(|digest| deleting.contains(digest))
+            .collect())
+    }
+
+    async fn unreferenced_tests_once(
+        &self,
+        now: Timestamp,
+        max: usize,
+    ) -> Result<Vec<(TenantId, Digest)>, Fail> {
+        let mut tx = self.pool.begin().await?;
+        // The rows due, but those a writer or another cleanup holds.
+        let rows = sqlx::query(concat!(
+            "SELECT t.tenant, t.digest FROM tests t WHERE ",
+            test_due!(),
+            " ORDER BY t.tenant, t.digest LIMIT $4 FOR UPDATE SKIP LOCKED"
+        ))
+        .bind(ts(now))
+        .bind(ms(TEST_GRACE))
+        .bind(ms(PAYLOAD_DELETION_TIMEOUT))
+        .bind(limit(max))
+        .fetch_all(&mut *tx)
+        .await?;
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let picked = rows
+            .iter()
+            .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+            .collect::<Result<Vec<_>, Error>>()?;
+        let (tenants, digests) = sorted_keys(&picked);
+        // Checked again under the locks, by a statement that sees what committed before them: a
+        // version that referenced a row before it was locked keeps it.
+        let marked = sqlx::query(concat!(
+            "UPDATE tests t SET deletion_started_at = $1 \
+             FROM unnest($4::text[], $5::bytea[]) AS f(tenant, digest) \
+             WHERE t.tenant = f.tenant AND t.digest = f.digest AND ",
+            test_due!(),
+            " RETURNING t.tenant, t.digest"
+        ))
+        .bind(ts(now))
+        .bind(ms(TEST_GRACE))
+        .bind(ms(PAYLOAD_DELETION_TIMEOUT))
+        .bind(tenants)
+        .bind(digests)
+        .fetch_all(&mut *tx)
+        .await?;
+        let marked: BTreeSet<(TenantId, Digest)> = marked
+            .iter()
+            .map(|row| Ok((row.tenant(0)?, row.digest(1)?)))
+            .collect::<Result<_, Error>>()?;
+        tx.commit().await?;
+        Ok(marked.into_iter().collect())
+    }
+
+    async fn drop_tests_once(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> Result<usize, Fail> {
+        let (tenants, digests) = sorted_keys(tests);
+        if !erased {
+            let dropped = sqlx::query(
+                "DELETE FROM tests t USING ( \
+                     SELECT tenant, digest FROM unnest($1::text[], $2::bytea[]) \
+                         AS f(tenant, digest) \
+                     ORDER BY tenant, digest) f \
+                 WHERE t.tenant = f.tenant AND t.digest = f.digest \
+                 AND t.deletion_started_at IS NOT NULL \
+                 AND NOT EXISTS (SELECT 1 FROM workflow_tests w \
+                                 WHERE w.tenant = t.tenant AND w.digest = t.digest)",
+            )
+            .bind(tenants)
+            .bind(digests)
+            .execute(&self.pool)
+            .await?;
+            return Ok(usize::try_from(dropped.rows_affected()).unwrap_or(usize::MAX));
+        }
+        // A namespace's erasure: the rows go whatever references them, then the references,
+        // read after the rows' locks: those of a version written meanwhile go too.
+        let mut tx = self.pool.begin().await?;
+        let dropped = sqlx::query(
+            "DELETE FROM tests t USING ( \
+                 SELECT tenant, digest FROM unnest($1::text[], $2::bytea[]) AS f(tenant, digest) \
+                 ORDER BY tenant, digest) f \
+             WHERE t.tenant = f.tenant AND t.digest = f.digest",
+        )
+        .bind(&tenants)
+        .bind(&digests)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM workflow_tests w USING unnest($1::text[], $2::bytea[]) AS f(tenant, digest) \
+             WHERE w.tenant = f.tenant AND w.digest = f.digest",
+        )
+        .bind(&tenants)
+        .bind(&digests)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(usize::try_from(dropped.rows_affected()).unwrap_or(usize::MAX))
+    }
+
     async fn reserve_payloads_once(
         &self,
         tenant_id: &TenantId,
@@ -1793,6 +2061,8 @@ impl PostgresStore {
              AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= $3 - $5) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
+             AND NOT EXISTS (SELECT 1 FROM tests x \
+                             WHERE x.tenant = p.tenant AND x.digest = p.digest) \
              RETURNING p.tenant, p.digest",
         )
         .bind(tenants)
@@ -2259,22 +2529,10 @@ impl JournalStore for PostgresStore {
         now: Timestamp,
     ) -> Result<StoredWorkflow, StoreError> {
         let version = workflow.version();
-        let inserted = sqlx::query(concat!(
-            "INSERT INTO workflows (tenant, version, name, document, labels, created_at) \
-             VALUES ($1, $2, $3, $4, $5::jsonb, $6) ON CONFLICT DO NOTHING RETURNING ",
-            workflow_columns!()
-        ))
-        .bind(tenant(tenant_id))
-        .bind(bytes(version))
-        .bind(workflow.name())
-        .bind(rewind_format::encode_workflow(workflow))
-        .bind(encode_labels(labels))
-        .bind(ts(now))
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(Error::from)?;
-        if let Some(row) = inserted {
-            return Ok(workflow_from_row(&row)?);
+        let inserted =
+            retrying(|| self.put_workflow_once(tenant_id, workflow, labels, now)).await?;
+        if let Some(stored) = inserted {
+            return Ok(stored);
         }
         // Stored before: the version as it was stored first.
         let stored = self.get_workflow(tenant_id, version).await?;
@@ -3114,6 +3372,98 @@ impl JournalStore for PostgresStore {
     }
 
     // ---------------------------------------------------------------------------------------
+    // Tests
+
+    async fn reserve_tests(
+        &self,
+        tenant_id: &TenantId,
+        tests: &[TestRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        if tests.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(retrying(|| self.reserve_tests_once(tenant_id, tests, now)).await?)
+    }
+
+    async fn get_test(
+        &self,
+        tenant_id: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<TestRecord>, StoreError> {
+        let row = sqlx::query(
+            "SELECT namespace, size FROM tests \
+             WHERE tenant = $1 AND digest = $2 AND deletion_started_at IS NULL",
+        )
+        .bind(tenant(tenant_id))
+        .bind(bytes(digest))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        Ok(Some(TestRecord {
+            digest,
+            namespace: row
+                .opt_text(0)?
+                .map(|name| {
+                    NamespaceName::new(name.clone())
+                        .map_err(|_| Error::Corrupt(format!("invalid namespace {name:?}")))
+                })
+                .transpose()?,
+            size: row.u64(1)?,
+        }))
+    }
+
+    async fn namespace_tests(
+        &self,
+        tenant_id: &TenantId,
+        namespace: &NamespaceName,
+        max: usize,
+    ) -> Result<Vec<Digest>, StoreError> {
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT digest FROM tests WHERE tenant = $1 AND namespace = $2 \
+             ORDER BY digest LIMIT $3",
+        )
+        .bind(tenant(tenant_id))
+        .bind(namespace.as_str())
+        .bind(limit(max))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(|row| row.digest(0))
+            .collect::<Result<_, Error>>()?)
+    }
+
+    async fn unreferenced_tests(
+        &self,
+        now: Timestamp,
+        max: usize,
+    ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
+        if nothing(max) {
+            return Ok(Vec::new());
+        }
+        Ok(retrying(|| self.unreferenced_tests_once(now, max)).await?)
+    }
+
+    async fn drop_tests(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> Result<usize, StoreError> {
+        if tests.is_empty() {
+            return Ok(0);
+        }
+        Ok(retrying(|| self.drop_tests_once(tests, erased)).await?)
+    }
+
+    // ---------------------------------------------------------------------------------------
     // Payloads
 
     async fn get_payload(
@@ -3170,6 +3520,8 @@ impl JournalStore for PostgresStore {
              AND (p.deletion_started_at IS NULL OR p.deletion_started_at <= $1 - $4) \
              AND NOT EXISTS (SELECT 1 FROM payload_refs r \
                              WHERE r.tenant = p.tenant AND r.digest = p.digest) \
+             AND NOT EXISTS (SELECT 1 FROM tests x \
+                             WHERE x.tenant = p.tenant AND x.digest = p.digest) \
              ORDER BY p.tenant, p.digest LIMIT $3",
         )
         .bind(ts(now))

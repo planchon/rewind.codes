@@ -4,7 +4,8 @@
 //! refused rather than misread. A migration is never edited once released: a change is a new
 //! migration (version 2 moved access to grants and roles; version 3 added the workflows, the
 //! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
-//! the read model's runs).
+//! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
+//! workflow versions).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -56,13 +57,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -629,6 +630,34 @@ GROUP BY tenant, created_at / 86400000;
 INSERT INTO usage (tenant, namespace, day, cpu_ms, runs_started)
 SELECT tenant, '*', created_at / 86400000, 0, COUNT(*) FROM runs
 GROUP BY tenant, created_at / 86400000;
+"#;
+
+/// Tests and the suites of workflow versions (`archi/05-testing-and-observability.md`, "Where
+/// tests are stored"). A `tests` row indexes a test whose document is a blob under its digest:
+/// the namespace of the run a recorded test came from (null for a test written by hand), its
+/// size, when it was stored or reserved last (its grace starts there), and when a cleanup started
+/// deleting it (its blob may be gone). `workflow_tests` holds the tests of each version's suite,
+/// written with the version, and is indexed by test: a test is kept while a version references
+/// it.
+const V6: &str = r#"
+CREATE TABLE tests (
+    tenant TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    namespace TEXT,
+    size INTEGER NOT NULL,
+    reserved_at INTEGER NOT NULL,
+    deletion_started_at INTEGER,
+    PRIMARY KEY (tenant, digest)
+) STRICT;
+CREATE INDEX tests_by_namespace ON tests (tenant, namespace);
+
+CREATE TABLE workflow_tests (
+    tenant TEXT NOT NULL,
+    version TEXT NOT NULL,
+    digest TEXT NOT NULL,
+    PRIMARY KEY (tenant, version, digest)
+) STRICT;
+CREATE INDEX workflow_tests_by_test ON workflow_tests (tenant, digest);
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
