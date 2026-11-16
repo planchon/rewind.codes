@@ -14,9 +14,10 @@ use crate::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TaskFilter, TaskRef,
-    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolTask,
-    Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter,
+    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
+    ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
@@ -55,9 +56,30 @@ struct State {
     next_feed_id: u64,
     /// Workflow versions, with the order they were stored in.
     workflows: BTreeMap<(TenantId, Digest), (u64, StoredWorkflow)>,
+    /// The index of the tests whose documents are blobs.
+    tests: BTreeMap<(TenantId, Digest), StoredTest>,
+    /// (tenant, test, version): the tests of each version's suite.
+    workflow_tests: BTreeSet<(TenantId, Digest, Digest)>,
     next_workflow: u64,
     /// Run → its watchers: watcher → (`seq` of the start, attached).
     watchers: BTreeMap<RunId, BTreeMap<RunId, (Seq, bool)>>,
+}
+
+#[derive(Debug, Clone)]
+struct StoredTest {
+    record: TestRecord,
+    /// When it was stored or reserved last: its grace starts there.
+    reserved_at: Timestamp,
+    deletion_started: Option<Timestamp>,
+}
+
+impl State {
+    fn test_referenced(&self, tenant: &TenantId, digest: Digest) -> bool {
+        self.workflow_tests
+            .range((tenant.clone(), digest, Digest::from_bytes([0; 32]))..)
+            .next()
+            .is_some_and(|(owner, test, _)| owner == tenant && *test == digest)
+    }
 }
 
 #[derive(Debug)]
@@ -870,6 +892,22 @@ impl JournalStore for MemoryJournal {
         let mut state = self.lock()?;
         let order = state.next_workflow;
         let key = (tenant.clone(), workflow.version());
+        if !state.workflows.contains_key(&key) {
+            for test in &workflow.suite().tests {
+                let live = state
+                    .tests
+                    .get(&(tenant.clone(), test.test))
+                    .is_some_and(|stored| stored.deletion_started.is_none());
+                if !live {
+                    return Err(missing_test(test.test));
+                }
+            }
+            for test in &workflow.suite().tests {
+                state
+                    .workflow_tests
+                    .insert((tenant.clone(), test.test, workflow.version()));
+            }
+        }
         let (_, stored) = state.workflows.entry(key).or_insert_with(|| {
             (
                 order,
@@ -1853,6 +1891,120 @@ impl JournalStore for MemoryJournal {
         Ok(deleting)
     }
 
+    async fn reserve_tests(
+        &self,
+        tenant: &TenantId,
+        tests: &[TestRecord],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let mut state = self.lock()?;
+        let mut deleting = Vec::new();
+        for record in tests {
+            match state.tests.get_mut(&(tenant.clone(), record.digest)) {
+                Some(stored) if stored.deletion_started.is_some() => deleting.push(record.digest),
+                Some(stored) => stored.reserved_at = now,
+                None => {
+                    state.tests.insert(
+                        (tenant.clone(), record.digest),
+                        StoredTest {
+                            record: record.clone(),
+                            reserved_at: now,
+                            deletion_started: None,
+                        },
+                    );
+                }
+            }
+        }
+        Ok(deleting)
+    }
+
+    async fn get_test(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<TestRecord>, StoreError> {
+        let state = self.lock()?;
+        Ok(state
+            .tests
+            .get(&(tenant.clone(), digest))
+            .filter(|stored| stored.deletion_started.is_none())
+            .map(|stored| stored.record.clone()))
+    }
+
+    async fn namespace_tests(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        limit: usize,
+    ) -> Result<Vec<Digest>, StoreError> {
+        let state = self.lock()?;
+        Ok(state
+            .tests
+            .iter()
+            .filter(|((owner, _), stored)| {
+                owner == tenant && stored.record.namespace.as_ref() == Some(namespace)
+            })
+            .map(|((_, digest), _)| *digest)
+            .take(limit)
+            .collect())
+    }
+
+    async fn unreferenced_tests(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> Result<Vec<(TenantId, Digest)>, StoreError> {
+        let mut state = self.lock()?;
+        let due: Vec<(TenantId, Digest)> = state
+            .tests
+            .iter()
+            .filter(|((tenant, digest), stored)| {
+                stored.reserved_at.saturating_add(TEST_GRACE) <= now
+                    && stored.deletion_started.is_none_or(|started| {
+                        started.saturating_add(PAYLOAD_DELETION_TIMEOUT) <= now
+                    })
+                    && !state.test_referenced(tenant, *digest)
+                    && !state.payloads.contains_key(&(tenant.clone(), *digest))
+            })
+            .map(|(key, _)| key.clone())
+            .take(limit)
+            .collect();
+        for key in &due {
+            if let Some(stored) = state.tests.get_mut(key) {
+                stored.deletion_started = Some(now);
+            }
+        }
+        Ok(due)
+    }
+
+    async fn drop_tests(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> Result<usize, StoreError> {
+        let mut state = self.lock()?;
+        let mut dropped = 0;
+        for (tenant, digest) in tests {
+            let key = (tenant.clone(), *digest);
+            let droppable = erased
+                || state.tests.get(&key).is_some_and(|stored| {
+                    stored.deletion_started.is_some() && !state.test_referenced(tenant, *digest)
+                });
+            if !droppable {
+                continue;
+            }
+            if state.tests.remove(&key).is_some() {
+                dropped += 1;
+            }
+            if erased {
+                state
+                    .workflow_tests
+                    .retain(|(owner, test, _)| !(owner == tenant && test == digest));
+            }
+        }
+        Ok(dropped)
+    }
+
     async fn unreferenced_payloads(
         &self,
         now: Timestamp,
@@ -1862,7 +2014,7 @@ impl JournalStore for MemoryJournal {
         Ok(state
             .payloads
             .iter()
-            .filter(|((tenant, _), stored)| deletable(&state, tenant, stored, now))
+            .filter(|((tenant, digest), stored)| deletable(&state, tenant, *digest, stored, now))
             .map(|(key, _)| key.clone())
             .take(limit)
             .collect())
@@ -1880,7 +2032,7 @@ impl JournalStore for MemoryJournal {
                 state
                     .payloads
                     .get(*key)
-                    .is_some_and(|stored| deletable(&state, &key.0, stored, now))
+                    .is_some_and(|stored| deletable(&state, &key.0, key.1, stored, now))
             })
             .cloned()
             .collect();
@@ -2433,10 +2585,25 @@ fn update_by_token(
         .map_or(TaskUpdate::NotFound, update))
 }
 
+/// A version referencing a test the store cannot keep for it.
+fn missing_test(digest: Digest) -> StoreError {
+    StoreError::Conflict(format!(
+        "the test {digest} has no row, or its deletion has started: reserve it and write its \
+         blob again before saving the version"
+    ))
+}
+
 /// Whether cleanup may start deleting the payload at `now`: no run has referenced it for its
 /// grace, and its deletion has not started, or started too long ago to be still going on.
-fn deletable(state: &State, tenant: &TenantId, stored: &StoredPayload, now: Timestamp) -> bool {
-    stored.refs.is_empty()
+fn deletable(
+    state: &State,
+    tenant: &TenantId,
+    digest: Digest,
+    stored: &StoredPayload,
+    now: Timestamp,
+) -> bool {
+    !state.tests.contains_key(&(tenant.clone(), digest))
+        && stored.refs.is_empty()
         && stored
             .unreferenced_since
             .is_some_and(|since| since.saturating_add(state.retention(tenant).payload_grace) <= now)

@@ -2,9 +2,11 @@
 //! (`archi/01-product.md`, "Workflows"; `archi/03-execution.md`, "Workflows across runs").
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use rewind_core::{Digest, RunId, Seq, Timestamp, Workflow};
 
+use crate::ports::namespaces::NamespaceName;
 use crate::ports::tenancy::TenantId;
 
 /// A workflow version as stored: immutable, keyed by its version in its tenant.
@@ -25,6 +27,20 @@ impl StoredWorkflow {
             .all(|(key, value)| self.labels.get(key) == Some(value))
     }
 }
+
+/// The index row of a test, whose document is a blob of the `BlobStore` under its digest
+/// (`archi/05-testing-and-observability.md`, "Where tests are stored").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TestRecord {
+    pub digest: Digest,
+    /// The namespace of the run a recorded test came from; `None` for a test written by hand.
+    pub namespace: Option<NamespaceName>,
+    /// Size of the document, in bytes.
+    pub size: u64,
+}
+
+/// How long a test no version references is kept after it was stored or reserved again.
+pub const TEST_GRACE: Duration = Duration::from_secs(24 * 3_600);
 
 /// The latest version of each workflow of a tenant, by name.
 #[derive(Debug, Clone, PartialEq, Eq)]

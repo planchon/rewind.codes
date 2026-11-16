@@ -31,7 +31,9 @@ pub use tasks::{
     ClaimedTask, ParkKind, ParkReason, ParkedScope, TaskFilter, TaskRef, TaskState, TaskToken,
     TaskUpdate, ToolTask, deferred_timeout_failure,
 };
-pub use workflows::{RunWorkflow, StartedBy, StoredWorkflow, Watched, WorkflowFilter};
+pub use workflows::{
+    RunWorkflow, StartedBy, StoredWorkflow, TEST_GRACE, TestRecord, Watched, WorkflowFilter,
+};
 
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
@@ -168,7 +170,10 @@ pub trait JournalStore: Send + Sync {
     // Workflows
 
     /// Stores a workflow version, with the labels of the key that saved it, and returns it as
-    /// stored. Idempotent by version: a second put changes nothing and returns the first.
+    /// stored, with a row of `workflow_tests` for each test of its suite, in one transaction.
+    /// Idempotent by version: a second put changes nothing and returns the first. A new version
+    /// that references a test without a row, or whose deletion has started, is refused
+    /// (`Conflict`): it would point to a blob that may be gone.
     fn put_workflow(
         &self,
         tenant: &TenantId,
@@ -557,6 +562,55 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<bool, StoreError>> + Send;
 
     // ---------------------------------------------------------------------------------------
+    // Tests (`archi/05-testing-and-observability.md`, "Where tests are stored")
+
+    /// Reserves the rows of tests before their blobs are written, in one transaction: a missing
+    /// row is created as its record describes it; an existing row starts its [`TEST_GRACE`]
+    /// again at `now`. Returns the tests whose deletion has started, left as they are: their
+    /// blobs may be deleted at any time, so they cannot be referenced until their rows are gone.
+    fn reserve_tests(
+        &self,
+        tenant: &TenantId,
+        tests: &[TestRecord],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Vec<Digest>, StoreError>> + Send;
+
+    /// A test's row; `None` for a test never stored, erased, or whose deletion has started.
+    fn get_test(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> impl Future<Output = Result<Option<TestRecord>, StoreError>> + Send;
+
+    /// Up to `limit` tests recorded from the runs of a namespace, for its erasure.
+    fn namespace_tests(
+        &self,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<Digest>, StoreError>> + Send;
+
+    /// Marks as being deleted, and returns, up to `limit` tests that no version references,
+    /// stored or reserved at least [`TEST_GRACE`] before `now`, whose digest is not also a
+    /// payload's, and whose deletion has not started, or started at least
+    /// [`PAYLOAD_DELETION_TIMEOUT`] ago. Their blobs can be deleted, then their rows dropped.
+    fn unreferenced_tests(
+        &self,
+        now: Timestamp,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<(TenantId, Digest)>, StoreError>> + Send;
+
+    /// Removes the rows of the given tests once their blobs are deleted: those still marked and
+    /// that no version references; with `erased`, every given row, with the rows of
+    /// `workflow_tests` that reference it (a namespace's erasure). Returns how many rows were
+    /// removed.
+    fn drop_tests(
+        &self,
+        tests: &[(TenantId, Digest)],
+        erased: bool,
+    ) -> impl Future<Output = Result<usize, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
     // Payloads
 
     /// A payload's row: size, preview, and the value when it is in the table tier.
@@ -583,8 +637,9 @@ pub trait JournalStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<Digest>, StoreError>> + Send;
 
     /// Up to `limit` payloads that no run has referenced for longer than their tenant's
-    /// `payload_grace`, at `now`, and whose deletion has not started, or started at least
-    /// [`PAYLOAD_DELETION_TIMEOUT`] ago.
+    /// `payload_grace`, at `now`, whose deletion has not started, or started at least
+    /// [`PAYLOAD_DELETION_TIMEOUT`] ago, and whose digest is not also a test's: a blob is keyed
+    /// by its digest, whatever holds it.
     fn unreferenced_payloads(
         &self,
         now: Timestamp,

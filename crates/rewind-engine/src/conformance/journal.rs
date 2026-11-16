@@ -10,8 +10,8 @@ use std::time::Duration;
 use rewind_core::{
     AbortKind, AbortReason, Annotation, CancelReason, Command, Completion, Digest, Epoch, Event,
     HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunStatus, Script,
-    Seed, Seq, Timestamp, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute,
-    Toolset, Workflow, WorkflowSchemas, end_signal_name,
+    Seed, Seq, Suite, SuiteTest, Timestamp, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy,
+    ToolRoute, Toolset, Workflow, WorkflowSchemas, end_signal_name,
 };
 use serde_json::json;
 
@@ -21,9 +21,9 @@ use crate::ports::{
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
     Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
-    StartedBy, StoreError, Subscription, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate,
-    Tenant, TenantId, TenantScope, ToolDeclarations, TraceContext, Trigger, Watched,
-    WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
+    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, TraceContext, Trigger,
+    Watched, WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DropNamespace, Month, NamespaceCursor, NamespaceFilter, NamespaceName,
@@ -218,6 +218,16 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         "journal",
         new_store(),
         workflow_versions_are_stored_by_tenant_and_listed_newest_first
+    );
+    check!(
+        "journal",
+        new_store(),
+        tests_are_kept_while_a_version_references_them
+    );
+    check!(
+        "journal",
+        new_store(),
+        tests_of_an_erased_namespace_go_whatever_references_them
     );
     check!(
         "journal",
@@ -4899,5 +4909,245 @@ pub async fn watching_a_run_says_whether_it_has_ended<S: JournalStore>(store: &S
         inbox(store, &watcher, later(T0, 2)).await,
         [],
         "the end of a run that had ended is the caller's to enqueue"
+    );
+}
+
+// Tests (`archi/05-testing-and-observability.md`, "Where tests are stored")
+
+fn test_record(name: &str, namespace: Option<&str>) -> TestRecord {
+    TestRecord {
+        digest: Digest::of(name.as_bytes()),
+        namespace: namespace.map(self::namespace),
+        size: 100,
+    }
+}
+
+fn with_tests(workflow: Workflow, tests: &[&TestRecord]) -> Workflow {
+    workflow
+        .with_suite(Suite {
+            parent: None,
+            tests: tests
+                .iter()
+                .enumerate()
+                .map(|(position, test)| SuiteTest {
+                    name: format!("test {position}"),
+                    test: test.digest,
+                })
+                .collect(),
+            retired: Vec::new(),
+            updated: Vec::new(),
+        })
+        .expect("a valid suite")
+}
+
+pub async fn tests_are_kept_while_a_version_references_them<S: JournalStore>(store: &S) {
+    let referenced = test_record("referenced", None);
+    let recorded = test_record("recorded", Some("alice"));
+    let late = test_record("late", None);
+    assert_eq!(
+        store
+            .reserve_tests(&acme(), &[referenced.clone(), recorded.clone()], T0)
+            .await
+            .expect("reserve_tests"),
+        Vec::<Digest>::new()
+    );
+    assert_eq!(
+        store
+            .get_test(&acme(), recorded.digest)
+            .await
+            .expect("get_test"),
+        Some(recorded.clone())
+    );
+    assert_eq!(
+        store
+            .get_test(&tenant("other"), recorded.digest)
+            .await
+            .expect("get_test"),
+        None,
+        "another tenant's test"
+    );
+
+    // A version referencing a test without a row is refused.
+    let refused = store
+        .put_workflow(
+            &acme(),
+            &with_tests(workflow("triage", "v0"), &[&referenced, &late]),
+            &BTreeMap::new(),
+            T0,
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Conflict(_))),
+        "{refused:?}"
+    );
+    store
+        .put_workflow(
+            &acme(),
+            &with_tests(workflow("triage", "v1"), &[&referenced]),
+            &BTreeMap::new(),
+            T0,
+        )
+        .await
+        .expect("put_workflow");
+
+    // Within their grace, no test is cleaned up.
+    let grace = T0.saturating_add(TEST_GRACE);
+    assert_eq!(
+        store
+            .unreferenced_tests(later(T0, 1), 10)
+            .await
+            .expect("unreferenced_tests"),
+        []
+    );
+    // After it, the test no version references is marked, and only once.
+    assert_eq!(
+        store
+            .unreferenced_tests(grace, 10)
+            .await
+            .expect("unreferenced_tests"),
+        [(acme(), recorded.digest)]
+    );
+    assert_eq!(
+        store
+            .unreferenced_tests(grace, 10)
+            .await
+            .expect("unreferenced_tests"),
+        []
+    );
+    // A test being deleted cannot be read, nor reserved again until its row is gone.
+    assert_eq!(
+        store
+            .get_test(&acme(), recorded.digest)
+            .await
+            .expect("get_test"),
+        None
+    );
+    assert_eq!(
+        store
+            .reserve_tests(&acme(), std::slice::from_ref(&recorded), grace)
+            .await
+            .expect("reserve_tests"),
+        [recorded.digest]
+    );
+    assert_eq!(
+        store
+            .drop_tests(
+                &[(acme(), recorded.digest), (acme(), referenced.digest)],
+                false
+            )
+            .await
+            .expect("drop_tests"),
+        1,
+        "only the marked row goes"
+    );
+    assert_eq!(
+        store
+            .reserve_tests(&acme(), std::slice::from_ref(&recorded), grace)
+            .await
+            .expect("reserve_tests"),
+        Vec::<Digest>::new(),
+        "a dropped test is stored anew"
+    );
+    assert_eq!(
+        store
+            .get_test(&acme(), referenced.digest)
+            .await
+            .expect("get_test"),
+        Some(referenced.clone())
+    );
+
+    // Reserving a test starts its grace again.
+    let renewed = test_record("renewed", None);
+    store
+        .reserve_tests(&acme(), std::slice::from_ref(&renewed), T0)
+        .await
+        .expect("reserve_tests");
+    store
+        .reserve_tests(
+            &acme(),
+            std::slice::from_ref(&renewed),
+            later(T0, 3_600_000),
+        )
+        .await
+        .expect("reserve_tests");
+    assert!(
+        !store
+            .unreferenced_tests(grace, 10)
+            .await
+            .expect("unreferenced_tests")
+            .contains(&(acme(), renewed.digest))
+    );
+}
+
+pub async fn tests_of_an_erased_namespace_go_whatever_references_them<S: JournalStore>(store: &S) {
+    let alice = test_record("alice's", Some("alice"));
+    let bob = test_record("bob's", Some("bob"));
+    let written = test_record("written", None);
+    store
+        .reserve_tests(&acme(), &[alice.clone(), bob.clone(), written.clone()], T0)
+        .await
+        .expect("reserve_tests");
+    store
+        .put_workflow(
+            &acme(),
+            &with_tests(workflow("triage", "v1"), &[&alice, &written]),
+            &BTreeMap::new(),
+            T0,
+        )
+        .await
+        .expect("put_workflow");
+    assert_eq!(
+        store
+            .namespace_tests(&acme(), &namespace("alice"), 10)
+            .await
+            .expect("namespace_tests"),
+        [alice.digest]
+    );
+    assert_eq!(
+        store
+            .namespace_tests(&tenant("other"), &namespace("alice"), 10)
+            .await
+            .expect("namespace_tests"),
+        []
+    );
+    // Not marked, and referenced: an erasure drops it anyway.
+    assert_eq!(
+        store
+            .drop_tests(&[(acme(), alice.digest)], true)
+            .await
+            .expect("drop_tests"),
+        1
+    );
+    assert_eq!(
+        store
+            .get_test(&acme(), alice.digest)
+            .await
+            .expect("get_test"),
+        None
+    );
+    assert_eq!(
+        store
+            .namespace_tests(&acme(), &namespace("alice"), 10)
+            .await
+            .expect("namespace_tests"),
+        []
+    );
+    // The version keeps the digest in its document, and is read as it was.
+    let stored = store
+        .get_workflow(
+            &acme(),
+            with_tests(workflow("triage", "v1"), &[&alice, &written]).version(),
+        )
+        .await
+        .expect("get_workflow")
+        .expect("the version is still stored");
+    assert_eq!(stored.workflow.suite().tests.len(), 2);
+    // The version's other test is still referenced.
+    assert_eq!(
+        store
+            .unreferenced_tests(T0.saturating_add(TEST_GRACE), 10)
+            .await
+            .expect("unreferenced_tests"),
+        [(acme(), bob.digest)]
     );
 }

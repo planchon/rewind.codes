@@ -69,8 +69,9 @@ pub use journal::{
     NewToolTask, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata,
     RunRecord, RunWorkflow, STICKY_GRACE, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, ToolTask, TraceContext,
-    Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    StoredWorkflow, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, TestRecord,
+    ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    deferred_timeout_failure,
 };
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DropNamespace, InvalidNamespace, Month, Namespace,

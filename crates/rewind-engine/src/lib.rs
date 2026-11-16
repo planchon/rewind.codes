@@ -15,7 +15,10 @@
 //! - [`retention`]: archives, deletion, payload cleanup, the erasure of deleted namespaces.
 //! - [`quotas`]: the CPU time a worker counts per namespace and writes about every 10 s, and the
 //!   sending of quota alerts.
-//! - [`mock`]: mock mode: cassettes, mocks, and scenarios run in virtual time.
+//! - [`mock`]: mock mode: the dispatcher that answers from a test's rules, mock handlers,
+//!   cassette and static responses.
+//! - [`testing`]: tests run in virtual time against a script, several at once; the checks of a
+//!   test against its toolset and its workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
 //! - [`adapters`]: in-memory storage, access, read model, secrets, telemetry and webhooks; a
 //!   fake identity provider; static tool responses and type-checking; system and virtual time;
@@ -50,6 +53,7 @@ pub mod retention;
 pub mod schema;
 mod tasks;
 pub mod telemetry;
+pub mod testing;
 pub mod text;
 pub mod trace;
 mod workflows;

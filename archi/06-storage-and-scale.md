@@ -36,8 +36,9 @@ namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, 
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
 workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
                                                            index on (tenant, name, created_at)
-tests      (tenant, digest, namespace, size, created_at)  PK (tenant, digest)
-                                                           index (tenant, namespace)  -- the document is a blob
+tests      (tenant, digest, namespace, size, reserved_at, deletion_started_at)
+                                                           PK (tenant, digest), index (tenant, namespace)
+                                                           -- the document is a blob
 workflow_tests (tenant, version, digest)                   PK (tenant, version, digest)
 runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on,
             runnable_at, expires_at, quarantine, failures, attempts, lease_owner, lease_until,
