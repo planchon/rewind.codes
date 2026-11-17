@@ -304,3 +304,81 @@ async fn a_run_of_a_workflow_takes_only_its_input_and_its_signals() {
     assert_eq!(seen, ["digest"]);
     server.stop().await;
 }
+
+/// A workflow saved under a grant limited to labels is a version of its own, carrying them, even
+/// when someone outside the scope saved the same workflow first: the scoped caller sees it,
+/// pins it and starts it. A tenant-wide save keeps the version it always had.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_workflow_saved_under_labels_is_a_version_of_its_own() {
+    let server = TestServer::start(&[]).await;
+    let tenant_wide = server.key(BuiltInRole::Harness, &[]).await;
+    let dev = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
+    let prod = server.key(BuiltInRole::Harness, &[("env", "prod")]).await;
+    let toolset = tenant_wide
+        .create_toolset(&CreateToolset::default())
+        .await
+        .unwrap();
+    let body = triage(&toolset.id, TRIAGE);
+
+    let first = tenant_wide.create_workflow(&body).await.unwrap();
+    assert!(first.labels.0.is_empty());
+    let ours = dev.create_workflow(&body).await.unwrap();
+    assert_ne!(
+        ours.version, first.version,
+        "the scope is part of the version"
+    );
+    assert_eq!(
+        ours.labels.0,
+        BTreeMap::from([("env".to_owned(), "dev".to_owned())])
+    );
+    assert_eq!(
+        dev.create_workflow(&body).await.unwrap().version,
+        ours.version,
+        "saving it again under the same labels returns it"
+    );
+    let theirs = prod.create_workflow(&body).await.unwrap();
+    assert!(theirs.version != ours.version && theirs.version != first.version);
+    let again = tenant_wide.create_workflow(&body).await.unwrap();
+    assert_eq!(
+        (again.version.as_str(), again.labels.0.len()),
+        (first.version.as_str(), 0),
+        "a tenant-wide save keeps its version"
+    );
+
+    // The scoped caller sees its own version only, and starts it by name.
+    let listed = dev.list_workflows(&WorkflowQuery::default()).await.unwrap();
+    assert_eq!(
+        listed
+            .workflows
+            .iter()
+            .map(|workflow| (workflow.name.as_str(), workflow.version.as_str()))
+            .collect::<Vec<_>>(),
+        [("triage", ours.version.as_str())]
+    );
+    let versions = dev.workflow_versions("triage").await.unwrap();
+    assert_eq!(versions.versions.len(), 1);
+    let pinned = dev
+        .create_toolset(&CreateToolset {
+            workflows: vec!["triage".into()],
+            ..CreateToolset::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(pinned.workflows[0].version, ours.version);
+    let mut start = StartRun::new("");
+    start.workflow = Some("triage".into());
+    start.input = json!({ "repo": "acme/api" });
+    let run = dev.start_run(&start, None).await.unwrap();
+    assert_eq!(run.workflow.unwrap().version, ours.version);
+    assert_eq!(
+        run.labels.0.get("env").map(String::as_str),
+        Some("dev"),
+        "{:?}",
+        run.labels
+    );
+
+    // A tenant-wide caller sees every scope's versions, newest first.
+    let all = tenant_wide.workflow_versions("triage").await.unwrap();
+    assert_eq!(all.versions.len(), 3);
+    server.stop().await;
+}

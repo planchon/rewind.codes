@@ -52,7 +52,9 @@ export default async function main(input: { repo: string }) {
 }
 ```
 
-Saving the same workflow again returns the version saved first. Each different save is a new immutable version:
+Saving the same workflow again returns the version saved first. Each different save is a new immutable version. A key
+limited to labels saves a version of its own, carrying its labels, even if the same workflow was saved under other
+labels: each environment of an organization (`env: "dev"`, `env: "prod"`) sees, pins and starts its own.
 
 ```ts
 const versions = await rewind.workflows.versions("repo_check"); // newest first

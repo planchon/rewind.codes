@@ -252,10 +252,9 @@ impl JournalStore for Store {
         &self,
         tenant: &TenantId,
         workflow: &rewind_core::Workflow,
-        labels: &std::collections::BTreeMap<String, String>,
         now: Timestamp,
     ) -> Result<rewind_engine::ports::StoredWorkflow, StoreError> {
-        journal!(self, store => store.put_workflow(tenant, workflow, labels, now).await)
+        journal!(self, store => store.put_workflow(tenant, workflow, now).await)
     }
 
     async fn get_workflow(

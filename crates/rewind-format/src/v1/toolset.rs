@@ -22,8 +22,10 @@
 //! none has no `workflows`. The workflows' built-ins are derived from them, never written.
 //!
 //! The workflow version document (the `workflows` table) is
-//! `{"description":…,"name":"triage","schemas":{…},"script":"<sha-256>","toolset":"<sha-256>",
-//! "v":1}`, in its canonical form, so that its bytes hash to the version.
+//! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"script":"<sha-256>",
+//! "toolset":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
+//! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
+//! a version saved tenant-wide keeps the document it had before versions carried labels.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -71,6 +73,8 @@ struct WorkflowV1 {
     script: String,
     toolset: String,
     schemas: WorkflowSchemasV1,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    labels: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -211,6 +215,7 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
         script: workflow.script().to_hex(),
         toolset: workflow.toolset().to_hex(),
         schemas: schemas_dto(workflow.schemas()),
+        labels: workflow.labels().clone(),
     };
     let mut document = serde_json::to_value(dto).expect("workflow DTOs always serialize");
     if let Value::Object(fields) = &mut document {
@@ -229,6 +234,7 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         digest(&dto.toolset, "\"toolset\"")?,
         schemas_from_dto(dto.schemas),
     )
+    .map(|workflow| workflow.with_labels(dto.labels))
     .map_err(|err| err.to_string())
 }
 

@@ -167,13 +167,12 @@ pub trait JournalStore: Send + Sync {
     // ---------------------------------------------------------------------------------------
     // Workflows
 
-    /// Stores a workflow version, with the labels of the key that saved it, and returns it as
-    /// stored. Idempotent by version: a second put changes nothing and returns the first.
+    /// Stores a workflow version, visible to the principals that see its labels, and returns it
+    /// as stored. Idempotent by version: a second put changes nothing and returns the first.
     fn put_workflow(
         &self,
         tenant: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> impl Future<Output = Result<StoredWorkflow, StoreError>> + Send;
 

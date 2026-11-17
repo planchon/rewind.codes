@@ -172,6 +172,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
+        host_claims_filter_by_the_labels_of_the_run
+    );
+    check!(
+        "journal",
+        new_store(),
         webhook_tokens_resolve_to_their_run_until_it_ends
     );
     check!("journal", new_store(), subscriptions_are_stored_per_tenant);
@@ -2128,6 +2133,7 @@ pub async fn expired_host_claims_that_cannot_be_handed_out_again_are_interrupted
     let host = TaskFilter::Host {
         tenant: acme(),
         namespace: None,
+        labels: BTreeMap::new(),
         toolset: None,
         tools: BTreeSet::new(),
     };
@@ -2741,6 +2747,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     let host = TaskFilter::Host {
         tenant: acme(),
         namespace: None,
+        labels: BTreeMap::new(),
         toolset: Some(Digest::of(b"another")),
         tools: BTreeSet::new(),
     };
@@ -2751,6 +2758,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     let host = TaskFilter::Host {
         tenant: acme(),
         namespace: None,
+        labels: BTreeMap::new(),
         toolset: Some(toolset_digest()),
         tools: BTreeSet::from(["ask_user".to_owned()]),
     };
@@ -2761,6 +2769,7 @@ pub async fn claims_filter_by_route_tenant_toolset_and_tool<S: JournalStore>(sto
     let host = TaskFilter::Host {
         tenant: acme(),
         namespace: None,
+        labels: BTreeMap::new(),
         toolset: None,
         tools: BTreeSet::new(),
     };
@@ -4523,6 +4532,67 @@ pub async fn an_erased_namespace_takes_no_run_and_is_dropped_once_empty<S: Journ
     );
 }
 
+/// A worker whose grant is limited to labels claims the host tasks of the runs carrying all of
+/// them, and only those: one tenant's environments do not answer each other's calls.
+pub async fn host_claims_filter_by_the_labels_of_the_run<S: JournalStore>(store: &S) {
+    let labelled = |id: u128, labels: BTreeMap<String, String>| async move {
+        let mut new = new_run_of(run_ref(id), &alice(), b"script", T0);
+        new.metadata.labels = labels;
+        store.create_run(new, None).await.expect("create_run");
+        let lease = lease_of(store, &run_ref(id), T0).await;
+        let consumed = inbox_ids(store, &lease).await;
+        let mut activation =
+            Activation::new(vec![run_started_entry()], consumed, RunStatus::Active);
+        activation.tool_calls.push(host_task(1, "ask_user"));
+        commit(store, &lease, activation, T0).await;
+        store.release(&lease).await.expect("release");
+    };
+    labelled(1, labels(&[("env", "dev")])).await;
+    labelled(2, labels(&[("env", "prod"), ("team", "a")])).await;
+    labelled(3, BTreeMap::new()).await;
+    let host = |namespace: Option<NamespaceName>, pairs: &[(&str, &str)]| TaskFilter::Host {
+        tenant: acme(),
+        namespace,
+        labels: labels(pairs),
+        toolset: None,
+        tools: BTreeSet::new(),
+    };
+    let runs = |claimed: Vec<crate::ports::ClaimedTask>| {
+        claimed
+            .into_iter()
+            .map(|task| task.task.task.run)
+            .collect::<Vec<_>>()
+    };
+    let prod_b = host(None, &[("env", "prod"), ("team", "b")]);
+    assert_eq!(
+        runs(claim(store, "h", &prod_b, T0, 10).await),
+        [],
+        "every label must match"
+    );
+    let dev_of_bob = host(Some(bob()), &[("env", "dev")]);
+    assert_eq!(
+        runs(claim(store, "h", &dev_of_bob, T0, 10).await),
+        [],
+        "the namespace still applies"
+    );
+    let dev_of_alice = host(Some(alice()), &[("env", "dev")]);
+    assert_eq!(
+        runs(claim(store, "h", &dev_of_alice, T0, 10).await),
+        [run_ref(1)]
+    );
+    let prod = host(None, &[("env", "prod")]);
+    assert_eq!(
+        runs(claim(store, "h", &prod, T0, 10).await),
+        [run_ref(2)],
+        "a run may carry more labels than the claim names"
+    );
+    assert_eq!(
+        runs(claim(store, "h", &host(None, &[]), T0, 10).await),
+        [run_ref(3)],
+        "without labels, every run's: the others are claimed"
+    );
+}
+
 pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalStore>(store: &S) {
     // `start_with_tasks` creates its runs in alice; bob's run is created by hand.
     start_with_tasks(store, run_ref(1), vec![host_task(1, "ask_user")]).await;
@@ -4551,6 +4621,7 @@ pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalSto
     let host = TaskFilter::Host {
         tenant: acme(),
         namespace: Some(bob()),
+        labels: BTreeMap::new(),
         toolset: None,
         tools: BTreeSet::new(),
     };
@@ -4630,31 +4701,38 @@ pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<S: J
     let none = BTreeMap::new();
     let scoped = labels(&[("conversation", "c-1")]);
     let first = workflow("triage", "v1");
-    let second = workflow("triage", "v2");
+    let second = workflow("triage", "v2").with_labels(scoped.clone());
     let third = workflow("triage", "v3");
-    let digest = workflow("digest", "d1");
-    let put = |workflow: Workflow, labels: BTreeMap<String, String>, at: Timestamp| async move {
+    let digest = workflow("digest", "d1").with_labels(scoped.clone());
+    let put = |workflow: Workflow, at: Timestamp| async move {
         store
-            .put_workflow(&acme(), &workflow, &labels, at)
+            .put_workflow(&acme(), &workflow, at)
             .await
             .expect("put_workflow")
     };
-    let stored = put(first.clone(), none.clone(), T0).await;
+    let stored = put(first.clone(), T0).await;
     assert_eq!(
         (&stored.workflow, &stored.labels, stored.created_at),
         (&first, &none, T0)
     );
-    put(second.clone(), scoped.clone(), later(T0, 10)).await;
-    put(digest.clone(), scoped.clone(), later(T0, 20)).await;
-    put(third.clone(), none.clone(), later(T0, 30)).await;
+    put(second.clone(), later(T0, 10)).await;
+    put(digest.clone(), later(T0, 20)).await;
+    put(third.clone(), later(T0, 30)).await;
     // A version is immutable: a second put changes nothing.
-    let again = put(first.clone(), scoped.clone(), later(T0, 40)).await;
+    let again = put(first.clone(), later(T0, 40)).await;
     assert_eq!((&again.labels, again.created_at), (&none, T0));
+    // The same workflow under labels is another version, which carries them.
+    let first_scoped = first.clone().with_labels(scoped.clone());
+    assert_ne!(first_scoped.version(), first.version());
+    let stored = put(first_scoped.clone(), later(T0, 5)).await;
+    assert_eq!(
+        (&stored.workflow, &stored.labels, stored.created_at),
+        (&first_scoped, &scoped, later(T0, 5))
+    );
     store
         .put_workflow(
             &tenant("other"),
             &workflow("triage", "elsewhere"),
-            &none,
             later(T0, 50),
         )
         .await
@@ -4689,12 +4767,17 @@ pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<S: J
     };
     assert_eq!(
         versions(none.clone()).await,
-        [third.clone(), second.clone(), first.clone()],
+        [
+            third.clone(),
+            second.clone(),
+            first_scoped.clone(),
+            first.clone()
+        ],
         "newest first"
     );
     assert_eq!(
         versions(scoped.clone()).await,
-        std::slice::from_ref(&second),
+        [second.clone(), first_scoped],
         "only the versions carrying the labels"
     );
     assert_eq!(

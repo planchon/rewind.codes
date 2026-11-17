@@ -13,7 +13,8 @@ use utoipa::{IntoParams, ToSchema};
 use crate::common::{Duration, Labels};
 use crate::namespaces::NamespaceName;
 
-/// `GET /v1/tasks`: claims host-tool tasks that are ready, waiting up to `wait` for one.
+/// `GET /v1/tasks`: claims host-tool tasks that are ready, waiting up to `wait` for one. A key
+/// limited to labels claims those of the runs carrying them only.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct TaskQuery {

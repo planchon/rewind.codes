@@ -17,7 +17,7 @@
 //! the run's inbox. Attempts, backoff, leases, approvals and tokens live in the task, never in
 //! the journal.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use rewind_core::{
@@ -147,6 +147,9 @@ pub enum TaskFilter {
         tenant: TenantId,
         /// The tasks of this namespace's runs only: an end user's token.
         namespace: Option<NamespaceName>,
+        /// The tasks of the runs carrying all of these labels only: a grant limited to labels.
+        /// Empty: every run.
+        labels: BTreeMap<String, String>,
         toolset: Option<Digest>,
         /// Empty: every host tool.
         tools: BTreeSet<String>,

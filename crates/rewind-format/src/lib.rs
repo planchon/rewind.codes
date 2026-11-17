@@ -21,7 +21,8 @@
 //!   `"workflows":[…]` when it pins workflows, in its canonical form, so that its bytes hash to
 //!   the toolset's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
-//!   "toolset":…,"v":1}`, in its canonical form, so that its bytes hash to the version.
+//!   "toolset":…,"v":1}`, with `"labels":{…}` when it was saved under a grant limited to labels,
+//!   in its canonical form, so that its bytes hash to the version.
 //!
 //! In events, payloads are written `{"value": …}` or `{"digest": "<sha-256 hex>"}`; in
 //! cassettes, as plain values. Seeds and digests are lowercase hex, times and durations are

@@ -5,7 +5,8 @@
 //! Workflow (a version: immutable, content-addressed)
 //! ├── name, description?
 //! ├── script, toolset            digests: what its runs execute
-//! └── schemas                    { input, output, signals: { <name>: schema } }
+//! ├── schemas                    { input, output, signals: { <name>: schema } }
+//! └── labels                     the scope it was saved under; {} for a tenant-wide save
 //!
 //! PinnedWorkflow (what a toolset pins: the interface, without the script)
 //! └── name, version (the Workflow's digest), description?, schemas
@@ -76,6 +77,11 @@ impl WorkflowSchemas {
 /// A version of a workflow: a script with a name and a typed interface. Immutable and
 /// content-addressed: its [`version`](Self::version) is the digest of its document, the workflow
 /// version document of the stored format v1 (`archi/02-journal.md`).
+///
+/// A version saved under a grant limited to labels carries them, and they are part of its
+/// document: the same workflow saved under other labels, or tenant-wide, is another version,
+/// which the other scopes do not see (`archi/06-storage-and-scale.md`, "Tenancy"). A version
+/// without labels has the document, and so the digest, it had before labels were part of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workflow {
     name: String,
@@ -83,6 +89,7 @@ pub struct Workflow {
     script: Digest,
     toolset: Digest,
     schemas: WorkflowSchemas,
+    labels: BTreeMap<String, String>,
 }
 
 /// A workflow that breaks an invariant. The messages are written for whoever registers it, a
@@ -119,7 +126,16 @@ impl Workflow {
             script,
             toolset,
             schemas,
+            labels: BTreeMap::new(),
         })
+    }
+
+    /// The same version saved under `labels`: the scope of a grant limited to labels. Another
+    /// version unless `labels` is empty.
+    #[must_use]
+    pub fn with_labels(mut self, labels: BTreeMap<String, String>) -> Self {
+        self.labels = labels;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -142,6 +158,11 @@ impl Workflow {
 
     pub fn schemas(&self) -> &WorkflowSchemas {
         &self.schemas
+    }
+
+    /// The labels it was saved under: only the principals that see them see it.
+    pub fn labels(&self) -> &BTreeMap<String, String> {
+        &self.labels
     }
 
     /// The version: SHA-256 of the canonical workflow version document, `"v": 1` included. The
@@ -171,6 +192,9 @@ impl Workflow {
         object.insert("script".into(), json!(self.script.to_hex()));
         object.insert("toolset".into(), json!(self.toolset.to_hex()));
         object.insert("schemas".into(), self.schemas.to_json());
+        if !self.labels.is_empty() {
+            object.insert("labels".into(), json!(self.labels));
+        }
         Value::Object(object)
     }
 }
@@ -484,6 +508,23 @@ mod tests {
             pinned.tool_name(WorkflowOp::Start),
             "workflows.triage.start"
         );
+    }
+
+    #[test]
+    fn labels_are_part_of_the_version_only_when_there_are_some() {
+        let tenant_wide = triage();
+        assert_eq!(
+            tenant_wide.clone().with_labels(BTreeMap::new()).version(),
+            tenant_wide.version(),
+            "no labels: the digest of the document without them"
+        );
+        let label = |key: &str, value: &str| BTreeMap::from([(key.to_owned(), value.to_owned())]);
+        let dev = triage().with_labels(label("env", "dev"));
+        let prod = triage().with_labels(label("env", "prod"));
+        assert_ne!(dev.version(), tenant_wide.version());
+        assert_ne!(dev.version(), prod.version());
+        assert_eq!(dev.labels(), &label("env", "dev"));
+        assert_eq!(dev.pinned().version, dev.version());
     }
 
     #[test]

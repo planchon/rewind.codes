@@ -15,8 +15,9 @@ export class Workflows {
 
   /**
    * Checks a workflow against its toolset and its own schemas, and saves it as a new version,
-   * the workflow's latest. Saving the same workflow again returns the version saved first. A
-   * script that does not check is refused with `invalid-script` (a `RewindApiError` with
+   * the workflow's latest. Saving the same workflow again returns the version saved first. A key
+   * limited to labels saves a version of its own, carrying its labels, which only the keys that
+   * see them see. A script that does not check is refused with `invalid-script` (a `RewindApiError` with
    * `diagnostics`); a name, a signal's name or a schema that cannot be used, with
    * `invalid-workflow`.
    */

@@ -113,7 +113,9 @@ export class Rewind {
   /**
    * Starts a worker executing these host tools: it long-polls their tasks, runs the handlers,
    * keeps the claims alive and answers. Stop it with `worker.stop()`. Each task names the namespace
-   * of its run, the end user the handler acts for (`ctx.namespace`).
+   * of its run, the end user the handler acts for (`ctx.namespace`). It claims the tasks of the
+   * runs its key sees: with a key limited to labels (`{ env: "dev" }`), only those of the runs
+   * carrying them, so each environment of a tenant runs its own worker.
    */
   worker(options: WorkerOptions): HostToolWorker {
     return new HostToolWorker(this.tasks, options);

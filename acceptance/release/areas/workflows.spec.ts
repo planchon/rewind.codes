@@ -314,6 +314,33 @@ export default async function main() {
   await api.post(`/v1/runs/${parent.id}/cancel`, {});
 });
 
+test("a key limited to labels saves its own version of a workflow saved first outside its scope, and starts it", { tag: "@success" }, async () => {
+  const name = fresh("env");
+  const first = await save(api, triage(name));
+  const created = await tenant.api.post("/v1/api-keys", { role: "harness", name: "dev environment", allowedLabels: { env: "dev" } });
+  expectOk(created, 201);
+  const dev = new Api(stacks().a.url, created.json.key as string).ns("wf");
+
+  const ours = await save(dev, triage(name));
+  expect(ours.version).not.toBe(first.version);
+  expect(ours.labels).toEqual({ env: "dev" });
+  const again = await dev.post("/v1/workflows", triage(name));
+  expectOk(again, 200);
+  expect(again.json.version).toBe(ours.version);
+  const tenantWide = await api.post("/v1/workflows", triage(name));
+  expectOk(tenantWide, 200);
+  expect(tenantWide.json.version, "a tenant-wide save keeps its version").toBe(first.version);
+
+  const listed = await dev.get("/v1/workflows");
+  expectOk(listed, 200);
+  expect(listed.json.workflows.filter((w: any) => w.name === name).map((w: any) => w.version)).toEqual([ours.version]);
+  const run = await started(dev, { workflow: name, input: { repo: "acme/dev" } });
+  expect(run.workflow.version).toBe(ours.version);
+  expect(run.labels).toMatchObject({ env: "dev" });
+  evidence(`${name}: tenant-wide ${first.version.slice(0, 12)}, env=dev ${ours.version.slice(0, 12)}; the dev key lists and starts its own`);
+  await dev.post(`/v1/runs/${run.id}/cancel`, {});
+});
+
 test("a script started by a key limited to labels cannot signal a run outside its scope", { tag: "@attack" }, async () => {
   // The key limited to `team: red` saves its own workflow (which carries its labels) and toolset.
   // `Tenant.key` sends `labels`; the API takes `allowedLabels`.

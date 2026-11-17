@@ -532,7 +532,9 @@ mod operations {
     /// Save a workflow (`save_workflow`)
     ///
     /// Checks the workflow's script against its toolset and its own schemas, and saves it as a
-    /// new version, the workflow's latest. Saving the same version again returns it (200).
+    /// new version, the workflow's latest. Saving the same version again returns it (200). A key
+    /// limited to labels saves a version of its own, carrying its labels, even when the same
+    /// workflow was saved under other labels or tenant-wide.
     #[utoipa::path(
         post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
         request_body = CreateWorkflow,
@@ -863,6 +865,9 @@ mod operations {
     // Host-tool tasks
 
     /// Claim host-tool tasks (long-poll)
+    ///
+    /// The tasks of the runs the caller sees: an end user's token claims those of its
+    /// namespace, a key limited to labels those of the runs carrying them.
     #[utoipa::path(
         get, path = "/v1/tasks", tag = "tasks", operation_id = "claimTasks",
         params(TaskQuery),

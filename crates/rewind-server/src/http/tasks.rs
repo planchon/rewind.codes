@@ -1,6 +1,10 @@
 //! Host-tool tasks: the harness's SDK worker long-polls them and answers through the claim's
 //! token; the harness approves or rejects the calls that wait for it (`archi/04-tools.md`,
 //! "Tool task lifecycle").
+//!
+//! A worker reaches the tasks of the runs its caller sees: an end user's token those of its
+//! namespace, a grant limited to labels those of the runs carrying them
+//! (`archi/06-storage-and-scale.md`, "Tenancy, namespaces, identity and access").
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -37,20 +41,14 @@ const FAILURE_LIMIT: usize = 64 * 1024;
 const WAIT: Duration = Duration::from_secs(30);
 const MAX_WAIT: Duration = Duration::from_secs(60);
 
-/// `GET /v1/tasks`: claims up to `limit` ready host-tool tasks, waiting up to `wait` for one.
+/// `GET /v1/tasks`: claims up to `limit` ready host-tool tasks of the runs the caller sees,
+/// waiting up to `wait` for one.
 pub(super) async fn claim(
     State(app): State<Arc<App>>,
     caller: Caller,
     Query(query): Query<TaskQuery>,
 ) -> Result<Json<TaskBatch>, ApiError> {
     caller.require(Permission::TasksWork)?;
-    if caller.scoped() {
-        return Err(ApiError::forbidden(format!(
-            "{} is limited to labels and cannot claim host-tool tasks: use a worker key of the \
-             tenant",
-            caller.who()
-        )));
-    }
     let toolset = query.toolset.as_deref().map(parse_digest).transpose()?;
     for tool in &query.tools {
         refuse_nul_in_filter("tool", tool)?;
@@ -58,6 +56,7 @@ pub(super) async fn claim(
     let claim = HostClaim {
         tenant: caller.tenant.clone(),
         namespace: caller.namespace.clone(),
+        labels: caller.labels.clone(),
         toolset,
         tools: query.tools.into_iter().collect::<BTreeSet<_>>(),
         limit: usize::try_from(query.limit.unwrap_or(1).clamp(1, 100)).unwrap_or(1),
@@ -239,12 +238,13 @@ fn check_failure_size(message: &str, data: Option<&serde_json::Value>) -> Result
     Ok(())
 }
 
-/// Refuses (410, as a task that no longer exists) the token of a task whose run is outside the
-/// namespace the request is bound to: a worker acting for an end user answers its tasks only.
+/// Refuses (410, as a task that no longer exists) the token of a task whose run the caller does
+/// not see: a worker acting for an end user answers its tasks only, and one whose grant is
+/// limited to labels the tasks of the runs carrying them.
 async fn held(app: &App, caller: &Caller, token: &TaskToken) -> Result<(), ApiError> {
-    let Some(namespace) = &caller.namespace else {
+    if caller.namespace.is_none() && !caller.scoped() {
         return Ok(());
-    };
+    }
     // A token holding a NUL character is no task's, and never reaches a store: the engine
     // answers it as gone.
     if token.0.contains('\0') {
@@ -254,7 +254,7 @@ async fn held(app: &App, caller: &Caller, token: &TaskToken) -> Result<(), ApiEr
         return Ok(());
     };
     match app.store.get_run(&task.task.run).await? {
-        Some(record) if record.namespace == *namespace => Ok(()),
+        Some(record) if caller.sees_run(&record) => Ok(()),
         _ => Err(rewind_engine::EngineError::TaskGone.into()),
     }
 }

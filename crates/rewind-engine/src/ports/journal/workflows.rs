@@ -11,8 +11,9 @@ use crate::ports::tenancy::TenantId;
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredWorkflow {
     pub workflow: Workflow,
-    /// The labels of the API key that saved it: a key limited to labels only sees the workflows
-    /// that carry them.
+    /// The labels it is visible under: a principal limited to labels only sees the versions
+    /// that carry them. Its [`Workflow::labels`], except for a version stored before they were
+    /// part of the version, which kept the labels of the key that saved it first.
     pub labels: BTreeMap<String, String>,
     pub created_at: Timestamp,
 }

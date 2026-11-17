@@ -52,7 +52,8 @@ pub(super) async fn create(
     };
     let generated = rewind_codegen::workflow_declarations(&request.name, &schemas);
     let script = Script::new(request.script);
-    // Saving a version again returns it with 200.
+    // Saving a version again returns it with 200. The caller's labels are part of the version:
+    // the same workflow saved under other labels, or tenant-wide, is another version.
     let existed = match Workflow::new(
         request.name.clone(),
         request.description.clone(),
@@ -62,7 +63,10 @@ pub(super) async fn create(
     ) {
         Ok(candidate) => app
             .store
-            .get_workflow(&caller.tenant, candidate.version())
+            .get_workflow(
+                &caller.tenant,
+                candidate.with_labels(caller.labels.clone()).version(),
+            )
             .await?
             .is_some(),
         Err(_) => false,

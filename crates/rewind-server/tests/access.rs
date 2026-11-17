@@ -13,10 +13,10 @@ use rewind_api::access::{BuiltInRole, CreateApiKey, OPERATOR, Permission};
 use rewind_api::common::Labels;
 use rewind_api::organization::Principal as CallerPrincipal;
 use rewind_api::reading::ToolStatsFilter;
-use rewind_api::runs::{CancelRun, ForkRun, RunFilter};
+use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
-use rewind_api::tasks::TaskQuery;
-use rewind_api::toolsets::{CreateToolset, Credentials};
+use rewind_api::tasks::{CompleteTask, TaskQuery};
+use rewind_api::toolsets::{CreateToolset, Credentials, HostTool};
 use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
@@ -429,8 +429,8 @@ async fn keys_are_given_within_what_their_creator_holds() {
     server.stop().await;
 }
 
-/// A grant limited to labels sees its runs but administers nothing, claims no task and reads no
-/// tool statistics.
+/// A grant limited to labels sees its runs but administers nothing and reads no tool
+/// statistics.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_key_limited_to_labels_does_not_administer() {
     let server = TestServer::start(&[]).await;
@@ -474,12 +474,104 @@ async fn a_key_limited_to_labels_does_not_administer() {
     }
     let (status, detail) = outcome(scoped.tool_stats(&ToolStatsFilter::default()).await);
     assert_eq!(status, 403, "{detail}");
-    let claim = TaskQuery {
-        wait: Some("1s".parse().unwrap()),
-        ..TaskQuery::default()
+    server.stop().await;
+}
+
+/// A worker whose key is limited to labels claims the host-tool tasks of the runs carrying them
+/// only, and cannot answer another scope's task: one tenant's environments (`env=dev`,
+/// `env=prod`) register the same toolset, and each one's worker serves its own runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_key_limited_to_labels_claims_the_tasks_of_its_runs_only() {
+    let server = TestServer::start(&[]).await;
+    let toolset = server
+        .key(BuiltInRole::Harness, &[])
+        .await
+        .create_toolset(&CreateToolset {
+            host: vec![HostTool {
+                name: "ask_user".into(),
+                description: "Asks the user.".into(),
+                input_schema: serde_json::json!({ "type": "object" }),
+                output_schema: Some(serde_json::json!({ "type": "string" })),
+                policy: None,
+            }],
+            ..CreateToolset::default()
+        })
+        .await
+        .unwrap();
+    let mut asking = StartRun::new(
+        r#"import { ask_user } from "rewind:tools";
+export default async function main() {
+  return await ask_user({});
+}
+"#,
+    );
+    asking.toolset = Some(toolset.id.clone());
+    let dev_harness = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
+    let dev_run = dev_harness.start_run(&asking, None).await.unwrap();
+    let prod_run = server
+        .key(BuiltInRole::Harness, &[("env", "prod")])
+        .await
+        .start_run(&asking, None)
+        .await
+        .unwrap();
+
+    let dev = server.key(BuiltInRole::Worker, &[("env", "dev")]).await;
+    let prod = server.key(BuiltInRole::Worker, &[("env", "prod")]).await;
+    let query = TaskQuery {
+        toolset: Some(toolset.id.clone()),
+        tools: vec!["ask_user".into()],
+        limit: Some(10),
+        wait: Some("10s".parse().unwrap()),
     };
-    let (status, detail) = outcome(scoped.claim_tasks(&claim).await);
-    assert_eq!(status, 403, "{detail}");
+    let ours = dev.claim_tasks(&query).await.unwrap().tasks;
+    assert_eq!(
+        ours.iter()
+            .map(|task| task.run_id.as_str())
+            .collect::<Vec<_>>(),
+        [dev_run.id.as_str()]
+    );
+    assert_eq!(ours[0].labels, Labels::from_iter([("env", "dev")]));
+    let quick = TaskQuery {
+        wait: Some("300ms".parse().unwrap()),
+        ..query.clone()
+    };
+    assert!(
+        dev.claim_tasks(&quick).await.unwrap().tasks.is_empty(),
+        "the prod run's task is not dev's"
+    );
+    let theirs = prod.claim_tasks(&query).await.unwrap().tasks;
+    assert_eq!(
+        theirs
+            .iter()
+            .map(|task| task.run_id.as_str())
+            .collect::<Vec<_>>(),
+        [prod_run.id.as_str()]
+    );
+
+    // A token of the other scope's task is answered as a task that no longer exists.
+    let answer = CompleteTask {
+        result: serde_json::json!("from dev"),
+    };
+    for refused in [
+        dev.heartbeat_task(&theirs[0].token).await.map(|_| ()),
+        dev.complete_task(&theirs[0].token, &answer).await,
+    ] {
+        let refused = problem(refused.unwrap_err());
+        assert_eq!(
+            (refused.status, refused.kind()),
+            (410, Some(ProblemType::TaskGone))
+        );
+    }
+    dev.complete_task(&ours[0].token, &answer).await.unwrap();
+    let ended = dev_harness
+        .get_run(&dev_run.id, support::wait("20s"))
+        .await
+        .unwrap();
+    assert_eq!(
+        ended.output.and_then(|output| output.value),
+        Some(serde_json::json!("from dev"))
+    );
+    prod.heartbeat_task(&theirs[0].token).await.unwrap();
     server.stop().await;
 }
 
