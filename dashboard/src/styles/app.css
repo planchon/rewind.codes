@@ -20,6 +20,8 @@ body {
   line-height: 20px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* No elastic bounce past the page's edges (macOS), nor a swipe back from it. */
+  overscroll-behavior: none;
 }
 
 button,
@@ -234,7 +236,7 @@ h3 {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  overscroll-behavior: none;
   padding: 2px 8px 16px;
   opacity: 0;
   translate: -8px 0;
@@ -779,66 +781,6 @@ fieldset.seg {
   color: var(--ink-3);
   font-size: 12px;
   margin: 0;
-}
-
-/* Filter bar (the toolbar of Scripts and Tools) */
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 8px 12px;
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
-  border-radius: var(--radius-md);
-}
-
-.filters .sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--line);
-}
-
-.filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 2px 0 8px;
-  border-radius: 9999px;
-  background: var(--surface-3);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink);
-}
-
-.filter-chip .k {
-  color: var(--ink-3);
-}
-
-.filter-chip button {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.filter-chip button:hover {
-  background: var(--line);
-  color: var(--ink);
 }
 
 /* Cards */
@@ -1993,6 +1935,10 @@ button.label:hover {
   max-height: 360px;
   overflow: auto;
   background: var(--code-bg);
+}
+
+.payload-body > .json-tree-wrap {
+  padding: 10px 12px;
 }
 
 .payload-body pre {

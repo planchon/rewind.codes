@@ -1,20 +1,42 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
-// outcome, the tools it called and the labels it ran with.
-import { Link, useNavigate, useSearchParams } from "react-router";
+// outcome, the tools it called and the labels it ran with. A search as on the Overview, one line
+// of text: `tool:` (the scripts that called it) and labels, `@key:value`; a click on a row's tool
+// or label adds it.
+import { useMemo } from "react";
+import { Link, useNavigate } from "react-router";
 import { useScripts } from "../api/queries";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../api/types";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
 import { PageHeader } from "../components/PageHeader";
+import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
-import {
-  readScriptFilters,
-  type ScriptFilters,
-  toScriptsQuery,
-  writeScriptFilters,
-} from "../model/filters";
+import { toScriptsQuery } from "../model/filters";
 import { formatCount } from "../model/format";
-import { queryLink } from "../model/query";
-import { AddFilter, FilterChip } from "./FilterBits";
+import {
+  fieldTerm,
+  joinQuery,
+  labelTerm,
+  queryLink,
+  removeTerm,
+  splitTerms,
+  withTerm,
+} from "../model/query";
+import { readScriptSearch, SCRIPT_FIELDS, scriptQueryOf } from "../model/searches";
+import { type OlderSearch, useViewSearch } from "./search";
+
+/** `/scripts?label=…&tool=…`, a link from before the search. */
+const OLDER: OlderSearch = {
+  names: ["label", "tool"],
+  read: (params) => scriptQueryOf(params) ?? "",
+};
+
+/** The search with its tool replaced: a script search names one tool. */
+function withTool(q: string, tool: string): string {
+  let rest = q;
+  for (const term of [...splitTerms(q)].reverse())
+    if (term.kind === "field" && term.field === "tool") rest = removeTerm(rest, term);
+  return joinQuery(rest, fieldTerm("tool", tool));
+}
 
 export function totalRuns(counts: RunCounts): number {
   return RUN_STATUSES.reduce((sum, s) => sum + counts[s], 0);
@@ -140,46 +162,38 @@ function ScriptRow({
 }
 
 export function ScriptsView() {
-  const [params, setParams] = useSearchParams();
-  const filters = readScriptFilters(params);
-  const key = writeScriptFilters(filters).toString();
-  const scripts = useScripts(key, toScriptsQuery(filters));
-  const update = (patch: Partial<ScriptFilters>) =>
-    setParams(writeScriptFilters({ ...filters, ...patch }));
+  const { q, setQ } = useViewSearch("q", OLDER);
+  const search = readScriptSearch(q);
+  const query = toScriptsQuery(search);
+  const scripts = useScripts(JSON.stringify(query), query);
   const addLabel = (pair: string) => {
-    if (!filters.labels.includes(pair)) update({ labels: [...filters.labels, pair] });
+    const at = pair.indexOf(":");
+    setQ(withTerm(q, labelTerm(pair.slice(0, at), pair.slice(at + 1))));
   };
 
   const list = scripts.data?.pages.flatMap((p) => p.scripts) ?? [];
+  const pages = scripts.data?.pages;
+  // The tools of the scripts listed, to suggest after `tool:`.
+  const values = useMemo(() => {
+    const tools = [...new Set((pages ?? []).flatMap((p) => p.scripts.flatMap((s) => s.tools)))];
+    return { tool: tools.sort().map((value) => ({ value })) };
+  }, [pages]);
   return (
     <div className="page">
       <PageHeader title="Scripts" />
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        fields={SCRIPT_FIELDS}
+        values={values}
+        fault={search.fault}
+        label="Search scripts"
+        placeholder="tool:github.close_issue  @team:infra"
+      />
       <p className="page-intro">Every distinct source executed, the most recently run first.</p>
-      <section className="filters" aria-label="Filters">
-        <AddFilter
-          fields={[
-            {
-              name: "label",
-              placeholder: "key:value",
-              check: (v) => (v.indexOf(":") > 0 ? null : "A label filter is key:value"),
-            },
-            { name: "tool", placeholder: "github.close_issue" },
-          ]}
-          onAdd={(field, value) => (field === "label" ? addLabel(value) : update({ tool: value }))}
-        />
-        {filters.labels.map((pair) => (
-          <FilterChip
-            key={pair}
-            name="label"
-            value={pair}
-            onRemove={() => update({ labels: filters.labels.filter((l) => l !== pair) })}
-          />
-        ))}
-        {filters.tool && (
-          <FilterChip name="tool" value={filters.tool} onRemove={() => update({ tool: null })} />
-        )}
-      </section>
-      {scripts.isPending ? (
+      {search.fault ? (
+        <Empty>Fix the search to see the scripts: the term at fault is underlined above.</Empty>
+      ) : scripts.isPending ? (
         <Loading>Loading scripts…</Loading>
       ) : scripts.isError ? (
         <ProblemView error={scripts.error} title="The scripts could not be read" />
@@ -203,12 +217,14 @@ export function ScriptsView() {
                   key={s.digest}
                   script={s}
                   onPickLabel={addLabel}
-                  onPickTool={(tool) => update({ tool })}
+                  onPickTool={(tool) => setQ(withTool(q, tool))}
                 />
               ))}
             </tbody>
           </table>
-          {list.length === 0 && <Empty>No script matches these filters.</Empty>}
+          {list.length === 0 && (
+            <Empty>{q ? "No script matches the search." : "No script ran yet."}</Empty>
+          )}
           {scripts.hasNextPage && (
             <div className="list-foot">
               <span className="num">{formatCount(list.length)} scripts shown</span>

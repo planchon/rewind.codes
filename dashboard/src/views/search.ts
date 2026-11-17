@@ -2,7 +2,7 @@
 // operator from one view to another, and a link names a search.
 import { useCallback, useEffect } from "react";
 import { useSearchParams } from "react-router";
-import { RANGES, type RangeKey } from "../model/filters";
+import { type RangeKey, rangeOf } from "../model/filters";
 import { legacyQuery, withQuery } from "../model/query";
 
 /**
@@ -43,8 +43,7 @@ export const WINDOW_WORDS: Record<RangeKey, string> = {
 /** The window of the URL (`window`), 24 hours by default. */
 export function useWindow(): [RangeKey, (w: RangeKey) => void] {
   const [params, setParams] = useSearchParams();
-  const raw = params.get("window");
-  const win: RangeKey = raw !== null && Object.hasOwn(RANGES, raw) ? (raw as RangeKey) : "24h";
+  const win: RangeKey = rangeOf(params.get("window")) ?? "24h";
   const setWin = useCallback(
     (w: RangeKey) =>
       setParams((current) => {
@@ -61,4 +60,40 @@ export function useWindow(): [RangeKey, (w: RangeKey) => void] {
 /** `started:>now-24h`: the runs of a window, as a query term. */
 export function windowTerm(field: "started" | "ended", win: RangeKey): string {
   return `${field}:>now-${win}`;
+}
+
+/** How an older link's parameters become a view's search. */
+export interface OlderSearch {
+  /** The parameters it had. */
+  names: readonly string[];
+  /** The search they mean, the link's own joined. */
+  read: (params: URLSearchParams) => string;
+}
+
+/**
+ * The search of a view that is not the runs' (Tools, Scripts, Namespaces), kept in the URL under
+ * `param`: an older link's parameters become it, and the URL is rewritten to it.
+ */
+export function useViewSearch(param: string, older?: OlderSearch) {
+  const [params, setParams] = useSearchParams();
+  const old = older?.names.some((name) => params.has(name)) ? older.read(params) : null;
+  const q = old ?? params.get(param) ?? "";
+  const write = useCallback(
+    (current: URLSearchParams, next: string) => {
+      const out = new URLSearchParams(current);
+      for (const name of older?.names ?? []) out.delete(name);
+      if (next.trim()) out.set(param, next.trim());
+      else out.delete(param);
+      return out;
+    },
+    [older, param],
+  );
+  useEffect(() => {
+    if (old !== null) setParams((current) => write(current, old), { replace: true });
+  }, [old, setParams, write]);
+  const setQ = useCallback(
+    (next: string) => setParams((current) => write(current, next)),
+    [setParams, write],
+  );
+  return { q, setQ };
 }

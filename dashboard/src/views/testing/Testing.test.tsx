@@ -123,7 +123,7 @@ describe("WorkflowView", () => {
     const iface = await screen.findByRole("region", { name: "Interface" });
     await user.click(within(iface).getByRole("button", { name: /input schema$/ }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getAllByText('"repo"')[0]).toHaveClass("j-key");
+    expect(within(dialog).getAllByText('"repo":')[0]).toHaveClass("j-key");
     await user.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
@@ -194,7 +194,7 @@ describe("TestView", () => {
     const test = screen.getByRole("region", { name: "Test closes the open issues once approved" });
     expect(within(test).getByRole("region", { name: "Input" })).toBeInTheDocument();
     const output = within(test).getByRole("region", { name: "Expected output" });
-    expect(within(output).getByText('"closed"')).toHaveClass("j-key");
+    expect(within(output).getByText('"closed":')).toHaveClass("j-key");
 
     const rules = within(test).getByRole("table", { name: "Tool rules" });
     expect(within(rules).getByText("github.list_issues")).toBeInTheDocument();
@@ -215,12 +215,26 @@ describe("TestView", () => {
     await user.click(within(test).getByRole("button", { name: "Open Input" }));
     const input = await screen.findByRole("dialog");
     expect(within(input).getByText("Input")).toBeInTheDocument();
-    expect(within(input).getByText('"repo"')).toHaveClass("j-key");
+    expect(within(input).getByText('"repo":')).toHaveClass("j-key");
     await user.click(within(input).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await user.click(screen.getByRole("button", { name: "JSON" }));
     const whole = await screen.findByRole("dialog");
-    expect(within(whole).getByText('"expect"')).toHaveClass("j-key");
+    expect(within(whole).getByText('"expect":')).toHaveClass("j-key");
+
+    // Its objects and arrays fold, one by one or all at once.
+    expect(within(whole).getAllByText('"closed":').length).toBeGreaterThan(0);
+    await user.click(within(whole).getByRole("button", { name: "Fold all" }));
+    expect(within(whole).queryByText('"closed":')).toBeNull();
+    expect(within(whole).getByText('"expect":')).toBeInTheDocument();
+    await user.click(within(whole).getByRole("button", { name: "Unfold all" }));
+    expect(within(whole).getAllByText('"closed":').length).toBeGreaterThan(0);
+    const expect_ = within(whole)
+      .getByText('"expect":')
+      .closest('[role="treeitem"]') as HTMLElement;
+    await user.click(within(expect_).getAllByRole("button", { name: "Fold" })[0] as HTMLElement);
+    expect(within(whole).queryByText('"closed":')).toBeNull();
+    expect(within(whole).getByText('"input":')).toBeInTheDocument();
   });
 
   it("says where the test stands in the suite, and why it changed", async () => {

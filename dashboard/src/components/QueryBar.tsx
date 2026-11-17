@@ -16,6 +16,7 @@ import {
 import type { Facets } from "../api/types";
 import { formatCount } from "../model/format";
 import {
+  type FieldSpec,
   type FieldValues,
   isKnownField,
   type Suggestion,
@@ -47,12 +48,24 @@ export interface QueryBarProps {
   /** The server could not read `value`: where and why. */
   fault?: QueryFault | null;
   placeholder?: string;
+  /** The fields of the language the bar writes: the runs' unless another view gives its own. */
+  fields?: readonly FieldSpec[];
+  /** What the bar searches, for its accessible name. */
+  label?: string;
   /** Beside the bar: a save button, a sort. */
   children?: ReactNode;
 }
 
 /** The query, as spans under the input: each term tinted, the term at fault underlined. */
-function Mirror({ text, bad }: { text: string; bad: [number, number] | null }) {
+function Mirror({
+  text,
+  bad,
+  fields,
+}: {
+  text: string;
+  bad: [number, number] | null;
+  fields: readonly FieldSpec[] | undefined;
+}) {
   const parts: ReactNode[] = [];
   let at = 0;
   for (const t of splitTerms(text)) {
@@ -62,7 +75,7 @@ function Mirror({ text, bad }: { text: string; bad: [number, number] | null }) {
         ? "label"
         : t.kind === "text"
           ? "text"
-          : isKnownField(t)
+          : isKnownField(t, fields)
             ? "field"
             : "text";
     const isBad = bad !== null && t.start < bad[1] && bad[0] < t.end;
@@ -97,6 +110,8 @@ export function QueryBar({
   onTyping,
   fault = null,
   placeholder = '@agent:triage status:failed tool:github.* error:timeout "rate limit"',
+  fields,
+  label = "Search runs",
   children,
 }: QueryBarProps) {
   const [draft, setDraft] = useState(value);
@@ -122,8 +137,8 @@ export function QueryBar({
   }, [value]);
 
   const suggestions = useMemo(
-    () => (open ? suggest(draft, caret, facets, 12, values) : null),
-    [open, draft, caret, facets, values],
+    () => (open ? suggest(draft, caret, facets, 12, values, fields) : null),
+    [open, draft, caret, facets, values, fields],
   );
   const typing = useRef(onTyping);
   typing.current = onTyping;
@@ -188,12 +203,12 @@ export function QueryBar({
 
   return (
     <div className="qbar-wrap">
-      <form className="qbar-row" onSubmit={submit} aria-label="Search runs">
+      <form className="qbar-row" onSubmit={submit} aria-label={label}>
         <div className={`qbar${bad ? " invalid" : ""}`}>
           <Search size={13} className="qbar-icon" aria-hidden="true" />
           <div className="qbar-field">
             <div className="qbar-mirror" ref={mirror} aria-hidden="true">
-              <Mirror text={draft} bad={bad} />
+              <Mirror text={draft} bad={bad} fields={fields} />
             </div>
             <input
               ref={input}

@@ -114,7 +114,7 @@ describe("the time cursor", () => {
     await user.hover(await target(6, "binding"));
     const pop = await screen.findByRole("tooltip");
     expect(pop).toHaveTextContent("= the result of #1 github.list_issues");
-    expect(pop).toHaveTextContent('"updated_at": "2025-10-01T00:00:00Z"');
+    expect(pop).toHaveTextContent('"updated_at":"2025-10-01T00:00:00Z"');
 
     await user.unhover(await target(6, "binding"));
     await user.hover(await target(11, "binding"));
@@ -126,7 +126,7 @@ describe("the time cursor", () => {
 
     await user.hover(await target(5, "input"));
     await waitFor(() =>
-      expect(screen.getByRole("tooltip")).toHaveTextContent(/The run's input.*"repo": "acme\/api"/),
+      expect(screen.getByRole("tooltip")).toHaveTextContent(/The run's input.*"repo":"acme\/api"/),
     );
   });
 
@@ -145,13 +145,13 @@ describe("the time cursor", () => {
       expect(screen.getByRole("tooltip")).toHaveTextContent("In flight since step 4."),
     );
     const pop = screen.getByRole("tooltip");
-    expect(pop).toHaveTextContent('"number": 3');
+    expect(pop).toHaveTextContent('"number":3');
 
     await user.unhover(await target(13, "call"));
     await user.keyboard("{End}");
     await user.hover(await target(13, "call"));
     await waitFor(() =>
-      expect(screen.getByRole("tooltip")).toHaveTextContent(/returned.*"repo": "acme\/api"/),
+      expect(screen.getByRole("tooltip")).toHaveTextContent(/returned.*"repo":"acme\/api"/),
     );
   });
 

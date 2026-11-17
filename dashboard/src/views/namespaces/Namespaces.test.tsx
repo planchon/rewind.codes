@@ -109,14 +109,14 @@ describe("the Namespaces view", () => {
       "descending",
     );
 
-    await user.type(screen.getByRole("searchbox", { name: "Search a namespace" }), "da");
+    await user.type(screen.getByRole("combobox", { name: "Query" }), "da{Enter}");
     await waitFor(() => expect(names().slice(2)).toEqual(["dana"]));
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("prefix") === "da")).toBe(
       true,
     );
     expect(search(router).get("prefix")).toBe("da");
 
-    await user.clear(screen.getByRole("searchbox", { name: "Search a namespace" }));
+    await user.click(screen.getByRole("button", { name: "Clear the query" }));
     await user.click(screen.getByRole("button", { name: /At 80% or more/ }));
     // By runs this month: bob, then user_7Kd02 at 83% of hers, then dana at 84% of her CPU.
     await waitFor(() => expect(names().slice(2)).toEqual(["bob", "user_7Kd02", "dana"]));

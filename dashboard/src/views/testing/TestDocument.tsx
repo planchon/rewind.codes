@@ -5,7 +5,7 @@
 // A recorded test holds its run's data and is read like the run: a caller who may not read the
 // runs of its namespace is told so here, and the rest of the page stays.
 import { Lock } from "lucide-react";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../../api/client";
 import type { Expectations, Test, TestSignal, TestWorld, Workflow } from "../../api/types";
@@ -26,6 +26,18 @@ import {
 
 function Empty({ children }: { children: string }) {
   return <p className="muted">{children}</p>;
+}
+
+/** A part of the document, in a panel of its own. */
+function Part({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="panel" aria-label={title}>
+      <header className="panel-head">
+        <h2>{title}</h2>
+      </header>
+      <div className="panel-body test-part">{children}</div>
+    </section>
+  );
 }
 
 function Tools({ world }: { world: TestWorld }) {
@@ -135,8 +147,7 @@ function World({ test }: { test: Test }) {
   const world = test.world ?? {};
   const empty = !world.mocks && !world.cassette && Object.keys(world.tools ?? {}).length === 0;
   return (
-    <section className="test-part" aria-label="World">
-      <h3>World</h3>
+    <Part title="World">
       {empty ? (
         <Empty>Nothing answers: any tool call fails the test.</Empty>
       ) : (
@@ -155,14 +166,13 @@ function World({ test }: { test: Test }) {
         </section>
       )}
       {world.cassette && <Cassette cassette={world.cassette} />}
-    </section>
+    </Part>
   );
 }
 
 function Signals({ signals }: { signals: TestSignal[] }) {
   return (
-    <section className="test-part" aria-label="Signals">
-      <h3>Signals</h3>
+    <Part title="Signals">
       {signals.length === 0 ? (
         <Empty>None sent.</Empty>
       ) : (
@@ -179,7 +189,7 @@ function Signals({ signals }: { signals: TestSignal[] }) {
           ))}
         </ol>
       )}
-    </section>
+    </Part>
   );
 }
 
@@ -192,8 +202,7 @@ function Expect({ expect }: { expect: Expectations }) {
     calls.length === 0 &&
     expect.order !== "listed";
   return (
-    <section className="test-part" aria-label="Expectations">
-      <h3>Expectations</h3>
+    <Part title="Expectations">
       {nothing ? (
         <Empty>Nothing is checked: the test passes when every call is answered.</Empty>
       ) : (
@@ -267,7 +276,7 @@ function Expect({ expect }: { expect: Expectations }) {
           </div>
         </dl>
       )}
-    </section>
+    </Part>
   );
 }
 
@@ -275,8 +284,7 @@ function Run({ test, versions }: { test: Test; versions: readonly Workflow[] }) 
   const origin = test.origin;
   const version = origin ? findVersion(versions, origin.version) : null;
   return (
-    <section className="test-part" aria-label="Run">
-      <h3>Run</h3>
+    <Part title="Run">
       <dl className="kv">
         <div>
           <dt>Starts</dt>
@@ -319,7 +327,7 @@ function Run({ test, versions }: { test: Test; versions: readonly Workflow[] }) 
           </div>
         )}
       </dl>
-    </section>
+    </Part>
   );
 }
 
@@ -355,9 +363,9 @@ function Outcome({ expect }: { expect: Expectations }) {
     return <JsonCard title="Expected error" value={expect.error} note="the run fails with it" />;
   }
   return (
-    <section className="json-card" aria-label="Expected output">
-      <header className="json-card-head">
-        <h3>Expected output</h3>
+    <section className="panel json-card" aria-label="Expected output">
+      <header className="panel-head">
+        <h2>Expected output</h2>
       </header>
       <p className="muted json-card-empty">Not checked: the test does not look at the output.</p>
     </section>

@@ -1,25 +1,26 @@
 // Namespaces: the end users of the organization and what they use of their limits this month.
 // First the organization's ceiling (the operator's) with its totals, then the default limits, then
 // the namespaces, sorted by CPU, runs or scripts of the month, so that an end user who abuses the
-// product comes first; a search by the start of the name, and a filter of those at 80 % or more of
-// a limit. Polled every 30 s.
+// product comes first; a search by the start of the name, in the bar of the Overview, and a filter
+// of those at 80 % or more of a limit. Polled every 30 s.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Search } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { Pencil } from "lucide-react";
+import { type ReactNode, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import {
   NAMESPACES,
   useNamespaceDefaults,
   useNamespaceList,
   useQuotaAlerts,
-  useSettled,
 } from "../../api/namespaces";
 import type { Namespace, NamespaceOrder, QuotaAlert, Quotas } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
 import { PageHeader } from "../../components/PageHeader";
+import { QueryBar } from "../../components/QueryBar";
 import { formatCount } from "../../model/format";
+import type { FieldSpec } from "../../model/query";
 import {
   formatQuota,
   limitOf,
@@ -32,7 +33,9 @@ import {
   shortDate,
   usedOf,
 } from "../../model/quotas";
+import { readNamespaceSearch } from "../../model/searches";
 import { Seg } from "../FilterBits";
+import { useViewSearch } from "../search";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm, worstAlert } from "./bits";
 
 const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
@@ -50,6 +53,9 @@ const SORTED: Partial<Record<NamespaceOrder, string>> = {
 };
 
 const ABOVE = 0.8;
+
+/** A namespace is searched by the start of its name: no field. */
+const NO_FIELDS: readonly FieldSpec[] = [];
 
 function readOrder(params: URLSearchParams): NamespaceOrder {
   const order = params.get("order");
@@ -140,8 +146,9 @@ function Namespaces() {
   const [params, setParams] = useSearchParams();
   const order = readOrder(params);
   const above = params.get("above") === "80";
-  const [search, setSearch] = useState(params.get("prefix") ?? "");
-  const prefix = useSettled(search.trim(), 200);
+  const { q, setQ } = useViewSearch("prefix");
+  const search = readNamespaceSearch(q);
+  const prefix = search.prefix;
   const [editing, setEditing] = useState(false);
 
   const set = (name: string, value: string | null) =>
@@ -154,12 +161,6 @@ function Namespaces() {
       },
       { replace: true },
     );
-
-  // The search is the URL's once it has settled.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `set` is new at each render
-  useEffect(() => {
-    if ((params.get("prefix") ?? "") !== prefix) set("prefix", prefix || null);
-  }, [prefix]);
 
   const query = {
     order,
@@ -237,19 +238,14 @@ function Namespaces() {
         </div>
       )}
 
-      <div className="filters">
-        <label className="search-field">
-          <Search size={13} aria-hidden="true" />
-          <span className="sr-only">Search a namespace</span>
-          <input
-            className="input mono"
-            type="search"
-            placeholder="Search a namespace…"
-            spellCheck={false}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        fields={NO_FIELDS}
+        fault={search.fault}
+        label="Search namespaces"
+        placeholder="The start of a namespace's name: user_7K"
+      >
         <Seg<NamespaceOrder>
           label="Order"
           value={order}
@@ -265,7 +261,7 @@ function Namespaces() {
         >
           At 80% or more{riskyCount !== null ? ` · ${riskyCount}` : ""}
         </button>
-      </div>
+      </QueryBar>
 
       {list.isPending ? (
         <Loading>Loading the namespaces…</Loading>

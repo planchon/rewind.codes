@@ -28,7 +28,8 @@ describe("ScriptsView", () => {
     const { router, requested } = renderApp("/scripts");
     await screen.findByRole("table");
     await user.click(screen.getAllByRole("button", { name: "crm.provision" })[0] as HTMLElement);
-    await waitFor(() => expect(search(router).get("tool")).toBe("crm.provision"));
+    await waitFor(() => expect(search(router).get("q")).toBe("tool:crm.provision"));
+    expect(screen.getByRole("combobox", { name: "Query" })).toHaveValue("tool:crm.provision");
     await waitFor(() =>
       expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(2),
     );

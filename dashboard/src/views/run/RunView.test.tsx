@@ -56,7 +56,7 @@ describe("RunView", () => {
       ).toBeInTheDocument(),
     );
     expect(within(inspector).getByRole("region", { name: "args" })).toHaveTextContent(
-      '"number": 4106',
+      '"number":4106',
     );
     expect(search(router).get("entry")).not.toBeNull();
   });

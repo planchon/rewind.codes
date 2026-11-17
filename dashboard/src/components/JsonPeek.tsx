@@ -1,16 +1,15 @@
-// JSON values in Testing: a line, colored, that opens the whole value in a dialog, colored and
-// indented, with a copy button; and a card for the values a page is about (a test's input and
-// what its output must contain).
+// JSON values in Testing: a line, colored, that opens the whole value in a dialog, as a tree that
+// folds, with a copy button; and a card for the values a page is about (a test's input and what
+// its output must contain), a tree that folds in place.
 import { Dialog } from "@base-ui/react/dialog";
 import { Maximize2, X } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { CopyButton } from "./bits";
-import { JsonText, JsonTokens, JsonValue } from "./Payload";
+import { foldable, JsonTree, OpeningButtons, useOpening } from "./JsonTree";
+import { JsonTokens, JsonValue } from "./Payload";
 
 /** Characters of a value shown in its line. */
 const LINE = 56;
-/** Lines of a value shown in its card. */
-const CARD_LINES = 12;
 
 export function JsonDialog({
   title,
@@ -24,6 +23,7 @@ export function JsonDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const text = useMemo(() => JSON.stringify(value, null, 2) ?? "undefined", [value]);
+  const { opening, openAll, foldAll } = useOpening();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -32,6 +32,7 @@ export function JsonDialog({
           <header className="json-dialog-head">
             <Dialog.Title className="json-dialog-title">{title}</Dialog.Title>
             <span className="end">
+              {foldable(value) && <OpeningButtons openAll={openAll} foldAll={foldAll} />}
               <CopyButton text={text} label={`Copy ${title}`} />
               <Dialog.Close className="icon-btn" aria-label="Close">
                 <X size={16} />
@@ -39,7 +40,7 @@ export function JsonDialog({
             </span>
           </header>
           <div className="json-dialog-body">
-            <JsonValue value={value} />
+            <JsonValue value={value} opening={opening} />
           </div>
         </Dialog.Popup>
       </Dialog.Portal>
@@ -70,7 +71,7 @@ export function JsonPeek({ value, title }: { value: unknown; title: string }) {
   );
 }
 
-/** A value a page is about: its first lines in a card, the whole of it a click away. */
+/** A value a page is about, in a card: a tree that folds, its whole a click away in a dialog. */
 export function JsonCard({
   title,
   value,
@@ -78,18 +79,16 @@ export function JsonCard({
 }: {
   title: string;
   value: unknown;
-  /** Said under the title, such as "contains". */
+  /** Said beside the title, such as "the output contains it". */
   note?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const text = useMemo(() => JSON.stringify(value, null, 2) ?? "undefined", [value]);
-  const lines = text.split("\n");
-  const cut = lines.length > CARD_LINES;
   return (
-    <section className="json-card" aria-label={title}>
-      <header className="json-card-head">
-        <h3>{title}</h3>
-        {note && <span className="dim">{note}</span>}
+    <section className="panel json-card" aria-label={title}>
+      <header className="panel-head">
+        <h2>{title}</h2>
+        {note && <span className="muted">{note}</span>}
         <span className="end">
           <CopyButton text={text} label={`Copy ${title}`} />
           <button
@@ -103,14 +102,9 @@ export function JsonCard({
           </button>
         </span>
       </header>
-      <button
-        type="button"
-        className={`json-card-body${cut ? " cut" : ""}`}
-        tabIndex={-1}
-        onClick={() => setOpen(true)}
-      >
-        <JsonText text={cut ? lines.slice(0, CARD_LINES).join("\n") : text} />
-      </button>
+      <div className="json-card-body">
+        <JsonTree value={value} size={text.length} label={title} />
+      </div>
       <JsonDialog title={title} value={value} open={open} onOpenChange={setOpen} />
     </section>
   );

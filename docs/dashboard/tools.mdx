@@ -3,8 +3,18 @@ title: "Tools"
 description: "Latency, error rate and retries of every tool your scripts call."
 ---
 
-The Tools view measures the tools behind your runs over a window: the last hour, 24 hours, 7 or 30 days, optionally for
-one toolset.
+The Tools view measures the tools behind your runs over a window: the last hour, 24 hours, 7 or 30 days.
+
+Search them as you search the runs on the [Overview](/dashboard/overview), in one line of text that **Enter** applies:
+
+| Term | Keeps |
+| --- | --- |
+| `close` | The tools whose name holds the word |
+| `tool:github.close_issue`, `tool:github.*` | That tool, or every tool of a namespace |
+| `toolset:5f3a9c…` | The calls of the runs of one toolset (its digest) |
+
+Each term must hold; `-` excludes one (`-tool:github.*`). A term the view cannot read is underlined, with why. From a
+run, its **Toolset** opens the view searching that toolset.
 
 <Frame>
   <img src="/images/dashboard/tools-light.webp" alt="The Tools view: calls, failures, retries and latency percentiles per tool, grouped by server" className="block dark:hidden" />

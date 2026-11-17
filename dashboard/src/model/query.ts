@@ -105,9 +105,12 @@ function readTerm(text: string, start: number, end: number): QueryTerm {
   return { ...base, kind: "text", field: null, operand: body };
 }
 
-/** Whether a term names a field of the language. */
-export function isKnownField(term: QueryTerm): boolean {
-  return term.kind === "field" && term.field !== null && FIELD_NAMES.has(term.field);
+/** Whether a term names a field of the language, or of the fields given (another view's search). */
+export function isKnownField(term: QueryTerm, fields: readonly FieldSpec[] = FIELDS): boolean {
+  if (term.kind !== "field" || term.field === null) return false;
+  return fields === FIELDS
+    ? FIELD_NAMES.has(term.field)
+    : fields.some((f) => f.name === term.field);
 }
 
 /** The values of an operand, split on commas outside quotes, unquoted. */
@@ -264,6 +267,8 @@ export interface FieldValue {
   /** Runs with this value. */
   count?: number;
   detail?: string;
+  /** Written as is: a pattern, never quoted. */
+  raw?: boolean;
 }
 
 /** Values to suggest per field, beside those of the facets. */
@@ -303,6 +308,7 @@ function fieldValues(
       label: v.value,
       ...(v.count !== undefined ? { count: v.count } : {}),
       ...(v.detail ? { detail: v.detail } : {}),
+      ...(v.raw ? { raw: true } : {}),
     }));
   switch (field) {
     case "status": {
@@ -389,7 +395,7 @@ export function typedField(text: string, caret: number): { field: string; value:
 /**
  * What to suggest for the term the caret is in: field names and label keys while a name is
  * typed, then the values that exist for it (the facets of the current query, or the values
- * given), at most `limit`.
+ * given), at most `limit`. The fields are the runs' unless others are given.
  */
 export function suggest(
   text: string,
@@ -397,6 +403,7 @@ export function suggest(
   facets: Facets | undefined,
   limit = 12,
   values?: FieldValues,
+  fields: readonly FieldSpec[] = FIELDS,
 ): Suggestions | null {
   const term = splitTerms(text).find((t) => t.start <= caret && caret <= t.end);
   const from = term ? term.start + (term.negated || term.raw === "-" ? 1 : 0) : caret;
@@ -416,7 +423,7 @@ export function suggest(
         label: `@${key}:${v.value}`,
         count: v.runs,
       }));
-  } else if (colon > 0 && FIELD_NAMES.has(typed.slice(0, colon))) {
+  } else if (colon > 0 && fields.some((f) => f.name === typed.slice(0, colon))) {
     const field = typed.slice(0, colon);
     const { kept, typed: value } = before(typed.slice(colon + 1));
     items = fieldValues(field, facets, values)
@@ -437,15 +444,17 @@ export function suggest(
         count: l.runs,
         partial: true,
       }));
-    const fields = typed.startsWith("@")
+    const names = typed.startsWith("@")
       ? []
-      : FIELDS.filter((f) => startsWith(f.name, name)).map((f) => ({
-          insert: `${f.name}:`,
-          label: `${f.name}:`,
-          detail: f.doc,
-          partial: true,
-        }));
-    items = [...fields, ...keys];
+      : fields
+          .filter((f) => startsWith(f.name, name))
+          .map((f) => ({
+            insert: `${f.name}:`,
+            label: `${f.name}:`,
+            detail: f.doc,
+            partial: true,
+          }));
+    items = [...names, ...keys];
   } else {
     return null;
   }

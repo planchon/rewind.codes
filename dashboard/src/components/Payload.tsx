@@ -6,6 +6,7 @@ import { usePayloadValue } from "../api/queries";
 import type { Payload } from "../api/types";
 import { formatBytes, shortDigest } from "../model/format";
 import { CopyButton, ProblemView } from "./bits";
+import { foldable, JsonTree, type Opening, OpeningButtons, useOpening } from "./JsonTree";
 
 /** Values up to this size are shown without a click. */
 const SHOW_AT_ONCE = 16 * 1024;
@@ -13,6 +14,8 @@ const SHOW_AT_ONCE = 16 * 1024;
 const RENDER_LIMIT = 200_000;
 /** Above this size, JSON is shown without colors. */
 const HIGHLIGHT_LIMIT = 100_000;
+/** Above this size, a value is shown as text rather than as a tree that folds. */
+const TREE_LIMIT = 1_000_000;
 
 const TOKEN =
   /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|([{}[\],])/g;
@@ -74,9 +77,16 @@ export function JsonText({ text }: { text: string }) {
   );
 }
 
-export function JsonValue({ value }: { value: unknown }) {
+/**
+ * A value whole: a tree whose objects and arrays fold, or, above a megabyte of JSON, its text (the
+ * first 200 000 characters, the rest on demand).
+ */
+export function JsonValue({ value, opening }: { value: unknown; opening?: Opening }) {
   const [all, setAll] = useState(false);
   const text = useMemo(() => JSON.stringify(value, null, 2) ?? "undefined", [value]);
+  if (text.length <= TREE_LIMIT) {
+    return <JsonTree value={value} size={text.length} {...(opening ? { opening } : {})} />;
+  }
   const cut = !all && text.length > RENDER_LIMIT;
   return (
     <>
@@ -92,7 +102,15 @@ export function JsonValue({ value }: { value: unknown }) {
   );
 }
 
-function LoadedValue({ digest, runId }: { digest: string; runId: string }) {
+function LoadedValue({
+  digest,
+  runId,
+  opening,
+}: {
+  digest: string;
+  runId: string;
+  opening: Opening;
+}) {
   const value = usePayloadValue(digest, runId, true);
   if (value.isPending) {
     return (
@@ -110,7 +128,7 @@ function LoadedValue({ digest, runId }: { digest: string; runId: string }) {
       </div>
     );
   }
-  return <JsonValue value={value.data} />;
+  return <JsonValue value={value.data} opening={opening} />;
 }
 
 export function PayloadView({
@@ -129,6 +147,9 @@ export function PayloadView({
   const [open, setOpen] = useState(true);
   const [asked, setAsked] = useState(inline && payload.bytes <= SHOW_AT_ONCE);
   const copyText = inline ? JSON.stringify(payload.value, null, 2) : null;
+  const { opening, openAll, foldAll } = useOpening();
+  // A value read on demand may fold: its buttons show once it is asked for.
+  const folds = open && asked && (inline ? foldable(payload.value) : true);
 
   return (
     <section className="payload" aria-label={name}>
@@ -149,6 +170,7 @@ export function PayloadView({
         </span>
         {extra}
         <span className="end">
+          {folds && <OpeningButtons openAll={openAll} foldAll={foldAll} />}
           {copyText !== null && <CopyButton text={copyText} label={`Copy ${name}`} />}
         </span>
       </header>
@@ -156,9 +178,9 @@ export function PayloadView({
         <div className="payload-body">
           {asked ? (
             inline ? (
-              <JsonValue value={payload.value} />
+              <JsonValue value={payload.value} opening={opening} />
             ) : (
-              <LoadedValue digest={payload.digest} runId={runId} />
+              <LoadedValue digest={payload.digest} runId={runId} opening={opening} />
             )
           ) : (
             <div className="payload-preview">

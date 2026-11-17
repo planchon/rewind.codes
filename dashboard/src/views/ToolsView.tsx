@@ -1,22 +1,50 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
-// host-tool group), over a window, optionally for one toolset.
-import { Fragment } from "react";
-import { Link, useSearchParams } from "react-router";
+// host-tool group), over a window. A search as on the Overview, one line of text: a part of a
+// tool's name, `tool:` (a name or `github.*`) and `toolset:` (the calls of one toolset's runs).
+import { Fragment, useMemo } from "react";
+import { Link } from "react-router";
 import { useToolStats } from "../api/queries";
 import type { ToolStats } from "../api/types";
 import { Empty, Loading, ProblemView, Time } from "../components/bits";
 import { PageHeader } from "../components/PageHeader";
+import { QueryBar } from "../components/QueryBar";
 import { useTooltip } from "../components/Tooltip";
-import {
-  type RangeKey,
-  readToolFilters,
-  type ToolFilters,
-  toToolStatsQuery,
-  writeToolFilters,
-} from "../model/filters";
+import { type RangeKey, toToolStatsQuery } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
-import { fieldTerm, queryLink } from "../model/query";
-import { AddFilter, FilterChip, Seg } from "./FilterBits";
+import { type FieldValues, fieldTerm, joinQuery, queryLink } from "../model/query";
+import { readToolSearch, TOOL_FIELDS } from "../model/searches";
+import { Seg } from "./FilterBits";
+import { type OlderSearch, useViewSearch, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+
+/** `/tools?toolset=…`, a link from before the search: the search of its toolset. */
+const OLDER: OlderSearch = {
+  names: ["toolset"],
+  read: (params) =>
+    joinQuery(
+      params.get("q"),
+      ...params
+        .getAll("toolset")
+        .filter((t) => t.trim() !== "")
+        .map((t) => fieldTerm("toolset", t.trim())),
+    ),
+};
+
+/** The values the search suggests for `tool:`: each tool listed, then each namespace's tools. */
+function toolValues(tools: ToolStats[]): FieldValues {
+  const namespaces = [
+    ...new Set(tools.flatMap((t) => (t.tool.includes(".") ? [namespaceOf(t.tool)] : []))),
+  ];
+  return {
+    tool: [
+      ...tools.map((t) => ({ value: t.tool, count: t.calls })),
+      ...namespaces.map((ns) => ({
+        value: `${ns}.*`,
+        detail: "every tool of the namespace",
+        raw: true,
+      })),
+    ],
+  };
+}
 
 export function namespaceOf(tool: string): string {
   const at = tool.indexOf(".");
@@ -98,15 +126,18 @@ function LatencyStrip({
 }
 
 export function ToolsView() {
-  const [params, setParams] = useSearchParams();
-  const filters = readToolFilters(params);
-  const key = writeToolFilters(filters).toString();
-  const stats = useToolStats(`tools:${key}`, () => toToolStatsQuery(filters, Date.now()));
-  const update = (patch: Partial<ToolFilters>) =>
-    setParams(writeToolFilters({ ...filters, ...patch }));
+  const { q, setQ } = useViewSearch("q", OLDER);
+  const [win, setWin] = useWindow();
+  const search = readToolSearch(q);
+  const toolset = search.toolset;
+  const stats = useToolStats(`tools:${win}|${toolset ?? ""}`, () =>
+    toToolStatsQuery(win, toolset, Date.now()),
+  );
   const tip = useTooltip();
 
-  const tools = stats.data?.tools ?? [];
+  const every = stats.data?.tools;
+  const values = useMemo(() => toolValues(every ?? []), [every]);
+  const tools = (every ?? []).filter((t) => search.keeps(t.tool));
   const groups = groupTools(tools);
   const scale = logScale(tools);
   const calls = tools.reduce((s, t) => s + t.calls, 0);
@@ -116,54 +147,46 @@ export function ToolsView() {
 
   return (
     <div className="page">
-      <PageHeader title="Tools" />
+      <PageHeader
+        title="Tools"
+        actions={
+          <Seg<RangeKey>
+            label="Window"
+            value={win}
+            onChange={setWin}
+            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
+          />
+        }
+      />
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        fields={TOOL_FIELDS}
+        values={values}
+        fault={search.fault}
+        label="Search tools"
+        placeholder="github  tool:github.*  toolset:5f3a9c…"
+      />
       {stats.data && (
         <p className="page-intro">
           Calls completed from <Time ms={Date.parse(stats.data.since)} /> to{" "}
           <Time ms={Date.parse(stats.data.until)} />.
         </p>
       )}
-      <section className="filters" aria-label="Filters">
-        <Seg<RangeKey>
-          label="Window"
-          value={filters.window}
-          onChange={(window) => update({ window })}
-          options={[
-            { value: "1h", label: "1h" },
-            { value: "24h", label: "24h" },
-            { value: "7d", label: "7d" },
-            { value: "30d", label: "30d" },
-          ]}
-        />
-        <span className="sep" />
-        {filters.toolset ? (
-          <FilterChip
-            name="toolset"
-            value={filters.toolset}
-            onRemove={() => update({ toolset: null })}
-          />
-        ) : (
-          <AddFilter
-            fields={[
-              {
-                name: "toolset",
-                placeholder: "toolset digest",
-                check: (v) =>
-                  /^[0-9a-f]{6,64}$/.test(v) ? null : "A toolset digest is hexadecimal",
-              },
-            ]}
-            onAdd={(_, toolset) => update({ toolset })}
-          />
-        )}
-      </section>
 
-      {stats.isPending ? (
+      {search.fault ? (
+        <Empty>Fix the search to see the tools: the term at fault is underlined above.</Empty>
+      ) : stats.isPending ? (
         <Loading>Loading tool statistics…</Loading>
       ) : stats.isError ? (
         <ProblemView error={stats.error} title="The tool statistics could not be read" />
       ) : tools.length === 0 ? (
         <div className="table-wrap">
-          <Empty>No tool call completed in this window.</Empty>
+          <Empty>
+            {(every ?? []).length === 0
+              ? "No tool call completed in this window."
+              : "No tool of this window matches the search."}
+          </Empty>
         </div>
       ) : (
         <>

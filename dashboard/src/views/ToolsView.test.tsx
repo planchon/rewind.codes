@@ -61,4 +61,34 @@ describe("ToolsView", () => {
     await user.click(screen.getByRole("button", { name: "24h" }));
     await waitFor(() => expect(search(router).get("window")).toBeNull());
   });
+
+  it("searches as the Overview does: words of a tool's name, tool: and toolset:", async () => {
+    const user = userEvent.setup();
+    const { router, requested } = renderApp("/tools?window=7d&toolset=abcdef12");
+    // A link from before the search: its toolset becomes the search's.
+    await waitFor(() => expect(search(router).get("q")).toBe("toolset:abcdef12"));
+    expect(search(router).get("toolset")).toBeNull();
+    expect(search(router).get("window")).toBe("7d");
+    await waitFor(() =>
+      expect(
+        requested("/v1/tools/stats").some((u) => u.searchParams.get("toolset") === "abcdef12"),
+      ).toBe(true),
+    );
+
+    const bar = screen.getByRole("combobox", { name: "Query" });
+    await user.clear(bar);
+    await user.type(bar, "forecast{Enter}");
+    await waitFor(() => expect(search(router).get("q")).toBe("forecast"));
+    const table = await screen.findByRole("table");
+    await waitFor(() =>
+      expect([...table.querySelectorAll(".tool-name a")].map((a) => a.textContent)).toEqual([
+        "weather.forecast",
+      ]),
+    );
+
+    await user.clear(bar);
+    await user.type(bar, "status:failed{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("status: not a field of the tools");
+    expect(screen.queryByRole("table")).toBeNull();
+  });
 });
