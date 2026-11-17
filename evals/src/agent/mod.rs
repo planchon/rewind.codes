@@ -6,35 +6,38 @@
 //! A mistake the model can fix (a bad argument, a refused script, a run that has ended) is a
 //! result with `is_error`; a fault of the platform is an [`AgentError`], which ends the episode
 //! as an error of the harness, not a failure of the model.
+//!
+//! The agent's toolset starts as the world's; each workflow `save_workflow` saves derives a new
+//! one that pins it, which the later calls use (the SDK's `currentToolset`). The agent is a
+//! caller limited to its labels: the workflows it saves carry them, and it sees only those.
 
 pub mod definitions;
 pub mod render;
+mod workflows;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rewind_api::common::{RunStatus, ScriptError};
-use rewind_api::scripts::{CheckResult, Diagnostic, TestResult};
+use rewind_api::common::RunStatus;
+use rewind_api::scripts::{CheckResult, Diagnostic};
+use rewind_api::testing::TestResult;
 use rewind_api::toolsets::ToolMatch;
-use rewind_core::{Matching, RunId, Script, Timestamp, parse_duration};
-use rewind_engine::mock::{
-    Expectations, ExpectedError, MockDispatcher, Mocks, Scenario, ScenarioError, ScenarioSignal,
-    SignalWhen,
-};
-use rewind_engine::ports::{Enqueued, RunFilter, RunRef, TenantId, TypeChecker};
+use rewind_core::{RunId, Script, Timestamp, Toolset, parse_duration};
+use rewind_engine::ports::{Enqueued, RunFilter, RunRef, TenantId, ToolDeclarations, TypeChecker};
 use rewind_engine::{EngineError, ForkError, ForkRun, StartError};
-use rewind_runtime::{SandboxLimits, TsMocks};
 use serde_json::{Map, Value, json};
 use sha2::{Digest as _, Sha256};
 
-use crate::clock::SharedClock;
 use crate::view;
 use crate::world::World;
 use render::{
     Limits, RunExtras, args, describe_check, describe_matches, describe_page, describe_refusal,
-    describe_run, describe_runs, describe_test, entry_text, json, truncate_end, truncate_middle,
+    describe_retry_refused, describe_run, describe_runs, entry_text, json, truncate_end,
+    truncate_middle,
 };
+
+pub use workflows::decode_cassette;
 
 /// What a tool call returns to the model.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +48,12 @@ pub struct AgentToolResult {
     pub is_error: bool,
     /// What the script handed in, if the call carried one: for the first-try check rate.
     pub script: Option<ScriptVerdict>,
+    /// The tests the model gave (`test_script`'s and `save_workflow`'s `tests`, and the tests
+    /// `save_workflow` updates): whether it writes tests unprompted.
+    pub tests_given: usize,
+    /// The gate refused the call: a test of a workflow's suite did not pass, so `save_workflow`
+    /// saved nothing, or `retry_run` started no fork.
+    pub gate_refused: bool,
 }
 
 /// Whether a script the model submitted passed the checks before anything ran.
@@ -79,6 +88,15 @@ enum Failure {
         detail: String,
         diagnostics: Vec<Diagnostic>,
     },
+    /// `invalid-test`: a test, or a change of a suite, refused before any test ran.
+    InvalidTest(String),
+    /// `invalid-workflow`: a workflow's name or schema cannot be used.
+    InvalidWorkflow(String),
+    /// `tests-failed`: tests of a suite did not pass.
+    TestsFailed {
+        detail: String,
+        tests: Vec<TestResult>,
+    },
     Platform(AgentError),
 }
 
@@ -95,6 +113,26 @@ fn result(content: String, is_error: bool) -> AgentToolResult {
         content,
         is_error,
         script: None,
+        tests_given: 0,
+        gate_refused: false,
+    }
+}
+
+/// The toolset the agent's scripts import from `rewind:tools` (and `rewind:workflows`), with
+/// what codegen generated for it.
+#[derive(Debug, Clone)]
+pub struct AgentToolset {
+    pub toolset: Toolset,
+    pub declarations: rewind_codegen::Declarations,
+}
+
+impl AgentToolset {
+    /// The declarations stored with the toolset, as the engine and the checker take them.
+    pub fn tool_declarations(&self) -> ToolDeclarations {
+        ToolDeclarations {
+            typescript: self.declarations.typescript.clone(),
+            prompt: self.declarations.prompt.clone(),
+        }
     }
 }
 
@@ -125,16 +163,28 @@ pub struct AgentTools<'w> {
     world: &'w World,
     options: AgentOptions,
     limits: Limits,
+    /// The world's toolset, then the last one `save_workflow` derived.
+    current: Mutex<Arc<AgentToolset>>,
 }
 
 impl<'w> AgentTools<'w> {
     pub fn new(world: &'w World, options: AgentOptions) -> Self {
         let limits = Limits::for_output(options.output_limit);
+        let current = AgentToolset {
+            toolset: world.toolset.clone(),
+            declarations: world.declarations.clone(),
+        };
         Self {
             world,
             options,
             limits,
+            current: Mutex::new(Arc::new(current)),
         }
+    }
+
+    /// The toolset the agent's scripts run with now.
+    pub fn toolset(&self) -> Arc<AgentToolset> {
+        crate::fake::lock(&self.current).clone()
     }
 
     /// Executes a tool call of the model. `input` is the call's arguments, an object or its
@@ -159,13 +209,16 @@ impl<'w> AgentTools<'w> {
                 "signal_run" => self.signal_run(&values, call_id).await,
                 "cancel_run" => self.cancel_run(&values).await,
                 "retry_run" => self.retry_run(&values, call_id).await,
+                "save_workflow" => self.save_workflow(&values).await,
+                "get_workflow" => self.get_workflow(&values).await,
+                "record_tests" => self.record_tests(&values).await,
                 _ => self.search_tools(&values),
             },
             Err(failure) => Err(failure),
         };
         let carries_script = matches!(
             name,
-            "run_script" | "check_script" | "test_script" | "retry_run"
+            "run_script" | "check_script" | "test_script" | "retry_run" | "save_workflow"
         );
         let mut handled = match handled {
             Ok(mut handled) => {
@@ -175,7 +228,12 @@ impl<'w> AgentTools<'w> {
                 handled
             }
             Err(Failure::Input(message)) => result(format!("{name}: {message}"), true),
-            Err(Failure::Problem(detail)) => result(
+            Err(
+                Failure::Problem(detail)
+                | Failure::InvalidTest(detail)
+                | Failure::InvalidWorkflow(detail)
+                | Failure::TestsFailed { detail, .. },
+            ) => result(
                 format!(
                     "{name} failed: {}",
                     truncate_end(&detail, self.limits.value)
@@ -186,9 +244,8 @@ impl<'w> AgentTools<'w> {
                 detail,
                 diagnostics,
             }) => AgentToolResult {
-                content: describe_refusal(&detail, &diagnostics, &self.limits),
-                is_error: true,
                 script: Some(ScriptVerdict::Refused),
+                ..result(describe_refusal(&detail, &diagnostics, &self.limits), true)
             },
             Err(Failure::Platform(error)) => return Err(error),
         };
@@ -203,8 +260,11 @@ impl<'w> AgentTools<'w> {
     async fn run_script(&self, input: &Map<String, Value>, call_id: &str) -> Handled {
         let code = require_string(input, "code", "code")?;
         let wait = self.wait_of(input.get("wait"))?;
-        let mut request = self.world.start_request(
+        let current = self.toolset();
+        let mut request = self.world.start_request_on(
             Script::new(code),
+            &current.toolset,
+            current.tool_declarations(),
             input.get("input").cloned().unwrap_or_else(|| json!({})),
         );
         request.idempotency_key = Some(run_key(&self.world.labels, call_id));
@@ -236,113 +296,9 @@ impl<'w> AgentTools<'w> {
             ScriptVerdict::Refused
         };
         Ok(AgentToolResult {
-            content: describe_check(&checked, &self.limits),
-            is_error: !checked.ok,
             script: Some(verdict),
+            ..result(describe_check(&checked, &self.limits), !checked.ok)
         })
-    }
-
-    async fn test_script(&self, input: &Map<String, Value>) -> Handled {
-        let code = require_string(input, "code", "code")?;
-        let Some(Value::Object(scenario)) = input.get("scenario") else {
-            return Err(Failure::Input("`scenario` must be an object.".into()));
-        };
-        let script = Script::new(code);
-        let mut dispatcher = MockDispatcher::new();
-        if let Some(run_id) = scenario.get("from_run") {
-            let run_id = run_id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
-                Failure::Input("`scenario.from_run` must be a non-empty string.".into())
-            })?;
-            let run = self.scoped_run(run_id).await?;
-            let cassette = self
-                .world
-                .engine
-                .export_cassette(&run, Matching::Sequential)
-                .await?;
-            dispatcher = dispatcher.with_cassette(cassette);
-        }
-        if let Some(tools) = scenario.get("tools") {
-            if !tools.is_object() {
-                return Err(Failure::Input(
-                    "`scenario.tools` must be an object of responses by tool name.".into(),
-                ));
-            }
-            dispatcher = dispatcher
-                .with_static_responses(tools)
-                .map_err(|err| Failure::Problem(format!("tools: {err}")))?;
-        }
-        let mut signals = Vec::new();
-        if let Some(listed) = scenario.get("signals") {
-            let invalid = || {
-                Failure::Input(
-                    "`scenario.signals` must be an array of { name, payload?, when? }.".into(),
-                )
-            };
-            for signal in listed.as_array().ok_or_else(invalid)? {
-                let name = signal["name"].as_str().ok_or_else(invalid)?;
-                let when = match signal.get("when").and_then(Value::as_str) {
-                    None | Some("blocked") => SignalWhen::Blocked,
-                    Some(after) => SignalWhen::After(parse_duration(after).map_err(|_| {
-                        Failure::Problem(format!(
-                            "signal {name}: when must be \"blocked\" or a duration such as \"2h\", not {after:?}"
-                        ))
-                    })?),
-                };
-                signals.push(ScenarioSignal {
-                    name: name.to_owned(),
-                    payload: signal.get("payload").cloned().unwrap_or(Value::Null),
-                    when,
-                });
-            }
-        }
-        let expect = expectations(scenario.get("expect"))?;
-        let mut test = Scenario::new(
-            script,
-            self.world.toolset.clone(),
-            scenario.get("input").cloned().unwrap_or_else(|| json!({})),
-        );
-        test.signals = signals;
-        test.expect = expect;
-        let executor = self.world.engine.executor();
-        let report = match scenario.get("mocks") {
-            Some(source) => {
-                let source = source.as_str().filter(|s| !s.is_empty()).ok_or_else(|| {
-                    Failure::Input("`scenario.mocks` must be a non-empty string.".into())
-                })?;
-                let clock: Arc<dyn rewind_engine::ports::Clock> =
-                    Arc::new(SharedClock::new(Scenario::DEFAULT_START));
-                let handlers = TsMocks::new(&Script::new(source), clock, SandboxLimits::default())
-                    .await
-                    .map_err(|err| match err {
-                        rewind_runtime::MockError::Invalid(message) => {
-                            Failure::Problem(format!("the mocks cannot load: {message}"))
-                        }
-                        rewind_runtime::MockError::Internal(message) => {
-                            Failure::Platform(AgentError::Checker(message))
-                        }
-                    })?;
-                let tools = handlers.tools().clone();
-                let dispatcher = dispatcher.with_mocks(Mocks { handlers, tools });
-                rewind_engine::mock::run_scenario(executor, dispatcher, test).await
-            }
-            None => rewind_engine::mock::run_scenario(executor, dispatcher, test).await,
-        };
-        let report = match report {
-            Ok(report) => report,
-            Err(ScenarioError::Start(error)) => return Err(start_failure(error)),
-            Err(ScenarioError::Engine(error)) => return Err(error.into()),
-        };
-        let result = TestResult {
-            passed: report.passed,
-            failures: report.failures,
-            status: report.status.into(),
-            output: report.output,
-            error: report.error.as_ref().map(ScriptError::from),
-            abort: report.abort.as_ref().map(Into::into),
-            calls: report.calls,
-            trace: report.trace,
-        };
-        Ok(result_of_test(&result, &self.limits))
     }
 
     async fn get_run(&self, input: &Map<String, Value>) -> Handled {
@@ -447,11 +403,26 @@ impl<'w> AgentTools<'w> {
         let name = require_string(input, "name", "name")?;
         let run = self.scoped_run(&run_id).await?;
         let payload = input.get("payload").cloned().unwrap_or(Value::Null);
-        let enqueued = self
+        let enqueued = match self
             .world
             .engine
             .signal(&run, name.clone(), payload, Some(idempotency_key(call_id)))
-            .await?;
+            .await
+        {
+            Ok(enqueued) => enqueued,
+            // `invalid-signal`: a run of a workflow takes only the signals it declares.
+            Err(EngineError::SignalRefused(detail)) => {
+                return Ok(result(
+                    format!(
+                        "Run {run_id} refused the signal {}: {}",
+                        render::quoted(&name),
+                        truncate_end(&detail, self.limits.value)
+                    ),
+                    true,
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
         let content = match enqueued {
             Enqueued::RunEnded => return Err(self.run_ended(&run, "a signal").await?),
             Enqueued::Duplicate => format!(
@@ -486,7 +457,32 @@ impl<'w> AgentTools<'w> {
         let run_id = require_string(input, "run_id", "run_id")?;
         let code = require_string(input, "code", "code")?;
         let parent = self.scoped_run(&run_id).await?;
-        let mut request = ForkRun::new(parent, Script::new(code));
+        let script = Script::new(code);
+        // `POST /v1/runs/{id}/fork`: the suite of the parent's workflow version first.
+        match self.gate_fork(&parent, &script).await {
+            Ok(()) => {}
+            Err(Failure::TestsFailed { detail, tests }) => {
+                let workflow = view::run(self.world, &parent)
+                    .await?
+                    .workflow
+                    .map(|workflow| render::workflow_ref(&workflow.name, &workflow.version));
+                return Ok(AgentToolResult {
+                    gate_refused: true,
+                    ..result(
+                        describe_retry_refused(
+                            &run_id,
+                            &detail,
+                            &tests,
+                            workflow.as_deref(),
+                            &self.limits,
+                        ),
+                        true,
+                    )
+                });
+            }
+            Err(failure) => return Err(failure),
+        }
+        let mut request = ForkRun::new(parent, script);
         request.labels = Some(self.world.labels.clone());
         request.idempotency_key = Some(run_key(&self.world.labels, call_id));
         let forked = self
@@ -511,7 +507,8 @@ impl<'w> AgentTools<'w> {
 
     fn search_tools(&self, input: &Map<String, Value>) -> Handled {
         let query = require_string(input, "query", "query")?;
-        let matches = search(&self.world.toolset, &self.world.declarations, &query)
+        let current = self.toolset();
+        let matches = search(&current.toolset, &current.declarations, &query)
             .ok_or_else(|| Failure::Problem("query: give at least one word to look for".into()))?;
         Ok(result(describe_matches(&query, &matches), false))
     }
@@ -578,11 +575,12 @@ impl<'w> AgentTools<'w> {
     /// `POST /v1/check`: the checks at start, then tsgo and the checker's rules.
     async fn check(&self, script: &Script) -> Result<CheckResult, Failure> {
         use rewind_engine::ports::ScriptExecutor as _;
+        let current = self.toolset();
         if let Err(invalid) = self
             .world
             .engine
             .executor()
-            .compile(script, &self.world.toolset)
+            .compile(script, &current.toolset)
         {
             return Ok(CheckResult {
                 ok: false,
@@ -592,7 +590,7 @@ impl<'w> AgentTools<'w> {
         let diagnostics = self
             .world
             .checker
-            .check(script, &self.world.tool_declarations())
+            .check(script, &current.tool_declarations())
             .await
             .map_err(|err| Failure::Platform(AgentError::Checker(err.to_string())))?;
         Ok(view::check_result(&diagnostics))
@@ -659,14 +657,6 @@ impl<'w> AgentTools<'w> {
     }
 }
 
-fn result_of_test(result: &TestResult, limits: &Limits) -> AgentToolResult {
-    AgentToolResult {
-        content: describe_test(result, limits),
-        is_error: !result.passed,
-        script: Some(ScriptVerdict::Passed),
-    }
-}
-
 /// A refused start, as the API answers it (`rewind-server`'s `error.rs`).
 fn start_failure(error: StartError) -> Failure {
     match error {
@@ -709,30 +699,6 @@ fn engine_failure(error: EngineError) -> Failure {
         )),
         other => Failure::Platform(AgentError::Engine(other)),
     }
-}
-
-fn expectations(value: Option<&Value>) -> Result<Expectations, Failure> {
-    let Some(value) = value else {
-        return Ok(Expectations::default());
-    };
-    let expect: rewind_api::scripts::Expectations = serde_json::from_value(value.clone())
-        .map_err(|err| Failure::Input(format!("`scenario.expect` is invalid: {err}.")))?;
-    Ok(Expectations {
-        status: expect.status.map(|status| match status {
-            RunStatus::Pending => rewind_core::RunStatus::Pending,
-            RunStatus::Active => rewind_core::RunStatus::Active,
-            RunStatus::Completed => rewind_core::RunStatus::Completed,
-            RunStatus::Failed => rewind_core::RunStatus::Failed,
-            RunStatus::Cancelled => rewind_core::RunStatus::Cancelled,
-            RunStatus::Aborted => rewind_core::RunStatus::Aborted,
-        }),
-        output: expect.output,
-        error: expect.error.map(|error| ExpectedError {
-            name: error.name,
-            message: error.message,
-        }),
-        calls: expect.calls,
-    })
 }
 
 /// The tools matching a query, best first, as `GET /v1/toolsets/{id}/search` ranks them: each
@@ -841,6 +807,48 @@ fn require_string(values: &Map<String, Value>, key: &str, label: &str) -> Result
             "`{label}` must be a non-empty string."
         ))),
     }
+}
+
+fn optional_string(values: &Map<String, Value>, key: &str) -> Result<Option<String>, Failure> {
+    match values.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.is_empty() => Ok(Some(value.clone())),
+        _ => Err(Failure::Input(format!(
+            "`{key}` must be a non-empty string."
+        ))),
+    }
+}
+
+fn optional_strings(
+    values: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<Vec<String>>, Failure> {
+    let invalid = || Failure::Input(format!("`{key}` must be an array of non-empty strings."));
+    match values.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| match item {
+                Value::String(text) if !text.is_empty() => Ok(text.clone()),
+                _ => Err(invalid()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(invalid()),
+    }
+}
+
+fn require_object<'v>(values: &'v Map<String, Value>, key: &str) -> Result<&'v Value, Failure> {
+    match values.get(key) {
+        Some(value @ Value::Object(_)) => Ok(value),
+        _ => Err(Failure::Input(format!(
+            "`{key}` must be a JSON Schema: an object."
+        ))),
+    }
+}
+
+fn is_object(value: &Value) -> bool {
+    value.is_object()
 }
 
 fn optional_index(values: &Map<String, Value>, key: &str) -> Result<Option<u64>, Failure> {

@@ -15,6 +15,7 @@ rewind-check.workspace = true
 rewind-codegen.workspace = true
 rewind-core.workspace = true
 rewind-engine.workspace = true
+rewind-format.workspace = true
 rewind-mcp.workspace = true
 rewind-runtime.workspace = true
 axum.workspace = true

@@ -6,6 +6,10 @@
 //! checker `rewind-check`, codegen `rewind-codegen`, and one virtual clock shared with the fake
 //! servers. Time only moves when the world is driven: a run's `wait`, a server's webhook, a
 //! signal sent by the world after a delay, a timer.
+//!
+//! The agent's toolset is registered as `POST /v1/toolsets` registers it, so that workflows are
+//! saved with it; workflows are saved and run as the server saves and runs them, with the
+//! agent's labels as the labels of the key that saves them.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
@@ -13,19 +17,24 @@ use std::time::Duration;
 
 use rewind_check::TsgoChecker;
 use rewind_core::{
-    Builtin, HistoryEntry, McpServer, McpTransport, RunId, RunOutcome, RunState, RunStatus, Script,
-    Timestamp, Tool, ToolRoute, Toolset,
+    Builtin, Digest, HistoryEntry, McpServer, McpTransport, RetiredTest, RunId, RunOutcome,
+    RunState, RunStatus, Script, Timestamp, Tool, ToolRoute, Toolset, UpdatedTest,
 };
 use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, RoutingDispatcher, SeededEntropy,
     Unrouted,
 };
 use rewind_engine::ports::{
-    Clock, JournalStore, RunFilter, RunRef, TenantId, ToolDeclarations, VirtualTime, WebhookToken,
+    Clock, JournalStore, NamespaceName, RunFilter, RunMetadata, RunRef, RunWorkflow,
+    StoredWorkflow, TenantId, ToolDeclarations, VirtualTime, WebhookToken, WorkflowFilter,
 };
-use rewind_engine::{Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartRun};
+use rewind_engine::suites::{LoadedTest, SuiteLoadError, TestFormat, TestKit};
+use rewind_engine::testing::TestOptions;
+use rewind_engine::{
+    Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartError, StartRun, StartWorkflow,
+};
 use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
-use rewind_runtime::{SandboxLimits, V8Executor};
+use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
 use crate::clock::{DAY, SharedClock, T0};
@@ -62,6 +71,14 @@ pub struct Reaction {
     pub after: Duration,
 }
 
+/// A run of a workflow that production starts after the conversation: the latest version of
+/// `workflow` the agent sees, with `input`. It shows whether what the agent saved works.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProductionRun {
+    pub workflow: &'static str,
+    pub input: Value,
+}
+
 /// What an episode's world is made of.
 #[derive(Debug, Clone, Default)]
 pub struct WorldSpec {
@@ -70,6 +87,8 @@ pub struct WorldSpec {
     /// The toolset has the built-in `webhook`.
     pub webhook: bool,
     pub reactions: Vec<Reaction>,
+    /// Started after the conversation, in order, each driven until it ends.
+    pub production: Vec<ProductionRun>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -88,6 +107,10 @@ pub enum WorldError {
     Engine(#[from] EngineError),
     #[error("an activation of run {run} failed: {error}")]
     Activation { run: RunId, error: EngineError },
+    #[error("the run of the workflow {workflow} cannot start: {message}")]
+    Production { workflow: String, message: String },
+    #[error("the stored tests cannot be read: {0}")]
+    Tests(#[from] SuiteLoadError),
 }
 
 /// How a drive ended.
@@ -144,6 +167,7 @@ pub struct World {
     mcp: McpDispatcher,
     reactions_spec: Vec<Reaction>,
     reactions: Mutex<Reactions>,
+    production: Vec<ProductionRun>,
 }
 
 impl std::fmt::Debug for World {
@@ -214,7 +238,6 @@ impl World {
         }
         let toolset = Toolset::new(pinned_servers, tools)
             .map_err(|err| WorldError::Toolset(err.to_string()))?;
-        let declarations = rewind_codegen::generate(&toolset, &BTreeMap::new());
 
         let executor = V8Executor::new(SandboxLimits::default())
             .map_err(|err| WorldError::Sandbox(err.to_string()))?;
@@ -223,7 +246,7 @@ impl World {
             public_url: Some(PUBLIC_URL.into()),
             ..EngineConfig::default()
         };
-        let engine = Engine::new(
+        let engine: EvalEngine = Engine::new(
             Adapters {
                 journal: MemoryJournal::new(),
                 blobs: MemoryBlobs::new(),
@@ -236,6 +259,7 @@ impl World {
             },
             config,
         );
+        let declarations = register_toolset(&engine, &toolset).await?;
         Ok(Self {
             engine,
             clock,
@@ -251,7 +275,17 @@ impl World {
             mcp,
             reactions_spec: spec.reactions.clone(),
             reactions: Mutex::new(Reactions::default()),
+            production: spec.production.clone(),
         })
+    }
+
+    /// Registers a toolset as `POST /v1/toolsets` does: its declarations generated, then stored
+    /// with it. A toolset registered again changes nothing.
+    pub async fn register_toolset(
+        &self,
+        toolset: &Toolset,
+    ) -> Result<rewind_codegen::Declarations, WorldError> {
+        register_toolset(&self.engine, toolset).await
     }
 
     /// The declarations stored with the toolset, as the engine and the checker take them.
@@ -274,10 +308,139 @@ impl World {
     /// Starts a run of the agent: with its labels, live, in virtual time. The caller has
     /// type-checked the script.
     pub fn start_request(&self, script: Script, input: Value) -> StartRun {
-        let mut request = StartRun::new(script, self.toolset.clone(), input);
-        request.declarations = self.tool_declarations();
+        self.start_request_on(script, &self.toolset, self.tool_declarations(), input)
+    }
+
+    /// [`start_request`](Self::start_request), with another toolset: one derived from the
+    /// world's.
+    pub fn start_request_on(
+        &self,
+        script: Script,
+        toolset: &Toolset,
+        declarations: ToolDeclarations,
+        input: Value,
+    ) -> StartRun {
+        let mut request = StartRun::new(script, toolset.clone(), input);
+        request.declarations = declarations;
         request.metadata.labels = self.labels.clone();
         request
+    }
+
+    /// What running a suite takes: the TypeScript mock handlers' loader, and the stored format
+    /// of tests.
+    pub fn test_kit<'a>(&self, loader: &'a TsMockLoader) -> TestKit<'a, TsMockLoader> {
+        TestKit {
+            loader,
+            format: test_format(),
+            options: TestOptions::default(),
+        }
+    }
+
+    /// The versions of a workflow the agent sees, newest first.
+    pub async fn workflow_versions(&self, name: &str) -> Result<Vec<StoredWorkflow>, WorldError> {
+        Ok(self
+            .engine
+            .journal()
+            .workflow_versions(&TenantId::local(), name, &self.labels)
+            .await
+            .map_err(EngineError::from)?)
+    }
+
+    /// Starts a run of the latest version of a workflow the agent sees, with its labels, as
+    /// `POST /v1/runs { workflow }` does.
+    pub async fn start_workflow(&self, name: &str, input: Value) -> Result<RunRef, WorldError> {
+        let refused = |message: String| WorldError::Production {
+            workflow: name.to_owned(),
+            message,
+        };
+        let latest = self
+            .workflow_versions(name)
+            .await?
+            .into_iter()
+            .next()
+            .ok_or_else(|| refused("the agent sees no version of it".into()))?;
+        let created = self
+            .engine
+            .start_workflow(StartWorkflow {
+                tenant: TenantId::local(),
+                namespace: NamespaceName::new(NamespaceName::LOCAL)
+                    .unwrap_or_else(|_| NamespaceName::migrated()),
+                version: latest.workflow.version(),
+                input,
+                ttl: None,
+                metadata: RunMetadata {
+                    labels: self.labels.clone(),
+                    ..RunMetadata::default()
+                },
+                idempotency_key: None,
+                credentials: None,
+            })
+            .await
+            .map_err(|error: StartError| refused(error.to_string()))?;
+        Ok(created.run)
+    }
+
+    /// After the conversation: the production runs, each started and driven until it ends.
+    /// Their ids, in order.
+    pub async fn run_production(&self) -> Result<Vec<RunId>, WorldError> {
+        let mut ids = Vec::new();
+        for production in &self.production {
+            let run = self
+                .start_workflow(production.workflow, production.input.clone())
+                .await?;
+            self.drive(Some(&run), None).await?;
+            ids.push(run.id);
+        }
+        Ok(ids)
+    }
+
+    /// Every version of every workflow, whatever its labels, oldest first, with its suite's
+    /// tests loaded: what a checker reads.
+    pub async fn workflow_reports(&self) -> Result<Vec<WorkflowReport>, WorldError> {
+        let tenant = TenantId::local();
+        let journal = self.engine.journal();
+        let latest = journal
+            .latest_workflows(&WorkflowFilter {
+                tenant: tenant.clone(),
+                labels: BTreeMap::new(),
+                after: None,
+                limit: None,
+            })
+            .await
+            .map_err(EngineError::from)?;
+        let mut reports = Vec::new();
+        for stored in latest {
+            let mut versions = journal
+                .workflow_versions(&tenant, stored.workflow.name(), &BTreeMap::new())
+                .await
+                .map_err(EngineError::from)?;
+            versions.reverse();
+            for version in versions {
+                let tests = self
+                    .engine
+                    .load_suite(&tenant, &version.workflow, test_format())
+                    .await?;
+                let workflow = &version.workflow;
+                reports.push(WorkflowReport {
+                    name: workflow.name().to_owned(),
+                    version: workflow.version(),
+                    parent: workflow.suite().parent,
+                    toolset: workflow.toolset(),
+                    script: self
+                        .engine
+                        .journal()
+                        .get_script(&tenant, workflow.script())
+                        .await
+                        .map_err(EngineError::from)?
+                        .map(|stored| stored.script.source().to_owned())
+                        .unwrap_or_default(),
+                    tests,
+                    retired: workflow.suite().retired.clone(),
+                    updated: workflow.suite().updated.clone(),
+                });
+            }
+        }
+        Ok(reports)
     }
 
     /// Every run of the world, oldest first.
@@ -518,6 +681,11 @@ impl World {
             reports.push(RunReport {
                 id: run.id,
                 status: record.as_ref().map_or(RunStatus::Pending, |r| r.status),
+                parent: record
+                    .as_ref()
+                    .and_then(|r| r.metadata.parent.as_ref())
+                    .map(|parent| parent.run),
+                workflow: record.as_ref().and_then(|r| r.metadata.workflow.clone()),
                 labels: record.map(|r| r.metadata.labels).unwrap_or_default(),
                 output,
                 error,
@@ -533,6 +701,10 @@ impl World {
 pub struct RunReport {
     pub id: RunId,
     pub status: RunStatus,
+    /// For a fork, the run it corrects.
+    pub parent: Option<RunId>,
+    /// For a run of a workflow, its name and version.
+    pub workflow: Option<RunWorkflow>,
     pub labels: BTreeMap<String, String>,
     /// With `completed`.
     pub output: Option<Value>,
@@ -540,4 +712,57 @@ pub struct RunReport {
     pub error: Option<String>,
     /// Every payload loaded.
     pub history: Vec<HistoryEntry>,
+}
+
+/// A workflow version at the end of an episode.
+#[derive(Debug, Clone)]
+pub struct WorkflowReport {
+    pub name: String,
+    pub version: Digest,
+    /// The version it derives from.
+    pub parent: Option<Digest>,
+    /// The toolset its runs call.
+    pub toolset: Digest,
+    /// Its script's source.
+    pub script: String,
+    /// The tests of its suite, in its order, each loaded.
+    pub tests: Vec<LoadedTest>,
+    pub retired: Vec<RetiredTest>,
+    pub updated: Vec<UpdatedTest>,
+}
+
+impl WorkflowReport {
+    /// The test of its suite named `name`, loaded.
+    pub fn test(&self, name: &str) -> Option<&LoadedTest> {
+        self.tests.iter().find(|test| test.name == name)
+    }
+}
+
+/// The stored format of tests, v1, as the composition root gives it to the engine.
+pub fn test_format() -> TestFormat {
+    TestFormat {
+        encode: rewind_format::encode_test,
+        decode: |document| rewind_format::decode_test(document).map_err(|error| error.to_string()),
+    }
+}
+
+/// Stores a toolset with the declarations codegen generates for it.
+async fn register_toolset(
+    engine: &EvalEngine,
+    toolset: &Toolset,
+) -> Result<rewind_codegen::Declarations, WorldError> {
+    let declarations = rewind_codegen::generate(toolset, &BTreeMap::new());
+    engine
+        .journal()
+        .put_toolset(
+            &TenantId::local(),
+            toolset,
+            &ToolDeclarations {
+                typescript: declarations.typescript.clone(),
+                prompt: declarations.prompt.clone(),
+            },
+        )
+        .await
+        .map_err(EngineError::from)?;
+    Ok(declarations)
 }

@@ -7,7 +7,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use rewind_check::TsgoChecker;
-use rewind_core::{RunId, Script};
+use rewind_core::{RunId, Script, WorkflowSchemas};
+use rewind_engine::RegisterWorkflow;
+use rewind_engine::ports::{TenantId, WorkflowDeclarations};
+use rewind_engine::suites::{SuiteChanges, TestInput};
+use rewind_runtime::TsMockLoader;
 use serde::Serialize;
 use serde_json::json;
 
@@ -16,7 +20,7 @@ use crate::clock::rfc3339;
 use crate::fake;
 use crate::model::{AssistantTurn, Conversation, Model, Stop, ToolResult, Turn, Usage};
 use crate::prompt::{self, Rendering};
-use crate::task::{Difficulty, Outcome, Task};
+use crate::task::{Difficulty, Outcome, Setup, SetupWorkflow, Task};
 use crate::world::{Delivered, World};
 
 /// How episodes run.
@@ -58,10 +62,17 @@ pub struct EpisodeRecord {
     pub first_check: Option<bool>,
     /// Model turns: requests to its API.
     pub iterations: usize,
-    /// Scripts submitted (`run_script`, `check_script`, `test_script`, `retry_run`).
+    /// Scripts submitted (`run_script`, `check_script`, `test_script`, `retry_run`,
+    /// `save_workflow`).
     pub scripts: usize,
     /// Scripts refused by the checks.
     pub refused: usize,
+    /// Tests the model wrote, unprompted or not: those it gave `test_script` and
+    /// `save_workflow`, updates included.
+    pub tests_written: usize,
+    /// Fixes the gate refused because a test of a workflow's suite did not pass
+    /// (`save_workflow`, `retry_run`).
+    pub gate_refusals: usize,
     /// Runs the agent started, forks included.
     pub runs: usize,
     /// Agent tool calls, by tool.
@@ -116,6 +127,8 @@ pub async fn run(
         iterations: 0,
         scripts: 0,
         refused: 0,
+        tests_written: 0,
+        gate_refusals: 0,
         runs: 0,
         tool_calls: BTreeMap::new(),
         usage: Usage::default(),
@@ -197,6 +210,8 @@ async fn converse(
                     content: format!("{name:?} is not one of the tools."),
                     is_error: true,
                     script: None,
+                    tests_given: 0,
+                    gate_refused: false,
                 },
                 Err(error) => return Err(format!("the harness failed: {error}")),
             };
@@ -207,6 +222,10 @@ async fn converse(
                     record.refused += 1;
                 }
                 record.first_check.get_or_insert(passed);
+            }
+            record.tests_written += handled.tests_given;
+            if handled.gate_refused {
+                record.gate_refusals += 1;
             }
             results.push(ToolResult {
                 call_id: call.id.clone(),
@@ -222,7 +241,11 @@ async fn converse(
         .settle()
         .await
         .map_err(|err| format!("the world could not settle: {err}"))?;
-    let outcome = outcome(world, answer, setup)
+    let production = world
+        .run_production()
+        .await
+        .map_err(|err| format!("production could not run: {err}"))?;
+    let outcome = outcome(world, answer, setup, production)
         .await
         .map_err(|err| format!("the world could not be read: {err}"))?;
     record.runs = outcome.agent_runs().count();
@@ -235,17 +258,31 @@ async fn converse(
     Ok(())
 }
 
-/// Starts the task's setup runs with the agent's labels, and drives them as far as they go.
+/// Plays the task's setup with the agent's labels: saves its workflows, starts its runs and
+/// drives each as far as it goes. The ids of the runs.
 async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     let mut ids = Vec::new();
-    for run in task.setup {
-        let request = world.start_request(Script::new(run.script), json!({}));
-        let created = world
-            .engine
-            .start_run(request)
-            .await
-            .map_err(|err| format!("a setup run was refused: {err}"))?;
-        ids.push(created.run.id);
+    for step in task.setup {
+        let run = match step {
+            Setup::Run(script) => {
+                let request = world.start_request(Script::new(*script), json!({}));
+                world
+                    .engine
+                    .start_run(request)
+                    .await
+                    .map_err(|err| format!("a setup run was refused: {err}"))?
+                    .run
+            }
+            Setup::Workflow(workflow) => {
+                save_workflow(world, &workflow()).await?;
+                continue;
+            }
+            Setup::WorkflowRun { workflow, input } => world
+                .start_workflow(workflow, input())
+                .await
+                .map_err(|err| format!("a setup run was refused: {err}"))?,
+        };
+        ids.push(run.id);
         world
             .drive(None, None)
             .await
@@ -254,10 +291,70 @@ async fn setup(task: &Task, world: &World) -> Result<Vec<RunId>, String> {
     Ok(ids)
 }
 
+/// Saves a workflow of the setup through the gate, with the agent's labels, on the toolset it
+/// was written for.
+async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), String> {
+    let refused = |error: String| {
+        format!(
+            "the setup's workflow {} was refused: {error}",
+            workflow.name
+        )
+    };
+    let toolset = match workflow.toolset {
+        Some(toolset) => toolset(&world.toolset).map_err(refused)?,
+        None => world.toolset.clone(),
+    };
+    world
+        .register_toolset(&toolset)
+        .await
+        .map_err(|err| refused(err.to_string()))?;
+    let mut tests = Vec::with_capacity(workflow.tests.len());
+    for test in &workflow.tests {
+        let test: rewind_api::testing::Test =
+            serde_json::from_value(test.clone()).map_err(|err| refused(err.to_string()))?;
+        let test = test.into_core(agent::decode_cassette).map_err(refused)?;
+        tests.push(TestInput::Inline(Box::new(test)));
+    }
+    let schemas = WorkflowSchemas {
+        input: workflow.input.clone(),
+        output: workflow.output.clone(),
+        signals: workflow.signals.clone(),
+    };
+    let generated = rewind_codegen::workflow_declarations(workflow.name, &schemas);
+    let loader = TsMockLoader::default();
+    world
+        .engine
+        .register_workflow(
+            RegisterWorkflow {
+                tenant: TenantId::local(),
+                name: workflow.name.to_owned(),
+                description: Some(workflow.description.to_owned()),
+                script: Script::new(workflow.script),
+                toolset: toolset.digest(),
+                schemas,
+                labels: world.labels.clone(),
+                declarations: WorkflowDeclarations {
+                    signals: generated.signals,
+                    entry: generated.entry,
+                },
+                suite: SuiteChanges {
+                    tests,
+                    ..SuiteChanges::default()
+                },
+            },
+            &*world.checker,
+            &world.test_kit(&loader),
+        )
+        .await
+        .map_err(|err| refused(err.to_string()))?;
+    Ok(())
+}
+
 async fn outcome(
     world: &World,
     answer: String,
     setup: Vec<RunId>,
+    production: Vec<RunId>,
 ) -> Result<Outcome, crate::world::WorldError> {
     let calls = world
         .servers
@@ -268,6 +365,8 @@ async fn outcome(
         answer,
         runs: world.run_reports().await?,
         setup,
+        production,
+        workflows: world.workflow_reports().await?,
         state: fake::snapshots(&world.servers),
         calls,
         delivered: world.delivered(),

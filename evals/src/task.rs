@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::fake::CallRecord;
-use crate::world::{Delivered, RunReport, WorldSpec};
+use crate::world::{Delivered, RunReport, WorkflowReport, WorldSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -17,11 +17,38 @@ pub enum Difficulty {
     Hard,
 }
 
-/// A run started before the conversation, with the agent's labels: the history the task
-/// talks about.
+/// What happened before the conversation, with the agent's labels: the history the task talks
+/// about.
 #[derive(Debug, Clone, Copy)]
-pub struct SetupRun {
+pub enum Setup {
+    /// A run of a script.
+    Run(&'static str),
+    /// A workflow saved through the gate, with its suite.
+    Workflow(fn() -> SetupWorkflow),
+    /// A run of the latest version of a workflow, with this input.
+    WorkflowRun {
+        workflow: &'static str,
+        input: fn() -> Value,
+    },
+}
+
+/// Makes a toolset from the world's.
+pub type MakeToolset = fn(&rewind_core::Toolset) -> Result<rewind_core::Toolset, String>;
+
+/// A workflow saved before the conversation, as `POST /v1/workflows` saves it.
+#[derive(Debug, Clone)]
+pub struct SetupWorkflow {
+    pub name: &'static str,
+    pub description: &'static str,
     pub script: &'static str,
+    pub input: Value,
+    pub output: Value,
+    pub signals: BTreeMap<String, Value>,
+    /// Its suite: tests written in full, as the API takes them.
+    pub tests: Vec<Value>,
+    /// The toolset it was saved with, made from the world's: the tools as they were then. The
+    /// world's own when `None`.
+    pub toolset: Option<MakeToolset>,
 }
 
 /// A task of the suite.
@@ -34,7 +61,7 @@ pub struct Task {
     pub features: &'static [&'static str],
     /// The fake servers, built-ins and reactions of its world.
     pub world: fn() -> WorldSpec,
-    pub setup: &'static [SetupRun],
+    pub setup: &'static [Setup],
     /// The user's message, given the ids of the setup runs.
     pub prompt: fn(&[RunId]) -> String,
     /// Whether the task was done, from the world at the end. `Err` says what is wrong.
@@ -50,6 +77,10 @@ pub struct Outcome {
     pub runs: Vec<RunReport>,
     /// The ids of the setup runs.
     pub setup: Vec<RunId>,
+    /// The ids of the runs production started after the conversation.
+    pub production: Vec<RunId>,
+    /// Every version of every workflow, oldest first, with its suite.
+    pub workflows: Vec<WorkflowReport>,
     /// Each fake server's state.
     pub state: BTreeMap<String, Value>,
     /// The calls each fake server received.
@@ -59,9 +90,19 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// The runs the agent started during the conversation.
+    /// The runs the agent started during the conversation, and those its scripts started.
     pub fn agent_runs(&self) -> impl Iterator<Item = &RunReport> {
-        self.runs.iter().filter(|run| !self.setup.contains(&run.id))
+        self.runs
+            .iter()
+            .filter(|run| !self.setup.contains(&run.id) && !self.production.contains(&run.id))
+    }
+
+    /// The versions of a workflow, oldest first.
+    pub fn versions(&self, workflow: &str) -> Vec<&WorkflowReport> {
+        self.workflows
+            .iter()
+            .filter(|version| version.name == workflow)
+            .collect()
     }
 
     /// The outputs of the agent's completed runs, oldest first.
@@ -179,6 +220,8 @@ mod tests {
             answer: answer.into(),
             runs: vec![],
             setup: vec![],
+            production: vec![],
+            workflows: vec![],
             state: BTreeMap::new(),
             calls: BTreeMap::new(),
             delivered: vec![],

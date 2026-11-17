@@ -10,8 +10,9 @@ use super::{Args, CallContext, Reply, Service, ToolSpec, lock, object_schema};
 use crate::clock::rfc3339;
 
 /// The channels, without their `#`.
-pub const CHANNELS: [(&str, &str); 9] = [
+pub const CHANNELS: [(&str, &str); 10] = [
     ("ops", "Operations and incidents"),
+    ("bugs", "The open bugs, every morning"),
     ("deploys", "Deployment announcements"),
     ("standup", "Daily standup"),
     ("finance", "Budget and spending"),

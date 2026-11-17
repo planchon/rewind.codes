@@ -170,7 +170,10 @@ async fn claude_solves_a_task_through_the_messages_api() {
     assert_eq!(body["model"], "claude-test");
     assert_eq!(body["output_config"]["effort"], "high");
     assert_eq!(body["cache_control"]["type"], "ephemeral");
-    assert_eq!(body["tools"].as_array().unwrap().len(), 9);
+    assert_eq!(
+        body["tools"].as_array().unwrap().len(),
+        evals::agent::definitions::AGENT_TOOLS.len()
+    );
     assert!(
         body["system"][0]["text"]
             .as_str()

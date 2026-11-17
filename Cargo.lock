@@ -1584,6 +1584,7 @@ dependencies = [
  "rewind-codegen",
  "rewind-core",
  "rewind-engine",
+ "rewind-format",
  "rewind-mcp",
  "rewind-runtime",
  "rmcp",

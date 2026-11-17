@@ -1,6 +1,6 @@
 //! Reports: per model and per prompt rendering, the first-try check pass rate, task success,
-//! iterations and tokens (`archi/05-testing-and-observability.md`, "Evals"), as JSON and as a
-//! readable summary.
+//! iterations and tokens, whether the model wrote tests and how often the gate refused its
+//! fixes (`archi/05-testing-and-observability.md`, "Evals"), as JSON and as a readable summary.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -29,6 +29,11 @@ pub struct Summary {
     pub mean_iterations: Option<f64>,
     /// Scripts submitted per measured episode, on average.
     pub mean_scripts: Option<f64>,
+    /// Of the measured episodes, the share where the model wrote at least one test.
+    pub tests_written_rate: Option<f64>,
+    /// Fixes the gate refused (a test of a workflow's suite did not pass) per measured
+    /// episode, on average.
+    pub mean_gate_refusals: Option<f64>,
     /// Tokens of the measured episodes.
     pub usage: Usage,
     /// Input and output tokens per measured episode, on average.
@@ -94,6 +99,14 @@ pub fn summarize(episodes: &[EpisodeRecord]) -> Vec<Summary> {
                 ),
                 mean_iterations: mean(measured.iter().map(|e| e.iterations).sum(), measured.len()),
                 mean_scripts: mean(measured.iter().map(|e| e.scripts).sum(), measured.len()),
+                tests_written_rate: rate(
+                    measured.iter().filter(|e| e.tests_written > 0).count(),
+                    measured.len(),
+                ),
+                mean_gate_refusals: mean(
+                    measured.iter().map(|e| e.gate_refusals).sum(),
+                    measured.len(),
+                ),
                 usage,
                 mean_tokens: mean(
                     usize::try_from(tokens).unwrap_or(usize::MAX),
@@ -134,22 +147,24 @@ pub fn markdown(report: &Report, episodes: &[EpisodeRecord]) -> String {
     );
     let _ = writeln!(
         out,
-        "| Model | Rendering | First-try check | Success | Iterations | Scripts | Tokens in | Tokens out | Errors |"
+        "| Model | Rendering | First-try check | Success | Iterations | Scripts | Wrote tests | Gate refusals | Tokens in | Tokens out | Errors |"
     );
     let _ = writeln!(
         out,
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
     );
     for summary in &report.summaries {
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
             summary.model,
             summary.rendering,
             percent(summary.first_check_pass_rate),
             percent(summary.success_rate),
             decimal(summary.mean_iterations),
             decimal(summary.mean_scripts),
+            percent(summary.tests_written_rate),
+            decimal(summary.mean_gate_refusals),
             thousands(summary.usage.total_input()),
             thousands(summary.usage.output),
             summary.errors,
@@ -239,6 +254,8 @@ mod tests {
             iterations: 4,
             scripts: 2,
             refused: 1,
+            tests_written: usize::from(success),
+            gate_refusals: 1,
             runs: 1,
             tool_calls: BTreeMap::new(),
             usage: Usage {
@@ -271,6 +288,8 @@ mod tests {
         assert_eq!(summary.success_rate, Some(1.0 / 3.0));
         assert_eq!(summary.first_check_pass_rate, Some(0.5));
         assert_eq!(summary.mean_iterations, Some(4.0));
+        assert_eq!(summary.tests_written_rate, Some(1.0 / 3.0));
+        assert_eq!(summary.mean_gate_refusals, Some(1.0));
         assert_eq!(summary.usage.input, 300);
         let report = Report {
             started_at: "2026-11-12T00:00:00Z".into(),
@@ -283,7 +302,7 @@ mod tests {
         };
         let text = markdown(&report, &episodes);
         assert!(
-            text.contains("| m | compact | 50% | 33% | 4.0 | 2.0 | 300 | 150 | 1 |"),
+            text.contains("| m | compact | 50% | 33% | 4.0 | 2.0 | 33% | 1.0 | 300 | 150 | 1 |"),
             "{text}"
         );
         assert!(text.contains("| a | easy | 1/1 |"));

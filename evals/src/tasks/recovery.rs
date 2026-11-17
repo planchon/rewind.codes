@@ -4,23 +4,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::fake::{chat, crm, tracker};
-use crate::task::{Difficulty, SetupRun, Task, ensure};
+use crate::task::{Difficulty, Setup, Task, ensure};
 use crate::world::WorldSpec;
 use rewind_core::{RunId, RunStatus};
 
 /// A run that posts and completes, and a run stuck waiting for the signal `go`.
-const POSTED: SetupRun = SetupRun {
-    script: r##"import { chat } from "rewind:tools";
+const POSTED: Setup = Setup::Run(
+    r##"import { chat } from "rewind:tools";
 
 export default async function main() {
   await chat.post_message({ channel: "#general", text: "hello" });
   return "posted";
 }
 "##,
-};
+);
 
-const STUCK: SetupRun = SetupRun {
-    script: r##"import { chat } from "rewind:tools";
+const STUCK: Setup = Setup::Run(
+    r##"import { chat } from "rewind:tools";
 import { signal } from "rewind";
 
 export default async function main() {
@@ -29,7 +29,7 @@ export default async function main() {
   return "went";
 }
 "##,
-};
+);
 
 /// Opens one onboarding issue per customer, and fails at `C-1004`, which has no company.
 pub const ONBOARDING: &str = r##"import { crm, tracker } from "rewind:tools";
@@ -47,7 +47,7 @@ export default async function main() {
 }
 "##;
 
-const ONBOARDING_RUN: SetupRun = SetupRun { script: ONBOARDING };
+const ONBOARDING_RUN: Setup = Setup::Run(ONBOARDING);
 
 fn setup_run(setup: &[RunId], index: usize) -> String {
     setup

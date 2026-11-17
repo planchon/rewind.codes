@@ -1,5 +1,5 @@
-//! Deterministic fake MCP servers: an issue tracker, a chat, a CRM, a shop, an ops platform and
-//! an office suite, each built from a fixed fixture, served with `rmcp` over streamable HTTP on
+//! Deterministic fake MCP servers: an issue tracker, a chat, a CRM, a shop, an ops platform, an
+//! office suite and a carrier, each built from a fixed fixture, served with `rmcp` over streamable HTTP on
 //! a local port, and called by the real `McpDispatcher`.
 //!
 //! A server answers from its state and the virtual time of the episode only, so the same calls
@@ -30,6 +30,7 @@ pub mod chat;
 pub mod crm;
 pub mod office;
 pub mod ops;
+pub mod shipping;
 pub mod shop;
 pub mod tracker;
 
@@ -441,12 +442,15 @@ pub fn by_name(name: &str) -> Option<Arc<dyn Service>> {
         "shop" => Arc::new(shop::Shop::new()),
         "ops" => Arc::new(ops::Ops::new()),
         "office" => Arc::new(office::Office::new()),
+        "shipping" => Arc::new(shipping::Shipping::new()),
         _ => return None,
     })
 }
 
 /// Every server's name.
-pub const SERVERS: [&str; 6] = ["tracker", "chat", "crm", "shop", "ops", "office"];
+pub const SERVERS: [&str; 7] = [
+    "tracker", "chat", "crm", "shop", "ops", "office", "shipping",
+];
 
 /// The state of a set of servers, by name.
 pub fn snapshots(servers: &[Running]) -> BTreeMap<String, Value> {

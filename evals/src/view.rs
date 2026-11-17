@@ -24,7 +24,9 @@ use rewind_core::{
     Annotation, Command, Completion, Event, HistoryEntry, Lifecycle, RunOutcome, RunState, Seq,
 };
 use rewind_engine::EngineError;
-use rewind_engine::ports::{InvalidScript, JournalStore, ParkKind, QuarantineKind, RunRef};
+use rewind_engine::ports::{
+    InvalidScript, JournalStore, ParkKind, QuarantineKind, RunRef, StoredWorkflow,
+};
 
 use crate::world::World;
 
@@ -494,6 +496,74 @@ fn namespace_of(
             record.run.id
         )))
     })
+}
+
+/// A workflow version, as `GET /v1/workflows/{name}` shows it (`rewind-server`'s
+/// `http/workflows.rs`, `view`): its declaration generated as a toolset that pins it alone
+/// generates it.
+pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
+    use rewind_api::workflows::{RetiredTest, SuiteTest, UpdatedTest};
+
+    let workflow = &stored.workflow;
+    let declarations = rewind_core::Toolset::empty()
+        .with_workflows([workflow.pinned()])
+        .map(|toolset| rewind_codegen::generate(&toolset, &BTreeMap::new()))
+        .ok();
+    let name = format!("{}.{}", rewind_core::WORKFLOWS_NAMESPACE, workflow.name());
+    let declaration = declarations
+        .as_ref()
+        .and_then(|generated| generated.tools.iter().find(|tool| tool.name == name));
+    rewind_api::workflows::Workflow {
+        name: workflow.name().to_owned(),
+        version: workflow.version().to_hex(),
+        description: workflow.description().map(str::to_owned),
+        toolset: workflow.toolset().to_hex(),
+        script: workflow.script().to_hex(),
+        input: workflow.schemas().input.clone(),
+        output: workflow.schemas().output.clone(),
+        signals: workflow.schemas().signals.clone(),
+        labels: Labels::from(stored.labels.clone()),
+        created_at: timestamp(stored.created_at),
+        declarations: rewind_api::toolsets::Declarations {
+            dts: declaration
+                .map(|declaration| declaration.typescript.clone())
+                .unwrap_or_default(),
+            prompt: declaration
+                .map(|declaration| declaration.prompt.clone())
+                .unwrap_or_default(),
+        },
+        parent: workflow.suite().parent.map(|parent| parent.to_hex()),
+        tests: workflow
+            .suite()
+            .tests
+            .iter()
+            .map(|test| SuiteTest {
+                name: test.name.clone(),
+                digest: test.test.to_hex(),
+            })
+            .collect(),
+        retired: workflow
+            .suite()
+            .retired
+            .iter()
+            .map(|retired| RetiredTest {
+                name: retired.name.clone(),
+                digest: retired.test.to_hex(),
+                reason: retired.reason.clone(),
+            })
+            .collect(),
+        updated: workflow
+            .suite()
+            .updated
+            .iter()
+            .map(|updated| UpdatedTest {
+                name: updated.name.clone(),
+                from: updated.from.to_hex(),
+                to: updated.to.to_hex(),
+                reason: updated.reason.clone(),
+            })
+            .collect(),
+    }
 }
 
 #[cfg(test)]

@@ -10,34 +10,51 @@ the numbers ([08](../archi/08-decisions.md#taken-while-building-the-evals-novemb
 ```
 model ──► system prompt (introduction, the rewind module, the toolset in one rendering)
   │        + the agent tools: run_script, check_script, test_script, get_run, list_runs,
-  │          signal_run, cancel_run, retry_run, search_tools
+  │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
+  │          record_tests
   ▼
-agent tools (the SDK's, ported) ──► engine in process: tsgo check, V8 sandbox, journal
+agent tools (the SDK's, ported) ──► engine in process: tsgo check, V8 sandbox, journal,
+                                       │   workflows and their suites (the gate), tests
                                        │   McpDispatcher (the real MCP client)
                                        ▼
                          fake MCP servers (rmcp, streamable HTTP on 127.0.0.1)
-                         tracker · chat · crm · shop · ops · office
+                         tracker · chat · crm · shop · ops · office · shipping
 ```
 
 1. The task's world starts: its fake servers, the toolset pinned from them (discovery through
    `McpDispatcher`), the declarations from `rewind-codegen`, and the engine at Monday
-   2026-03-02T09:00:00Z in virtual time. Setup runs, if the task has any, run first.
+   2026-03-02T09:00:00Z in virtual time. The task's setup, if it has one, is played first, with
+   the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
+   the toolset as it was then, for a server that changed since), runs of those workflows.
 2. The model gets the task and loops: generate a script, check it, run it, fix it. Each tool
    call is handled as the SDK handles it, with the same text back: 256 KiB pages, diagnostics
-   with code frames, the trace up to a failure. A `wait` elapses in virtual time.
+   with code frames, the trace up to a failure, the tests that did not pass. A `wait` elapses
+   in virtual time. The agent is a caller limited to its labels: the workflows it saves carry
+   them, and `save_workflow` derives the toolset its later scripts use, as the SDK does.
 3. When the model answers (or after 30 turns), the world goes on in virtual time, up to 60
    days: sleeping runs wake up, the world answers signal waits as the task says, servers call
-   their webhooks.
-4. The task's checker looks at the fake servers' state, the runs and the model's last answer.
+   their webhooks. Then production runs the workflows the task names: the latest version the
+   agent sees, as tomorrow's run would.
+4. The task's checker looks at the fake servers' state, the runs, the workflows (every
+   version, its suite, its lineage) and the model's last answer.
 
 ## Tasks
 
-`cargo run -p evals -- list` lists them: 22 tasks from easy to hard, each exercising one or
+`cargo run -p evals -- list` lists them: 24 tasks from easy to hard, each exercising one or
 more of fan-out with `Promise.all`, pagination, `ToolError` and its `data`, results typed by
 an output schema or read with `.json()`, `Date.now()`, bulk updates, outputs above 256 KB,
 sleeping and polling, signals with and without a timeout, webhooks, a rate limit with
 idempotent retries, several servers joined, and the runs of an earlier turn found, cancelled
 or corrected with `retry_run`.
+
+Two are repair tasks ([05](../archi/05-testing-and-observability.md#evals)): the model gets a
+workflow with its suite, and succeeds when its fix passes the gate and does what the workflow
+is for.
+
+| Task | The model must |
+| --- | --- |
+| `fix_workflow_regression` | Find the failed run of `ship_orders` (an order collected in store has a label without tracking), record it as a test and give it the expectation it should have met (`record_tests`, `{ from, expect }`), save a fix that passes the inherited suite and that test, and finish the run with `retry_run`. The checker wants a new version derived from the old one, keeping its tests and adding one recorded from the failed run, a completed fork, and one label per order: a label bought twice is paid twice. |
+| `upgrade_workflow_suite` | Adapt `bug_digest` to the tracker's new `list_issues` (`labels` renamed `label`, a reporter on every issue, a cursor instead of a truncated list): its tests are stale, so it updates those that still hold, each with a reason, and retires the one about truncated lists or updates it too. The checker wants a new version keeping the tests of what the workflow is for, a reason on every update and retirement, and production's run of the new version posting every open bug to #bugs. |
 
 Each task is in `src/tasks/`; its checker computes what it expects from the fixtures of
 `src/fake/`. Each has a reference solution in `tests/solutions/`, which `cargo test` runs
@@ -74,8 +91,9 @@ input, `{{run_id}}` stands for the last run id the tool results gave.
 Each run writes to its output directory:
 
 - `summary.md`: per model and rendering, the first-try check pass rate, task success, model
-  turns, scripts, tokens and errors; then each task's successes per column, and why each
-  failed episode failed.
+  turns, scripts, the share of episodes where the model wrote tests (`test_script`,
+  `save_workflow`), the fixes the gate refused per episode, tokens and errors; then each
+  task's successes per column, and why each failed episode failed.
 - `report.json`: the same summaries, and every episode's record.
 - `transcripts/`: each episode's system prompt and turns, tool results included.
 

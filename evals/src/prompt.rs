@@ -54,8 +54,8 @@ impl FromStr for Rendering {
 
 const INTRODUCTION: &str = "\
 You solve tasks by writing TypeScript scripts that Rewind runs for you, through the tools \
-run_script, check_script, test_script, get_run, list_runs, signal_run, cancel_run, retry_run \
-and search_tools.
+run_script, check_script, test_script, get_run, list_runs, signal_run, cancel_run, retry_run, \
+search_tools, save_workflow, get_workflow and record_tests.
 
 - A script is one ES module whose default export is `async function main(input)`. What `main` \
 returns is the run's output, as JSON.
@@ -67,6 +67,8 @@ no `fetch`, no file system and no `process`.
 - run_script type-checks the script before running it: fix what the diagnostics say and run it \
 again. When a run fails halfway, retry_run starts it again with a corrected script, without \
 repeating the calls it already made.
+- A workflow is a script saved with a name and schemas (save_workflow). Each version carries \
+its tests, which every later version must pass: a version is saved only if they all do.
 - When the task is done, answer with a short summary of what you did, and the answer if the \
 task asks a question.";
 

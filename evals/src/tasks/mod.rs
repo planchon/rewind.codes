@@ -4,8 +4,10 @@ mod basics;
 mod data;
 mod durable;
 mod recovery;
+mod repair;
 
 pub use recovery::ONBOARDING;
+pub use repair::{BUG_DIGEST, SHIP_ORDERS};
 
 use crate::task::Task;
 
@@ -15,6 +17,7 @@ pub fn all() -> Vec<Task> {
     tasks.extend(data::tasks());
     tasks.extend(durable::tasks());
     tasks.extend(recovery::tasks());
+    tasks.extend(repair::tasks());
     tasks.sort_by_key(|task| task.difficulty);
     tasks
 }
