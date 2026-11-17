@@ -585,10 +585,7 @@ impl AgentTools<'_> {
             .await?;
         if reports.iter().any(|report| !report.passed) {
             return Err(tests_failed(
-                &format!(
-                    "the corrected script was not run: {} pins it to its suite",
-                    stored.workflow
-                ),
+                &format!("the suite of {}", stored.workflow),
                 &reports,
             ));
         }
@@ -819,7 +816,7 @@ fn test_result(report: &TestReport) -> TestResult {
 }
 
 /// `tests-failed`: every outcome, the detail naming those that did not pass.
-fn tests_failed(what: &str, reports: &[TestReport]) -> Failure {
+fn tests_failed(suite: &str, reports: &[TestReport]) -> Failure {
     let failed: Vec<String> = reports
         .iter()
         .filter(|report| !report.passed)
@@ -834,7 +831,7 @@ fn tests_failed(what: &str, reports: &[TestReport]) -> Failure {
         .collect();
     Failure::TestsFailed {
         detail: format!(
-            "{what}: {} of {} tests did not pass. {}. Fix the script, or retire a test that is \
+            "{} of {} tests of {suite} did not pass: {}. Fix the script, or retire a test that is \
              deprecated or update one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
@@ -880,7 +877,7 @@ fn register_error(error: RegisterError) -> Failure {
         }
         RegisterError::NulCharacter(error) => Failure::Problem(error.to_string()),
         RegisterError::Suite(error) => suite_error(error.into()),
-        RegisterError::TestsFailed(reports) => tests_failed("the workflow was not saved", &reports),
+        RegisterError::TestsFailed(reports) => tests_failed("the suite", &reports),
         RegisterError::Tests(error) => test_error(error),
         RegisterError::Store(rewind_engine::ports::StoreError::Conflict(message)) => {
             Failure::Problem(message)

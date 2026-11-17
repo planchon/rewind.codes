@@ -122,7 +122,9 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
         ]
     );
     assert!(
-        refused.detail.contains("1 of 1 tests did not pass"),
+        refused
+            .detail
+            .starts_with("1 of 1 tests of the suite did not pass: \"closes three once approved\""),
         "{}",
         refused.detail
     );
@@ -309,7 +311,7 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
     let refused = problem(harness.fork_run(&run.id, &fork, None).await.unwrap_err());
     assert_eq!(refused.kind(), Some(ProblemType::TestsFailed));
     assert!(
-        refused.detail.contains("the corrected script was not run"),
+        refused.detail.contains("tests of the suite of triage@"),
         "{}",
         refused.detail
     );

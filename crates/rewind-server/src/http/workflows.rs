@@ -376,9 +376,7 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::Blob(error) => error.into(),
         RegisterError::Suite(error) => testing::suite_error(error.into()),
         RegisterError::CorruptTest(message) => ApiError::internal(message),
-        RegisterError::TestsFailed(reports) => {
-            testing::tests_failed("the workflow was not saved", &reports)
-        }
+        RegisterError::TestsFailed(reports) => testing::tests_failed("the suite", &reports),
         RegisterError::Tests(error) => testing::test_error(error),
     }
 }

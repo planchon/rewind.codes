@@ -608,7 +608,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
     assert!(saved.is_error);
     assert!(
         saved.content.starts_with(
-            "The workflow was not saved: the workflow was not saved: 1 of 3 tests did not pass. \"fails when the carrier refuses a label\" (failed): "
+            "The workflow was not saved: 1 of 3 tests of the suite did not pass: \"fails when the carrier refuses a label\" (failed): "
         ),
         "{}",
         saved.content
@@ -630,7 +630,7 @@ async fn the_gate_refuses_a_fix_that_breaks_the_suite_and_counts_it() {
     let failed = first_uuid(&retried.content).unwrap();
     assert!(
         retried.content.starts_with(&format!(
-            "Run {failed} was not retried: the corrected script was not run: ship_orders@"
+            "Run {failed} was not retried: 1 of 3 tests of the suite of ship_orders@"
         )),
         "{}",
         retried.content

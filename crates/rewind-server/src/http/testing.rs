@@ -119,7 +119,7 @@ pub(crate) fn result(report: &TestReport) -> TestResult {
 }
 
 /// `tests-failed`: every outcome, the detail naming those that did not pass.
-pub(crate) fn tests_failed(what: &str, reports: &[TestReport]) -> ApiError {
+pub(crate) fn tests_failed(suite: &str, reports: &[TestReport]) -> ApiError {
     let failed: Vec<String> = reports
         .iter()
         .filter(|report| !report.passed)
@@ -134,7 +134,7 @@ pub(crate) fn tests_failed(what: &str, reports: &[TestReport]) -> ApiError {
         .collect();
     ApiError(Box::new(rewind_api::Problem::tests_failed(
         format!(
-            "{what}: {} of {} tests did not pass. {}. Fix the script, or retire a test that is \
+            "{} of {} tests of {suite} did not pass: {}. Fix the script, or retire a test that is \
              deprecated or update one whose state or result is out of date, each with a reason",
             failed.len(),
             reports.len(),
@@ -493,10 +493,7 @@ pub(crate) async fn gate_fork(
     .await?;
     if reports.iter().any(|report| !report.passed) {
         return Err(tests_failed(
-            &format!(
-                "the corrected script was not run: {} pins it to its suite",
-                stored.workflow
-            ),
+            &format!("the suite of {}", stored.workflow),
             &reports,
         ));
     }
