@@ -202,7 +202,8 @@ pub struct Workflow {
     pub updated: Vec<UpdatedTest>,
 }
 
-/// `GET /v1/workflows`: the latest version of each workflow, by name.
+/// `GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every
+/// version whose script it is, newest first, on one page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowPage {
@@ -223,6 +224,10 @@ pub struct WorkflowQuery {
     /// At most this many workflows (50 by default, 500 at most).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// The digest of a script: every version of any workflow whose script it is, newest first,
+    /// rather than the latest version of each workflow. `after` and `limit` do not apply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 /// `GET /v1/workflows/{name}`: the versions of a workflow, newest first.

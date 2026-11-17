@@ -57,6 +57,7 @@ Saving the same workflow again returns the version saved first. Each different s
 ```ts
 const versions = await rewind.workflows.versions("repo_check"); // newest first
 for await (const workflow of rewind.workflows.listAll()) console.log(workflow.name, workflow.version); // the latest of each
+const sharing = await rewind.workflows.list({ script: repoCheck.script }); // every version whose script it is
 ```
 
 ## Let scripts start it

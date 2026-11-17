@@ -198,6 +198,15 @@ pub trait JournalStore: Send + Sync {
         labels: &BTreeMap<String, String>,
     ) -> impl Future<Output = Result<Vec<StoredWorkflow>, StoreError>> + Send;
 
+    /// The versions of any workflow whose script is `script` and that carry all of `labels`,
+    /// newest first (as `workflow_versions`).
+    fn workflows_with_script(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        labels: &BTreeMap<String, String>,
+    ) -> impl Future<Output = Result<Vec<StoredWorkflow>, StoreError>> + Send;
+
     /// The latest version of each workflow of the tenant, among the versions that carry all of
     /// the filter's labels, sorted by name.
     fn latest_workflows(

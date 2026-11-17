@@ -3427,3 +3427,268 @@ table.grid.compact th {
 .test-place p {
   margin: 0;
 }
+
+/* JSON in Testing: a line that opens a dialog, a card, the dialog */
+
+.json-peek {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  box-shadow: 0 0 0 1px var(--line);
+  font: 12px / 18px var(--font-mono);
+  text-align: left;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.json-peek:hover {
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.json-peek code {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.json-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--line);
+  overflow: hidden;
+}
+
+.json-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.json-card-head h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.json-card-head .end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.json-card-body {
+  position: relative;
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  background: var(--code-bg);
+  text-align: left;
+  cursor: zoom-in;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.json-card-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-card-body.cut::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 40px;
+  background: linear-gradient(transparent, var(--code-bg));
+}
+
+.json-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.dialog.json-dialog {
+  top: 8vh;
+  width: min(880px, calc(100vw - 32px));
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.json-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 8px 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.json-dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.json-dialog-head .end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.json-dialog-body {
+  overflow: auto;
+  background: var(--code-bg);
+}
+
+.json-dialog-body pre {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Testing: the breadcrumb's switchers, the sidebar's glyphs, the suite table */
+
+.crumbs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.crumb-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  height: 28px;
+  padding: 0 6px;
+  margin: 0 -6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.crumb-switch:hover,
+.crumb-switch[data-popup-open] {
+  background: var(--surface-2);
+}
+
+.crumb-switch-icon {
+  flex: none;
+  color: var(--ink-3);
+}
+
+.crumb-switch-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb-menu {
+  max-width: 420px;
+  max-height: min(480px, 70vh);
+  overflow-y: auto;
+}
+
+.crumb-test {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.origin {
+  color: var(--ink-3);
+}
+
+.origin.added {
+  color: var(--accent);
+}
+
+.origin.updated {
+  color: var(--warning);
+}
+
+.origin.retired {
+  color: var(--critical);
+}
+
+.nav-item[data-open] {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.nav-item.retired .nav-label {
+  text-decoration: line-through;
+  text-decoration-color: var(--line-strong);
+}
+
+.suite-table td {
+  vertical-align: top;
+}
+
+.suite-cell {
+  min-width: 220px;
+}
+
+.suite-cell-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+}
+
+.suite-cell-reason {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.expects {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.section-subhead {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+.test-doc {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.json-card-empty {
+  margin: 0;
+  padding: 12px;
+  font-size: 13px;
+}

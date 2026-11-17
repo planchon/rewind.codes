@@ -494,6 +494,10 @@ describe("the client", () => {
       [null, "1"],
       ["triage", "1"],
     ]);
+
+    // The versions whose script it is: the script's digest goes in the query.
+    await rewind.workflows.list({ script: saved.script });
+    expect(server.calls("GET", "/v1/workflows").at(-1)?.query.get("script")).toBe(saved.script);
   });
 
   it("refuses a workflow whose script or schemas cannot be used", async () => {

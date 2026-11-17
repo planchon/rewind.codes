@@ -1,17 +1,17 @@
-// A test's document, on its page in Testing: the world it gives the run (its input, start and seed, each tool's
-// rules, its mock handlers, the cassette it was recorded with), the signals it sends, what must
-// hold at the end, and for a recorded test the run it comes from (archi/05, "The test document").
+// A test's document, on its page in Testing: its input and what its output must contain, the
+// world it gives the run (each tool's rules, its mock handlers, the cassette it was recorded
+// with), the signals it sends, what must hold at the end, and for a recorded test the run it
+// comes from (archi/05, "The test document"). Every JSON value opens whole, colored, in a dialog.
 // A recorded test holds its run's data and is read like the run: a caller who may not read the
 // runs of its namespace is told so here, and the rest of the page stays.
-import { FlaskConical, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../../api/client";
-import { useTest } from "../../api/queries";
 import type { Expectations, Test, TestSignal, TestWorld, Workflow } from "../../api/types";
-import { Digest, Loading, ProblemView, RunId, Time } from "../../components/bits";
+import { Digest, ProblemView, RunId, Time } from "../../components/bits";
 import { CodeView } from "../../components/CodeView";
-import { JsonValue } from "../../components/Payload";
+import { JsonCard, JsonDialog, JsonPeek } from "../../components/JsonPeek";
 import { StatusBadge } from "../../components/Status";
 import {
   expectedTimes,
@@ -23,20 +23,6 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
-
-/** Values up to this length are written on one line; longer ones open in a box. */
-const INLINE = 72;
-
-/** A JSON value: on one line when short, in a scrolling box otherwise. */
-function Json({ value }: { value: unknown }) {
-  const text = JSON.stringify(value) ?? "undefined";
-  if (text.length <= INLINE) return <code className="json-inline">{text}</code>;
-  return (
-    <div className="json-box">
-      <JsonValue value={value} />
-    </div>
-  );
-}
 
 function Empty({ children }: { children: string }) {
   return <p className="muted">{children}</p>;
@@ -63,7 +49,14 @@ function Tools({ world }: { world: TestWorld }) {
               <tr key={`${tool}-${i}`}>
                 <td className="mono">{i === 0 ? tool : ""}</td>
                 <td className="wrap">
-                  {rule.args ? <Json value={rule.args} /> : <span className="muted">any call</span>}
+                  {rule.args ? (
+                    <JsonPeek
+                      value={rule.args}
+                      title={`${tool}, rule ${i + 1}: the args it matches`}
+                    />
+                  ) : (
+                    <span className="muted">any call</span>
+                  )}
                 </td>
                 <td className="wrap">
                   {rule.error ? (
@@ -73,12 +66,18 @@ function Tools({ world }: { world: TestWorld }) {
                       {rule.error.data !== undefined && rule.error.data !== null && (
                         <>
                           {" "}
-                          <Json value={rule.error.data} />
+                          <JsonPeek
+                            value={rule.error.data}
+                            title={`${tool}, rule ${i + 1}: the error's data`}
+                          />
                         </>
                       )}
                     </span>
                   ) : (
-                    <Json value={rule.returns ?? null} />
+                    <JsonPeek
+                      value={rule.returns ?? null}
+                      title={`${tool}, rule ${i + 1}: what it returns`}
+                    />
                   )}
                 </td>
                 <td className="dim">{ruleTimes(rule.times)}</td>
@@ -92,7 +91,7 @@ function Tools({ world }: { world: TestWorld }) {
 }
 
 function Cassette({ cassette }: { cassette: unknown }) {
-  const [shown, setShown] = useState(false);
+  const [open, setOpen] = useState(false);
   const summary = summarizeCassette(cassette);
   if (!summary) return null;
   return (
@@ -124,14 +123,10 @@ function Cassette({ cassette }: { cassette: unknown }) {
           ))}
         </ul>
       )}
-      <button type="button" className="btn small" onClick={() => setShown(!shown)}>
-        {shown ? "Hide the cassette" : "Show the cassette"}
+      <button type="button" className="btn small" onClick={() => setOpen(true)}>
+        Open the cassette
       </button>
-      {shown && (
-        <div className="json-box">
-          <JsonValue value={cassette} />
-        </div>
-      )}
+      <JsonDialog title="Cassette" value={cassette} open={open} onOpenChange={setOpen} />
     </section>
   );
 }
@@ -176,7 +171,9 @@ function Signals({ signals }: { signals: TestSignal[] }) {
             // biome-ignore lint/suspicious/noArrayIndexKey: signals are sent in this order.
             <li key={i}>
               <span className="mono">{s.name}</span>{" "}
-              {s.payload !== undefined && s.payload !== null && <Json value={s.payload} />}{" "}
+              {s.payload !== undefined && s.payload !== null && (
+                <JsonPeek value={s.payload} title={`The signal ${s.name}: its payload`} />
+              )}{" "}
               <span className="dim">{signalWhen(s.when)}</span>
             </li>
           ))}
@@ -213,7 +210,7 @@ function Expect({ expect }: { expect: Expectations }) {
             <div>
               <dt>Output contains</dt>
               <dd>
-                <Json value={expect.output} />
+                <JsonPeek value={expect.output} title="The output contains" />
               </dd>
             </div>
           )}
@@ -244,7 +241,11 @@ function Expect({ expect }: { expect: Expectations }) {
                       {c.args ? (
                         <>
                           {" "}
-                          <span className="dim">with args containing</span> <Json value={c.args} />
+                          <span className="dim">with args containing</span>{" "}
+                          <JsonPeek
+                            value={c.args}
+                            title={`${c.tool}: the args it is called with`}
+                          />
                         </>
                       ) : null}{" "}
                       <span className={c.times === 0 ? "tag critical" : "tag"}>
@@ -270,41 +271,59 @@ function Expect({ expect }: { expect: Expectations }) {
   );
 }
 
-function Origin({
-  test,
-  workflow,
-  versions,
-}: {
-  test: Test;
-  workflow: string;
-  versions: readonly Workflow[];
-}) {
+function Run({ test, versions }: { test: Test; versions: readonly Workflow[] }) {
   const origin = test.origin;
-  if (!origin) return null;
-  const version = findVersion(versions, origin.version);
+  const version = origin ? findVersion(versions, origin.version) : null;
   return (
-    <div>
-      <dt>Recorded from</dt>
-      <dd className="origin">
-        <Link to={`/runs/${origin.run}`} title="The run it was recorded from">
-          <RunId id={origin.run} />
-        </Link>{" "}
-        <span className="dim">of the namespace</span>{" "}
-        <span className="mono">{origin.namespace}</span>
-        <span className="dim">, which ran</span>{" "}
-        {version ? (
-          <Link className="mono" to={workflowPath(workflow, version.version)}>
-            {workflowRef(version)}
-          </Link>
-        ) : (
-          <span className="mono">{workflowRef({ name: workflow, version: origin.version })}</span>
+    <section className="test-part" aria-label="Run">
+      <h3>Run</h3>
+      <dl className="kv">
+        <div>
+          <dt>Starts</dt>
+          <dd>
+            {test.start ? (
+              <Time ms={Date.parse(test.start)} />
+            ) : (
+              <span className="dim">2026-01-01 00:00:00 UTC, in virtual time</span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Seed</dt>
+          <dd>
+            {test.seed ? (
+              <Digest digest={test.seed} />
+            ) : (
+              <span className="dim">the fixed seed of every test</span>
+            )}
+          </dd>
+        </div>
+        {origin && (
+          <div>
+            <dt>Recorded from</dt>
+            <dd className="origin">
+              <Link to={`/runs/${origin.run}`} title="The run it was recorded from">
+                <RunId id={origin.run} />
+              </Link>{" "}
+              <span className="dim">of the namespace</span>{" "}
+              <span className="mono">{origin.namespace}</span>
+              <span className="dim">, which ran</span>{" "}
+              {version ? (
+                <Link className="mono" to={workflowPath(version.name, version.version)}>
+                  {workflowRef(version)}
+                </Link>
+              ) : (
+                <span className="mono">{origin.version.slice(0, 12)}</span>
+              )}
+            </dd>
+          </div>
         )}
-      </dd>
-    </div>
+      </dl>
+    </section>
   );
 }
 
-function Unreadable({ error }: { error: unknown }) {
+export function Unreadable({ error }: { error: unknown }) {
   if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
     const forbidden = error.status === 403;
     return (
@@ -327,72 +346,35 @@ function Unreadable({ error }: { error: unknown }) {
   return <ProblemView error={error} title="The test could not be read" />;
 }
 
-export function TestDocument({
-  digest,
-  name,
-  workflow,
-  versions,
-}: {
-  digest: string;
-  /** Its name in the suite, shown until the document is read. */
-  name: string;
-  workflow: string;
-  versions: readonly Workflow[];
-}) {
-  const test = useTest(digest);
-  const doc = test.data;
+/** What the run must end with: its output, or the error it fails with. */
+function Outcome({ expect }: { expect: Expectations }) {
+  if (expect.output !== undefined) {
+    return <JsonCard title="Expected output" value={expect.output} note="the output contains it" />;
+  }
+  if (expect.error) {
+    return <JsonCard title="Expected error" value={expect.error} note="the run fails with it" />;
+  }
   return (
-    <section className="test-doc" aria-label={`Test ${doc?.name ?? name}`}>
-      <header className="test-doc-head">
-        <FlaskConical size={14} aria-hidden="true" />
-        <h3>Document</h3>
-        {doc?.origin && <span className="tag info">recorded</span>}
-        <span className="end">
-          <Digest digest={digest} />
-        </span>
+    <section className="json-card" aria-label="Expected output">
+      <header className="json-card-head">
+        <h3>Expected output</h3>
       </header>
-      <div className="test-doc-body">
-        {test.isPending ? (
-          <Loading>Loading the test…</Loading>
-        ) : test.isError ? (
-          <Unreadable error={test.error} />
-        ) : (
-          <>
-            <dl className="kv">
-              <div>
-                <dt>Input</dt>
-                <dd>
-                  <Json value={test.data.input ?? {}} />
-                </dd>
-              </div>
-              <div>
-                <dt>Starts</dt>
-                <dd>
-                  {test.data.start ? (
-                    <Time ms={Date.parse(test.data.start)} />
-                  ) : (
-                    <span className="dim">2026-01-01 00:00:00 UTC, in virtual time</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Seed</dt>
-                <dd>
-                  {test.data.seed ? (
-                    <Digest digest={test.data.seed} />
-                  ) : (
-                    <span className="dim">the fixed seed of every test</span>
-                  )}
-                </dd>
-              </div>
-              <Origin test={test.data} workflow={workflow} versions={versions} />
-            </dl>
-            <World test={test.data} />
-            <Signals signals={test.data.signals ?? []} />
-            <Expect expect={test.data.expect ?? {}} />
-          </>
-        )}
+      <p className="muted json-card-empty">Not checked: the test does not look at the output.</p>
+    </section>
+  );
+}
+
+export function TestDocument({ test, versions }: { test: Test; versions: readonly Workflow[] }) {
+  return (
+    <section className="test-doc" aria-label={`Test ${test.name}`}>
+      <div className="json-cards">
+        <JsonCard title="Input" value={test.input ?? {}} />
+        <Outcome expect={test.expect ?? {}} />
       </div>
+      <World test={test} />
+      <Signals signals={test.signals ?? []} />
+      <Expect expect={test.expect ?? {}} />
+      <Run test={test} versions={versions} />
     </section>
   );
 }

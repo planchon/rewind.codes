@@ -4,39 +4,52 @@ description: "Each workflow, the suite of tests each of its versions passed, and
 ---
 
 Testing lists every [workflow](/concepts/workflows) of your organization, by name, with its latest version and the
-number of tests in its suite.
+number of tests in its suite. It has a sidebar of its own: the workflows, then the suite of the version you are looking
+at, each test a click away, then that version's details (when it was saved, the version it derives from, its script,
+toolset and labels).
 
 ## A workflow
 
-A workflow opens on its latest version. Pick another one in the **version** menu of the header: each entry shows the
-version's digest, whether it is the latest, and the size of its suite. The version shows when it was saved, its script,
-toolset and schemas, and its **parent**: the version it derives from, which opens in turn. The versions of a workflow
-form its lineage.
+A workflow opens on its latest version. The breadcrumb names it, `Testing / triage / 6320e7bc7786`: click the version
+to switch to another one, each with the size of its suite. The page shows the version's **interface** (its input,
+output and signal schemas) and its **suite**, the tests it passed when it was saved, as a table:
 
-A version's **suite** is the tests it passed when it was saved:
-
-| Group | What |
+| Column | What |
 | --- | --- |
-| **Inherited** | The parent's tests the version kept as they were |
-| **Added** | The tests the version brought, written by hand or [recorded from runs](/sdk/workflows#record-tests-from-runs) |
-| **Updated** | The parent's tests the version replaced, from the old test to the new one, with the reason given |
-| **Retired** | The parent's tests the version dropped, with the reason given |
+| **Test** | Its name, a link to its page. For an updated test, the parent's test it replaces and why |
+| **Origin** | **Inherited** from the parent as it was, **added** by the version (written by hand or [recorded from a run](/sdk/workflows#record-tests-from-runs), a link to that run), or **updated** |
+| **Input** | The run's input |
+| **Expects** | How the run must end: its status, and what its output must contain or the error it fails with |
+| **Calls** | How many calls the test checks, and how many must never happen |
+| **World** | Its tool rules, mock handlers, cassette and signals |
 
-The reasons are what changed on purpose: read them before you change a behavior a test pins.
+The tests the version **retired** from its parent follow, each with the reason given. The reasons are what changed on
+purpose: read them before you change a behavior a test pins.
+
+The page does not show test results: every test of a suite passed when its version was saved.
 
 ## A test
 
-Each test has its own page, in the suite of a version. Its header picks the version, another test of the suite (the
-retired ones last), or the previous and next ones. The page says where the test stands in the suite (inherited, added,
-updated or retired) and why it changed; for an updated test, the parent's test it replaced opens in the suite of the
-parent. Then its document:
+Each test has its own page, in the suite of a version. The breadcrumb switches the version (to the test of the same name
+in that version, or to the version itself when it has none) and the test; previous and next go through the suite. The
+page says where the test stands in the suite and why it changed; for an updated test, the parent's test it replaced
+opens in the suite of the parent. Then:
 
-- **Input**, **start** and **seed**: what the run begins with.
+- **Input** and **expected output**: what the run begins with, and what its output must contain.
 - **World**: the rules each tool answers with (the args they match, what they return or the error, how many times),
-  the mock handlers, and a summary of the cassette (its calls and signals).
+  the mock handlers, and the cassette (its calls and signals).
 - **Signals**: the signals sent to the run, and when.
 - **Expectations**: the status, the output or the error, and the calls that must or must not happen.
-- **Origin**: for a recorded test, the run it was recorded from, which opens on its [Run](/dashboard/run) page.
+- **Run**: its start and seed, and for a recorded test the run it was recorded from, which opens on its
+  [Run](/dashboard/run) page.
+
+Every JSON value opens whole, colored, in a dialog, with a copy button; **JSON** opens the whole test document.
 
 A recorded test holds its run's data, so it is read like the run: it needs `runs:read` in the namespace it was recorded
 from. When you cannot read it, the page says so in place of the document. Testing itself needs `toolsets:read`.
+
+## A script's tests
+
+A script's page in [Scripts](/dashboard/scripts) shows the suites of the workflow versions it is the script of. The
+tests of a script that no workflow version has are not stored: they become a suite when the script is saved as a
+workflow.

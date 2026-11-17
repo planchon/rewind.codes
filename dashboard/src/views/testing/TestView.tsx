@@ -1,13 +1,16 @@
 // A test of a workflow, on its own page in Testing, in the suite of a version (the latest unless
-// `?version=` names another). The header picks the version (the test of the same name in its
-// suite, or the version itself when it has none), another test of the suite, or the previous or
-// next one; the page says where the test stands in the suite (inherited, added,
-// updated with the parent's test it replaced, retired) and why, then its document.
-import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
+// `?version=` names another). The breadcrumb switches the version (to the test of the same name
+// in its suite, or to the version itself when it has none) and the test; previous and next go
+// through the suite, and the whole document opens as JSON. The page says where the test stands
+// in the suite (inherited, added, updated with the parent's test it replaced, retired) and why,
+// then its document.
+import { ArrowRight, Braces, ChevronLeft, ChevronRight } from "lucide-react";
+import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useWorkflowVersions } from "../../api/queries";
+import { useTest, useWorkflowVersions } from "../../api/queries";
 import type { Workflow } from "../../api/types";
 import { Loading, ProblemView } from "../../components/bits";
+import { JsonDialog } from "../../components/JsonPeek";
 import { PageHeader } from "../../components/PageHeader";
 import {
   findVersion,
@@ -18,56 +21,11 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
-import { TestDocument } from "./TestDocument";
+import { CrumbLink, Crumbs, Switcher, type SwitchItem } from "./Crumbs";
+import { TestDocument, Unreadable } from "./TestDocument";
+import { OriginGlyph, TestingSidebar } from "./TestingSidebar";
 import { TestingGate } from "./TestingView";
-import { KIND_TAG, useVersion, VersionPicker } from "./WorkflowView";
-
-/** The tests of a version's suite, to pick one: its tests, then those it retired. */
-function TestPicker({
-  places,
-  current,
-  version,
-  onPick,
-}: {
-  places: readonly TestPlace[];
-  current: string;
-  version: Workflow;
-  onPick: (digest: string) => void;
-}) {
-  const tests = places.filter((p) => p.kind !== "retired");
-  const retired = places.filter((p) => p.kind === "retired");
-  const known = places.some((p) => p.digest === current);
-  return (
-    <select
-      className="select test-picker"
-      aria-label="Test"
-      value={known ? current : ""}
-      onChange={(e) => onPick(e.target.value)}
-    >
-      {!known && (
-        <option value="" disabled>
-          Not in this suite
-        </option>
-      )}
-      <optgroup label={`Suite of ${workflowRef(version)}`}>
-        {tests.map((p) => (
-          <option key={p.digest} value={p.digest}>
-            {p.name}
-          </option>
-        ))}
-      </optgroup>
-      {retired.length > 0 && (
-        <optgroup label="Retired">
-          {retired.map((p) => (
-            <option key={p.digest} value={p.digest}>
-              {p.name}
-            </option>
-          ))}
-        </optgroup>
-      )}
-    </select>
-  );
-}
+import { KIND_TAG, useVersion, VersionSwitcher } from "./WorkflowView";
 
 /** Where the test stands in the suite of the version, and why it changed. */
 function Place({
@@ -142,7 +100,9 @@ export function TestView() {
 function TestPage() {
   const { name = "", digest = "" } = useParams();
   const navigate = useNavigate();
+  const [json, setJson] = useState(false);
   const versions = useWorkflowVersions(name);
+  const test = useTest(digest);
   const list = versions.data ?? [];
   const { version, asked } = useVersion(list);
   const suite = version ? suiteOf(version, list) : null;
@@ -151,68 +111,106 @@ function TestPage() {
   const place = index >= 0 ? (places[index] ?? null) : null;
   const previous = index > 0 ? places[index - 1] : undefined;
   const next = index >= 0 ? places[index + 1] : undefined;
-  const open = (test: string) => navigate(testPath(name, test, version?.version));
+  const open = (to: string) => navigate(testPath(name, to, version?.version));
+  const title = place?.name ?? test.data?.name ?? digest.slice(0, 12);
+
   // Another version keeps the test of the same name when its suite has one.
-  const toVersion = (v: string) => {
-    const target = findVersion(list, v);
+  const toVersion = (v: Workflow, latest: boolean) => {
+    const target = findVersion(list, v.version);
     const same =
       target && place
         ? suitePlaces(suiteOf(target, list)).find((p) => p.name === place.name)
         : undefined;
-    navigate(
-      same ? testPath(name, same.digest, v) : workflowPath(name, v === list[0]?.version ? null : v),
-    );
+    return same
+      ? testPath(name, same.digest, v.version)
+      : workflowPath(name, latest ? null : v.version);
   };
+  const item = (p: TestPlace): SwitchItem => ({
+    key: p.digest,
+    label: (
+      <span className="crumb-test">
+        <OriginGlyph place={p} />
+        {p.name}
+      </span>
+    ),
+    to: testPath(name, p.digest, version?.version),
+    current: p.digest === digest,
+  });
 
   return (
     <div className="page">
+      <TestingSidebar workflow={name} version={version} versions={list} test={digest} />
       <PageHeader
         crumbs={
+          <Crumbs>
+            <CrumbLink to="/testing">Testing</CrumbLink>
+            <CrumbLink to={workflowPath(name)}>{name}</CrumbLink>
+            {version ? (
+              <VersionSwitcher versions={list} current={version} to={toVersion} />
+            ) : (
+              <span className="mono">{asked?.slice(0, 12) ?? ""}</span>
+            )}
+          </Crumbs>
+        }
+        title={
+          version ? (
+            <Switcher
+              title="Test"
+              label={<span className="crumb-switch-text">{title}</span>}
+              groups={[
+                {
+                  label: `Suite of ${workflowRef(version)}`,
+                  items: places.filter((p) => p.kind !== "retired").map(item),
+                },
+                { label: "Retired", items: places.filter((p) => p.kind === "retired").map(item) },
+              ]}
+            />
+          ) : (
+            title
+          )
+        }
+        actions={
           <>
-            <Link to="/testing">Testing</Link>
-            <span className="page-header-sep" aria-hidden="true">
-              /
-            </span>
-            <Link
-              to={workflowPath(
-                name,
-                version?.version === list[0]?.version ? null : version?.version,
-              )}
-            >
-              {name}
-            </Link>
+            {test.data && (
+              <button
+                type="button"
+                className="btn small"
+                title="The test's whole document, as stored"
+                onClick={() => setJson(true)}
+              >
+                <Braces size={14} aria-hidden="true" /> JSON
+              </button>
+            )}
+            {version && (
+              <>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Previous test"
+                  title={previous ? `Previous: ${previous.name}` : "The first test"}
+                  disabled={!previous}
+                  onClick={() => previous && open(previous.digest)}
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Next test"
+                  title={next ? `Next: ${next.name}` : "The last test"}
+                  disabled={!next}
+                  onClick={() => next && open(next.digest)}
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </>
+            )}
           </>
         }
-        title={place?.name ?? digest.slice(0, 12)}
-        actions={
-          version ? (
-            <div className="test-nav">
-              <VersionPicker versions={list} current={version} onPick={toVersion} />
-              <TestPicker places={places} current={digest} version={version} onPick={open} />
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Previous test"
-                title={previous ? `Previous: ${previous.name}` : "The first test"}
-                disabled={!previous}
-                onClick={() => previous && open(previous.digest)}
-              >
-                <ChevronLeft size={16} />
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Next test"
-                title={next ? `Next: ${next.name}` : "The last test"}
-                disabled={!next}
-                onClick={() => next && open(next.digest)}
-              >
-                <ChevronRight size={16} />
-              </button>
-            </div>
-          ) : undefined
-        }
       />
+      {test.data && (
+        <JsonDialog title={`Test ${title}`} value={test.data} open={json} onOpenChange={setJson} />
+      )}
       {versions.isPending ? (
         <Loading>Loading the workflow…</Loading>
       ) : versions.isError ? (
@@ -230,13 +228,13 @@ function TestPage() {
             </p>
           )}
           <Place place={place} version={version} parent={suite?.parent ?? null} />
-          <TestDocument
-            key={digest}
-            digest={digest}
-            name={place?.name ?? ""}
-            workflow={name}
-            versions={list}
-          />
+          {test.isPending ? (
+            <Loading>Loading the test…</Loading>
+          ) : test.isError ? (
+            <Unreadable error={test.error} />
+          ) : (
+            <TestDocument test={test.data} versions={list} />
+          )}
         </div>
       )}
     </div>

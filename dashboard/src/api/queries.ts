@@ -112,6 +112,17 @@ export function useWorkflows(query: ListWorkflowsQuery = {}) {
   });
 }
 
+/** The versions of any workflow whose script is `script`, newest first. */
+export function useWorkflowsWithScript(script: string, enabled = true) {
+  const { api } = useScope();
+  return useQuery({
+    queryKey: ["workflows", "script", script],
+    queryFn: async ({ signal }) => (await api.workflows({ script }, signal)).workflows,
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
 /** A workflow's versions, newest first. */
 export function useWorkflowVersions(name: string) {
   const { api } = useScope();

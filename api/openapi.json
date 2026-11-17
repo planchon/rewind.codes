@@ -6559,7 +6559,7 @@
         "type": "object"
       },
       "WorkflowPage": {
-        "description": "`GET /v1/workflows`: the latest version of each workflow, by name.",
+        "description": "`GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every\nversion whose script it is, newest first, on one page.",
         "properties": {
           "next": {
             "description": "Pass it as `after` to read the next page; absent on the last page.",
@@ -15253,7 +15253,7 @@
     },
     "/v1/workflows": {
       "get": {
-        "description": "The latest version of each workflow the caller sees, by name.",
+        "description": "The latest version of each workflow the caller sees, by name; with `script`, every version\nwhose script it is, newest first.",
         "operationId": "listWorkflows",
         "parameters": [
           {
@@ -15274,6 +15274,15 @@
               "format": "int32",
               "minimum": 0,
               "type": "integer"
+            }
+          },
+          {
+            "description": "The digest of a script: every version of any workflow whose script it is, newest first,\nrather than the latest version of each workflow. `after` and `limit` do not apply.",
+            "in": "query",
+            "name": "script",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],

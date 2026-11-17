@@ -275,6 +275,15 @@ impl JournalStore for Store {
         journal!(self, store => store.workflow_versions(tenant, name, labels).await)
     }
 
+    async fn workflows_with_script(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        labels: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Vec<rewind_engine::ports::StoredWorkflow>, StoreError> {
+        journal!(self, store => store.workflows_with_script(tenant, script, labels).await)
+    }
+
     async fn latest_workflows(
         &self,
         filter: &rewind_engine::ports::WorkflowFilter,

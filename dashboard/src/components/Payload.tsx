@@ -17,7 +17,8 @@ const HIGHLIGHT_LIMIT = 100_000;
 const TOKEN =
   /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)|\b(true|false|null)\b|([{}[\],])/g;
 
-export function JsonText({ text }: { text: string }) {
+/** JSON text with its tokens colored, without a frame: in a line or in a block. */
+export function JsonTokens({ text }: { text: string }) {
   const nodes = useMemo(() => {
     if (text.length > HIGHLIGHT_LIMIT) return [text];
     const out: ReactNode[] = [];
@@ -60,9 +61,15 @@ export function JsonText({ text }: { text: string }) {
     if (last < text.length) out.push(<Fragment key={n++}>{text.slice(last)}</Fragment>);
     return out;
   }, [text]);
+  return <>{nodes}</>;
+}
+
+export function JsonText({ text }: { text: string }) {
   return (
     <pre>
-      <code>{nodes}</code>
+      <code>
+        <JsonTokens text={text} />
+      </code>
     </pre>
   );
 }

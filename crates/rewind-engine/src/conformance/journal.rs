@@ -4743,7 +4743,38 @@ pub async fn workflow_versions_are_stored_by_tenant_and_listed_newest_first<S: J
         latest(none.clone(), None, Some(1)).await,
         std::slice::from_ref(&digest)
     );
-    assert_eq!(latest(none, Some("digest".into()), None).await, [third]);
+    assert_eq!(
+        latest(none.clone(), Some("digest".into()), None).await,
+        std::slice::from_ref(&third)
+    );
+
+    // A script is the script of the versions that name it, whatever their workflow.
+    let shared = workflow("digest", "v3");
+    put(shared.clone(), scoped.clone(), later(T0, 60)).await;
+    let with_script = |script: &str, labels: BTreeMap<String, String>| {
+        let script = Digest::of(script.as_bytes());
+        async move {
+            store
+                .workflows_with_script(&acme(), script, &labels)
+                .await
+                .expect("workflows_with_script")
+                .into_iter()
+                .map(|stored| stored.workflow)
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(
+        with_script("v3", none.clone()).await,
+        [shared.clone(), third],
+        "newest first, across workflows"
+    );
+    assert_eq!(
+        with_script("v3", scoped).await,
+        [shared],
+        "carrying the labels"
+    );
+    assert_eq!(with_script("v1", none.clone()).await, [first]);
+    assert_eq!(with_script("nothing", none).await, []);
 }
 
 /// Creates a run that `starter` started with the call `seq`.

@@ -1520,7 +1520,8 @@ export interface paths {
         };
         /**
          * List the workflows
-         * @description The latest version of each workflow the caller sees, by name.
+         * @description The latest version of each workflow the caller sees, by name; with `script`, every version
+         *     whose script it is, newest first.
          */
         get: operations["listWorkflows"];
         put?: never;
@@ -4262,7 +4263,10 @@ export interface components {
              */
             version: string;
         };
-        /** @description `GET /v1/workflows`: the latest version of each workflow, by name. */
+        /**
+         * @description `GET /v1/workflows`: the latest version of each workflow, by name; with `script`, every
+         *     version whose script it is, newest first, on one page.
+         */
         WorkflowPage: {
             /** @description Pass it as `after` to read the next page; absent on the last page. */
             next?: string | null;
@@ -11038,6 +11042,11 @@ export interface operations {
                 after?: string;
                 /** @description At most this many workflows (50 by default, 500 at most). */
                 limit?: number;
+                /**
+                 * @description The digest of a script: every version of any workflow whose script it is, newest first,
+                 *     rather than the latest version of each workflow. `after` and `limit` do not apply.
+                 */
+                script?: string;
             };
             header?: never;
             path?: never;

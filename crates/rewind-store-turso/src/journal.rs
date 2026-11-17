@@ -924,6 +924,34 @@ impl JournalStore for TursoStore {
         Ok(versions)
     }
 
+    async fn workflows_with_script(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let connection = self.connection().await?;
+        // The script is read from the version's document: a tenant has few versions.
+        let rows = sql::query(
+            &connection,
+            concat!(
+                "SELECT ",
+                workflow_columns!(),
+                " FROM workflows WHERE tenant = ? AND json_extract(document, '$.script') = ? \
+                 ORDER BY created_at DESC, stored_order DESC"
+            ),
+            vec![tenant(tenant_id), text(script.to_hex())],
+        )
+        .await?;
+        let mut versions = Vec::new();
+        for row in &rows {
+            if carries(&decode_labels(&row.text(2)?)?, labels) {
+                versions.push(workflow_from_row(row)?);
+            }
+        }
+        Ok(versions)
+    }
+
     async fn latest_workflows(
         &self,
         filter: &WorkflowFilter,

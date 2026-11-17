@@ -10,6 +10,7 @@ import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../../compo
 import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
 import { workflowPath } from "../../model/workflows";
+import { TestingSidebar } from "./TestingSidebar";
 
 /** Testing needs `toolsets:read`: workflows are read with the toolsets. */
 export function TestingGate({ children }: { children: ReactNode }) {
@@ -69,6 +70,7 @@ function WorkflowList() {
   const list = workflows.data?.pages.flatMap((p) => p.workflows) ?? [];
   return (
     <div className="page">
+      <TestingSidebar />
       <PageHeader title="Testing" />
       <p className="page-intro">
         Each workflow and its suite: the tests every version passed when it was saved, and that the

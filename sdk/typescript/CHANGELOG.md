@@ -18,6 +18,7 @@ suite a workflow version carries and every derived version must pass, and tests 
 - `workflows.record(name, { query?, runs?, limit? })` records tests from the workflow's completed and failed runs, one
   per path, and answers their digests, names, paths and runs, and the runs it skipped.
 - `rewind.tests.get(digest)`: a stored test. A test recorded from a run is read like the run.
+- `workflows.list({ script })`: every version of any workflow whose script it is, newest first, on one page.
 - The problem slugs `invalid-test` and `tests-failed`; `RewindApiError.tests` holds each test's outcome of a
   `tests-failed` refusal, which `workflows.create` and `runs.fork` (of a run of a workflow) may answer.
 - The types of tests, suites and recordings: `Test`, `TestInput`, `TestFrom`, `TestRun`, `TestResult`, `TestProblem`,

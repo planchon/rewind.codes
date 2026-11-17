@@ -1,5 +1,5 @@
 // The mocked workflows and tests of `/v1`: `GET /v1/workflows` (the latest version of each, by
-// name, paged with `after`), `GET /v1/workflows/{name}` (its versions, newest first) and
+// name, paged with `after`; with `script`, every version whose script it is, newest first), `GET /v1/workflows/{name}` (its versions, newest first) and
 // `GET /v1/tests/{digest}`. They need `toolsets:read`; a grant limited to labels sees the
 // workflows carrying them; a recorded test is read like its run (`runs:read` in its namespace).
 import { HttpResponse, http } from "msw";
@@ -22,6 +22,13 @@ export function workflowHandlers(world: World) {
       const caller = guard(world, request, "toolsets:read");
       if (caller instanceof Response) return caller;
       const q = new URL(request.url).searchParams;
+      const script = q.get("script");
+      if (script !== null) {
+        const versions = visibleVersions(world, caller)
+          .filter((v) => v.script === script)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        return HttpResponse.json({ workflows: versions });
+      }
       const after = q.get("after");
       const limit = Math.min(500, Math.max(1, Number(q.get("limit") ?? 50) || 50));
       const latest = new Map<string, Workflow>();

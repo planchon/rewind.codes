@@ -14,7 +14,9 @@ use rewind_api::runs::{ForkRun, StartRun};
 use rewind_api::scripts::TestRequest;
 use rewind_api::testing::{Test, TestFrom, TestInput, TestProblem};
 use rewind_api::toolsets::CreateToolset;
-use rewind_api::workflows::{CreateWorkflow, RecordTests, TestRetirement, TestUpdate};
+use rewind_api::workflows::{
+    CreateWorkflow, RecordTests, TestRetirement, TestUpdate, WorkflowQuery,
+};
 use rewind_api::{Problem, ProblemType};
 use serde_json::json;
 use support::{TestServer, eventually, wait};
@@ -160,6 +162,20 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
     let v3 = harness.create_workflow(&retired).await.unwrap();
     assert!(v3.tests.is_empty());
     assert_eq!(v3.retired[0].reason, "gone");
+
+    // The versions whose script is TRIAGE, newest first: the script's page shows their suites.
+    let with_script = |script: &str| WorkflowQuery {
+        script: Some(script.to_owned()),
+        ..WorkflowQuery::default()
+    };
+    let page = harness
+        .list_workflows(&with_script(&v1.script))
+        .await
+        .unwrap();
+    let versions: Vec<&str> = page.workflows.iter().map(|w| w.version.as_str()).collect();
+    assert_eq!(versions, [v3.version.as_str(), v1.version.as_str()]);
+    assert_eq!(page.next, None);
+    assert!(harness.list_workflows(&with_script("nope")).await.is_err());
 
     // A test given inline cannot claim to be recorded.
     let mut forged = triage(&toolset.id, TRIAGE);

@@ -19,7 +19,7 @@ use rewind_api::workflows::{
     CreateWorkflow, RetiredTest, SuiteTest, UpdatedTest, Workflow as ApiWorkflow, WorkflowPage,
     WorkflowQuery, WorkflowVersions,
 };
-use rewind_core::{Script, Toolset, WorkflowSchemas};
+use rewind_core::{Digest, Script, Toolset, WorkflowSchemas};
 use rewind_engine::ports::{
     JournalStore, StoredWorkflow, TenantId, WorkflowDeclarations, WorkflowFilter,
 };
@@ -181,6 +181,19 @@ pub(super) async fn list(
     Query(query): Query<WorkflowQuery>,
 ) -> Result<Json<WorkflowPage>, ApiError> {
     caller.require(Permission::ToolsetsRead)?;
+    if let Some(script) = &query.script {
+        let script = Digest::from_hex(script).map_err(|_| {
+            ApiError::invalid("script: the digest of a script, 64 lowercase hexadecimal digits")
+        })?;
+        let found = app
+            .store
+            .workflows_with_script(&caller.tenant, script, &caller.labels)
+            .await?;
+        return Ok(Json(WorkflowPage {
+            workflows: found.iter().map(view).collect(),
+            next: None,
+        }));
+    }
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
     let found = app
         .store

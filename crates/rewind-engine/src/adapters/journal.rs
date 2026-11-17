@@ -959,6 +959,30 @@ impl JournalStore for MemoryJournal {
             .collect())
     }
 
+    async fn workflows_with_script(
+        &self,
+        tenant: &TenantId,
+        script: Digest,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        let state = self.lock()?;
+        let mut versions: Vec<&(u64, StoredWorkflow)> = state
+            .workflows
+            .iter()
+            .filter(|((owner, _), (_, stored))| {
+                owner == tenant && stored.workflow.script() == script && stored.carries(labels)
+            })
+            .map(|(_, row)| row)
+            .collect();
+        versions.sort_by(|(a_order, a), (b_order, b)| {
+            (b.created_at, b_order).cmp(&(a.created_at, a_order))
+        });
+        Ok(versions
+            .into_iter()
+            .map(|(_, stored)| stored.clone())
+            .collect())
+    }
+
     async fn latest_workflows(
         &self,
         filter: &WorkflowFilter,

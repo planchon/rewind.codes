@@ -556,7 +556,8 @@ mod operations {
 
     /// List the workflows
     ///
-    /// The latest version of each workflow the caller sees, by name.
+    /// The latest version of each workflow the caller sees, by name; with `script`, every version
+    /// whose script it is, newest first.
     #[utoipa::path(
         get, path = "/v1/workflows", tag = "workflows", operation_id = "listWorkflows",
         params(WorkflowQuery),

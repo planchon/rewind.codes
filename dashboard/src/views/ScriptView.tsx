@@ -1,4 +1,4 @@
-// One script: its source, and its runs.
+// One script: its source, the suites of the workflow versions it is the script of, and its runs.
 import { Link, useParams, useSearchParams } from "react-router";
 import { useRuns, useScript } from "../api/queries";
 import { RUN_STATUSES, type RunStatus } from "../api/types";
@@ -9,6 +9,7 @@ import { StatusGlyph } from "../components/Status";
 import { fieldTerm, joinQuery } from "../model/query";
 import { Seg } from "./FilterBits";
 import { RunTable } from "./RunTable";
+import { ScriptSuites } from "./testing/ScriptSuites";
 
 export function ScriptView() {
   const { digest = "" } = useParams();
@@ -44,6 +45,7 @@ export function ScriptView() {
           <CodeView source={script.data.source} />
         )}
       </section>
+      <ScriptSuites digest={digest} />
       <div className="section-head">
         <h2>Runs of this script</h2>
         <Seg<RunStatus | "any">

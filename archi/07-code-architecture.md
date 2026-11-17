@@ -115,7 +115,8 @@ Methods (declared in `crates/rewind-engine/src/ports/journal/mod.rs`):
 put_script(tenant, script, compiled) / get_script(tenant, digest)
 put_toolset(tenant, toolset, declarations) / get_toolset(tenant, digest) / list_toolsets(tenant)
 put_workflow(tenant, workflow, labels, now) -> StoredWorkflow / get_workflow(tenant, version)
-workflow_versions(tenant, name, labels) / latest_workflows(WorkflowFilter { tenant, labels, after, limit })
+workflow_versions(tenant, name, labels) / workflows_with_script(tenant, script, labels)
+latest_workflows(WorkflowFilter { tenant, labels, after, limit })
 reserve_tests(tenant, [TestRecord { digest, namespace?, size }], now) -> [digest being deleted]
 get_test(tenant, digest) -> TestRecord    namespace_tests(tenant, namespace, limit) -> [digest]
 unreferenced_tests(now, limit) -> [(tenant, digest)]    drop_tests([(tenant, digest)], erased) -> count
@@ -251,7 +252,8 @@ Contracts, all covered by the conformance suite:
   the end itself, under the same key. A workflow version is immutable: a second `put_workflow`
   of a version changes nothing and returns the first. `workflow_versions` lists a name's
   versions carrying `labels`, newest first (created last first, then stored last first): the
-  first is the latest; `latest_workflows` gives the latest version of each name, by name.
+  first is the latest; `workflows_with_script` lists the versions of any name whose script is
+  `script`, in the same order; `latest_workflows` gives the latest version of each name, by name.
 - Tests ([suites](05-testing-and-observability.md#suites-and-the-gate)): the documents are
   blobs; the store indexes them. `reserve_tests` inserts a test's row, or makes an existing one
   new again, before its blob is written, and returns the digests whose deletion has started.
@@ -561,7 +563,7 @@ Conventions:
 |  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
 |  | `PUT /v1/namespaces/{name}/toolsets/{id}/credentials` | `credentials:write` | Sets or renews an end user's credentials for the toolset |
 | Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, runs its suite through the [gate](05-testing-and-observability.md#suites-and-the-gate), and saves it as a new version; returns its declarations. 422 `tests-failed` lists the tests that did not pass |
-|  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version |
+|  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version; with `script`, every version whose script it is, newest first |
 |  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first, each with its suite |
 |  | `POST /v1/workflows/{name}/record` | `runs:read` | Records tests from the workflow's past runs, one per path ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)); stores them, adds them to no suite |
 |  | `GET /v1/tests/{digest}` | `toolsets:read` | A test document; a recorded one also needs `runs:read` in its namespace |

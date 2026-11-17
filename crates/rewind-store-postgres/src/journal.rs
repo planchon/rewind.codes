@@ -2583,6 +2583,33 @@ impl JournalStore for PostgresStore {
             .collect::<Result<_, Error>>()?)
     }
 
+    async fn workflows_with_script(
+        &self,
+        tenant_id: &TenantId,
+        script: Digest,
+        labels: &BTreeMap<String, String>,
+    ) -> Result<Vec<StoredWorkflow>, StoreError> {
+        // The script is read from the version's document: a tenant has few versions, and the
+        // index on (tenant, name, …) bounds the scan to them.
+        let rows = sqlx::query(concat!(
+            "SELECT ",
+            workflow_columns!(),
+            " FROM workflows WHERE tenant = $1 AND labels @> $2::jsonb \
+             AND (document::jsonb ->> 'script') = $3 \
+             ORDER BY created_at DESC, ordinal DESC"
+        ))
+        .bind(tenant(tenant_id))
+        .bind(encode_labels(labels))
+        .bind(script.to_hex())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(Error::from)?;
+        Ok(rows
+            .iter()
+            .map(workflow_from_row)
+            .collect::<Result<_, Error>>()?)
+    }
+
     async fn latest_workflows(
         &self,
         filter: &WorkflowFilter,
