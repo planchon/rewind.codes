@@ -1,0 +1,42 @@
+---
+title: "Testing"
+description: "Each workflow, the suite of tests each of its versions passed, and every test on its own page, with the reasons tests were updated or retired."
+---
+
+Testing lists every [workflow](/concepts/workflows) of your organization, by name, with its latest version and the
+number of tests in its suite.
+
+## A workflow
+
+A workflow opens on its latest version. Pick another one in the **version** menu of the header: each entry shows the
+version's digest, whether it is the latest, and the size of its suite. The version shows when it was saved, its script,
+toolset and schemas, and its **parent**: the version it derives from, which opens in turn. The versions of a workflow
+form its lineage.
+
+A version's **suite** is the tests it passed when it was saved:
+
+| Group | What |
+| --- | --- |
+| **Inherited** | The parent's tests the version kept as they were |
+| **Added** | The tests the version brought, written by hand or [recorded from runs](/sdk/workflows#record-tests-from-runs) |
+| **Updated** | The parent's tests the version replaced, from the old test to the new one, with the reason given |
+| **Retired** | The parent's tests the version dropped, with the reason given |
+
+The reasons are what changed on purpose: read them before you change a behavior a test pins.
+
+## A test
+
+Each test has its own page, in the suite of a version. Its header picks the version, another test of the suite (the
+retired ones last), or the previous and next ones. The page says where the test stands in the suite (inherited, added,
+updated or retired) and why it changed; for an updated test, the parent's test it replaced opens in the suite of the
+parent. Then its document:
+
+- **Input**, **start** and **seed**: what the run begins with.
+- **World**: the rules each tool answers with (the args they match, what they return or the error, how many times),
+  the mock handlers, and a summary of the cassette (its calls and signals).
+- **Signals**: the signals sent to the run, and when.
+- **Expectations**: the status, the output or the error, and the calls that must or must not happen.
+- **Origin**: for a recorded test, the run it was recorded from, which opens on its [Run](/dashboard/run) page.
+
+A recorded test holds its run's data, so it is read like the run: it needs `runs:read` in the namespace it was recorded
+from. When you cannot read it, the page says so in place of the document. Testing itself needs `toolsets:read`.

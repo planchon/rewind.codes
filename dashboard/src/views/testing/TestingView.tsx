@@ -1,5 +1,5 @@
-// Workflows: each workflow, by name, with its latest version: what it does, its suite, when it was
-// saved (archi/05, "Dashboard"). A workflow opens on its versions.
+// Testing: each workflow, by name, with its latest version: what it does, the size of its suite,
+// when it was saved (archi/05, "Dashboard"). A workflow opens on its latest version.
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { useWorkflows } from "../../api/queries";
@@ -9,20 +9,17 @@ import { NoPermission } from "../../app/NoPermission";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../../components/bits";
 import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
+import { workflowPath } from "../../model/workflows";
 
-/** The workflow views need `toolsets:read`: workflows are read with the toolsets. */
-export function WorkflowsGate({ children }: { children: ReactNode }) {
+/** Testing needs `toolsets:read`: workflows are read with the toolsets. */
+export function TestingGate({ children }: { children: ReactNode }) {
   const access = useAccess();
   if (access.can("toolsets:read")) return <>{children}</>;
   return (
     <div className="page">
-      <NoPermission permission="toolsets:read" what="see the workflows" />
+      <NoPermission permission="toolsets:read" what="see the workflows and their tests" />
     </div>
   );
-}
-
-export function workflowPath(name: string): string {
-  return `/workflows/${encodeURIComponent(name)}`;
 }
 
 function WorkflowRow({ workflow }: { workflow: Workflow }) {
@@ -59,11 +56,11 @@ function WorkflowRow({ workflow }: { workflow: Workflow }) {
   );
 }
 
-export function WorkflowsView() {
+export function TestingView() {
   return (
-    <WorkflowsGate>
+    <TestingGate>
       <WorkflowList />
-    </WorkflowsGate>
+    </TestingGate>
   );
 }
 
@@ -72,10 +69,10 @@ function WorkflowList() {
   const list = workflows.data?.pages.flatMap((p) => p.workflows) ?? [];
   return (
     <div className="page">
-      <PageHeader title="Workflows" />
+      <PageHeader title="Testing" />
       <p className="page-intro">
-        Named scripts that other scripts start and signal. Each version carries its suite: the tests
-        it passed when it was saved.
+        Each workflow and its suite: the tests every version passed when it was saved, and that the
+        next version must pass too.
       </p>
       {workflows.isPending ? (
         <Loading>Loading workflows…</Loading>
@@ -101,7 +98,7 @@ function WorkflowList() {
             </tbody>
           </table>
           {list.length === 0 && (
-            <Empty>No workflow yet: the agent tool save_workflow saves one.</Empty>
+            <Empty>No workflow yet: the agent tool save_workflow saves one with its tests.</Empty>
           )}
           {workflows.hasNextPage && (
             <div className="list-foot">

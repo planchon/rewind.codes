@@ -173,7 +173,7 @@ or updated test that is not inherited or has no reason, two tests of the same na
 
 The reasons stay in the lineage: each version of `rewind.workflows.versions(name)` has its `parent`, its suite
 (`tests`), the parent's tests it `retired` and those it `updated` (`from` and `to` digests), each with its reason. A
-person reading a version learns what changed on purpose. The dashboard's [Workflows](/dashboard/workflows) view shows
+person reading a version learns what changed on purpose. The dashboard's [Testing](/dashboard/testing) view shows
 them.
 
 A test is given to a save inline, by the digest of a stored test, or as `{ from: "<digest>", expect: { … } }`: a stored

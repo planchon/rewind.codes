@@ -1,11 +1,10 @@
-// A workflow: its versions, newest first. A version shows its lineage (the version it derives
-// from), its script, toolset and schemas, and its suite: the tests it inherited from its parent,
-// added (recorded from runs among them), updated and retired, with the reasons (archi/05, "Suites
-// and the gate"). A test opens below its suite, on its world and its expectations. The version
-// and the test opened are in the URL (`?version=…&test=…`).
+// A workflow in Testing, at one version: the latest unless `?version=` names another, picked in
+// the header. The version shows its lineage (the version it derives from), its script, toolset and
+// schemas, and its suite: the tests it inherited from its parent, added (recorded from runs among
+// them), updated and retired, with the reasons (archi/05, "Suites and the gate"). Each test opens
+// on its own page.
 import { ArrowRight, GitBranch } from "lucide-react";
-import { useEffect, useRef } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { useWorkflowVersions } from "../../api/queries";
 import type { Workflow } from "../../api/types";
 import { Ago, Digest, LabelList, Loading, ProblemView } from "../../components/bits";
@@ -13,16 +12,21 @@ import { PageHeader } from "../../components/PageHeader";
 import { JsonValue } from "../../components/Payload";
 import {
   findVersion,
-  type SuiteEntry,
   type SuiteKind,
   suiteCounts,
   suiteOf,
+  suitePlaces,
+  type TestPlace,
+  testPath,
+  workflowPath,
   workflowRef,
 } from "../../model/workflows";
-import { TestDocument } from "./TestDocument";
-import { WorkflowsGate } from "./WorkflowsView";
+import { TestingGate } from "./TestingView";
 
-const KIND_TAG: Record<SuiteKind, { label: string; className: string; title: string }> = {
+export const KIND_TAG: Record<
+  SuiteKind | "retired",
+  { label: string; className: string; title: string }
+> = {
   inherited: { label: "inherited", className: "tag", title: "Kept from its parent as it was" },
   added: { label: "added", className: "tag info", title: "New in this version" },
   updated: {
@@ -35,7 +39,55 @@ const KIND_TAG: Record<SuiteKind, { label: string; className: string; title: str
     className: "tag",
     title: "Its parent is not among this workflow's versions: inherited or added",
   },
+  retired: {
+    label: "retired",
+    className: "tag critical",
+    title: "A test of the parent this version dropped",
+  },
 };
+
+/** The versions of a workflow, newest first, to pick one: in the header of its pages. */
+export function VersionPicker({
+  versions,
+  current,
+  onPick,
+}: {
+  versions: readonly Workflow[];
+  current: Workflow;
+  onPick: (version: string) => void;
+}) {
+  return (
+    <select
+      className="select mono version-picker"
+      aria-label="Version"
+      value={current.version}
+      onChange={(e) => onPick(e.target.value)}
+    >
+      {versions.map((v, i) => {
+        const tests = v.tests?.length ?? 0;
+        return (
+          <option key={v.version} value={v.version}>
+            {workflowRef(v)}
+            {i === 0 ? " · latest" : ""} · {tests} test{tests === 1 ? "" : "s"}
+          </option>
+        );
+      })}
+    </select>
+  );
+}
+
+/**
+ * The version a page shows: the one `?version=` names, or the latest. `null` while the versions
+ * load, or when the version named is not among them.
+ */
+export function useVersion(versions: readonly Workflow[]): {
+  version: Workflow | null;
+  asked: string | null;
+} {
+  const [params] = useSearchParams();
+  const asked = params.get("version");
+  return { version: asked ? findVersion(versions, asked) : (versions[0] ?? null), asked };
+}
 
 /** A JSON Schema, in short: its properties and their types, or its type. */
 function schemaLine(schema: unknown): string {
@@ -69,34 +121,24 @@ function Schema({ name, schema }: { name: string; schema: unknown }) {
   );
 }
 
-interface Selection {
-  version: string | null;
-  test: string | null;
-}
-
 function TestRow({
   entry,
-  open,
-  onOpen,
+  workflow,
+  parent,
 }: {
-  entry: SuiteEntry;
-  open: boolean;
-  onOpen: (digest: string) => void;
+  entry: TestPlace;
+  workflow: Workflow;
+  parent: Workflow | null;
 }) {
   const tag = KIND_TAG[entry.kind];
   return (
-    <li className={`suite-test${open ? " open" : ""}`}>
+    <li className="suite-test">
       <span className={tag.className} title={tag.title}>
         {tag.label}
       </span>
-      <button
-        type="button"
-        className="link-btn suite-name"
-        aria-expanded={open}
-        onClick={() => onOpen(entry.digest)}
-      >
+      <Link className="suite-name" to={testPath(workflow.name, entry.digest, workflow.version)}>
         {entry.name}
-      </button>
+      </Link>
       {entry.recordedFrom && (
         <Link
           to={`/runs/${entry.recordedFrom}`}
@@ -106,28 +148,25 @@ function TestRow({
           its run
         </Link>
       )}
-      {entry.kind === "updated" && entry.from && (
+      {entry.kind === "updated" && entry.from ? (
         <span className="suite-change">
-          <button
-            type="button"
-            className="link-btn"
+          <Link
+            to={testPath(workflow.name, entry.from, parent?.version)}
             title="The parent's test it replaced"
-            onClick={() => onOpen(entry.from as string)}
           >
             <span className="digest">{entry.from.slice(0, 12)}</span>
-          </button>
+          </Link>
           <ArrowRight size={12} aria-hidden="true" />
           <span className="digest" title={entry.digest}>
             {entry.digest.slice(0, 12)}
           </span>
         </span>
-      )}
-      {entry.kind !== "updated" && (
+      ) : (
         <span className="digest end" title={entry.digest}>
           {entry.digest.slice(0, 12)}
         </span>
       )}
-      {entry.kind === "updated" && (
+      {(entry.kind === "updated" || entry.kind === "retired") && (
         <p className="suite-reason">
           {entry.reason ? (
             <>Why: {entry.reason}</>
@@ -143,36 +182,15 @@ function TestRow({
 function VersionPanel({
   version,
   versions,
-  latest,
-  selection,
-  select,
+  onPick,
 }: {
   version: Workflow;
   versions: readonly Workflow[];
-  latest: boolean;
-  selection: Selection;
-  select: (next: Selection) => void;
+  onPick: (version: string) => void;
 }) {
-  const ref = useRef<HTMLElement>(null);
   const suite = suiteOf(version, versions);
   const counts = suiteCounts(suite);
-  const current = selection.version === version.version;
-  const opened = current ? selection.test : null;
-  const openedName =
-    opened === null
-      ? ""
-      : (suite.tests.find((t) => t.digest === opened)?.name ??
-        suite.tests.find((t) => t.from === opened)?.name ??
-        suite.retired.find((t) => t.digest === opened)?.name ??
-        "");
-
-  useEffect(() => {
-    if (current) ref.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-  }, [current]);
-
-  const toVersion = (v: string) => select({ version: v, test: null });
-  const openTest = (digest: string) =>
-    select({ version: version.version, test: opened === digest ? null : digest });
+  const latest = versions[0]?.version === version.version;
   const summary = [
     counts.inherited && `${counts.inherited} inherited`,
     counts.added && `${counts.added} added`,
@@ -180,14 +198,10 @@ function VersionPanel({
     counts.kept && `${counts.kept} kept`,
     counts.retired && `${counts.retired} retired`,
   ].filter(Boolean);
+  const retired = suitePlaces(suite).filter((place) => place.kind === "retired");
 
   return (
-    <section
-      ref={ref}
-      className={`panel version${current ? " current" : ""}`}
-      aria-label={`Version ${workflowRef(version)}`}
-      aria-current={current ? "true" : undefined}
-    >
+    <section className="panel version" aria-label={`Version ${workflowRef(version)}`}>
       <header className="panel-head">
         <h2>
           <GitBranch size={14} aria-hidden="true" />
@@ -209,7 +223,7 @@ function VersionPanel({
                 <button
                   type="button"
                   className="link-btn mono"
-                  onClick={() => toVersion(suite.parent?.version ?? "")}
+                  onClick={() => onPick(suite.parent?.version ?? "")}
                 >
                   {workflowRef(suite.parent)}
                 </button>
@@ -282,52 +296,26 @@ function VersionPanel({
           ) : (
             <ul className="suite-list">
               {suite.tests.map((entry) => (
-                <TestRow
-                  key={entry.name}
-                  entry={entry}
-                  open={opened === entry.digest || (opened !== null && opened === entry.from)}
-                  onOpen={openTest}
-                />
+                <TestRow key={entry.name} entry={entry} workflow={version} parent={suite.parent} />
               ))}
             </ul>
           )}
-          {suite.retired.length > 0 && (
+          {retired.length > 0 && (
             <>
               <h4>Retired from its parent</h4>
               <ul className="suite-list">
-                {suite.retired.map((t) => (
-                  <li key={t.name} className={`suite-test${opened === t.digest ? " open" : ""}`}>
-                    <span className="tag critical">retired</span>
-                    <button
-                      type="button"
-                      className="link-btn suite-name"
-                      aria-expanded={opened === t.digest}
-                      onClick={() => openTest(t.digest)}
-                    >
-                      {t.name}
-                    </button>
-                    <span className="digest end" title={t.digest}>
-                      {t.digest.slice(0, 12)}
-                    </span>
-                    <p className="suite-reason">Why: {t.reason}</p>
-                  </li>
+                {retired.map((entry) => (
+                  <TestRow
+                    key={entry.name}
+                    entry={entry}
+                    workflow={version}
+                    parent={suite.parent}
+                  />
                 ))}
               </ul>
             </>
           )}
         </section>
-
-        {opened !== null && (
-          <TestDocument
-            key={opened}
-            digest={opened}
-            name={openedName}
-            workflow={version.name}
-            versions={versions}
-            onPickVersion={toVersion}
-            onClose={() => select({ version: version.version, test: null })}
-          />
-        )}
       </div>
     </section>
   );
@@ -335,54 +323,47 @@ function VersionPanel({
 
 export function WorkflowView() {
   return (
-    <WorkflowsGate>
+    <TestingGate>
       <WorkflowPage />
-    </WorkflowsGate>
+    </TestingGate>
   );
 }
 
 function WorkflowPage() {
   const { name = "" } = useParams();
-  const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const versions = useWorkflowVersions(name);
   const list = versions.data ?? [];
-  const asked = params.get("version");
-  const selection: Selection = {
-    version: asked ? (findVersion(list, asked)?.version ?? asked) : null,
-    test: params.get("test"),
-  };
-  const select = (next: Selection) => {
-    const out = new URLSearchParams();
-    if (next.version) out.set("version", next.version);
-    if (next.version && next.test) out.set("test", next.test);
-    setParams(out, { replace: true });
-  };
+  const { version, asked } = useVersion(list);
   const latest = list[0];
+  const pick = (v: string) => navigate(workflowPath(name, v === latest?.version ? null : v));
 
   return (
     <div className="page">
-      <PageHeader crumbs={<Link to="/workflows">Workflows</Link>} title={name} />
+      <PageHeader
+        crumbs={<Link to="/testing">Testing</Link>}
+        title={name}
+        actions={
+          version ? <VersionPicker versions={list} current={version} onPick={pick} /> : undefined
+        }
+      />
       {versions.isPending ? (
         <Loading>Loading its versions…</Loading>
       ) : versions.isError ? (
         <ProblemView error={versions.error} title={`The workflow ${name} could not be read`} />
+      ) : version === null ? (
+        <p className="page-intro">
+          No version {asked} among the {list.length} versions of {name}.{" "}
+          <Link to={workflowPath(name)}>Its latest version</Link>
+        </p>
       ) : (
         <>
           <p className="page-intro">
             {latest?.description ? `${latest.description} ` : ""}
-            {list.length} version{list.length === 1 ? "" : "s"}, the newest first. Each passed its
-            suite when it was saved; a test changed on purpose says why.
+            {list.length} version{list.length === 1 ? "" : "s"}. Each passed its suite when it was
+            saved; a test changed on purpose says why.
           </p>
-          {list.map((v, i) => (
-            <VersionPanel
-              key={v.version}
-              version={v}
-              versions={list}
-              latest={i === 0}
-              selection={selection}
-              select={select}
-            />
-          ))}
+          <VersionPanel version={version} versions={list} onPick={pick} />
         </>
       )}
     </div>

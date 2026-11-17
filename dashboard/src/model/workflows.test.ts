@@ -16,8 +16,11 @@ import {
   startedRuns,
   suiteCounts,
   suiteOf,
+  suitePlaces,
   summarizeCassette,
+  testPath,
   workflowCallOf,
+  workflowPath,
   workflowRef,
 } from "./workflows";
 
@@ -162,6 +165,23 @@ describe("a version's suite", () => {
       kept: 0,
       retired: 1,
     });
+  });
+
+  it("lists the tests to go through: the suite's, then those it retired", () => {
+    const places = suitePlaces(suiteOf(second, [second, first]));
+    expect(places.map((t) => [t.name, t.kind, t.digest, t.reason])).toEqual([
+      ["a", "inherited", "da", null],
+      ["b", "updated", "db2", "the message changed"],
+      [recorded, "added", "dr", null],
+      ["c", "retired", "dc", "deprecated"],
+    ]);
+  });
+
+  it("names the pages of Testing: a workflow, a test, at a version or the latest", () => {
+    expect(workflowPath("triage")).toBe("/testing/triage");
+    expect(workflowPath("a b", "v2")).toBe("/testing/a%20b?version=v2");
+    expect(testPath("triage", "dc")).toBe("/testing/triage/tests/dc");
+    expect(testPath("triage", "dc", "v2")).toBe("/testing/triage/tests/dc?version=v2");
   });
 
   it("adds every test of a first version", () => {

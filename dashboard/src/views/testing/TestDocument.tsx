@@ -1,9 +1,9 @@
-// A test, opened from a suite: the world it gives the run (its input, start and seed, each tool's
+// A test's document, on its page in Testing: the world it gives the run (its input, start and seed, each tool's
 // rules, its mock handlers, the cassette it was recorded with), the signals it sends, what must
 // hold at the end, and for a recorded test the run it comes from (archi/05, "The test document").
 // A recorded test holds its run's data and is read like the run: a caller who may not read the
 // runs of its namespace is told so here, and the rest of the page stays.
-import { FlaskConical, Lock, X } from "lucide-react";
+import { FlaskConical, Lock } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { ApiError } from "../../api/client";
@@ -20,6 +20,7 @@ import {
   ruleTimes,
   signalWhen,
   summarizeCassette,
+  workflowPath,
   workflowRef,
 } from "../../model/workflows";
 
@@ -273,12 +274,10 @@ function Origin({
   test,
   workflow,
   versions,
-  onPickVersion,
 }: {
   test: Test;
   workflow: string;
   versions: readonly Workflow[];
-  onPickVersion: (version: string) => void;
 }) {
   const origin = test.origin;
   if (!origin) return null;
@@ -294,13 +293,9 @@ function Origin({
         <span className="mono">{origin.namespace}</span>
         <span className="dim">, which ran</span>{" "}
         {version ? (
-          <button
-            type="button"
-            className="link-btn mono"
-            onClick={() => onPickVersion(version.version)}
-          >
+          <Link className="mono" to={workflowPath(workflow, version.version)}>
             {workflowRef(version)}
-          </button>
+          </Link>
         ) : (
           <span className="mono">{workflowRef({ name: workflow, version: origin.version })}</span>
         )}
@@ -337,16 +332,12 @@ export function TestDocument({
   name,
   workflow,
   versions,
-  onPickVersion,
-  onClose,
 }: {
   digest: string;
   /** Its name in the suite, shown until the document is read. */
   name: string;
   workflow: string;
   versions: readonly Workflow[];
-  onPickVersion: (version: string) => void;
-  onClose: () => void;
 }) {
   const test = useTest(digest);
   const doc = test.data;
@@ -354,19 +345,10 @@ export function TestDocument({
     <section className="test-doc" aria-label={`Test ${doc?.name ?? name}`}>
       <header className="test-doc-head">
         <FlaskConical size={14} aria-hidden="true" />
-        <h3>{doc?.name ?? name}</h3>
+        <h3>Document</h3>
         {doc?.origin && <span className="tag info">recorded</span>}
         <span className="end">
           <Digest digest={digest} />
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Close the test"
-            title="Close"
-            onClick={onClose}
-          >
-            <X size={14} />
-          </button>
         </span>
       </header>
       <div className="test-doc-body">
@@ -403,12 +385,7 @@ export function TestDocument({
                   )}
                 </dd>
               </div>
-              <Origin
-                test={test.data}
-                workflow={workflow}
-                versions={versions}
-                onPickVersion={onPickVersion}
-              />
+              <Origin test={test.data} workflow={workflow} versions={versions} />
             </dl>
             <World test={test.data} />
             <Signals signals={test.data.signals ?? []} />

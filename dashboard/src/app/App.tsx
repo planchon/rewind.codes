@@ -129,17 +129,23 @@ export const routes: RouteObject[] = [
           { path: "tools", element: <ToolStats /> },
         ],
       },
-      // Workflows are read with the toolsets (`toolsets:read`): their views check it themselves.
+      // Testing reads the workflows with the toolsets (`toolsets:read`): its views check it.
       {
-        path: "workflows",
+        path: "testing",
         lazy: async () => ({
-          Component: (await import("../views/workflows/WorkflowsView")).WorkflowsView,
+          Component: (await import("../views/testing/TestingView")).TestingView,
         }),
       },
       {
-        path: "workflows/:name",
+        path: "testing/:name",
         lazy: async () => ({
-          Component: (await import("../views/workflows/WorkflowView")).WorkflowView,
+          Component: (await import("../views/testing/WorkflowView")).WorkflowView,
+        }),
+      },
+      {
+        path: "testing/:name/tests/:digest",
+        lazy: async () => ({
+          Component: (await import("../views/testing/TestView")).TestView,
         }),
       },
       {

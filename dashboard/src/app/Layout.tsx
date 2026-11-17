@@ -6,10 +6,10 @@ import {
   ChevronRight,
   Eye,
   FileCode,
+  FlaskConical,
   LayoutGrid,
   Search,
   Users,
-  Workflow,
   Wrench,
 } from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
@@ -107,10 +107,10 @@ function MainNav() {
       )}
       {access.can("toolsets:read") && (
         <NavItem
-          to="/workflows"
-          icon={<Workflow size={16} />}
-          label="Workflows"
-          current={pathname.startsWith("/workflows")}
+          to="/testing"
+          icon={<FlaskConical size={16} />}
+          label="Testing"
+          current={pathname.startsWith("/testing")}
         />
       )}
       {/* Tool statistics need `runs:read`, and a grant not limited to labels. */}

@@ -263,6 +263,47 @@ export function suiteOf(version: Workflow, versions: readonly Workflow[]): Suite
   return { tests, retired: version.retired ?? [], parent, parentMissing };
 }
 
+/** A test's place in a version's suite: one of its tests, or one of the parent's it retired. */
+export interface TestPlace {
+  name: string;
+  digest: string;
+  kind: SuiteKind | "retired";
+  /** For an updated test: the parent's test it replaced. */
+  from: string | null;
+  /** Why it was updated or retired; `null` when no reason was recorded. */
+  reason: string | null;
+  recordedFrom: string | null;
+}
+
+/** The tests of a suite in the order Testing lists them: its tests, then those it retired. */
+export function suitePlaces(suite: Suite): TestPlace[] {
+  return [
+    ...suite.tests,
+    ...suite.retired.map(
+      (t): TestPlace => ({
+        name: t.name,
+        digest: t.digest,
+        kind: "retired",
+        from: null,
+        reason: t.reason,
+        recordedFrom: recordedRunOf(t.name),
+      }),
+    ),
+  ];
+}
+
+/** Testing's page of a workflow, at a version (its latest when none is named). */
+export function workflowPath(name: string, version?: string | null): string {
+  const path = `/testing/${encodeURIComponent(name)}`;
+  return version ? `${path}?version=${version}` : path;
+}
+
+/** Testing's page of a test, in the suite of a version (the latest when none is named). */
+export function testPath(name: string, digest: string, version?: string | null): string {
+  const path = `/testing/${encodeURIComponent(name)}/tests/${digest}`;
+  return version ? `${path}?version=${version}` : path;
+}
+
 /** How many of each kind a suite has. */
 export function suiteCounts(suite: Suite): Record<SuiteKind | "retired", number> {
   const counts = { inherited: 0, added: 0, updated: 0, kept: 0, retired: suite.retired.length };

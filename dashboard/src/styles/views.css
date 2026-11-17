@@ -3393,3 +3393,37 @@ table.grid.compact th {
 .test-unreadable p:last-child {
   margin-bottom: 0;
 }
+
+/* Testing: the pickers in the header of a workflow's and a test's pages */
+
+.version-picker {
+  max-width: 300px;
+  font-size: 13px;
+}
+
+.test-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.test-picker {
+  max-width: 320px;
+  font-size: 13px;
+}
+
+.test-place {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: 13px;
+}
+
+.test-place p {
+  margin: 0;
+}
