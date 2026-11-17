@@ -324,6 +324,65 @@ async fn an_unchanged_save_returns_the_version_saved_first() {
 }
 
 #[tokio::test]
+async fn a_save_sent_again_returns_the_version_it_made() {
+    let engine = setup().await;
+    let checker = StaticTypeChecker::default();
+    let first = || {
+        save(
+            "v1",
+            SuiteChanges {
+                tests: vec![TestInput::Inline(Box::new(closes()))],
+                ..SuiteChanges::default()
+            },
+        )
+    };
+    let v1 = engine
+        .register_workflow(first(), &checker, &kit())
+        .await
+        .unwrap();
+    let again = engine.register_workflow(first(), &checker, &kit()).await;
+    assert_eq!(again.unwrap(), v1, "its test is not added a second time");
+
+    // A version that retires the test and adds another, sent twice: the second answers the
+    // first, rather than retiring a test the version no longer has.
+    let second = || {
+        let mut renamed = closes();
+        renamed.name = "closes issue 4".into();
+        let mut request = save(
+            "v1",
+            SuiteChanges {
+                tests: vec![TestInput::Inline(Box::new(renamed))],
+                retire: vec![TestRetirement {
+                    names: vec!["closes one".into()],
+                    reason: "renamed".into(),
+                }],
+                ..SuiteChanges::default()
+            },
+        );
+        request.description = Some("v2".into());
+        request
+    };
+    let v2 = engine
+        .register_workflow(second(), &checker, &kit())
+        .await
+        .unwrap();
+    assert_eq!(v2.workflow.suite().parent, Some(v1.workflow.version()));
+    let again = engine.register_workflow(second(), &checker, &kit()).await;
+    assert_eq!(again.unwrap(), v2);
+
+    // Named as the parent, the version itself gets the changes, which do not apply to it.
+    let mut onto = second();
+    onto.suite.parent = Some(v2.workflow.version());
+    match engine.register_workflow(onto, &checker, &kit()).await {
+        Err(RegisterError::Suite(error)) => assert!(
+            error.to_string().starts_with("retire names \"closes one\""),
+            "{error}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     let engine = setup().await;
     let checker = StaticTypeChecker::default();

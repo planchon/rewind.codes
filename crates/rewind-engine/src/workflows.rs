@@ -34,7 +34,7 @@ use crate::ports::{
     TenantId, ToolCall, ToolDispatcher, TypeChecker, WebhookSender, WorkflowDeclarations,
 };
 use crate::schema::{Refused, Validator};
-use crate::suites::{SuiteChanges, SuiteError, SuiteLoadError, TestKit};
+use crate::suites::{SuiteChanges, SuiteError, SuiteLoadError, TestFormat, TestKit};
 use crate::testing::{MockLoader, Subject, TestError, TestReport, run_tests};
 use crate::text::{self, NulCharacter};
 
@@ -212,6 +212,27 @@ where
             return Err(RegisterError::TypeErrors(diagnostics));
         }
 
+        // A save sent again, such as a retry whose answer was lost: the version it made.
+        let latest = self
+            .journal
+            .workflow_versions(&tenant, workflow.name(), &request.labels)
+            .await?
+            .into_iter()
+            .next();
+        if let Some(latest) = &latest
+            && self
+                .saved_by(
+                    &tenant,
+                    &latest.workflow,
+                    &workflow,
+                    &request.suite,
+                    kit.format,
+                )
+                .await?
+        {
+            return Ok(latest.clone());
+        }
+
         // The gate.
         let parent = match request.suite.parent {
             Some(version) => {
@@ -223,15 +244,9 @@ where
                     .ok_or(SuiteError::ParentNotFound(version))?;
                 Some(parent.workflow)
             }
-            None => self
-                .journal
-                .workflow_versions(&tenant, workflow.name(), &request.labels)
-                .await?
-                .into_iter()
-                .next()
-                .map(|stored| stored.workflow),
+            None => latest.map(|stored| stored.workflow),
         };
-        // The same workflow saved again, its suite unchanged: the version saved first.
+        // The same workflow saved again on a parent named, its suite unchanged: that version.
         if let Some(parent) = &parent
             && same_content(parent, &workflow)
             && request.suite.tests.is_empty()
@@ -272,6 +287,44 @@ where
             .await?;
         tracing::debug!(workflow = %stored.workflow, "workflow registered");
         Ok(stored)
+    }
+
+    /// Whether `latest` is the version this save makes: the same content, and the suite the
+    /// changes compose on `latest`'s own parent. So a save sent again (a retry whose answer was
+    /// lost, a seed run twice) answers the version it made, instead of applying its changes a
+    /// second time on top of it.
+    async fn saved_by(
+        &self,
+        tenant: &TenantId,
+        latest: &Workflow,
+        workflow: &Workflow,
+        changes: &SuiteChanges,
+        format: TestFormat,
+    ) -> Result<bool, RegisterError> {
+        let base = latest.suite().parent;
+        if !same_content(latest, workflow)
+            || changes.parent.is_some_and(|named| Some(named) != base)
+        {
+            return Ok(false);
+        }
+        let base = match base {
+            Some(version) => match self.journal.get_workflow(tenant, version).await? {
+                Some(stored) => Some(stored.workflow),
+                None => return Ok(false),
+            },
+            None => None,
+        };
+        // A change that does not apply to the parent is reported by the save itself.
+        let Ok(composed) = self
+            .compose_suite(tenant, base.as_ref(), changes, format)
+            .await
+        else {
+            return Ok(false);
+        };
+        Ok(workflow
+            .clone()
+            .with_suite(composed.suite)
+            .is_ok_and(|made| made.version() == latest.version()))
     }
 
     /// Starts a run of a workflow version: its input is checked against the version's schema,
