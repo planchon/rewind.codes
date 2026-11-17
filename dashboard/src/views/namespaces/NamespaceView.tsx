@@ -1,10 +1,11 @@
 // A namespace's page: one end user. Its CPU time added up over the month against its quota, its
-// use of every limit, the alerts of the month, its tokens in use, its exceptions to the defaults;
-// and what the caller's permissions allow: change its limits (`namespaces:write`), revoke its
-// tokens (`tokens:write`), erase it (`namespaces:write`, confirmed by typing its name).
+// use of every limit, the alerts of the month, its tokens in use, its exceptions to the defaults,
+// links to its runs and its scripts; and what the caller's permissions allow, each in a dialog:
+// change its limits (`namespaces:write`), revoke its tokens (`tokens:write`), erase it
+// (`namespaces:write`, confirmed by typing its name).
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight, Pencil, Trash2 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import { NAMESPACES, useNamespaceDefaults, useNamespaceDetail } from "../../api/namespaces";
 import type { NamespaceDetail, Quotas, RevokedTokens } from "../../api/types";
@@ -13,6 +14,7 @@ import { useApi } from "../../app/session";
 import { Ago, CopyButton, Loading, ProblemView, Time, useNow } from "../../components/bits";
 import { CpuChart } from "../../components/CpuChart";
 import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
@@ -111,67 +113,56 @@ function ExceptionsEditor({
       pending={save.isPending}
       error={save.error}
       onSubmit={(quotas) => save.mutate(quotas)}
-      onCancel={onDone}
     />
   );
 }
 
-/** Erasing an end user, confirmed by typing its name. */
-function Erase({ name, onCancel }: { name: string; onCancel: () => void }) {
+/** Erasing an end user, in a dialog, confirmed by typing its name. */
+function Erase({ name, onErased }: { name: string; onErased: () => void }) {
   const api = useApi();
   const queryClient = useQueryClient();
   const [typed, setTyped] = useState("");
   const erase = useMutation({
     mutationFn: () => api.deleteNamespace(name),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: NAMESPACES }),
+    onSuccess: async () => {
+      onErased();
+      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
+    },
   });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (typed === name) erase.mutate();
-  };
-  if (erase.isSuccess) {
-    return (
-      <div className="notice" role="status">
-        The erasure of <span className="mono">{name}</span> started: its tokens are revoked and its
-        active runs cancelled; its runs, credentials and use are erased in the background.
-      </div>
-    );
-  }
   return (
-    <form className="panel danger-panel" aria-label={`Erase ${name}`} onSubmit={submit}>
-      <div className="panel-head">
-        <Trash2 size={13} aria-hidden="true" className="tone-critical" />
-        <h2>Erase {name}</h2>
-      </div>
-      <div className="panel-body stack">
-        <p>
+    <DialogForm
+      title={`Erase ${name}`}
+      description={
+        <>
           The end user leaves: their tokens are revoked and their active runs cancelled, then their
           runs, journals, credentials and use are erased. This cannot be undone, and the namespace
           takes no run or token meanwhile. The organization's totals keep what it used.
-        </p>
-        <label className="field col">
-          <span className="field-label">
-            Type <span className="mono">{name}</span> to confirm
-          </span>
-          <input
-            className="input mono"
-            value={typed}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(e) => setTyped(e.target.value)}
-          />
-        </label>
-        <div className="form-actions">
-          <button type="submit" className="btn danger" disabled={typed !== name || erase.isPending}>
-            {erase.isPending ? "Erasing…" : `Erase ${name}`}
-          </button>
-          <button type="button" className="btn ghost" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-        {erase.error ? <ErrorNote error={erase.error} title="Could not erase it" /> : null}
-      </div>
-    </form>
+        </>
+      }
+      submit={`Erase ${name}`}
+      pending={erase.isPending}
+      pendingLabel="Erasing…"
+      disabled={typed !== name}
+      danger
+      error={erase.error}
+      errorTitle="Could not erase it"
+      onSubmit={() => {
+        if (typed === name) erase.mutate();
+      }}
+    >
+      <label className="field col">
+        <span className="field-label">
+          Type <span className="mono">{name}</span> to confirm
+        </span>
+        <input
+          className="input mono"
+          value={typed}
+          spellCheck={false}
+          autoComplete="off"
+          onChange={(e) => setTyped(e.target.value)}
+        />
+      </label>
+    </DialogForm>
   );
 }
 
@@ -189,6 +180,7 @@ function NamespacePage() {
   const defaults = useNamespaceDefaults();
   const [editing, setEditing] = useState(false);
   const [erasing, setErasing] = useState(false);
+  const [erased, setErased] = useState(false);
   const [revoked, setRevoked] = useState<RevokedTokens | null>(null);
   const revoke = useMutation({
     mutationFn: () => api.revokeNamespaceTokens(name),
@@ -231,6 +223,7 @@ function NamespacePage() {
   const canWrite = access.can("namespaces:write") && !deleting;
   const canRevoke = access.can("tokens:write") && !deleting;
   const runs = queryLink("/observability", fieldTerm("namespace", ns.name));
+  const scripts = queryLink("/scripts", fieldTerm("namespace", ns.name));
 
   return (
     <div className="page">
@@ -244,10 +237,7 @@ function NamespacePage() {
         }
         actions={
           <>
-            <Link className="btn" to={runs} title="Its runs, in Observability">
-              See its runs
-            </Link>
-            {canWrite && !editing && (
+            {canWrite && (
               <button type="button" className="btn" onClick={() => setEditing(true)}>
                 <Pencil size={12} /> Edit its limits
               </button>
@@ -262,7 +252,7 @@ function NamespacePage() {
                 Revoke its tokens
               </ConfirmButton>
             )}
-            {canWrite && !erasing && (
+            {canWrite && (
               <button type="button" className="btn" onClick={() => setErasing(true)}>
                 <Trash2 size={12} /> Erase…
               </button>
@@ -281,6 +271,14 @@ function NamespacePage() {
             <Ago ms={Date.parse(ns.lastActiveAt)} />
           </>
         )}
+        {" · "}
+        <Link to={runs} title="Its runs, in Observability">
+          See its runs
+        </Link>
+        {" · "}
+        <Link to={scripts} title="The scripts its runs ran">
+          See its scripts
+        </Link>
       </p>
 
       {revoked && (
@@ -290,14 +288,28 @@ function NamespacePage() {
         </div>
       )}
       {revoke.error ? <ErrorNote error={revoke.error} title="Could not revoke its tokens" /> : null}
-      {erasing && <Erase name={ns.name} onCancel={() => setErasing(false)} />}
-      {editing && (
+      {erased && (
+        <div className="notice" role="status">
+          The erasure of <span className="mono">{ns.name}</span> started: its tokens are revoked and
+          its active runs cancelled; its runs, credentials and use are erased in the background.
+        </div>
+      )}
+      <FormDialog open={erasing && canWrite} onOpenChange={setErasing}>
+        <Erase
+          name={ns.name}
+          onErased={() => {
+            setErasing(false);
+            setErased(true);
+          }}
+        />
+      </FormDialog>
+      <FormDialog open={editing && canWrite} onOpenChange={setEditing} wide>
         <ExceptionsEditor
           detail={d}
           defaults={defaults.data?.defaults ?? null}
           onDone={() => setEditing(false)}
         />
-      )}
+      </FormDialog>
 
       <nav className="month-nav" aria-label="Month">
         <button

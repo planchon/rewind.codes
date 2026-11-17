@@ -11,15 +11,26 @@ one toolset.
   <img src="/images/dashboard/tools-dark.webp" alt="The Tools view: calls, failures, retries and latency percentiles per tool, grouped by server" className="hidden dark:block" />
 </Frame>
 
+Search with the same query bar as the runs, which reads here:
+
+| Term | Keeps |
+| --- | --- |
+| `tool:github.close_issue`, `tool:github.*` | These tools, or the tools of a server |
+| `toolset:079b3789` | The calls of the runs of one toolset (its digest). A run's **Toolset** detail opens it |
+| `close_issue` | The tools whose name holds this text |
+
+A leading `-` excludes, as for runs: `-tool:workflows.*`.
+
 At the top: the calls completed, how many failed, the retries, and the slowest tool. Then each tool, grouped by MCP
-server, group of host tools and built-ins:
+server, group of host tools and built-ins; a group folds under its row:
 
 | Column | What |
 | --- | --- |
-| **Calls**, **Failed**, **Error rate** | How many calls completed, and how many failed |
+| **Calls**, **Failed** | How many calls completed, and how many failed, with their share |
 | **By kind** | The failures by kind: an error, a timeout, an unavailable server, an unknown outcome |
 | **Retries** | Attempts beyond the first: calls sent again after a transient failure or a lost claim |
 | **p50**, **p95**, **p99**, **max** | Latency, from the call to its result |
+| **Latency** | The same on one log scale for every tool: a dot at p50, a bar to p95, a tick at p99, a line to the slowest call |
 
 A slow or failing tool slows or fails every script that calls it: this is where to look when the Overview's
 **Failing tools** lights up. The SDK reads the same figures with `rewind.tools.stats()`.

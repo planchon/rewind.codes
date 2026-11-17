@@ -203,7 +203,10 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
       <div>
         <dt>Toolset</dt>
         <dd>
-          <Link to={`/tools?toolset=${run.toolset}`} title="Statistics of this toolset's tools">
+          <Link
+            to={queryLink("/tools", `toolset:${run.toolset}`)}
+            title="Statistics of this toolset's tools"
+          >
             <Digest digest={run.toolset} />
           </Link>
         </dd>

@@ -1,6 +1,8 @@
 // The query bar: one line of the query language, its terms tinted by kind, the term the server
 // could not read underlined with its message, and suggestions as the operator types (field names
-// from the grammar, values from the facets of the current query). Enter applies the query.
+// from the grammar, values from the facets of the current query and those given). Enter applies
+// the query. The views of runs read the whole language; Scripts, Tools and Namespaces read the
+// part of it their endpoint understands (`language`), and underline the rest themselves.
 import { Search, X } from "lucide-react";
 import {
   type FormEvent,
@@ -18,6 +20,9 @@ import { formatCount } from "../model/format";
 import {
   type FieldValues,
   isKnownField,
+  type QueryFault,
+  type QueryLanguage,
+  RUNS_LANGUAGE,
   type Suggestion,
   splitTerms,
   suggest,
@@ -25,12 +30,7 @@ import {
   utf16Span,
 } from "../model/query";
 
-export interface QueryFault {
-  message: string;
-  /** In characters, as the server gives it. */
-  start: number;
-  end: number;
-}
+export type { QueryFault };
 
 export interface QueryBarProps {
   /** The query applied, from the URL. */
@@ -39,6 +39,8 @@ export interface QueryBarProps {
   facets?: Facets | undefined;
   /** Values to suggest that the facets do not count, per field: the namespaces. */
   values?: FieldValues | undefined;
+  /** The fields and labels the view reads: the runs' language by default. */
+  language?: QueryLanguage;
   /**
    * The field whose value is being typed, and what is typed of it; `null` when no value is.
    * For a parent that looks the values up as they are typed.
@@ -52,7 +54,15 @@ export interface QueryBarProps {
 }
 
 /** The query, as spans under the input: each term tinted, the term at fault underlined. */
-function Mirror({ text, bad }: { text: string; bad: [number, number] | null }) {
+function Mirror({
+  text,
+  bad,
+  language,
+}: {
+  text: string;
+  bad: [number, number] | null;
+  language: QueryLanguage;
+}) {
   const parts: ReactNode[] = [];
   let at = 0;
   for (const t of splitTerms(text)) {
@@ -62,7 +72,7 @@ function Mirror({ text, bad }: { text: string; bad: [number, number] | null }) {
         ? "label"
         : t.kind === "text"
           ? "text"
-          : isKnownField(t)
+          : isKnownField(t, language)
             ? "field"
             : "text";
     const isBad = bad !== null && t.start < bad[1] && bad[0] < t.end;
@@ -94,6 +104,7 @@ export function QueryBar({
   onSubmit,
   facets,
   values,
+  language = RUNS_LANGUAGE,
   onTyping,
   fault = null,
   placeholder = '@agent:triage status:failed tool:github.* error:timeout "rate limit"',
@@ -122,8 +133,8 @@ export function QueryBar({
   }, [value]);
 
   const suggestions = useMemo(
-    () => (open ? suggest(draft, caret, facets, 12, values) : null),
-    [open, draft, caret, facets, values],
+    () => (open ? suggest(draft, caret, facets, 12, values, language) : null),
+    [open, draft, caret, facets, values, language],
   );
   const typing = useRef(onTyping);
   typing.current = onTyping;
@@ -193,7 +204,7 @@ export function QueryBar({
           <Search size={13} className="qbar-icon" aria-hidden="true" />
           <div className="qbar-field">
             <div className="qbar-mirror" ref={mirror} aria-hidden="true">
-              <Mirror text={draft} bad={bad} />
+              <Mirror text={draft} bad={bad} language={language} />
             </div>
             <input
               ref={input}

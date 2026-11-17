@@ -23,18 +23,54 @@ describe("ScriptsView", () => {
     expect(row.getByTitle(/\d+ completed, \d+ failed/)).toBeInTheDocument();
   });
 
-  it("filters by tool through the API", async () => {
+  it("filters by tool through the API, from the query bar", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/scripts");
     await screen.findByRole("table");
     await user.click(screen.getAllByRole("button", { name: "crm.provision" })[0] as HTMLElement);
-    await waitFor(() => expect(search(router).get("tool")).toBe("crm.provision"));
+    await waitFor(() => expect(search(router).get("q")).toBe("tool:crm.provision"));
+    expect(screen.getByRole("combobox", { name: "Query" })).toHaveValue("tool:crm.provision");
     await waitFor(() =>
       expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(2),
     );
     expect(
       requested("/v1/scripts").some((u) => u.searchParams.get("tool") === "crm.provision"),
     ).toBe(true);
+  });
+
+  it("searches by label, and underlines what the list cannot read", async () => {
+    const user = userEvent.setup();
+    const { router, requested } = renderApp("/scripts?label=agent:triage");
+    // An older link's filter is read as the query it means.
+    await waitFor(() => expect(search(router).get("q")).toBe("@agent:triage"));
+    expect(search(router).get("label")).toBeNull();
+    await waitFor(() =>
+      expect(
+        requested("/v1/scripts").some((u) => u.searchParams.getAll("label")[0] === "agent:triage"),
+      ).toBe(true),
+    );
+
+    const bar = screen.getByRole("combobox", { name: "Query" });
+    await user.clear(bar);
+    await user.type(bar, "status:failed{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/searched by namespace/);
+    expect(bar).toHaveAttribute("aria-invalid", "true");
+    expect(screen.queryByRole("table")).toBeNull();
+  });
+
+  it("narrows to one namespace with Rewind-Namespace, and its links to the runs too", async () => {
+    const { callsTo } = renderApp("/scripts?q=namespace:chen");
+    const table = await screen.findByRole("table");
+    await waitFor(() =>
+      expect(callsTo("/v1/scripts").at(-1)?.headers.get("Rewind-Namespace")).toBe("chen"),
+    );
+    // chen runs the digest agent alone.
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(screen.getByText(/The sources the runs of/)).toHaveTextContent("chen");
+    const runs = within(table).getAllByTitle("Its runs")[0] as HTMLElement;
+    expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
+      /^script:\S+ namespace:chen$/,
+    );
   });
 
   it("opens a script: its source and its runs", async () => {

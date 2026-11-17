@@ -514,6 +514,18 @@ h3 {
   max-width: 80ch;
 }
 
+/* A link in the line under the title (a namespace's runs and scripts) reads as one. */
+.page-intro a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 3px;
+}
+
+.page-intro a:hover {
+  text-decoration-color: currentColor;
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -781,73 +793,18 @@ fieldset.seg {
   margin: 0;
 }
 
-/* Filter bar (the toolbar of Scripts and Tools) */
-
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 8px 12px;
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
-  border-radius: var(--radius-md);
-}
-
-.filters .sep {
-  width: 1px;
-  align-self: stretch;
-  background: var(--line);
-}
-
-.filter-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.filter-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 2px 0 8px;
-  border-radius: 9999px;
-  background: var(--surface-3);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  color: var(--ink);
-}
-
-.filter-chip .k {
-  color: var(--ink-3);
-}
-
-.filter-chip button {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--ink-2);
-  cursor: pointer;
-}
-
-.filter-chip button:hover {
-  background: var(--line);
-  color: var(--ink);
-}
-
 /* Cards */
 
+/* A card clips what it holds to its rounded corners (a gutter, a hatch, a header's fill), with
+   `clip` rather than `hidden`: no scroll container, so what sticks inside still sticks to the
+   page. Its stroke is a shadow, which nothing around it may clip: a card never sits in a
+   container that scrolls; one that must scroll is the card itself. */
 .panel {
   background: var(--surface);
   box-shadow: var(--shadow-card);
   border-radius: var(--radius-md);
   min-width: 0;
+  overflow: clip;
 }
 
 .panel-head {
@@ -1789,6 +1746,64 @@ button.label:hover {
   border-top: 1px solid var(--line);
 }
 
+/* A form in a dialog: the title and its close button, the fields scrolling under them when the
+   screen is short, the foot with Cancel and the change. */
+
+.dialog.form-dialog {
+  top: 10vh;
+  width: min(560px, calc(100vw - 32px));
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.dialog.form-dialog.wide {
+  width: min(880px, calc(100vw - 32px));
+}
+
+.form-dialog-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.form-dialog-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 20px 24px 0;
+}
+
+.form-dialog-head .dialog-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.form-dialog-head .icon-btn {
+  align-self: center;
+  margin-left: auto;
+}
+
+.form-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  padding: 12px 24px 24px;
+  overflow: auto;
+}
+
+.form-dialog-body .form-row .field.col {
+  flex: 1 1 200px;
+}
+
+/* One height for every field of a dialog, a row of the page's forms being shorter. */
+.dialog.form-dialog .field.col .input {
+  width: 100%;
+  height: 36px;
+}
+
 /* Find */
 
 .dialog.find {
@@ -1987,6 +2002,88 @@ button.label:hover {
   margin-left: auto;
   display: flex;
   gap: 2px;
+}
+
+.payload-head .copy-btn,
+.value-dialog-head .copy-btn {
+  opacity: 1;
+}
+
+/* A JSON value at hand, with its button to open it large, shown on hover */
+
+.json-box {
+  position: relative;
+  min-width: 0;
+}
+
+.json-box-tools {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.json-box:hover .copy-btn,
+.json-box:focus-within .copy-btn {
+  opacity: 1;
+}
+
+/* A value opened large: the width of the screen, the height it needs */
+
+.dialog.value-dialog {
+  top: 5vh;
+  width: min(1200px, calc(100vw - 48px));
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.value-dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 8px 0 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.value-dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.value-dialog-head .meta {
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.value-dialog-head .end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.value-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--code-bg);
+}
+
+.value-dialog-body pre {
+  padding: 16px 20px;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  tab-size: 2;
 }
 
 .payload-body {

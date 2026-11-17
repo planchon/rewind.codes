@@ -12,7 +12,12 @@ script executed, the most recently run first.
 </Frame>
 
 Each row shows the script's first lines and digest, its runs and their outcomes, the tools it called and the labels of its
-runs. Filter by a label (`agent:triage`) to see what one agent writes.
+runs, and when it last and first ran.
+
+Search with the same query bar as the runs, which reads an end user, labels and a tool here: `namespace:alice` shows the
+scripts Alice's runs ran, counted over her runs only; `@agent:triage` shows what one agent writes,
+`@agent:triage tool:github.close_issue` the scripts of that agent that closed issues. Click a tool or a label in a row to
+add it to the query. An end user's page opens the same list with **See its scripts**.
 
 Open a script to read its full source and its runs. From a run, the **Script** detail opens the same page.
 

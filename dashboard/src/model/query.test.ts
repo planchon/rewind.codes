@@ -7,7 +7,9 @@ import {
   quoteValue,
   splitTerms,
   suggest,
+  TEXT_VALUES,
   toggleFacet,
+  typedField,
   utf16Span,
   withQuery,
   withTerm,
@@ -121,6 +123,42 @@ describe("suggestions", () => {
 
   it("offer nothing inside quoted text", () => {
     expect(suggest('"rate', 5, FACETS)).toBeNull();
+  });
+
+  it("offer the namespaces of the facets, then those looked up", () => {
+    const facets = {
+      ...FACETS,
+      namespaces: [
+        { value: "bob", runs: 26 },
+        { value: "alice", runs: 17 },
+      ],
+    };
+    const values = { namespace: [{ value: "bob" }, { value: "ben", detail: "3 runs this month" }] };
+    const s = suggest("namespace:", 10, facets, 12, values);
+    expect(s?.items.map((i) => [i.insert, i.count ?? i.detail])).toEqual([
+      ["namespace:bob", 26],
+      ["namespace:alice", 17],
+      ["namespace:ben", "3 runs this month"],
+    ]);
+    expect(suggest("namespace:b", 11, facets, 12, values)?.items.map((i) => i.insert)).toEqual([
+      "namespace:bob",
+      "namespace:ben",
+    ]);
+  });
+
+  it("follow the language of the view, and offer values for free text", () => {
+    const language = { fields: [{ name: "tool", doc: "" }], labels: false };
+    expect(suggest("t", 1, FACETS, 12, undefined, language)?.items.map((i) => i.insert)).toEqual([
+      "tool:",
+    ]);
+    expect(suggest("@a", 2, FACETS, 12, undefined, language)).toBeNull();
+    expect(suggest("status:f", 8, FACETS, 12, undefined, language)).toBeNull();
+    const names = { [TEXT_VALUES]: [{ value: "user_7Kd02" }, { value: "dana" }] };
+    expect(suggest("us", 2, undefined, 12, names, language)?.items.map((i) => i.insert)).toEqual([
+      "user_7Kd02",
+    ]);
+    expect(typedField("x us", 4)).toEqual({ field: TEXT_VALUES, value: "us" });
+    expect(typedField("namespace:b", 11)).toEqual({ field: "namespace", value: "b" });
   });
 });
 

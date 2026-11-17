@@ -1,6 +1,8 @@
 // A payload: its size, digest and preview at once; its value on demand. A value above the API's
 // inline limit is not in the entry: it is read with GET /v1/payloads/{digest} when asked for.
-import { ChevronDown, ChevronRight } from "lucide-react";
+// Any payload opens large in a dialog, to be read at the width of the screen.
+import { Dialog } from "@base-ui/react/dialog";
+import { ChevronDown, ChevronRight, Maximize2, X } from "lucide-react";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { usePayloadValue } from "../api/queries";
 import type { Payload } from "../api/types";
@@ -106,6 +108,79 @@ function LoadedValue({ digest, runId }: { digest: string; runId: string }) {
   return <JsonValue value={value.data} />;
 }
 
+/** A value in a dialog as wide as the screen allows: the payload's, or one already at hand. */
+export function ValueDialog({
+  open,
+  onOpenChange,
+  name,
+  meta,
+  copyText,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  name: string;
+  meta?: ReactNode;
+  copyText?: string | null;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="dialog-backdrop" />
+        <Dialog.Popup className="dialog value-dialog">
+          <header className="value-dialog-head">
+            <Dialog.Title className="value-dialog-title mono">{name}</Dialog.Title>
+            {meta && <span className="meta">{meta}</span>}
+            <span className="end">
+              {copyText && <CopyButton text={copyText} label={`Copy ${name}`} />}
+              <Dialog.Close className="icon-btn" aria-label="Close">
+                <X size={14} />
+              </Dialog.Close>
+            </span>
+          </header>
+          <div className="value-dialog-body">{children}</div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+/** The button that opens a value large. */
+export function ExpandButton({ name, onClick }: { name: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className="copy-btn"
+      aria-label={`Open ${name} large`}
+      title="Open large"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+    >
+      <Maximize2 size={12} />
+    </button>
+  );
+}
+
+/** A JSON value with a button that opens it large, for values already at hand. */
+export function JsonBox({ name, value }: { name: string; value: unknown }) {
+  const [large, setLarge] = useState(false);
+  const text = useMemo(() => JSON.stringify(value, null, 2) ?? "undefined", [value]);
+  return (
+    <div className="json-box">
+      <div className="json-box-tools">
+        <ExpandButton name={name} onClick={() => setLarge(true)} />
+      </div>
+      <JsonValue value={value} />
+      <ValueDialog open={large} onOpenChange={setLarge} name={name} copyText={text}>
+        <JsonValue value={value} />
+      </ValueDialog>
+    </div>
+  );
+}
+
 export function PayloadView({
   name,
   payload,
@@ -121,7 +196,13 @@ export function PayloadView({
   const inline = payload.value !== undefined;
   const [open, setOpen] = useState(true);
   const [asked, setAsked] = useState(inline && payload.bytes <= SHOW_AT_ONCE);
+  const [large, setLarge] = useState(false);
   const copyText = inline ? JSON.stringify(payload.value, null, 2) : null;
+  const meta = (
+    <span title={payload.digest}>
+      {formatBytes(payload.bytes)} · {shortDigest(payload.digest)}
+    </span>
+  );
 
   return (
     <section className="payload" aria-label={name}>
@@ -137,14 +218,20 @@ export function PayloadView({
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </button>
         <span className="name">{name}</span>
-        <span className="meta" title={payload.digest}>
-          {formatBytes(payload.bytes)} · {shortDigest(payload.digest)}
-        </span>
+        <span className="meta">{meta}</span>
         {extra}
         <span className="end">
           {copyText !== null && <CopyButton text={copyText} label={`Copy ${name}`} />}
+          <ExpandButton name={name} onClick={() => setLarge(true)} />
         </span>
       </header>
+      <ValueDialog open={large} onOpenChange={setLarge} name={name} meta={meta} copyText={copyText}>
+        {inline ? (
+          <JsonValue value={payload.value} />
+        ) : (
+          <LoadedValue digest={payload.digest} runId={runId} />
+        )}
+      </ValueDialog>
       {open && (
         <div className="payload-body">
           {asked ? (

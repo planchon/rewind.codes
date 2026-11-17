@@ -1,27 +1,37 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
-// outcome, the tools it called and the labels it ran with.
-import { Link, useNavigate, useSearchParams } from "react-router";
-import { useScripts } from "../api/queries";
+// outcome, the tools it called and the labels it ran with. Searched with the query bar of the
+// runs, which reads labels and one tool here, what `GET /v1/scripts` filters by, and one
+// namespace, sent as `Rewind-Namespace`: the scripts of one end user, counted over their runs.
+import { useMemo } from "react";
+import { Link, useNavigate } from "react-router";
+import { useRunStats, useScripts } from "../api/queries";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../api/types";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
 import { PageHeader } from "../components/PageHeader";
+import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
-import {
-  readScriptFilters,
-  type ScriptFilters,
-  toScriptsQuery,
-  writeScriptFilters,
-} from "../model/filters";
+import { legacyScriptsQuery, RANGES, SCRIPTS_LANGUAGE, scriptsSearch } from "../model/filters";
 import { formatCount } from "../model/format";
-import { queryLink } from "../model/query";
-import { AddFilter, FilterChip } from "./FilterBits";
+import { fieldTerm, joinQuery, labelTerm, queryLink, splitTerms, withTerm } from "../model/query";
+import { useListQuery, useRunQueryValues } from "./search";
+
+const LEGACY_NAMES = ["label", "tool"] as const;
 
 export function totalRuns(counts: RunCounts): number {
   return RUN_STATUSES.reduce((sum, s) => sum + counts[s], 0);
 }
 
 /** Runs by status: a bar to compare at a glance, counts with glyphs to read. */
-export function Outcomes({ counts, digest }: { counts: RunCounts; digest?: string }) {
+export function Outcomes({
+  counts,
+  digest,
+  scope = "",
+}: {
+  counts: RunCounts;
+  digest?: string;
+  /** A term the links to the runs add: the namespace the counts are of. */
+  scope?: string;
+}) {
   const total = totalRuns(counts);
   const present = RUN_STATUSES.filter((s) => counts[s] > 0);
   const title = present.map((s) => `${counts[s]} ${s}`).join(", ");
@@ -38,7 +48,7 @@ export function Outcomes({ counts, digest }: { counts: RunCounts; digest?: strin
           digest ? (
             <Link
               key={s}
-              to={queryLink("/observability", `status:${s} script:${digest}`)}
+              to={queryLink("/observability", joinQuery(`status:${s} script:${digest}`, scope))}
               className={`status ${s}`}
               title={`${counts[s]} ${s}`}
             >
@@ -66,10 +76,12 @@ function topLabels(labels: Record<string, number> | undefined, n: number): strin
 
 function ScriptRow({
   script,
+  scope,
   onPickLabel,
   onPickTool,
 }: {
   script: ScriptSummary;
+  scope: string;
   onPickLabel: (p: string) => void;
   onPickTool: (t: string) => void;
 }) {
@@ -91,7 +103,7 @@ function ScriptRow({
       </td>
       <td className="right">
         <Link
-          to={queryLink("/observability", `script:${script.digest}`)}
+          to={queryLink("/observability", joinQuery(`script:${script.digest}`, scope))}
           className="num"
           title="Its runs"
         >
@@ -99,7 +111,7 @@ function ScriptRow({
         </Link>
       </td>
       <td>
-        <Outcomes counts={script.runs} digest={script.digest} />
+        <Outcomes counts={script.runs} digest={script.digest} scope={scope} />
       </td>
       <td className="wrap">
         <span className="labels">
@@ -131,55 +143,74 @@ function ScriptRow({
       </td>
       <td className="dim">
         <Ago ms={Date.parse(script.lastRunAt)} />
-      </td>
-      <td className="dim">
-        <Ago ms={Date.parse(script.firstRunAt)} />
+        <span className="cell-sub">
+          first <Ago ms={Date.parse(script.firstRunAt)} />
+        </span>
       </td>
     </tr>
   );
 }
 
+/**
+ * What the bar suggests: the namespaces, labels and tools of the last 30 days' runs, and the
+ * namespaces whose name starts with what is typed.
+ */
+function useScriptFacets() {
+  const facets = useRunStats("scripts-facets", () => ({
+    since: new Date(Date.now() - RANGES["30d"]).toISOString(),
+    top: 20,
+  }));
+  const lookup = useRunQueryValues();
+  const data = facets.data?.facets;
+  return useMemo(
+    () => ({
+      // Tools are offered by name: the list takes one tool, never a pattern.
+      facets: data ? { ...data, tools: [] } : undefined,
+      values: {
+        ...lookup.values,
+        tool: (data?.tools ?? []).map((t) => ({ value: t.value, count: t.runs })),
+      },
+      onTyping: lookup.onTyping,
+    }),
+    [data, lookup.values, lookup.onTyping],
+  );
+}
+
 export function ScriptsView() {
-  const [params, setParams] = useSearchParams();
-  const filters = readScriptFilters(params);
-  const key = writeScriptFilters(filters).toString();
-  const scripts = useScripts(key, toScriptsQuery(filters));
-  const update = (patch: Partial<ScriptFilters>) =>
-    setParams(writeScriptFilters({ ...filters, ...patch }));
-  const addLabel = (pair: string) => {
-    if (!filters.labels.includes(pair)) update({ labels: [...filters.labels, pair] });
-  };
+  const { q, setQ } = useListQuery(legacyScriptsQuery, LEGACY_NAMES);
+  const search = scriptsSearch(q);
+  const scripts = useScripts(q, search.query, search.namespace, search.fault === null);
+  const suggestions = useScriptFacets();
+  const addTerm = (term: string) => setQ(withTerm(q, term));
+  const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
 
   const list = scripts.data?.pages.flatMap((p) => p.scripts) ?? [];
   return (
     <div className="page">
       <PageHeader title="Scripts" />
-      <p className="page-intro">Every distinct source executed, the most recently run first.</p>
-      <section className="filters" aria-label="Filters">
-        <AddFilter
-          fields={[
-            {
-              name: "label",
-              placeholder: "key:value",
-              check: (v) => (v.indexOf(":") > 0 ? null : "A label filter is key:value"),
-            },
-            { name: "tool", placeholder: "github.close_issue" },
-          ]}
-          onAdd={(field, value) => (field === "label" ? addLabel(value) : update({ tool: value }))}
-        />
-        {filters.labels.map((pair) => (
-          <FilterChip
-            key={pair}
-            name="label"
-            value={pair}
-            onRemove={() => update({ labels: filters.labels.filter((l) => l !== pair) })}
-          />
-        ))}
-        {filters.tool && (
-          <FilterChip name="tool" value={filters.tool} onRemove={() => update({ tool: null })} />
+      <p className="page-intro">
+        {search.namespace ? (
+          <>
+            The sources the runs of <span className="mono">{search.namespace}</span> executed, the
+            most recently run first; their runs are that end user's.
+          </>
+        ) : (
+          "Every distinct source executed, the most recently run first."
         )}
-      </section>
-      {scripts.isPending ? (
+      </p>
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        language={SCRIPTS_LANGUAGE}
+        facets={suggestions.facets}
+        values={suggestions.values}
+        onTyping={suggestions.onTyping}
+        fault={search.fault}
+        placeholder="namespace:alice @agent:triage tool:github.close_issue"
+      />
+      {search.fault ? (
+        <Empty>Fix the query to see the scripts: the term at fault is underlined above.</Empty>
+      ) : scripts.isPending ? (
         <Loading>Loading scripts…</Loading>
       ) : scripts.isError ? (
         <ProblemView error={scripts.error} title="The scripts could not be read" />
@@ -194,7 +225,6 @@ export function ScriptsView() {
                 <th>Tools</th>
                 <th>Labels</th>
                 <th>Last run</th>
-                <th>First run</th>
               </tr>
             </thead>
             <tbody>
@@ -202,13 +232,26 @@ export function ScriptsView() {
                 <ScriptRow
                   key={s.digest}
                   script={s}
-                  onPickLabel={addLabel}
-                  onPickTool={(tool) => update({ tool })}
+                  scope={scope}
+                  onPickLabel={(pair) => {
+                    const at = pair.indexOf(":");
+                    addTerm(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
+                  }}
+                  onPickTool={(tool) =>
+                    setQ(
+                      joinQuery(
+                        ...splitTerms(q)
+                          .filter((t) => !(t.kind === "field" && t.field === "tool"))
+                          .map((t) => t.raw),
+                        fieldTerm("tool", tool),
+                      ),
+                    )
+                  }
                 />
               ))}
             </tbody>
           </table>
-          {list.length === 0 && <Empty>No script matches these filters.</Empty>}
+          {list.length === 0 && <Empty>No script matches this search.</Empty>}
           {scripts.hasNextPage && (
             <div className="list-foot">
               <span className="num">{formatCount(list.length)} scripts shown</span>

@@ -254,7 +254,7 @@ export function Meter({
   );
 }
 
-/** A figure of the Overview: a big number, what it counts, a line of context; a link. */
+/** A figure, as the Overview shows them: a big number, what it counts, a line of context; a link to what it counts, when there is one. */
 export function Tile({
   to,
   label,
@@ -262,17 +262,25 @@ export function Tile({
   context,
   tone,
 }: {
-  to: string;
+  to?: string;
   label: string;
   value: ReactNode;
   context?: ReactNode;
   tone?: "critical" | "warning" | "good" | "info";
 }) {
-  return (
-    <Link to={to} className={`tile${tone ? ` tile-${tone}` : ""}`}>
+  const className = `tile${tone ? ` tile-${tone}` : ""}`;
+  const body = (
+    <>
       <span className="tile-label">{label}</span>
       <span className="tile-value num">{value}</span>
       {context !== undefined && <span className="tile-context">{context}</span>}
+    </>
+  );
+  return to ? (
+    <Link to={to} className={className}>
+      {body}
     </Link>
+  ) : (
+    <div className={`${className} static`}>{body}</div>
   );
 }

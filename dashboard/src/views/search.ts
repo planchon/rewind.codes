@@ -1,9 +1,12 @@
 // The query and the window of the views that search runs, kept in the URL: the query follows the
 // operator from one view to another, and a link names a search.
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
+import { useNamespaceSuggestions, useSettled } from "../api/namespaces";
+import { useAccess } from "../app/access";
 import { RANGES, type RangeKey } from "../model/filters";
-import { legacyQuery, withQuery } from "../model/query";
+import { formatCount } from "../model/format";
+import { type FieldValues, legacyQuery, TEXT_VALUES, withQuery } from "../model/query";
 
 /**
  * The query of the URL (`q`). An older link's filters (`?status=failed&label=…`) are read as the
@@ -20,6 +23,37 @@ export function useSearchQuery() {
     (next: string) => setParams((current) => withQuery(current, next)),
     [setParams],
   );
+  return { q, setQ, params, setParams };
+}
+
+/**
+ * The query of a list that is not of runs (Scripts, Tools, Namespaces), in the URL (`q`). An older
+ * link's parameters, which `legacy` reads as a query, are rewritten to it.
+ */
+export function useListQuery(
+  legacy: (params: URLSearchParams) => string | null,
+  legacyNames: readonly string[],
+) {
+  const [params, setParams] = useSearchParams();
+  const old = legacy(params);
+  const q = old ?? params.get("q") ?? "";
+  const setQ = useCallback(
+    (next: string, replace = false) =>
+      setParams(
+        (current) => {
+          const p = new URLSearchParams(current);
+          for (const name of legacyNames) p.delete(name);
+          if (next.trim()) p.set("q", next.trim());
+          else p.delete("q");
+          return p;
+        },
+        { replace },
+      ),
+    [setParams, legacyNames],
+  );
+  useEffect(() => {
+    if (old !== null) setQ(old, true);
+  }, [old, setQ]);
   return { q, setQ, params, setParams };
 }
 
@@ -61,4 +95,55 @@ export function useWindow(): [RangeKey, (w: RangeKey) => void] {
 /** `started:>now-24h`: the runs of a window, as a query term. */
 export function windowTerm(field: "started" | "ended", win: RangeKey): string {
   return `${field}:>now-${win}`;
+}
+
+/**
+ * The namespaces to suggest as a name is typed: those whose name starts with it, the most active
+ * this month first, for whoever reads the namespaces. The facets already count the namespaces of
+ * the current query's runs; these add the end users the facets leave out.
+ */
+function useNamespaceLookup(typed: string | null) {
+  const access = useAccess();
+  const prefix = useSettled(typed, 150);
+  const found = useNamespaceSuggestions(access.can("namespaces:read") ? prefix : null);
+  return useMemo(
+    () =>
+      (found.data?.namespaces ?? []).map((ns) => ({
+        value: ns.name,
+        detail: `${formatCount(ns.usage.runsStarted)} runs this month`,
+      })),
+    [found.data],
+  );
+}
+
+/** The values the runs' query bar suggests beside the facets: the namespaces, looked up. */
+export function useRunQueryValues(): {
+  values: FieldValues;
+  onTyping: (typed: { field: string; value: string } | null) => void;
+} {
+  const [typed, setTyped] = useState<string | null>(null);
+  const namespaces = useNamespaceLookup(typed);
+  const onTyping = useCallback(
+    (t: { field: string; value: string } | null) =>
+      setTyped(t?.field === "namespace" ? t.value : null),
+    [],
+  );
+  const values = useMemo(() => ({ namespace: namespaces }), [namespaces]);
+  return { values, onTyping };
+}
+
+/** The values the Namespaces' bar suggests for its free text: the names that start with it. */
+export function useNamespaceNameValues(): {
+  values: FieldValues;
+  onTyping: (typed: { field: string; value: string } | null) => void;
+} {
+  const [typed, setTyped] = useState<string | null>(null);
+  const namespaces = useNamespaceLookup(typed);
+  const onTyping = useCallback(
+    (t: { field: string; value: string } | null) =>
+      setTyped(t?.field === TEXT_VALUES && t.value !== "" ? t.value : null),
+    [],
+  );
+  const values = useMemo(() => ({ [TEXT_VALUES]: namespaces }), [namespaces]);
+  return { values, onTyping };
 }

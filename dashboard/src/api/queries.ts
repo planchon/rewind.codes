@@ -76,15 +76,21 @@ export function useRun(id: string) {
   return useQuery({ queryKey: ["run", id], queryFn: ({ signal }) => api.run(id, signal) });
 }
 
-export function useScripts(key: string, query: ListScriptsQuery) {
+export function useScripts(
+  key: string,
+  query: ListScriptsQuery,
+  namespace: string | null,
+  enabled = true,
+) {
   const { api } = useScope();
   return useInfiniteQuery({
-    queryKey: ["scripts", key],
+    queryKey: ["scripts", key, namespace],
     queryFn: ({ pageParam, signal }) =>
-      api.scripts(pageParam ? { ...query, cursor: pageParam } : query, signal),
+      api.scripts(pageParam ? { ...query, cursor: pageParam } : query, signal, namespace),
     initialPageParam: "",
     getNextPageParam: (last) => last.nextCursor ?? undefined,
     refetchInterval: 30_000,
+    enabled,
   });
 }
 

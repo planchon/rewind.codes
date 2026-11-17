@@ -6,7 +6,7 @@ import { Link } from "react-router";
 import { useRunEntry } from "../../api/queries";
 import type { Entry, Payload, Run } from "../../api/types";
 import { ProblemView, Time } from "../../components/bits";
-import { JsonValue, PayloadView } from "../../components/Payload";
+import { JsonBox, PayloadView } from "../../components/Payload";
 import { OutcomeBadge, StatusBadge } from "../../components/Status";
 import { formatDuration, formatOffset } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
@@ -64,7 +64,7 @@ function RawEntry({ runId, idx }: { runId: string; idx: number }) {
           <ProblemView error={entry.error} title="The entry could not be read" />
         ) : (
           <div className="payload-body">
-            <JsonValue value={entry.data} />
+            <JsonBox name={`entry #${idx}`} value={entry.data} />
           </div>
         ))}
     </div>
@@ -324,7 +324,7 @@ function ActivityDetail({
           </h4>
           {a.end.error.data !== undefined && (
             <div className="payload-body">
-              <JsonValue value={a.end.error.data} />
+              <JsonBox name="error data" value={a.end.error.data} />
             </div>
           )}
         </section>

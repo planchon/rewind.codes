@@ -1,7 +1,7 @@
 // The dashboard's client of the API: `/v1`, typed by the generated `paths` and authenticated
 // with a Bearer token (the operator's key, or a member's access token), and the sign-in routes
-// `/auth`, which read and write the session cookie and never see a token. It never names a
-// namespace (`Rewind-Namespace`): the dashboard reads every namespace of the organization.
+// `/auth`, which read and write the session cookie and never see a token. It reads every namespace
+// of the organization, and names one (`Rewind-Namespace`) only for the scripts of one end user.
 import createClient from "openapi-fetch";
 import type {
   ApiKey,
@@ -253,8 +253,19 @@ export class Api {
     );
   }
 
-  async scripts(query: ListScriptsQuery, signal?: AbortSignal): Promise<ScriptPage> {
-    return this.unwrap(await this.client.GET("/v1/scripts", { params: { query }, signal }));
+  /** The scripts the runs ran: of one end user's runs when `namespace` names one. */
+  async scripts(
+    query: ListScriptsQuery,
+    signal?: AbortSignal,
+    namespace: string | null = null,
+  ): Promise<ScriptPage> {
+    return this.unwrap(
+      await this.client.GET("/v1/scripts", {
+        params: { query },
+        ...(namespace !== null ? { headers: { "Rewind-Namespace": namespace } } : {}),
+        signal,
+      }),
+    );
   }
 
   async script(digest: string, signal?: AbortSignal): Promise<Script> {

@@ -3,7 +3,7 @@
 // by a grant cannot be deleted.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
 import { ApiError } from "../../api/client";
 import { ROLES, usePermissionCatalog, useRoles, WHOAMI } from "../../api/organization";
 import type { Permission, PermissionInfo, Role } from "../../api/types";
@@ -11,6 +11,7 @@ import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { groupPermissions, missingPermissions, roleNameProblem } from "../../model/access";
 import { ConfirmButton, Described, Field, PermissionList } from "./bits";
 import { SectionGate } from "./OrganizationView";
@@ -70,102 +71,84 @@ export function RoleEditor({
       else next.add(p);
       return next;
     });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     setTouched(true);
     if (!nameProblem) save.mutate();
   };
 
   return (
-    <form
-      className="panel role-editor"
-      aria-label={role ? `Edit the role ${role.name}` : "New role"}
+    <DialogForm
+      title={role ? `Edit the role ${role.name}` : "New role"}
+      meta={`${chosen.size} of ${catalog.length} permissions`}
+      submit={role ? "Save the role" : "Create the role"}
+      pending={save.isPending}
+      disabled={touched && nameProblem !== null}
+      error={save.error}
       onSubmit={submit}
     >
-      <div className="panel-head">
-        <h2>{role ? `Edit ${role.name}` : "New role"}</h2>
-        <span className="end muted">
-          {chosen.size} of {catalog.length} permissions
-        </span>
+      <div className="form-row">
+        <Field
+          label="Name"
+          hint="Lowercase letters, digits, - and _; at most 64."
+          error={touched ? nameProblem : null}
+        >
+          {(props) => (
+            <input
+              {...props}
+              className="input mono"
+              value={name}
+              disabled={role !== null}
+              placeholder="auditor"
+              spellCheck={false}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => setTouched(true)}
+            />
+          )}
+        </Field>
+        <Field label="Description" hint="Shown wherever the role is given." grow>
+          {(props) => (
+            <input
+              {...props}
+              className="input"
+              value={description}
+              placeholder="What the role is for"
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          )}
+        </Field>
       </div>
-      <div className="panel-body stack">
-        <div className="form-row">
-          <Field
-            label="Name"
-            hint="Lowercase letters, digits, - and _; at most 64."
-            error={touched ? nameProblem : null}
-          >
-            {(props) => (
-              <input
-                {...props}
-                className="input mono"
-                value={name}
-                disabled={role !== null}
-                placeholder="auditor"
-                spellCheck={false}
-                onChange={(e) => setName(e.target.value)}
-                onBlur={() => setTouched(true)}
-              />
-            )}
-          </Field>
-          <Field label="Description" hint="Shown wherever the role is given." grow>
-            {(props) => (
-              <input
-                {...props}
-                className="input"
-                value={description}
-                placeholder="What the role is for"
-                onChange={(e) => setDescription(e.target.value)}
-              />
-            )}
-          </Field>
-        </div>
-        <fieldset className="perm-groups">
-          <legend className="field-label">
-            Permissions <span className="muted">— you can give only those you hold yourself</span>
-          </legend>
-          {groupPermissions(catalog).map((group) => (
-            <div key={group.resource} className="perm-group">
-              <h3>{group.resource.replace("_", " ")}</h3>
-              {group.items.map((item) => {
-                const held = access.permissions.has(item.permission);
-                return (
-                  <label
-                    key={item.permission}
-                    className={held ? "perm-check" : "perm-check unheld"}
-                    title={held ? undefined : "You do not hold this permission"}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={chosen.has(item.permission)}
-                      disabled={!held}
-                      onChange={() => toggle(item.permission)}
-                    />
-                    <span className="perm-name mono">{item.permission}</span>
-                    <span className="perm-desc">
-                      <Described text={item.description} />
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          ))}
-        </fieldset>
-        {save.error && <ErrorNote error={save.error} />}
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={save.isPending || (touched && nameProblem !== null)}
-          >
-            {save.isPending ? "Saving…" : role ? "Save the role" : "Create the role"}
-          </button>
-          <button type="button" className="btn ghost" onClick={onDone}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </form>
+      <fieldset className="perm-groups">
+        <legend className="field-label">
+          Permissions <span className="muted">— you can give only those you hold yourself</span>
+        </legend>
+        {groupPermissions(catalog).map((group) => (
+          <div key={group.resource} className="perm-group">
+            <h3>{group.resource.replace("_", " ")}</h3>
+            {group.items.map((item) => {
+              const held = access.permissions.has(item.permission);
+              return (
+                <label
+                  key={item.permission}
+                  className={held ? "perm-check" : "perm-check unheld"}
+                  title={held ? undefined : "You do not hold this permission"}
+                >
+                  <input
+                    type="checkbox"
+                    checked={chosen.has(item.permission)}
+                    disabled={!held}
+                    onChange={() => toggle(item.permission)}
+                  />
+                  <span className="perm-name mono">{item.permission}</span>
+                  <span className="perm-desc">
+                    <Described text={item.description} />
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        ))}
+      </fieldset>
+    </DialogForm>
   );
 }
 
@@ -176,7 +159,13 @@ function Roles() {
   const roles = useRoles();
   const write = access.can("roles:write");
   const catalog = usePermissionCatalog(write);
-  const [editing, setEditing] = useState<Role | "new" | null>(null);
+  // The role in the dialog (`null` for a new one), kept while it closes.
+  const [editing, setEditing] = useState(false);
+  const [target, setTarget] = useState<Role | null>(null);
+  const edit = (role: Role | null) => {
+    setTarget(role);
+    setEditing(true);
+  };
   const [failed, setFailed] = useState<{ role: string; error: unknown } | null>(null);
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteRole(name),
@@ -214,7 +203,7 @@ function Roles() {
                 disabled={locked !== undefined || catalog.isPending}
                 title={locked}
                 aria-label={`Edit the role ${r.name}`}
-                onClick={() => setEditing(r)}
+                onClick={() => edit(r)}
               >
                 Edit
               </button>
@@ -250,26 +239,28 @@ function Roles() {
           A role is a set of permissions. The built-in roles never change; changing one of the
           organization's applies at once to everyone holding it.
         </p>
-        {write && editing === null && (
+        {write && (
           <button
             type="button"
             className="btn"
             disabled={catalog.isPending}
-            onClick={() => setEditing("new")}
+            onClick={() => edit(null)}
           >
             <Plus size={12} /> New role
           </button>
         )}
       </div>
       {catalog.error && <ErrorNote error={catalog.error} />}
-      {editing !== null && catalog.data && (
-        <RoleEditor
-          role={editing === "new" ? null : editing}
-          catalog={catalog.data}
-          existing={roles.data.map((r) => r.name)}
-          onDone={() => setEditing(null)}
-        />
-      )}
+      <FormDialog open={editing && catalog.data !== undefined} onOpenChange={setEditing} wide>
+        {catalog.data && (
+          <RoleEditor
+            role={target}
+            catalog={catalog.data}
+            existing={roles.data.map((r) => r.name)}
+            onDone={() => setEditing(false)}
+          />
+        )}
+      </FormDialog>
       <div className="panel">
         <div className="panel-head">
           <h2>The organization's roles</h2>

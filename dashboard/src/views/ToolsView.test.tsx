@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { ToolStats } from "../api/types";
 import { renderApp, search } from "../test/app";
-import { groupTools, logScale, namespaceOf } from "./ToolsView";
+import { groupTools, logScale, logTicks, namespaceOf } from "./ToolsView";
 
 function stats(tool: string, p50: number, max: number): ToolStats {
   return {
@@ -34,9 +34,18 @@ describe("ToolsView", () => {
   it("puts latencies on a log scale that ignores calls answered at once", () => {
     const scale = logScale([stats("a", 0, 0), stats("b", 140, 3_200)]);
     expect(scale.min).toBe(100);
+    expect(scale.max).toBe(5_000);
     expect(scale.x(100)).toBe(0);
-    expect(scale.x(3_200)).toBeCloseTo(1);
+    expect(scale.x(5_000)).toBeCloseTo(1);
     expect(scale.x(0)).toBe(0);
+    // Short: every step labelled; long: the major steps, every other one past five.
+    expect(logTicks(scale).map((t) => t.ms)).toEqual([100, 200, 500, 1_000, 2_000, 5_000]);
+    const long = logScale([stats("a", 15, 20), stats("b", 140, 3 * 3_600_000)]);
+    expect(
+      logTicks(long)
+        .filter((t) => t.label)
+        .map((t) => t.ms),
+    ).toEqual([10, 1_000, 60_000, 3_600_000]);
   });
 
   it("shows latency, error rate and retries per tool over the window", async () => {
