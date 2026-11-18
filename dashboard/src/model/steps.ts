@@ -4,6 +4,7 @@
 // until the script pauses again. What the run knew after a step is the journal up to its last
 // entry, so the state at the cursor is `buildRunModel(entries up to it)`.
 import type { Entry } from "../api/types";
+import { CANCELLED_ERROR } from "./ending";
 import type { Activity, RunModel } from "./run";
 
 /** The events that wake the script up: each starts a step. */
@@ -28,8 +29,11 @@ export interface Step {
   committed: Entry[];
   /** When the trigger was recorded, in milliseconds since the epoch. */
   at: number;
-  /** It ends the run: it holds `complete_run`, `fail_run` or `run_aborted`. */
-  ends: "completed" | "failed" | "aborted" | null;
+  /**
+   * It ends the run: it holds `complete_run`, `fail_run` or `run_aborted`. A `fail_run` whose
+   * error is `CancelledError` ends it `cancelled` (archi/02-journal.md, "Run state").
+   */
+  ends: "completed" | "failed" | "cancelled" | "aborted" | null;
 }
 
 /** The steps of a history, in order. `run_aborted` ends the step it follows. */
@@ -53,7 +57,8 @@ export function buildSteps(entries: readonly Entry[]): Step[] {
     current.committed.push(entry);
     const type = entry.event.type;
     if (type === "complete_run") current.ends = "completed";
-    if (type === "fail_run") current.ends = "failed";
+    if (entry.event.type === "fail_run")
+      current.ends = entry.event.error.name === CANCELLED_ERROR ? "cancelled" : "failed";
     if (type === "run_aborted") current.ends = "aborted";
   }
   return steps;

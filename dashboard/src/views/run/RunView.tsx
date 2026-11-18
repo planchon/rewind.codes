@@ -84,23 +84,26 @@ const SEVERITY = {
   received: 0,
 } as const;
 
-function worst(activities: Activity[]) {
+function worst(activities: Activity[], runEnded: boolean) {
   return activities
-    .map(activityOutcome)
+    .map((a) => activityOutcome(a, runEnded))
     .reduce(
       (w, o) => (SEVERITY[o] > SEVERITY[w] ? o : w),
       "ok" as ReturnType<typeof activityOutcome>,
     );
 }
 
-function noteText(group: NoteGroup, now: number): ReactNode {
+/** The text of a note. Once the run has ended, what was still pending was cancelled. */
+function noteText(group: NoteGroup, now: number, ended: boolean): ReactNode {
   const first = group.activities[0];
   if (!first) return null;
   const n = group.activities.length;
+  const outcome = (a: Activity) => activityOutcome(a, ended);
   switch (first.kind) {
     case "tool_call": {
-      const failed = group.activities.filter((a) => activityOutcome(a) === "failed").length;
-      const open = group.activities.filter((a) => activityOutcome(a) === "open").length;
+      const failed = group.activities.filter((a) => outcome(a) === "failed").length;
+      const open = group.activities.filter((a) => outcome(a) === "open").length;
+      const cancelled = group.activities.filter((a) => outcome(a) === "cancelled").length;
       if (n === 1) {
         const end = first.end;
         return (
@@ -111,7 +114,9 @@ function noteText(group: NoteGroup, now: number): ReactNode {
                 ? end.outcome === "failed"
                   ? end.error.kind
                   : formatDuration(end.at - first.at)
-                : "in flight"}
+                : ended
+                  ? "cancelled"
+                  : "in flight"}
             </span>
           </>
         );
@@ -121,6 +126,7 @@ function noteText(group: NoteGroup, now: number): ReactNode {
           {callName(first.tool, first.args)} <span className="note-meta">×{n}</span>
           {failed > 0 && <span className="note-meta tone-critical">{failed} failed</span>}
           {open > 0 && <span className="note-meta">{open} in flight</span>}
+          {cancelled > 0 && <span className="note-meta">{cancelled} cancelled</span>}
         </>
       );
     }
@@ -128,28 +134,32 @@ function noteText(group: NoteGroup, now: number): ReactNode {
       return (
         <>
           sleep {formatDuration(first.durationMs)}
-          {!first.end && (
+          {!first.end && !ended && (
             <span className="note-meta">fires {formatRelative(first.fireAt, now)}</span>
           )}
-          {first.end?.outcome === "cancelled" && <span className="note-meta">cancelled</span>}
+          {(first.end?.outcome === "cancelled" || (!first.end && ended)) && (
+            <span className="note-meta">cancelled</span>
+          )}
         </>
       );
     case "signal": {
-      if (endedRunOf(first.name) !== null) return endedNote(group, now);
+      if (endedRunOf(first.name) !== null) return endedNote(group, now, ended);
       const end = first.end;
       return (
         <>
           signal "{first.name}"{n > 1 ? <span className="note-meta">×{n}</span> : null}
           <span className="note-meta">
-            {end === null
-              ? first.timeoutAt
-                ? `gives up ${formatRelative(first.timeoutAt, now)}`
-                : "waiting"
-              : end.outcome === "timed_out"
-                ? "timed out"
-                : end.buffered
-                  ? "was waiting in the mailbox"
-                  : `after ${formatDuration(end.at - first.at)}`}
+            {end === null && ended
+              ? "cancelled"
+              : end === null
+                ? first.timeoutAt
+                  ? `gives up ${formatRelative(first.timeoutAt, now)}`
+                  : "waiting"
+                : end.outcome === "timed_out"
+                  ? "timed out"
+                  : end.buffered
+                    ? "was waiting in the mailbox"
+                    : `after ${formatDuration(end.at - first.at)}`}
           </span>
         </>
       );
@@ -166,7 +176,7 @@ function noteText(group: NoteGroup, now: number): ReactNode {
 }
 
 /** The waits of `run.result()` on a line: the end of each run, or how long it is awaited. */
-function endedNote(group: NoteGroup, now: number): ReactNode {
+function endedNote(group: NoteGroup, now: number, runEnded: boolean): ReactNode {
   const waits = group.activities.filter((a) => a.kind === "signal");
   const first = waits[0];
   if (!first) return null;
@@ -176,19 +186,21 @@ function endedNote(group: NoteGroup, now: number): ReactNode {
       <>
         {activityTitle(first)}
         <span className="note-meta">
-          {end === null
-            ? first.timeoutAt
-              ? `gives up ${formatRelative(first.timeoutAt, now)}`
-              : "waiting"
-            : end.outcome === "timed_out"
-              ? "timed out"
-              : `${readRunEnd(end.payload).status ?? "ended"}${end.buffered ? "" : ` after ${formatDuration(end.at - first.at)}`}`}
+          {end === null && runEnded
+            ? "cancelled"
+            : end === null
+              ? first.timeoutAt
+                ? `gives up ${formatRelative(first.timeoutAt, now)}`
+                : "waiting"
+              : end.outcome === "timed_out"
+                ? "timed out"
+                : `${readRunEnd(end.payload).status ?? "ended"}${end.buffered ? "" : ` after ${formatDuration(end.at - first.at)}`}`}
         </span>
       </>
     );
   }
   const ended = waits.filter((w) => w.end?.outcome === "received").length;
-  const failed = waits.filter((w) => activityOutcome(w) === "failed").length;
+  const failed = waits.filter((w) => activityOutcome(w, runEnded) === "failed").length;
   return (
     <>
       run.result() <span className="note-meta">×{waits.length}</span>
@@ -222,7 +234,7 @@ function Notes({
       {groupNotes(activities).map((g) => {
         const first = g.activities[0];
         if (!first) return null;
-        const outcome = worst(g.activities);
+        const outcome = worst(g.activities, model.end !== null);
         const isSelected =
           selected !== null &&
           g.activities.some(
@@ -238,7 +250,7 @@ function Notes({
             }
           >
             {first.kind !== "log" && <OutcomeGlyph outcome={outcome} size={10} />}
-            {noteText(g, now)}
+            {noteText(g, now, model.end !== null)}
           </button>
         );
       })}
@@ -276,10 +288,7 @@ export function RunView() {
   );
   const targets = useMemo(() => (index ? buildTargets(index, model) : null), [index, model]);
   const lastStep = cursor.steps[cursor.steps.length - 1];
-  const failedStep =
-    lastStep && (lastStep.ends === "failed" || lastStep.ends === "aborted")
-      ? cursor.steps.length - 1
-      : null;
+  const ending = lastStep?.ends ? { step: cursor.steps.length - 1, kind: lastStep.ends } : null;
   const marks = useMemo(
     () =>
       cursor.atHead || cursor.n < 0
@@ -344,7 +353,7 @@ export function RunView() {
       if (line === errorLine) return "error";
       const activities = atCursor.byLine.get(line);
       if (!activities) return null;
-      const outcome = worst(activities);
+      const outcome = worst(activities, atCursor.end !== null);
       if (outcome === "failed") return "failed";
       if (outcome === "open") return "open";
       return "activity";
@@ -467,7 +476,7 @@ export function RunView() {
 
         {section === "debugger" && (
           <>
-            <CursorBar cursor={cursor} live={live} failedStep={failedStep} t0={model.firstAt} />
+            <CursorBar cursor={cursor} live={live} ending={ending} t0={model.firstAt} />
             <section className="panel" aria-label="Timeline">
               <header className="panel-head">
                 <h2>Timeline</h2>

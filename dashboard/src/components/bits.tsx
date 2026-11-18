@@ -33,12 +33,38 @@ export function CopyButton({ text, label = "Copy" }: { text: string; label?: str
   );
 }
 
-export function Digest({ digest, full = false }: { digest: string; full?: boolean }) {
+export function Digest({
+  digest,
+  full = false,
+  onPick,
+  pickTitle,
+}: {
+  digest: string;
+  full?: boolean;
+  /** Makes the digest a button beside its copy button, never around it. */
+  onPick?: () => void;
+  pickTitle?: string;
+}) {
+  const text = full ? digest : shortDigest(digest);
   return (
     <span className="copyable">
-      <span className="digest" title={digest}>
-        {full ? digest : shortDigest(digest)}
-      </span>
+      {onPick ? (
+        <button
+          type="button"
+          className="link-btn digest"
+          title={pickTitle ?? digest}
+          onClick={(e) => {
+            e.stopPropagation();
+            onPick();
+          }}
+        >
+          {text}
+        </button>
+      ) : (
+        <span className="digest" title={digest}>
+          {text}
+        </span>
+      )}
       <CopyButton text={digest} label="Copy digest" />
     </span>
   );

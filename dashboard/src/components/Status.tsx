@@ -7,10 +7,12 @@ import {
   CircleX,
   FlaskConical,
   GitFork,
+  OctagonX,
   TriangleExclamationPoint,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { RunStatus } from "../api/types";
+import type { EndKind } from "../model/ending";
 
 /** A run's status: a dot in the status's color, then its word (Geist's status dot). */
 export function StatusGlyph({ status, size = 10 }: { status: RunStatus; size?: number }) {
@@ -105,6 +107,23 @@ export function OutcomeGlyph({ outcome, size = 11 }: { outcome: Outcome; size?: 
       aria-label={o.word}
     >
       <o.Icon size={size} strokeWidth={2.5} />
+    </span>
+  );
+}
+
+const END = {
+  completed: { tone: "tone-good", Icon: CircleCheck },
+  failed: { tone: "tone-critical", Icon: CircleX },
+  cancelled: { tone: "tone-neutral", Icon: Ban },
+  aborted: { tone: "tone-critical", Icon: OctagonX },
+} as const;
+
+/** The mark of how a run ended: a cancellation is gray, never red. */
+export function EndGlyph({ kind, size = 14 }: { kind: EndKind; size?: number }) {
+  const e = END[kind];
+  return (
+    <span className={`glyph ${e.tone}`} aria-hidden="true">
+      <e.Icon size={size} strokeWidth={2.25} />
     </span>
   );
 }

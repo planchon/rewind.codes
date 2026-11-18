@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  fitLabels,
   formatBytes,
   formatDuration,
   formatOffset,
@@ -7,6 +8,7 @@ import {
   formatRelative,
   formatTime,
   shortDigest,
+  shortLabelValue,
   shortRunId,
   splitLabel,
 } from "./format";
@@ -61,5 +63,24 @@ describe("format", () => {
     expect(shortRunId("01932f5e-7c1a-7b3e-9f2c-4e1a07b3c9d2")).toBe("01932f5e…b3c9d2");
     expect(splitLabel("conversation:c-42:x")).toEqual(["conversation", "c-42:x"]);
     expect(splitLabel("nocolon")).toBeNull();
+  });
+
+  it("shortens a label's value by its middle, and fits whole chips in a cell", () => {
+    expect(shortLabelValue("development")).toBe("development");
+    expect(shortLabelValue("6afc64fdf4d56d8262048836")).toBe("6afc64fdf…048836");
+    const labels: [string, string][] = [
+      ["dax", "iteration"],
+      ["env", "development"],
+      ["goal", "6afc64fdf4d56d8262048836"],
+      ["iteration", "6afc64fe1c0b5e2a9d7f3a41"],
+      ["kind", "routine"],
+      ["routine", "notifications_daily"],
+    ];
+    expect(fitLabels(labels)).toEqual({ shown: labels.slice(0, 2), hidden: 4 });
+    // One label is always shown, however long.
+    expect(fitLabels([["a-very-long-label-key-indeed", "6afc64fdf4d56d8262048836"]], 10)).toEqual({
+      shown: [["a-very-long-label-key-indeed", "6afc64fdf4d56d8262048836"]],
+      hidden: 0,
+    });
   });
 });
