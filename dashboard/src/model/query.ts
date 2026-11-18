@@ -36,7 +36,35 @@ export const FIELDS: readonly FieldSpec[] = [
   { name: "namespace", doc: "the end user: namespace:alice,bob" },
 ];
 
-const FIELD_NAMES = new Set(FIELDS.map((f) => f.name));
+/**
+ * What a query bar reads: the runs' language, or the part of it a list that is not of runs
+ * understands (Scripts, Tools, Namespaces), which the view turns into its endpoint's parameters.
+ */
+export interface QueryLanguage {
+  /** The fields a term may name. */
+  fields: readonly FieldSpec[];
+  /** Whether a label (`@key:value`) is a term. */
+  labels: boolean;
+}
+
+/** A term a query bar cannot read: why, and where, in characters (as the server gives it). */
+export interface QueryFault {
+  message: string;
+  start: number;
+  end: number;
+}
+
+/** A fault at a term, its UTF-16 offsets turned into characters. */
+export function termFault(text: string, term: QueryTerm, message: string): QueryFault {
+  const chars = (end: number) => [...text.slice(0, end)].length;
+  return { message, start: chars(term.start), end: chars(term.end) };
+}
+
+/** The query language of the runs, as the server reads it. */
+export const RUNS_LANGUAGE: QueryLanguage = { fields: FIELDS, labels: true };
+
+/** The key of `FieldValues` that holds what to suggest for free text. */
+export const TEXT_VALUES = "#text";
 
 export type TermKind = "label" | "field" | "text";
 
@@ -105,12 +133,13 @@ function readTerm(text: string, start: number, end: number): QueryTerm {
   return { ...base, kind: "text", field: null, operand: body };
 }
 
-/** Whether a term names a field of the language, or of the fields given (another view's search). */
-export function isKnownField(term: QueryTerm, fields: readonly FieldSpec[] = FIELDS): boolean {
-  if (term.kind !== "field" || term.field === null) return false;
-  return fields === FIELDS
-    ? FIELD_NAMES.has(term.field)
-    : fields.some((f) => f.name === term.field);
+/** Whether a term names a field of the language. */
+export function isKnownField(term: QueryTerm, language: QueryLanguage = RUNS_LANGUAGE): boolean {
+  return (
+    term.kind === "field" &&
+    term.field !== null &&
+    language.fields.some((f) => f.name === term.field)
+  );
 }
 
 /** The values of an operand, split on commas outside quotes, unquoted. */
@@ -267,8 +296,6 @@ export interface FieldValue {
   /** Runs with this value. */
   count?: number;
   detail?: string;
-  /** Written as is: a pattern, never quoted. */
-  raw?: boolean;
 }
 
 /** Values to suggest per field, beside those of the facets. */
@@ -299,17 +326,25 @@ function fieldValues(
   facets: Facets | undefined,
   values: FieldValues | undefined,
 ): Suggestion[] {
+  const known = facetValuesOf(field, facets);
+  const seen = new Set(known.map((s) => s.insert));
+  const given = (values?.[field] ?? []).filter((v) => !seen.has(v.value)).map(givenValue);
+  return [...known, ...given];
+}
+
+function givenValue(v: FieldValue): Suggestion {
+  return {
+    insert: v.value,
+    label: v.value,
+    ...(v.count !== undefined ? { count: v.count } : {}),
+    ...(v.detail ? { detail: v.detail } : {}),
+  };
+}
+
+/** The values of a field the grammar or the facets know. */
+function facetValuesOf(field: string, facets: Facets | undefined): Suggestion[] {
   const from = (list: { value: string; runs: number }[] | undefined) =>
     (list ?? []).map((v) => ({ insert: v.value, label: v.value, count: v.runs }));
-  const given = values?.[field];
-  if (given)
-    return given.map((v) => ({
-      insert: v.value,
-      label: v.value,
-      ...(v.count !== undefined ? { count: v.count } : {}),
-      ...(v.detail ? { detail: v.detail } : {}),
-      ...(v.raw ? { raw: true } : {}),
-    }));
   switch (field) {
     case "status": {
       const counts = counted(facets?.statuses);
@@ -345,6 +380,8 @@ function fieldValues(
       return from(facets?.errors);
     case "signal":
       return from(facets?.signals);
+    case "namespace":
+      return from(facets?.namespaces);
     case "script":
       return (facets?.scripts ?? []).map((v) => ({
         insert: v.value,
@@ -382,9 +419,14 @@ function before(operand: string): { kept: string; typed: string } {
   return { kept: values.map(quoteValue).join(","), typed };
 }
 
-/** The field whose value the caret is in, and the value typed so far (after its last comma). */
+/**
+ * The field whose value the caret is in, and the value typed so far (after its last comma); for
+ * free text not quoted, `TEXT_VALUES` and the text typed.
+ */
 export function typedField(text: string, caret: number): { field: string; value: string } | null {
   const term = splitTerms(text).find((t) => t.start <= caret && caret <= t.end);
+  if (term?.kind === "text" && !term.body.startsWith('"'))
+    return { field: TEXT_VALUES, value: text.slice(term.start + (term.negated ? 1 : 0), caret) };
   if (term?.kind !== "field" || term.field === null) return null;
   const typed = text.slice(term.start + (term.negated ? 1 : 0), caret);
   const colon = typed.indexOf(":");
@@ -394,8 +436,8 @@ export function typedField(text: string, caret: number): { field: string; value:
 
 /**
  * What to suggest for the term the caret is in: field names and label keys while a name is
- * typed, then the values that exist for it (the facets of the current query, or the values
- * given), at most `limit`. The fields are the runs' unless others are given.
+ * typed (and the values given for free text), then the values that exist for it (the facets of
+ * the current query, then the values given), at most `limit`.
  */
 export function suggest(
   text: string,
@@ -403,7 +445,7 @@ export function suggest(
   facets: Facets | undefined,
   limit = 12,
   values?: FieldValues,
-  fields: readonly FieldSpec[] = FIELDS,
+  language: QueryLanguage = RUNS_LANGUAGE,
 ): Suggestions | null {
   const term = splitTerms(text).find((t) => t.start <= caret && caret <= t.end);
   const from = term ? term.start + (term.negated || term.raw === "-" ? 1 : 0) : caret;
@@ -412,7 +454,9 @@ export function suggest(
   if (typed.startsWith('"')) return null;
   let items: Suggestion[];
   const colon = typed.indexOf(":");
+  const fieldNames = new Set(language.fields.map((f) => f.name));
   if (typed.startsWith("@") && colon > 0) {
+    if (!language.labels) return null;
     const key = typed.slice(1, colon);
     const { kept, typed: value } = before(typed.slice(colon + 1));
     const label = facets?.labels.find((l) => l.key === key);
@@ -423,7 +467,7 @@ export function suggest(
         label: `@${key}:${v.value}`,
         count: v.runs,
       }));
-  } else if (colon > 0 && fields.some((f) => f.name === typed.slice(0, colon))) {
+  } else if (colon > 0 && fieldNames.has(typed.slice(0, colon))) {
     const field = typed.slice(0, colon);
     const { kept, typed: value } = before(typed.slice(colon + 1));
     items = fieldValues(field, facets, values)
@@ -435,7 +479,12 @@ export function suggest(
       }));
   } else if (colon < 0) {
     const name = typed.startsWith("@") ? typed.slice(1) : typed;
-    const keys = (facets?.labels ?? [])
+    const texts = typed.startsWith("@")
+      ? []
+      : (values?.[TEXT_VALUES] ?? [])
+          .filter((v) => typed !== "" && startsWith(v.value, typed))
+          .map((v) => ({ ...givenValue(v), insert: quoteValue(v.value) }));
+    const keys = (language.labels ? (facets?.labels ?? []) : [])
       .filter((l) => startsWith(l.key, name))
       .map((l) => ({
         insert: `@${l.key}:`,
@@ -444,9 +493,9 @@ export function suggest(
         count: l.runs,
         partial: true,
       }));
-    const names = typed.startsWith("@")
+    const fields = typed.startsWith("@")
       ? []
-      : fields
+      : language.fields
           .filter((f) => startsWith(f.name, name))
           .map((f) => ({
             insert: `${f.name}:`,
@@ -454,7 +503,7 @@ export function suggest(
             detail: f.doc,
             partial: true,
           }));
-    items = [...names, ...keys];
+    items = [...texts, ...fields, ...keys];
   } else {
     return null;
   }

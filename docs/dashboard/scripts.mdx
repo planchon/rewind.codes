@@ -12,9 +12,12 @@ script executed, the most recently run first.
 </Frame>
 
 Each row shows the script's first lines and digest, its runs and their outcomes, the tools it called and the labels of its
-runs. Search them as on the [Overview](/dashboard/overview), in one line of text: `@agent:triage` keeps the scripts that ran
-with a label (repeat the term to require several), `tool:github.close_issue` those that called a tool. A click on a row's
-tool or label adds it to the search.
+runs, and when it last and first ran.
+
+Search with the same query bar as the runs, which reads an end user, labels and a tool here: `namespace:alice` shows the
+scripts Alice's runs ran, counted over her runs only; `@agent:triage` shows what one agent writes,
+`@agent:triage tool:github.close_issue` the scripts of that agent that closed issues. Click a tool or a label in a row to
+add it to the query. An end user's page opens the same list with **See its scripts**.
 
 Open a script to read its full source, its tests and its runs. Its tests are the suites of the workflow versions it is
 the script of, as [Testing](/dashboard/testing#a-workflow) shows them. From a run, the **Script** detail opens the same

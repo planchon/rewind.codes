@@ -1,12 +1,12 @@
 // Namespaces: the end users of the organization and what they use of their limits this month.
-// First the organization's ceiling (the operator's) with its totals, then the default limits, then
-// the namespaces, sorted by CPU, runs or scripts of the month, so that an end user who abuses the
-// product comes first; a search by the start of the name, in the bar of the Overview, and a filter
-// of those at 80 % or more of a limit. Polled every 30 s.
+// First the organization's ceiling (the operator's) with its totals, then, folding under it, the
+// default limits and the namespaces, sorted by CPU, runs or scripts of the month, so that an end
+// user who abuses the product comes first; the query bar of the runs, which reads the start of a
+// name here, and a filter of those at 80 % or more of a limit. Polled every 30 s.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Pencil } from "lucide-react";
+import { ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link } from "react-router";
 import {
   NAMESPACES,
   useNamespaceDefaults,
@@ -17,10 +17,11 @@ import type { Namespace, NamespaceOrder, QuotaAlert, Quotas } from "../../api/ty
 import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
+import { FormDialog } from "../../components/FormDialog";
 import { PageHeader } from "../../components/PageHeader";
 import { QueryBar } from "../../components/QueryBar";
+import { legacyNamespacesQuery, NAMESPACES_LANGUAGE, namespacesSearch } from "../../model/filters";
 import { formatCount } from "../../model/format";
-import type { FieldSpec } from "../../model/query";
 import {
   formatQuota,
   limitOf,
@@ -33,9 +34,8 @@ import {
   shortDate,
   usedOf,
 } from "../../model/quotas";
-import { readNamespaceSearch } from "../../model/searches";
 import { Seg } from "../FilterBits";
-import { useViewSearch } from "../search";
+import { useListQuery, useNamespaceNameValues } from "../search";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm, worstAlert } from "./bits";
 
 const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
@@ -54,8 +54,7 @@ const SORTED: Partial<Record<NamespaceOrder, string>> = {
 
 const ABOVE = 0.8;
 
-/** A namespace is searched by the start of its name: no field. */
-const NO_FIELDS: readonly FieldSpec[] = [];
+const LEGACY_NAMES = ["prefix"] as const;
 
 function readOrder(params: URLSearchParams): NamespaceOrder {
   const order = params.get("order");
@@ -128,7 +127,6 @@ function DefaultsEditor({ defaults, onDone }: { defaults: Quotas; onDone: () => 
       pending={save.isPending}
       error={save.error}
       onSubmit={(quotas) => save.mutate(quotas)}
-      onCancel={onDone}
     />
   );
 }
@@ -143,13 +141,13 @@ export function NamespacesView() {
 
 function Namespaces() {
   const access = useAccess();
-  const [params, setParams] = useSearchParams();
+  const { q, setQ, params, setParams } = useListQuery(legacyNamespacesQuery, LEGACY_NAMES);
+  const { prefix, fault } = namespacesSearch(q);
+  const names = useNamespaceNameValues();
   const order = readOrder(params);
   const above = params.get("above") === "80";
-  const { q, setQ } = useViewSearch("prefix");
-  const search = readNamespaceSearch(q);
-  const prefix = search.prefix;
   const [editing, setEditing] = useState(false);
+  const [folded, setFolded] = useState(false);
 
   const set = (name: string, value: string | null) =>
     setParams(
@@ -204,7 +202,6 @@ function Namespaces() {
         title="Namespaces"
         actions={
           write &&
-          !editing &&
           defaults.data && (
             <button type="button" className="btn" onClick={() => setEditing(true)}>
               <Pencil size={14} aria-hidden="true" /> Edit the defaults
@@ -223,9 +220,11 @@ function Namespaces() {
         exceptions per namespace. CPU time is never refused: it alerts at 80% and 100%.
       </p>
 
-      {editing && defaults.data && (
-        <DefaultsEditor defaults={defaults.data.defaults} onDone={() => setEditing(false)} />
-      )}
+      <FormDialog open={editing && defaults.data !== undefined} onOpenChange={setEditing} wide>
+        {defaults.data && (
+          <DefaultsEditor defaults={defaults.data.defaults} onDone={() => setEditing(false)} />
+        )}
+      </FormDialog>
 
       {tenantAlerts.length > 0 && (
         <div className="notice notice-critical" role="status">
@@ -241,10 +240,11 @@ function Namespaces() {
       <QueryBar
         value={q}
         onSubmit={setQ}
-        fields={NO_FIELDS}
-        fault={search.fault}
-        label="Search namespaces"
-        placeholder="The start of a namespace's name: user_7K"
+        language={NAMESPACES_LANGUAGE}
+        values={names.values}
+        onTyping={names.onTyping}
+        fault={fault}
+        placeholder="The start of a namespace's name: user_7Kd"
       >
         <Seg<NamespaceOrder>
           label="Order"
@@ -263,7 +263,9 @@ function Namespaces() {
         </button>
       </QueryBar>
 
-      {list.isPending ? (
+      {fault ? (
+        <Empty>Fix the search to see the namespaces: the term at fault is underlined above.</Empty>
+      ) : list.isPending ? (
         <Loading>Loading the namespaces…</Loading>
       ) : list.isError ? (
         <ProblemView error={list.error} title="The namespaces could not be read" />
@@ -280,8 +282,20 @@ function Namespaces() {
               {defaults.data && (
                 <tr className="row-ceiling">
                   <th scope="row">
-                    <span className="ns-title">{organization}</span>
-                    <span className="ns-note muted">operator's ceiling, on the totals</span>
+                    <button
+                      type="button"
+                      className="group-toggle ns-title"
+                      aria-expanded={!folded}
+                      aria-label={`${folded ? "Show" : "Hide"} the namespaces of ${organization}`}
+                      onClick={() => setFolded(!folded)}
+                    >
+                      {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                      {organization}
+                    </button>
+                    <span className="ns-note muted">
+                      operator's ceiling, on the totals
+                      {folded ? ` · ${formatCount(total)} namespace${total === 1 ? "" : "s"}` : ""}
+                    </span>
                   </th>
                   {METERED.map((m) => (
                     <td key={m.key}>
@@ -294,8 +308,8 @@ function Namespaces() {
                   ))}
                 </tr>
               )}
-              {defaults.data && (
-                <tr className="row-defaults">
+              {defaults.data && !folded && (
+                <tr className="row-defaults child-row">
                   <th scope="row">
                     <span className="ns-title">Defaults</span>
                     <span className="ns-note muted">{otherLimits(defaults.data.defaults)}</span>
@@ -314,8 +328,8 @@ function Namespaces() {
                   })}
                 </tr>
               )}
-              {rows.map((ns) => (
-                <tr key={ns.name} className={ns.deletingSince ? "dimmed" : undefined}>
+              {(folded ? [] : rows).map((ns) => (
+                <tr key={ns.name} className={`child-row${ns.deletingSince ? " dimmed" : ""}`}>
                   <th scope="row">
                     <Link to={namespacePath(ns.name)} className="ns-title mono">
                       {ns.name}

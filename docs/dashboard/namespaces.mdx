@@ -11,13 +11,14 @@ with their use against their limits. It needs `namespaces:read`.
   <img src="/images/dashboard/namespaces-dark.webp" alt="The Namespaces view: the ceiling, the default limits, and each end user's use as meters" className="hidden dark:block" />
 </Frame>
 
-- **The first row** is your organization: its ceiling, with the totals of every end user.
-- **Defaults** are the limits of every end user without exceptions. **Edit the defaults** changes them, with
-  `namespaces:write`.
+- **The first row** is your organization: its ceiling, with the totals of every end user. The defaults and the end
+  users fold under it.
+- **Defaults** are the limits of every end user without exceptions. **Edit the defaults** changes them in a dialog,
+  with `namespaces:write`.
 - **Then each end user**, sorted by CPU, runs or scripts of the month, or by name. Each quota is a meter: orange from
   80 %, red at 100 %. A CPU time above its quota shows its share (`160%`): CPU is never refused, only alerted on.
-- **Search** by the start of a name, in the bar of the [Overview](/dashboard/overview) (**Enter** applies it), and
-  **At 80 % or more** keeps those near a limit.
+- **Search** by the start of a name in the query bar, which suggests the names as you type, and **At 80 % or more**
+  keeps those near a limit.
 
 ## One end user
 
@@ -42,8 +43,9 @@ The arrows next to the month go back in time.
 | Action | Needs | Does |
 | --- | --- | --- |
 | **See its runs** | `runs:read` | Opens Observability on `namespace:<name>` |
-| **Edit its limits** | `namespaces:write` | Sets its exceptions: more for a paying user, `0` active runs to block someone |
+| **See its scripts** | `runs:read` | Opens Scripts on `namespace:<name>`: the scripts its runs ran |
+| **Edit its limits** | `namespaces:write` | Sets its exceptions in a dialog: more for a paying user, `0` active runs to block someone |
 | **Revoke its tokens** | `tokens:write` | Revokes every token of the end user, signed ones issued before now included |
-| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its name to confirm |
+| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its name in the dialog to confirm |
 
 The SDK does the same with [`rewind.namespaces`](/sdk/end-users).

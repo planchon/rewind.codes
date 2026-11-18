@@ -109,14 +109,19 @@ describe("the Namespaces view", () => {
       "descending",
     );
 
-    await user.type(screen.getByRole("combobox", { name: "Query" }), "da{Enter}");
+    const bar = screen.getByRole("combobox", { name: "Query" });
+    await user.type(bar, "da");
+    // The names that start with it are suggested as it is typed.
+    expect(await screen.findByRole("option", { name: /dana/ })).toBeInTheDocument();
+    await user.keyboard("{Enter}");
     await waitFor(() => expect(names().slice(2)).toEqual(["dana"]));
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("prefix") === "da")).toBe(
       true,
     );
-    expect(search(router).get("prefix")).toBe("da");
+    expect(search(router).get("q")).toBe("da");
 
     await user.click(screen.getByRole("button", { name: "Clear the query" }));
+    await waitFor(() => expect(search(router).get("q")).toBeNull());
     await user.click(screen.getByRole("button", { name: /At 80% or more/ }));
     // By runs this month: bob, then user_7Kd02 at 83% of hers, then dana at 84% of her CPU.
     await waitFor(() => expect(names().slice(2)).toEqual(["bob", "user_7Kd02", "dana"]));
@@ -124,6 +129,17 @@ describe("the Namespaces view", () => {
       true,
     );
     expect(screen.getByText(/3 at 80% or more of a limit/)).toBeInTheDocument();
+  });
+
+  it("folds the namespaces under the organization's row", async () => {
+    const user = userEvent.setup();
+    renderApp("/namespaces?prefix=da");
+    await waitFor(() => expect(names().slice(2)).toEqual(["dana"]));
+    await user.click(screen.getByRole("button", { name: /Hide the namespaces of/ }));
+    expect(names()).toHaveLength(1);
+    expect(within(rows()[0] as HTMLElement).getByText(/· 1 namespace$/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Show the namespaces of/ }));
+    expect(names().slice(2)).toEqual(["dana"]);
   });
 
   it("lists the alerts of the month, each sent to the webhooks", async () => {
@@ -198,6 +214,10 @@ describe("a namespace's page", () => {
       "href",
       "/observability?q=namespace%3Abob",
     );
+    expect(screen.getByRole("link", { name: "See its scripts" })).toHaveAttribute(
+      "href",
+      "/scripts?q=namespace%3Abob",
+    );
   });
 
   it("lists its exceptions with the defaults they replace", async () => {
@@ -231,6 +251,12 @@ describe("a namespace's page", () => {
     const { callsTo } = renderApp("/namespaces/bob");
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
 
+    await user.click(screen.getByRole("button", { name: "Edit its limits" }));
+    // In a dialog over the page, which Cancel closes without a change.
+    const first = screen.getByRole("form", { name: "Limits of bob" });
+    expect(screen.getByRole("dialog")).toContainElement(first);
+    await user.click(within(first).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await user.click(screen.getByRole("button", { name: "Edit its limits" }));
     const form = screen.getByRole("form", { name: "Limits of bob" });
     expect(within(form).getByLabelText("CPU per month")).toHaveAttribute(

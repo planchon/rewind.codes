@@ -2,13 +2,14 @@
 // `api_keys:write` creates one (its secret is shown once) and revokes them.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, KeyRound, Plus } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { API_KEYS, useApiKeys, useRoles } from "../../api/organization";
 import type { ApiKey } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
 import {
   ConfirmButton,
   defaultRole,
@@ -77,13 +78,7 @@ function Secret({ apiKey, onDone }: { apiKey: ApiKey; onDone: () => void }) {
   );
 }
 
-function CreateKey({
-  onCreated,
-  onCancel,
-}: {
-  onCreated: (key: ApiKey) => void;
-  onCancel: () => void;
-}) {
+function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
   const api = useApi();
   const access = useAccess();
   const queryClient = useQueryClient();
@@ -107,18 +102,22 @@ function CreateKey({
       onCreated(key);
     },
   });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     if (name.trim() && chosen && labels.labels) create.mutate();
   };
   if (roles.isPending && access.can("roles:read")) return <Loading />;
   return (
-    <form className="panel" aria-label="New API key" onSubmit={submit}>
-      <div className="panel-head">
-        <h2>New API key</h2>
-        <span className="end muted">For a harness, its SDK worker, the CLI or a dashboard.</span>
-      </div>
-      <div className="panel-body form-row">
+    <DialogForm
+      title="New API key"
+      description="For a harness, its SDK worker, the CLI or a dashboard. Its secret is shown once."
+      submit="Create the key"
+      pending={create.isPending}
+      pendingLabel="Creating…"
+      disabled={!name.trim() || !chosen || !labels.labels}
+      error={create.error}
+      onSubmit={submit}
+    >
+      <div className="form-row">
         <Field label="Name" hint="What the key is for." grow>
           {(props) => (
             <input
@@ -132,6 +131,8 @@ function CreateKey({
           )}
         </Field>
         <RoleField roles={givable} value={chosen} onChange={setRole} operator={access.operator} />
+      </div>
+      <div className="form-row">
         <LabelsField value={labels.text} onChange={labels.setText} error={labels.error} />
         {access.operator && (
           <Field label="Tenant" hint="Another tenant's; it is created with its first key.">
@@ -147,25 +148,8 @@ function CreateKey({
             )}
           </Field>
         )}
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={!name.trim() || !chosen || !labels.labels || create.isPending}
-          >
-            {create.isPending ? "Creating…" : "Create the key"}
-          </button>
-          <button type="button" className="btn ghost" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
       </div>
-      {create.error && (
-        <div className="panel-body">
-          <ErrorNote error={create.error} />
-        </div>
-      )}
-    </form>
+    </DialogForm>
   );
 }
 
@@ -193,22 +177,21 @@ function ApiKeys() {
           Keys call the API <code>/v1</code> with the role of their grant. A key limited to labels
           sees only the runs carrying them.
         </p>
-        {write && !creating && !created && (
+        {write && !created && (
           <button type="button" className="btn" onClick={() => setCreating(true)}>
             <Plus size={12} /> New key
           </button>
         )}
       </div>
       {created && <Secret apiKey={created} onDone={() => setCreated(null)} />}
-      {creating && (
+      <FormDialog open={creating} onOpenChange={setCreating}>
         <CreateKey
           onCreated={(key) => {
             setCreating(false);
             setCreated(key);
           }}
-          onCancel={() => setCreating(false)}
         />
-      )}
+      </FormDialog>
       {keys.isPending ? (
         <Loading />
       ) : keys.error ? (

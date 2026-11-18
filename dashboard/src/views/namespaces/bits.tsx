@@ -1,11 +1,11 @@
 // Pieces the namespace views share: a quota's use against its limit as a meter, an alert as a
-// chip, the form of six limits, and the gate of `namespaces:read`.
-import { type FormEvent, type ReactNode, useState } from "react";
+// chip, the form of six limits (in a dialog), and the gate of `namespaces:read`.
+import { type ReactNode, useState } from "react";
 import type { QuotaAlert, Quotas } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
 import { Meter } from "../../components/Charts";
-import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm } from "../../components/FormDialog";
 import {
   formatQuota,
   formatShare,
@@ -95,7 +95,10 @@ export function worstAlert(alerts: readonly QuotaAlert[]): QuotaAlert | null {
   return worst;
 }
 
-/** The six limits as a form: an empty field sets none (`blank`). */
+/**
+ * The six limits as a form, in the dialog that opened it: an empty field sets none (`blank`). The
+ * figures are checked before they are sent, each under its field.
+ */
 export function QuotasForm({
   label,
   intro,
@@ -105,7 +108,6 @@ export function QuotasForm({
   pending,
   error,
   onSubmit,
-  onCancel,
 }: {
   label: string;
   intro: ReactNode;
@@ -116,12 +118,10 @@ export function QuotasForm({
   pending: boolean;
   error: unknown;
   onSubmit: (quotas: Quotas) => void;
-  onCancel: () => void;
 }) {
   const [texts, setTexts] = useState<QuotaTexts>(() => quotaTexts(initial));
   const [errors, setErrors] = useState<Partial<QuotaTexts>>({});
-  const send = (e: FormEvent) => {
-    e.preventDefault();
+  const send = () => {
     const parsed = parseQuotas(texts);
     if (parsed.errors) {
       setErrors(parsed.errors);
@@ -131,40 +131,32 @@ export function QuotasForm({
     onSubmit(parsed.quotas);
   };
   return (
-    <form className="panel" aria-label={label} onSubmit={send}>
-      <div className="panel-head">
-        <h2>{label}</h2>
+    <DialogForm
+      title={label}
+      description={intro}
+      submit={submit}
+      pending={pending}
+      error={error}
+      onSubmit={send}
+    >
+      <div className="quota-form">
+        {QUOTA_FIELDS.map((f) => (
+          <Field key={f.key} label={f.label} hint={f.hint} error={errors[f.key] ?? null}>
+            {(props) => (
+              <input
+                {...props}
+                className="input mono"
+                inputMode={f.unit === "count" ? "numeric" : "text"}
+                spellCheck={false}
+                placeholder={blank(f.key)}
+                value={texts[f.key]}
+                onChange={(e) => setTexts((t) => ({ ...t, [f.key]: e.target.value }))}
+              />
+            )}
+          </Field>
+        ))}
       </div>
-      <div className="panel-body stack">
-        <p className="section-intro dim">{intro}</p>
-        <div className="form-row quota-form">
-          {QUOTA_FIELDS.map((f) => (
-            <Field key={f.key} label={f.label} hint={f.hint} error={errors[f.key] ?? null}>
-              {(props) => (
-                <input
-                  {...props}
-                  className="input mono"
-                  inputMode={f.unit === "count" ? "numeric" : "text"}
-                  spellCheck={false}
-                  placeholder={blank(f.key)}
-                  value={texts[f.key]}
-                  onChange={(e) => setTexts((t) => ({ ...t, [f.key]: e.target.value }))}
-                />
-              )}
-            </Field>
-          ))}
-        </div>
-        <div className="form-actions">
-          <button type="submit" className="btn primary" disabled={pending}>
-            {pending ? "Saving…" : submit}
-          </button>
-          <button type="button" className="btn ghost" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-        {error ? <ErrorNote error={error} /> : null}
-      </div>
-    </form>
+    </DialogForm>
   );
 }
 

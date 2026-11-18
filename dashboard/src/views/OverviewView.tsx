@@ -16,7 +16,15 @@ import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount, formatDuration, formatPercent, formatTime } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
 import { Seg } from "./FilterBits";
-import { BUCKETS, useSearchQuery, useWindow, WINDOW_WORDS, WINDOWS, windowTerm } from "./search";
+import {
+  BUCKETS,
+  useRunQueryValues,
+  useSearchQuery,
+  useWindow,
+  WINDOW_WORDS,
+  WINDOWS,
+  windowTerm,
+} from "./search";
 
 const POLL = 10_000;
 
@@ -43,6 +51,7 @@ export function OverviewView() {
   const { q, setQ } = useSearchQuery();
   const [win, setWin] = useWindow();
   const { zone } = useSettings();
+  const lookup = useRunQueryValues();
   const width = RANGES[win];
   const { bucket, ms: bucketMs } = BUCKETS[win];
   const key = `${win}|${q}`;
@@ -299,7 +308,14 @@ export function OverviewView() {
           </>
         }
       />
-      <QueryBar value={q} onSubmit={setQ} facets={current.data?.facets} fault={fault}>
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        facets={current.data?.facets}
+        values={lookup.values}
+        onTyping={lookup.onTyping}
+        fault={fault}
+      >
         <SaveSearch q={q} view="overview" />
       </QueryBar>
       {body}

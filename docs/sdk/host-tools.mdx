@@ -104,3 +104,24 @@ The complete program is in [`examples/host-tools`](https://github.com/planchon/r
 
 A refused key (401, 403) stops the worker: `worker.done` rejects. Other failures are reported to `onError` and
 retried. A worker holding an end user's token, instead of a key, claims only the calls of that end user's runs.
+
+## One worker per environment
+
+A worker claims the calls of the runs its key sees. With a key limited to labels, those are the runs carrying them:
+give each environment of your organization a key limited to its label, with the role `harness` or `worker`, and its
+worker answers only its own runs' calls, against its own database, even when every environment registers the same
+toolset.
+
+```ts
+// REWIND_API_KEY is limited to { env: "dev" } on the dev server, to { env: "prod" } in production.
+const rewind = new Rewind();
+
+// Runs this key starts carry env=dev; this worker never receives a call of an env=prod run.
+const worker = rewind.worker({
+  toolset: toolset.id,
+  tools: { "db.find_order": async ({ id }: { id: string }) => db.orders.find(id) },
+});
+```
+
+The run's labels are in `ctx.labels`. A token of another environment's call is answered as a call that no longer
+exists (410).

@@ -1,4 +1,4 @@
-// The segmented control of the views' bars: a window, an order.
+// A segmented control: a window, an order.
 import type { ReactNode } from "react";
 
 export function Seg<T extends string>({

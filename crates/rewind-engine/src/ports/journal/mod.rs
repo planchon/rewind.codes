@@ -169,8 +169,8 @@ pub trait JournalStore: Send + Sync {
     // ---------------------------------------------------------------------------------------
     // Workflows
 
-    /// Stores a workflow version, with the labels of the key that saved it, and returns it as
-    /// stored, with a row of `workflow_tests` for each test of its suite, in one transaction.
+    /// Stores a workflow version, visible to the principals that see its labels, and returns it
+    /// as stored, with a row of `workflow_tests` for each test of its suite, in one transaction.
     /// Idempotent by version: a second put changes nothing and returns the first. A new version
     /// that references a test without a row, or whose deletion has started, is refused
     /// (`Conflict`): it would point to a blob that may be gone.
@@ -178,7 +178,6 @@ pub trait JournalStore: Send + Sync {
         &self,
         tenant: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> impl Future<Output = Result<StoredWorkflow, StoreError>> + Send;
 

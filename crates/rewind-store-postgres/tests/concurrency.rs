@@ -678,7 +678,6 @@ async fn a_version_and_the_cleanup_of_its_test_never_both_win() {
     let tenant = TenantId::new("acme").expect("tenant");
     let reserved_at = now();
     let due = reserved_at.saturating_add(TEST_GRACE);
-    let labels = BTreeMap::new();
     let (mut stored, mut refused) = (0, 0);
     // One test at a time: the tests of the rounds before are referenced or being deleted, so
     // the cleanup can only mark this round's.
@@ -694,7 +693,7 @@ async fn a_version_and_the_cleanup_of_its_test_never_both_win() {
             .expect("reserve_tests");
         let version = version_with_test(n, test.digest);
         let (put, marked) = tokio::join!(
-            writer.put_workflow(&tenant, &version, &labels, due),
+            writer.put_workflow(&tenant, &version, due),
             cleanup.unreferenced_tests(due, TESTS),
         );
         let marked = marked

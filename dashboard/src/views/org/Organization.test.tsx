@@ -47,7 +47,10 @@ describe("the Organization view", () => {
     expect(within(table).queryByRole("columnheader", { name: "Actions" })).toBeNull();
 
     await userEvent.setup().click(within(nav).getByRole("link", { name: "Invitations" }));
-    expect(await screen.findByText("katherine@example.net")).toBeInTheDocument();
+    // Katherine is a member too: her address is read in the invitations, once they are shown.
+    const invitations = await screen.findByRole("region", { name: "Invitations" });
+    expect(await within(invitations).findByText("katherine@example.net")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invite someone" })).toBeNull();
     expect(screen.queryByRole("form", { name: "Invite someone" })).toBeNull();
   });
 
@@ -107,13 +110,13 @@ describe("the Organization view", () => {
     const user = userEvent.setup();
     const world = graceWithRole("role-admin", ["runs:read", "roles:read", "roles:write"]);
     renderApp("/organization/roles", { world });
-    await user.click(await screen.findByRole("button", { name: /new role/i }));
+    // A role giving more than she holds cannot be edited by her.
+    const auditor = await screen.findByRole("listitem", { name: "Role auditor" });
+    expect(within(auditor).getByRole("button", { name: "Edit the role auditor" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /new role/i }));
     const editor = screen.getByRole("form", { name: "New role" });
     expect(within(editor).getByRole("checkbox", { name: /runs:read/ })).toBeEnabled();
     expect(within(editor).getByRole("checkbox", { name: /runs:start/ })).toBeDisabled();
-    // A role giving more than she holds cannot be edited by her.
-    const auditor = screen.getByRole("listitem", { name: "Role auditor" });
-    expect(within(auditor).getByRole("button", { name: "Edit the role auditor" })).toBeDisabled();
   });
 
   it("explains that a role still given cannot be deleted", async () => {
@@ -192,6 +195,7 @@ describe("the Organization view", () => {
       "namespaces:read",
     ]);
     renderApp("/organization/invitations", { world });
+    await user.click(await screen.findByRole("button", { name: "Invite someone" }));
     const form = await screen.findByRole("form", { name: "Invite someone" });
     const options = within(within(form).getByLabelText("Role")).getAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual(["reader", "inviter (custom)"]);
@@ -250,6 +254,7 @@ describe("the Organization view", () => {
     const user = userEvent.setup();
     const world = signedIn("ada@example.net", "org_01ACME");
     const { callsTo } = renderApp("/organization/invitations", { world });
+    await user.click(await screen.findByRole("button", { name: "Invite someone" }));
     const form = await screen.findByRole("form", { name: "Invite someone" });
     await user.type(within(form).getByLabelText("Email"), "new@example.net");
     await user.selectOptions(within(form).getByLabelText("Role"), "harness");

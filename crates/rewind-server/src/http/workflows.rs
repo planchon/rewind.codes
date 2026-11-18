@@ -110,8 +110,10 @@ pub(super) async fn create(
             .get_workflow(&caller.tenant, version)
             .await?
             .is_some_and(|stored| !stored.workflow.suite().tests.is_empty()),
+        // The latest version saved under the caller's labels, as the engine takes it.
         None => before
-            .first()
+            .iter()
+            .find(|stored| stored.labels == caller.labels)
             .is_some_and(|latest| !latest.workflow.suite().tests.is_empty()),
     };
     if inherited || !suite.tests.is_empty() || !suite.update.is_empty() {

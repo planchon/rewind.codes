@@ -1205,7 +1205,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Claim host-tool tasks (long-poll) */
+        /**
+         * Claim host-tool tasks (long-poll)
+         * @description The tasks of the runs the caller sees: an end user's token claims those of its
+         *     namespace, a key limited to labels those of the runs carrying them.
+         */
         get: operations["claimTasks"];
         put?: never;
         post?: never;
@@ -1531,8 +1535,9 @@ export interface paths {
          *     suite: its parent's tests, minus those it retires and with those it updates, each with a
          *     reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
          *     every test passes. Saving the same workflow again returns the version saved first (200).
-         *     Runs the script's tests: served by a server with the worker role (503 on the api role
-         *     when there is a test to run).
+         *     A key limited to labels saves a version of its own, carrying its labels, even when the
+         *     same workflow was saved under other labels or tenant-wide. Runs the script's tests:
+         *     served by a server with the worker role (503 on the api role when there is a test to run).
          */
         post: operations["createWorkflow"];
         delete?: never;
@@ -2026,7 +2031,8 @@ export interface components {
          * @description `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
          *     against its toolset and against its own schemas: its default export must take the input and
          *     return the output, and `signal()` only takes the declared names. Saving the same workflow
-         *     again returns the version saved first (200).
+         *     again under the same labels returns the version saved first (200): the labels of a key limited
+         *     to labels are part of the version, so such a key saves a version of its own.
          * @example {
          *       "description": "Triage the stale issues of a repository, after approval.",
          *       "input": {
@@ -2083,7 +2089,7 @@ export interface components {
             output: Record<string, unknown>;
             /**
              * @description The version it derives from, `name@<version>` or a version: the latest version of the
-             *     same name the caller sees when absent. Its suite is inherited.
+             *     same name saved under the caller's labels when absent. Its suite is inherited.
              */
             parent?: string | null;
             /** @description Inherited tests dropped, with a reason: they are deprecated. */
@@ -4240,8 +4246,8 @@ export interface components {
             description?: string | null;
             input: Record<string, unknown>;
             /**
-             * @description The labels of the API key that saved it: a key limited to labels only sees the workflows
-             *     carrying them.
+             * @description The labels of the key that saved it, part of the version: a key limited to labels only
+             *     sees the workflows carrying them. Empty for a version saved tenant-wide.
              */
             labels: components["schemas"]["Labels"];
             name: string;

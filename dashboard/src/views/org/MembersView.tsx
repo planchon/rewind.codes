@@ -8,6 +8,7 @@ import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { displayName } from "../../model/access";
 import {
   beyondCaller,
@@ -61,32 +62,22 @@ function GrantEditor({
     },
   });
   return (
-    <form
-      className="inline-form"
-      aria-label={`Role of ${displayName(member.user)}`}
-      onSubmit={(e) => {
-        e.preventDefault();
+    <DialogForm
+      title={`Role of ${displayName(member.user)}`}
+      description="What they may do in the organization, and the labels of the runs they see."
+      submit="Save"
+      pending={save.isPending}
+      disabled={!role || !labels.labels}
+      error={save.error}
+      onSubmit={() => {
         if (labels.labels) save.mutate();
       }}
     >
       <div className="form-row">
         <RoleField roles={givable} value={role} onChange={setRole} />
         <LabelsField value={labels.text} onChange={labels.setText} error={labels.error} />
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={!role || !labels.labels || save.isPending}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </button>
-          <button type="button" className="btn ghost" onClick={onDone}>
-            Cancel
-          </button>
-        </div>
       </div>
-      {save.error && <ErrorNote error={save.error} />}
-    </form>
+    </DialogForm>
   );
 }
 
@@ -97,7 +88,9 @@ function Members() {
   const members = useMembers();
   const roles = useRoles(access.can("roles:read"));
   const names = useMemberNames();
-  const [editing, setEditing] = useState<string | null>(null);
+  // The member in the dialog, kept while it closes.
+  const [editing, setEditing] = useState(false);
+  const [target, setTarget] = useState<Member | null>(null);
   const [failed, setFailed] = useState<{ user: string; error: unknown } | null>(null);
   const manage = access.can("members:manage");
   const remove = useMutation({
@@ -191,7 +184,10 @@ function Members() {
                               disabled={locked !== undefined}
                               title={locked}
                               aria-label={`Change the role of ${displayName(m.user)}`}
-                              onClick={() => setEditing(editing === m.user.id ? null : m.user.id)}
+                              onClick={() => {
+                                setTarget(m);
+                                setEditing(true);
+                              }}
                             >
                               Change role
                             </button>
@@ -210,17 +206,6 @@ function Members() {
                         </td>
                       )}
                     </tr>
-                    {editing === m.user.id && (
-                      <tr className="editing">
-                        <td colSpan={columns}>
-                          <GrantEditor
-                            member={m}
-                            roles={roles.data ?? null}
-                            onDone={() => setEditing(null)}
-                          />
-                        </td>
-                      </tr>
-                    )}
                     {failed?.user === m.user.id && (
                       <tr className="editing">
                         <td colSpan={columns}>
@@ -235,6 +220,15 @@ function Members() {
           </table>
         </div>
       )}
+      <FormDialog open={editing} onOpenChange={setEditing}>
+        {target && (
+          <GrantEditor
+            member={target}
+            roles={roles.data ?? null}
+            onDone={() => setEditing(false)}
+          />
+        )}
+      </FormDialog>
     </section>
   );
 }

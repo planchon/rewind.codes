@@ -31,6 +31,9 @@ pub struct HostClaim {
     pub tenant: TenantId,
     /// The tasks of this namespace's runs only: a worker holding an end user's token.
     pub namespace: Option<NamespaceName>,
+    /// The tasks of the runs carrying all of these labels only: a worker whose grant is limited
+    /// to labels. Empty: every run.
+    pub labels: BTreeMap<String, String>,
     pub toolset: Option<Digest>,
     /// Empty: every host tool.
     pub tools: BTreeSet<String>,
@@ -92,6 +95,7 @@ where
         let filter = TaskFilter::Host {
             tenant: claim.tenant.clone(),
             namespace: claim.namespace.clone(),
+            labels: claim.labels.clone(),
             toolset: claim.toolset,
             tools: claim.tools.clone(),
         };

@@ -1,50 +1,30 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
-// host-tool group), over a window. A search as on the Overview, one line of text: a part of a
-// tool's name, `tool:` (a name or `github.*`) and `toolset:` (the calls of one toolset's runs).
-import { Fragment, useMemo } from "react";
+// host-tool group), over a window, optionally for one toolset. Searched with the query bar of the
+// runs, which reads `toolset:` (sent to the server), `tool:` and a tool's name here; its figures
+// are the Overview's tiles, and each group of tools folds under its row.
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { useToolStats } from "../api/queries";
 import type { ToolStats } from "../api/types";
 import { Empty, Loading, ProblemView, Time } from "../components/bits";
+import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { useTooltip } from "../components/Tooltip";
-import { type RangeKey, toToolStatsQuery } from "../model/filters";
+import {
+  legacyToolsQuery,
+  type RangeKey,
+  TOOLS_LANGUAGE,
+  toolsSearch,
+  toToolStatsQuery,
+} from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
-import { type FieldValues, fieldTerm, joinQuery, queryLink } from "../model/query";
-import { readToolSearch, TOOL_FIELDS } from "../model/searches";
+import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
 import { Seg } from "./FilterBits";
-import { type OlderSearch, useViewSearch, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+import { useListQuery, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
 
-/** `/tools?toolset=…`, a link from before the search: the search of its toolset. */
-const OLDER: OlderSearch = {
-  names: ["toolset"],
-  read: (params) =>
-    joinQuery(
-      params.get("q"),
-      ...params
-        .getAll("toolset")
-        .filter((t) => t.trim() !== "")
-        .map((t) => fieldTerm("toolset", t.trim())),
-    ),
-};
-
-/** The values the search suggests for `tool:`: each tool listed, then each namespace's tools. */
-function toolValues(tools: ToolStats[]): FieldValues {
-  const namespaces = [
-    ...new Set(tools.flatMap((t) => (t.tool.includes(".") ? [namespaceOf(t.tool)] : []))),
-  ];
-  return {
-    tool: [
-      ...tools.map((t) => ({ value: t.tool, count: t.calls })),
-      ...namespaces.map((ns) => ({
-        value: `${ns}.*`,
-        detail: "every tool of the namespace",
-        raw: true,
-      })),
-    ],
-  };
-}
+const LEGACY_NAMES = ["toolset"] as const;
 
 export function namespaceOf(tool: string): string {
   const at = tool.indexOf(".");
@@ -76,20 +56,90 @@ export function groupTools(tools: ToolStats[]): Group[] {
   return [...groups.values()].sort((a, b) => b.calls - a.calls || a.name.localeCompare(b.name));
 }
 
-/** A log scale over the latencies of every tool, so their strips compare. */
+const S = 1_000;
+const M = 60 * S;
+const H = 60 * M;
+const D = 24 * H;
+
+/**
+ * The durations the latency axis is drawn at, as people name them: the major ones (1 ms, 10 ms,
+ * 100 ms, 1 s, 10 s, 1 min, 10 min, 1 h, 1 d) label it, the others fill it when it is short.
+ */
+const STEPS: { ms: number; major: boolean }[] = [
+  ...[1, 2, 5, 10, 20, 50, 100, 200, 500].map((ms) => ({ ms, major: [1, 10, 100].includes(ms) })),
+  ...[1, 2, 5, 10, 20, 30].map((n) => ({ ms: n * S, major: n === 1 || n === 10 })),
+  ...[1, 2, 5, 10, 20, 30].map((n) => ({ ms: n * M, major: n === 1 || n === 10 })),
+  ...[1, 2, 6, 12].map((n) => ({ ms: n * H, major: n === 1 })),
+  ...[1, 2, 7, 30].map((n) => ({ ms: n * D, major: n === 1 })),
+];
+
+/**
+ * A log scale over the latencies of every tool, so their strips compare: from the major step
+ * under the fastest median to the step over the slowest call, so that both ends are ticks.
+ */
 export function logScale(tools: ToolStats[]) {
   // Calls answered at once (mock mode, virtual time) would stretch the axis to 1 ms.
   const positive = tools.map((t) => t.latencyMs.p50).filter((v) => v > 0);
-  const lo = Math.floor(Math.log10(Math.min(...positive, 1_000)));
-  const hi = Math.log10(Math.max(...tools.map((t) => t.latencyMs.max), 10 ** (lo + 1)));
-  const span = Math.max(hi - lo, 1);
+  const fastest = Math.min(...positive, 1_000);
+  const lo = STEPS.filter((s) => s.major && s.ms <= fastest).at(-1)?.ms ?? 1;
+  const slowest = Math.max(...tools.map((t) => t.latencyMs.max), 10 * lo);
+  const hi = STEPS.find((s) => s.ms >= slowest)?.ms ?? slowest;
+  const span = Math.log10(hi / lo);
   return {
-    x: (ms: number) => Math.min(1, Math.max(0, (Math.log10(Math.max(ms, 10 ** lo)) - lo) / span)),
-    min: 10 ** lo,
-    max: 10 ** hi,
+    x: (ms: number) => Math.min(1, Math.max(0, Math.log10(Math.max(ms, lo) / lo) / span)),
+    min: lo,
+    max: hi,
   };
 }
 
+/**
+ * The ticks of the scale. Up to two major steps, every step is drawn and labelled; beyond, the
+ * major steps only, and above five of them, every other one is labelled.
+ */
+export function logTicks(
+  scale: ReturnType<typeof logScale>,
+): { ms: number; major: boolean; label: boolean }[] {
+  const inside = STEPS.filter((s) => s.ms >= scale.min && s.ms <= scale.max);
+  const majors = inside.filter((s) => s.major);
+  if (majors.length <= 2) return inside.map((s) => ({ ...s, label: true }));
+  const every = majors.length > 5 ? 2 : 1;
+  return majors.map((s, i) => ({ ...s, label: i % every === 0 }));
+}
+
+/** A tick's label: `10ms`, `1s`, `10s`, `1m`, `10m`, `1h`, `1d`. */
+export function tickLabel(ms: number): string {
+  if (ms < S) return `${ms}ms`;
+  if (ms < M) return `${ms / S}s`;
+  if (ms < H) return `${ms / M}m`;
+  if (ms < D) return `${ms / H}h`;
+  return `${ms / D}d`;
+}
+
+const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
+
+/** The axis of the latency column: a label at each tick, over the strips' gridlines. */
+function LatencyAxis({ scale }: { scale: ReturnType<typeof logScale> }) {
+  return (
+    <div className="latency-axis" aria-hidden="true">
+      {logTicks(scale)
+        .filter((t) => t.label)
+        .map((t) => (
+          <span
+            key={t.ms}
+            className={t.major ? "major" : undefined}
+            style={{ left: pct(scale.x(t.ms)) }}
+          >
+            {tickLabel(t.ms)}
+          </span>
+        ))}
+    </div>
+  );
+}
+
+/**
+ * One tool's latency on the shared scale: a dot at the median, a bar to p95, a line on to the
+ * slowest call, a tick at p99; the gridlines of the axis behind.
+ */
 function LatencyStrip({
   stats,
   scale,
@@ -102,7 +152,7 @@ function LatencyStrip({
   onLeave: () => void;
 }) {
   const { p50, p95, p99, max } = stats.latencyMs;
-  const pct = (v: number) => `${(scale.x(v) * 100).toFixed(2)}%`;
+  const x = (ms: number) => pct(scale.x(ms));
   return (
     <div
       className="latency-strip"
@@ -111,33 +161,51 @@ function LatencyStrip({
       role="img"
       aria-label={`p50 ${formatDuration(p50)}, p95 ${formatDuration(p95)}, p99 ${formatDuration(p99)}, max ${formatDuration(max)}`}
     >
-      <span
-        className="whisker"
-        style={{ left: pct(p50), width: `calc(${pct(max)} - ${pct(p50)})` }}
-      />
-      <span
-        className="box"
-        style={{ left: pct(p50), width: `max(3px, calc(${pct(p95)} - ${pct(p50)}))` }}
-      />
-      <span className="tick p99" style={{ left: pct(p99) }} />
-      <span className="tick max" style={{ left: pct(max) }} />
+      {logTicks(scale).map((t) => (
+        <span
+          key={t.ms}
+          className={`grid-line${t.major ? " major" : ""}`}
+          style={{ left: x(t.ms) }}
+        />
+      ))}
+      <span className="whisker" style={{ left: x(p95), width: `calc(${x(max)} - ${x(p95)})` }} />
+      <span className="cap" style={{ left: x(max) }} />
+      <span className="box" style={{ left: x(p50), width: `calc(${x(p95)} - ${x(p50)})` }} />
+      <span className="tick p99" style={{ left: x(p99) }} />
+      <span className="dot" style={{ left: x(p50) }} />
     </div>
   );
 }
 
+/** What the bar suggests: the tools of the window, and the namespaces they belong to. */
+function toolValues(tools: ToolStats[]): FieldValues {
+  const names = tools.map((t) => ({ value: t.tool, count: t.calls, detail: "calls" }));
+  const namespaces = [
+    ...new Set(tools.filter((t) => t.tool.includes(".")).map((t) => namespaceOf(t.tool))),
+  ].map((ns) => ({ value: `${ns}.*`, detail: "every tool of the namespace" }));
+  return { tool: [...names, ...namespaces], [TEXT_VALUES]: names };
+}
+
 export function ToolsView() {
-  const { q, setQ } = useViewSearch("q", OLDER);
+  const { q, setQ } = useListQuery(legacyToolsQuery, LEGACY_NAMES);
   const [win, setWin] = useWindow();
-  const search = readToolSearch(q);
-  const toolset = search.toolset;
-  const stats = useToolStats(`tools:${win}|${toolset ?? ""}`, () =>
-    toToolStatsQuery(win, toolset, Date.now()),
+  const search = toolsSearch(q);
+  const stats = useToolStats(`tools:${win}:${search.toolset ?? ""}`, () =>
+    toToolStatsQuery(win, search.toolset, Date.now()),
   );
   const tip = useTooltip();
+  const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
+  const fold = (name: string) =>
+    setFolded((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
-  const every = stats.data?.tools;
-  const values = useMemo(() => toolValues(every ?? []), [every]);
-  const tools = (every ?? []).filter((t) => search.keeps(t.tool));
+  const all = stats.data?.tools ?? [];
+  const values = useMemo(() => toolValues(stats.data?.tools ?? []), [stats.data]);
+  const tools = all.filter((t) => search.keeps(t.tool));
   const groups = groupTools(tools);
   const scale = logScale(tools);
   const calls = tools.reduce((s, t) => s + t.calls, 0);
@@ -158,24 +226,23 @@ export function ToolsView() {
           />
         }
       />
-      <QueryBar
-        value={q}
-        onSubmit={setQ}
-        fields={TOOL_FIELDS}
-        values={values}
-        fault={search.fault}
-        label="Search tools"
-        placeholder="github  tool:github.*  toolset:5f3a9c…"
-      />
       {stats.data && (
         <p className="page-intro">
           Calls completed from <Time ms={Date.parse(stats.data.since)} /> to{" "}
           <Time ms={Date.parse(stats.data.until)} />.
         </p>
       )}
+      <QueryBar
+        value={q}
+        onSubmit={setQ}
+        language={TOOLS_LANGUAGE}
+        values={values}
+        fault={search.fault}
+        placeholder="tool:github.* toolset:079b3789 close_issue"
+      />
 
       {search.fault ? (
-        <Empty>Fix the search to see the tools: the term at fault is underlined above.</Empty>
+        <Empty>Fix the query to see the tools: the term at fault is underlined above.</Empty>
       ) : stats.isPending ? (
         <Loading>Loading tool statistics…</Loading>
       ) : stats.isError ? (
@@ -183,40 +250,38 @@ export function ToolsView() {
       ) : tools.length === 0 ? (
         <div className="table-wrap">
           <Empty>
-            {(every ?? []).length === 0
-              ? "No tool call completed in this window."
-              : "No tool of this window matches the search."}
+            {all.length === 0
+              ? `No tool call completed in ${WINDOW_WORDS[win]}.`
+              : "No tool matches this search."}
           </Empty>
         </div>
       ) : (
         <>
-          <section className="stat-strip" aria-label="Totals">
-            <div>
-              <span className="k">Calls</span>
-              <span className="v num">{formatCount(calls)}</span>
-            </div>
-            <div>
-              <span className="k">Failed</span>
-              <span className="v num">
-                {formatCount(errors)}{" "}
-                <span className="muted">· {formatPercent(errors, calls)}</span>
-              </span>
-            </div>
-            <div>
-              <span className="k">Retries</span>
-              <span className="v num">
-                {formatCount(retries)}{" "}
-                <span className="muted">· {formatPercent(retries, calls)} of calls</span>
-              </span>
-            </div>
+          <section className="tiles" aria-label="Totals">
+            <Tile
+              label="Calls"
+              value={formatCount(calls)}
+              context={`${formatCount(tools.length)} tool${tools.length === 1 ? "" : "s"} in ${WINDOW_WORDS[win]}`}
+            />
+            <Tile
+              label="Failed"
+              value={formatCount(errors)}
+              context={`${formatPercent(errors, calls)} of the calls`}
+              tone={errors > 0 ? "critical" : undefined}
+            />
+            <Tile
+              label="Retries"
+              value={formatCount(retries)}
+              context={`${formatPercent(retries, calls)} of the calls`}
+              tone={retries > 0 ? "warning" : undefined}
+            />
             {slowest && (
-              <div>
-                <span className="k">Slowest p95</span>
-                <span className="v">
-                  <span className="mono">{slowest.tool}</span>{" "}
-                  <span className="num">{formatDuration(slowest.latencyMs.p95)}</span>
-                </span>
-              </div>
+              <Tile
+                to={queryLink("/observability", fieldTerm("tool", slowest.tool))}
+                label="Slowest p95"
+                value={formatDuration(slowest.latencyMs.p95)}
+                context={slowest.tool}
+              />
             )}
           </section>
           <div className="table-wrap">
@@ -225,8 +290,7 @@ export function ToolsView() {
                 <tr>
                   <th>Tool</th>
                   <th className="right">Calls</th>
-                  <th className="right">Failed</th>
-                  <th>Error rate</th>
+                  <th>Failed</th>
                   <th>By kind</th>
                   <th className="right">Retries</th>
                   <th className="right">p50</th>
@@ -234,116 +298,148 @@ export function ToolsView() {
                   <th className="right">p99</th>
                   <th className="right">max</th>
                   <th className="latency-head">
-                    <span>Latency</span>
-                    <span className="muted num">
-                      {formatDuration(scale.min)} – {formatDuration(scale.max)}, log
+                    <span className="latency-title">
+                      Latency <span className="muted">log scale</span>
                     </span>
+                    <LatencyAxis scale={scale} />
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {groups.map((g) => (
-                  <Fragment key={g.name}>
-                    <tr className="group-row">
-                      <td className="mono">{g.name}</td>
-                      <td className="right num">{formatCount(g.calls)}</td>
-                      <td className="right num">{formatCount(g.errors)}</td>
-                      <td className="num dim">{formatPercent(g.errors, g.calls)}</td>
-                      <td />
-                      <td className="right num">{formatCount(g.retries)}</td>
-                      <td colSpan={5} />
-                    </tr>
-                    {g.tools.map((t) => (
-                      <tr key={t.tool}>
-                        <td className="mono tool-name">
-                          <Link
-                            to={queryLink("/observability", fieldTerm("tool", t.tool))}
-                            title={`Runs that called ${t.tool}`}
+                {groups.map((g) => {
+                  const open = !folded.has(g.name);
+                  return (
+                    <Fragment key={g.name}>
+                      <tr className="group-row">
+                        <td>
+                          <button
+                            type="button"
+                            className="group-toggle mono"
+                            aria-expanded={open}
+                            onClick={() => fold(g.name)}
                           >
-                            {t.tool}
-                          </Link>
+                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                            {g.name}
+                            <span className="count">{formatCount(g.tools.length)}</span>
+                          </button>
                         </td>
-                        <td className="right num">{formatCount(t.calls)}</td>
-                        <td className={`right num${t.errors > 0 ? " tone-critical" : " muted"}`}>
-                          {formatCount(t.errors)}
+                        <td className="right num">{formatCount(g.calls)}</td>
+                        <td className="num">
+                          {formatCount(g.errors)}{" "}
+                          <span className="dim">· {formatPercent(g.errors, g.calls)}</span>
                         </td>
-                        <td>
-                          <span className="rate">
-                            <span className="rate-bar" aria-hidden="true">
-                              <span
-                                style={{ width: `${t.calls ? (100 * t.errors) / t.calls : 0}%` }}
-                              />
-                            </span>
-                            <span className="num">{formatPercent(t.errors, t.calls)}</span>
-                          </span>
-                        </td>
-                        <td>
-                          <span className="labels">
-                            {Object.entries(t.errorKinds)
-                              .filter(([, n]) => n > 0)
-                              .sort(([, a], [, b]) => b - a)
-                              .map(([kind, n]) => (
-                                <Link
-                                  key={kind}
-                                  className="label"
-                                  to={queryLink(
-                                    "/observability",
-                                    `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
-                                  )}
-                                  title={`Runs where ${t.tool} failed with ${kind}`}
-                                >
-                                  <span className="k">{kind}</span>&nbsp;{n}
-                                </Link>
-                              ))}
-                          </span>
-                        </td>
-                        <td
-                          className="right num"
-                          title={`${formatPercent(t.retries, t.calls)} of calls`}
-                        >
-                          {formatCount(t.retries)}
-                        </td>
-                        <td className="right num">{formatDuration(t.latencyMs.p50)}</td>
-                        <td className="right num">{formatDuration(t.latencyMs.p95)}</td>
-                        <td className="right num">{formatDuration(t.latencyMs.p99)}</td>
-                        <td className="right num dim">{formatDuration(t.latencyMs.max)}</td>
-                        <td>
-                          <LatencyStrip
-                            stats={t}
-                            scale={scale}
-                            onLeave={tip.hide}
-                            onHover={(e) =>
-                              tip.show(
-                                e,
-                                <>
-                                  <div className="tt-title">{t.tool}</div>
-                                  <dl>
-                                    <dt>p50</dt>
-                                    <dd>{formatDuration(t.latencyMs.p50)}</dd>
-                                    <dt>p95</dt>
-                                    <dd>{formatDuration(t.latencyMs.p95)}</dd>
-                                    <dt>p99</dt>
-                                    <dd>{formatDuration(t.latencyMs.p99)}</dd>
-                                    <dt>max</dt>
-                                    <dd>{formatDuration(t.latencyMs.max)}</dd>
-                                    <dt>calls</dt>
-                                    <dd>{formatCount(t.calls)}</dd>
-                                  </dl>
-                                </>,
-                              )
-                            }
-                          />
-                        </td>
+                        <td />
+                        <td className="right num">{formatCount(g.retries)}</td>
+                        <td colSpan={5} />
                       </tr>
-                    ))}
-                  </Fragment>
-                ))}
+                      {open &&
+                        g.tools.map((t) => (
+                          <tr key={t.tool}>
+                            <td className="mono tool-name">
+                              <Link
+                                to={queryLink("/observability", fieldTerm("tool", t.tool))}
+                                title={`Runs that called ${t.tool}`}
+                              >
+                                {t.tool}
+                              </Link>
+                            </td>
+                            <td className="right num">{formatCount(t.calls)}</td>
+                            <td>
+                              <span className="rate">
+                                <span
+                                  className={`rate-n num${t.errors > 0 ? " tone-critical" : " muted"}`}
+                                >
+                                  {formatCount(t.errors)}
+                                </span>
+                                <span className="rate-bar" aria-hidden="true">
+                                  <span
+                                    style={{
+                                      width: `${t.calls ? (100 * t.errors) / t.calls : 0}%`,
+                                    }}
+                                  />
+                                </span>
+                                <span className="num dim">{formatPercent(t.errors, t.calls)}</span>
+                              </span>
+                            </td>
+                            <td>
+                              <span className="labels">
+                                {Object.entries(t.errorKinds)
+                                  .filter(([, n]) => n > 0)
+                                  .sort(([, a], [, b]) => b - a)
+                                  .map(([kind, n]) => (
+                                    <Link
+                                      key={kind}
+                                      className="label"
+                                      to={queryLink(
+                                        "/observability",
+                                        `${fieldTerm("tool", t.tool)} ${fieldTerm("error", kind)}`,
+                                      )}
+                                      title={`Runs where ${t.tool} failed with ${kind}`}
+                                    >
+                                      <span className="k">{kind}</span>&nbsp;{n}
+                                    </Link>
+                                  ))}
+                              </span>
+                            </td>
+                            <td
+                              className="right num"
+                              title={`${formatPercent(t.retries, t.calls)} of calls`}
+                            >
+                              {formatCount(t.retries)}
+                            </td>
+                            <td className="right num">{formatDuration(t.latencyMs.p50)}</td>
+                            <td className="right num">{formatDuration(t.latencyMs.p95)}</td>
+                            <td className="right num">{formatDuration(t.latencyMs.p99)}</td>
+                            <td className="right num dim">{formatDuration(t.latencyMs.max)}</td>
+                            <td className="latency-cell">
+                              <LatencyStrip
+                                stats={t}
+                                scale={scale}
+                                onLeave={tip.hide}
+                                onHover={(e) =>
+                                  tip.show(
+                                    e,
+                                    <>
+                                      <div className="tt-title">{t.tool}</div>
+                                      <dl>
+                                        <dt>p50</dt>
+                                        <dd>{formatDuration(t.latencyMs.p50)}</dd>
+                                        <dt>p95</dt>
+                                        <dd>{formatDuration(t.latencyMs.p95)}</dd>
+                                        <dt>p99</dt>
+                                        <dd>{formatDuration(t.latencyMs.p99)}</dd>
+                                        <dt>max</dt>
+                                        <dd>{formatDuration(t.latencyMs.max)}</dd>
+                                        <dt>calls</dt>
+                                        <dd>{formatCount(t.calls)}</dd>
+                                      </dl>
+                                    </>,
+                                  )
+                                }
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
-            <div className="list-foot">
-              <span>
-                Strip: p50 to p95 as a bar, then a line to the slowest call; a tick at p99. Latency
-                runs from the call's schedule to its completion.
+            <div className="list-foot latency-legend">
+              <span className="legend-item">
+                <span className="lg-dot" aria-hidden="true" /> p50
+              </span>
+              <span className="legend-item">
+                <span className="lg-box" aria-hidden="true" /> p50 to p95
+              </span>
+              <span className="legend-item">
+                <span className="lg-tick" aria-hidden="true" /> p99
+              </span>
+              <span className="legend-item">
+                <span className="lg-whisker" aria-hidden="true" /> to the slowest call
+              </span>
+              <span className="muted">
+                On a log scale. Latency runs from the call's schedule to its completion.
               </span>
             </div>
           </div>

@@ -194,6 +194,44 @@ async fn a_version_is_saved_only_when_its_inherited_suite_passes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_save_derives_from_the_versions_saved_under_its_own_labels() {
+    let server = TestServer::start(&[]).await;
+    let tenant_wide = server.key(BuiltInRole::Harness, &[]).await;
+    let dev = server.key(BuiltInRole::Harness, &[("env", "dev")]).await;
+    let toolset = tenant_wide
+        .create_toolset(&CreateToolset::default())
+        .await
+        .unwrap();
+    let mut first = triage(&toolset.id, TRIAGE);
+    first.tests = vec![TestInput::Inline(Box::new(closes_three()))];
+    let v1 = tenant_wide.create_workflow(&first).await.unwrap();
+
+    // The first version under env=dev starts its own lineage: no parent, no test to pass.
+    let ours = dev
+        .create_workflow(&triage(&toolset.id, TWO))
+        .await
+        .unwrap();
+    assert_eq!((ours.parent.as_deref(), ours.tests.len()), (None, 0));
+    // It cannot name a parent it does not see.
+    let mut named = triage(&toolset.id, TRIAGE);
+    named.parent = Some(v1.version.clone());
+    assert_eq!(
+        problem(dev.create_workflow(&named).await.unwrap_err()).status,
+        404
+    );
+
+    // A tenant-wide save sees env=dev's version, the newest, but derives from its own lineage:
+    // the regression fails the test it inherits.
+    let refused = problem(
+        tenant_wide
+            .create_workflow(&triage(&toolset.id, TWO))
+            .await
+            .unwrap_err(),
+    );
+    assert_eq!(refused.kind(), Some(ProblemType::TestsFailed));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn post_test_runs_a_workflows_suite_against_a_candidate() {
     let server = TestServer::start(&[]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;

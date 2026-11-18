@@ -32,11 +32,12 @@ export class Workflows {
 
   /**
    * Checks a workflow against its toolset and its own schemas, runs its suite, and saves it as a new version, the
-   * workflow's latest. Saving the same workflow again returns the version saved first.
+   * workflow's latest. Saving the same workflow again returns the version saved first. A key limited to labels saves a
+   * version of its own, carrying its labels, which only the keys that see them see.
    *
-   * The suite is the parent's tests (`parent`, or the latest version of the same name the caller sees), minus those
-   * `retire` names, with those `update` names replaced, plus `tests`; `retire` and `update` give a reason, kept in the
-   * lineage. Every test must pass: there is no way around it.
+   * The suite is the parent's tests (`parent`, or the latest version of the same name saved under the caller's
+   * labels), minus those `retire` names, with those `update` names replaced, plus `tests`; `retire` and `update` give
+   * a reason, kept in the lineage. Every test must pass: there is no way around it.
    *
    * Refusals, each a `RewindApiError`: a script that does not check is `invalid-script` (with `diagnostics`); a name,
    * a signal's name or a schema that cannot be used, `invalid-workflow`; a test or a suite that cannot be read (an

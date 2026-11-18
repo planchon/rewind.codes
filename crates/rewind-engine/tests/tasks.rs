@@ -177,6 +177,7 @@ fn host_claim(tenant: &TenantId) -> HostClaim {
     HostClaim {
         tenant: tenant.clone(),
         namespace: None,
+        labels: BTreeMap::new(),
         toolset: None,
         tools: BTreeSet::new(),
         limit: 10,

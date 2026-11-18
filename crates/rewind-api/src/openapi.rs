@@ -539,8 +539,9 @@ mod operations {
     /// suite: its parent's tests, minus those it retires and with those it updates, each with a
     /// reason, plus its new ones. It is saved as a new version, the workflow's latest, only if
     /// every test passes. Saving the same workflow again returns the version saved first (200).
-    /// Runs the script's tests: served by a server with the worker role (503 on the api role
-    /// when there is a test to run).
+    /// A key limited to labels saves a version of its own, carrying its labels, even when the
+    /// same workflow was saved under other labels or tenant-wide. Runs the script's tests:
+    /// served by a server with the worker role (503 on the api role when there is a test to run).
     #[utoipa::path(
         post, path = "/v1/workflows", tag = "workflows", operation_id = "createWorkflow",
         request_body = CreateWorkflow,
@@ -907,6 +908,9 @@ mod operations {
     // Host-tool tasks
 
     /// Claim host-tool tasks (long-poll)
+    ///
+    /// The tasks of the runs the caller sees: an end user's token claims those of its
+    /// namespace, a key limited to labels those of the runs carrying them.
     #[utoipa::path(
         get, path = "/v1/tasks", tag = "tasks", operation_id = "claimTasks",
         params(TaskQuery),

@@ -384,8 +384,9 @@ Ends:
 A script reaches only the runs of its tenant within its **scope**: the allowed labels of the
 grant that started the first run of its tree (an API key's or a member's), none for a grant
 without labels. Children inherit the
-scope, and their labels always include it. Versions are content-addressed and a toolset pins a
-version, so a workflow cannot start itself, or a workflow that starts it.
+scope, and their labels always include it. Versions are content-addressed, the labels of a
+grant limited to labels that saved one included ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)),
+and a toolset pins a version, so a workflow cannot start itself, or a workflow that starts it.
 
 In mock mode, `workflows.<name>.start` is answered by the mock sources like any tool call, and
 their answer is the child's outcome: a result is its output, a failure its error. No run is

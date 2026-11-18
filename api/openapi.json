@@ -595,7 +595,7 @@
       },
       "CreateWorkflow": {
         "additionalProperties": false,
-        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked\nagainst its toolset and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain returns the version saved first (200).",
+        "description": "`POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked\nagainst its toolset and against its own schemas: its default export must take the input and\nreturn the output, and `signal()` only takes the declared names. Saving the same workflow\nagain under the same labels returns the version saved first (200): the labels of a key limited\nto labels are part of the version, so such a key saves a version of its own.",
         "example": {
           "description": "Triage the stale issues of a repository, after approval.",
           "input": {
@@ -658,7 +658,7 @@
             "type": "object"
           },
           "parent": {
-            "description": "The version it derives from, `name@<version>` or a version: the latest version of the\nsame name the caller sees when absent. Its suite is inherited.",
+            "description": "The version it derives from, `name@<version>` or a version: the latest version of the\nsame name saved under the caller's labels when absent. Its suite is inherited.",
             "type": [
               "string",
               "null"
@@ -6494,7 +6494,7 @@
           },
           "labels": {
             "$ref": "#/components/schemas/Labels",
-            "description": "The labels of the API key that saved it: a key limited to labels only sees the workflows\ncarrying them."
+            "description": "The labels of the key that saved it, part of the version: a key limited to labels only\nsees the workflows carrying them. Empty for a version saved tenant-wide."
           },
           "name": {
             "type": "string"
@@ -13471,6 +13471,7 @@
     },
     "/v1/tasks": {
       "get": {
+        "description": "The tasks of the runs the caller sees: an end user's token claims those of its\nnamespace, a key limited to labels those of the runs carrying them.",
         "operationId": "claimTasks",
         "parameters": [
           {
@@ -15354,7 +15355,7 @@
         ]
       },
       "post": {
-        "description": "Checks the workflow's script against its toolset and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nRuns the script's tests: served by a server with the worker role (503 on the api role\nwhen there is a test to run).",
+        "description": "Checks the workflow's script against its toolset and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the script's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
         "operationId": "createWorkflow",
         "requestBody": {
           "content": {

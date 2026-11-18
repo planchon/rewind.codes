@@ -538,6 +538,7 @@ fn matches_filter(filter: &TaskFilter, run: &Run, task: &Task) -> bool {
         TaskFilter::Host {
             tenant,
             namespace,
+            labels,
             toolset,
             tools,
         } => {
@@ -546,6 +547,9 @@ fn matches_filter(filter: &TaskFilter, run: &Run, task: &Task) -> bool {
                 && namespace
                     .as_ref()
                     .is_none_or(|name| *name == run.record.namespace)
+                && labels
+                    .iter()
+                    .all(|(key, value)| run.record.metadata.labels.get(key) == Some(value))
                 && toolset.is_none_or(|digest| digest == run.record.toolset)
                 && (tools.is_empty() || tools.contains(&task.tool))
         }
@@ -886,7 +890,6 @@ impl JournalStore for MemoryJournal {
         &self,
         tenant: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> Result<StoredWorkflow, StoreError> {
         let mut state = self.lock()?;
@@ -913,7 +916,7 @@ impl JournalStore for MemoryJournal {
                 order,
                 StoredWorkflow {
                     workflow: workflow.clone(),
-                    labels: labels.clone(),
+                    labels: workflow.labels().clone(),
                     created_at: now,
                 },
             )

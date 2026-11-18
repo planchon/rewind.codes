@@ -1,9 +1,12 @@
 // The query and the window of the views that search runs, kept in the URL: the query follows the
 // operator from one view to another, and a link names a search.
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { type RangeKey, rangeOf } from "../model/filters";
-import { legacyQuery, withQuery } from "../model/query";
+import { useNamespaceSuggestions, useSettled } from "../api/namespaces";
+import { useAccess } from "../app/access";
+import { RANGES, type RangeKey } from "../model/filters";
+import { formatCount } from "../model/format";
+import { type FieldValues, legacyQuery, TEXT_VALUES, withQuery } from "../model/query";
 
 /**
  * The query of the URL (`q`). An older link's filters (`?status=failed&label=…`) are read as the
@@ -20,6 +23,37 @@ export function useSearchQuery() {
     (next: string) => setParams((current) => withQuery(current, next)),
     [setParams],
   );
+  return { q, setQ, params, setParams };
+}
+
+/**
+ * The query of a list that is not of runs (Scripts, Tools, Namespaces), in the URL (`q`). An older
+ * link's parameters, which `legacy` reads as a query, are rewritten to it.
+ */
+export function useListQuery(
+  legacy: (params: URLSearchParams) => string | null,
+  legacyNames: readonly string[],
+) {
+  const [params, setParams] = useSearchParams();
+  const old = legacy(params);
+  const q = old ?? params.get("q") ?? "";
+  const setQ = useCallback(
+    (next: string, replace = false) =>
+      setParams(
+        (current) => {
+          const p = new URLSearchParams(current);
+          for (const name of legacyNames) p.delete(name);
+          if (next.trim()) p.set("q", next.trim());
+          else p.delete("q");
+          return p;
+        },
+        { replace },
+      ),
+    [setParams, legacyNames],
+  );
+  useEffect(() => {
+    if (old !== null) setQ(old, true);
+  }, [old, setQ]);
   return { q, setQ, params, setParams };
 }
 
@@ -43,7 +77,8 @@ export const WINDOW_WORDS: Record<RangeKey, string> = {
 /** The window of the URL (`window`), 24 hours by default. */
 export function useWindow(): [RangeKey, (w: RangeKey) => void] {
   const [params, setParams] = useSearchParams();
-  const win: RangeKey = rangeOf(params.get("window")) ?? "24h";
+  const raw = params.get("window");
+  const win: RangeKey = raw !== null && Object.hasOwn(RANGES, raw) ? (raw as RangeKey) : "24h";
   const setWin = useCallback(
     (w: RangeKey) =>
       setParams((current) => {
@@ -62,38 +97,53 @@ export function windowTerm(field: "started" | "ended", win: RangeKey): string {
   return `${field}:>now-${win}`;
 }
 
-/** How an older link's parameters become a view's search. */
-export interface OlderSearch {
-  /** The parameters it had. */
-  names: readonly string[];
-  /** The search they mean, the link's own joined. */
-  read: (params: URLSearchParams) => string;
+/**
+ * The namespaces to suggest as a name is typed: those whose name starts with it, the most active
+ * this month first, for whoever reads the namespaces. The facets already count the namespaces of
+ * the current query's runs; these add the end users the facets leave out.
+ */
+function useNamespaceLookup(typed: string | null) {
+  const access = useAccess();
+  const prefix = useSettled(typed, 150);
+  const found = useNamespaceSuggestions(access.can("namespaces:read") ? prefix : null);
+  return useMemo(
+    () =>
+      (found.data?.namespaces ?? []).map((ns) => ({
+        value: ns.name,
+        detail: `${formatCount(ns.usage.runsStarted)} runs this month`,
+      })),
+    [found.data],
+  );
 }
 
-/**
- * The search of a view that is not the runs' (Tools, Scripts, Namespaces), kept in the URL under
- * `param`: an older link's parameters become it, and the URL is rewritten to it.
- */
-export function useViewSearch(param: string, older?: OlderSearch) {
-  const [params, setParams] = useSearchParams();
-  const old = older?.names.some((name) => params.has(name)) ? older.read(params) : null;
-  const q = old ?? params.get(param) ?? "";
-  const write = useCallback(
-    (current: URLSearchParams, next: string) => {
-      const out = new URLSearchParams(current);
-      for (const name of older?.names ?? []) out.delete(name);
-      if (next.trim()) out.set(param, next.trim());
-      else out.delete(param);
-      return out;
-    },
-    [older, param],
+/** The values the runs' query bar suggests beside the facets: the namespaces, looked up. */
+export function useRunQueryValues(): {
+  values: FieldValues;
+  onTyping: (typed: { field: string; value: string } | null) => void;
+} {
+  const [typed, setTyped] = useState<string | null>(null);
+  const namespaces = useNamespaceLookup(typed);
+  const onTyping = useCallback(
+    (t: { field: string; value: string } | null) =>
+      setTyped(t?.field === "namespace" ? t.value : null),
+    [],
   );
-  useEffect(() => {
-    if (old !== null) setParams((current) => write(current, old), { replace: true });
-  }, [old, setParams, write]);
-  const setQ = useCallback(
-    (next: string) => setParams((current) => write(current, next)),
-    [setParams, write],
+  const values = useMemo(() => ({ namespace: namespaces }), [namespaces]);
+  return { values, onTyping };
+}
+
+/** The values the Namespaces' bar suggests for its free text: the names that start with it. */
+export function useNamespaceNameValues(): {
+  values: FieldValues;
+  onTyping: (typed: { field: string; value: string } | null) => void;
+} {
+  const [typed, setTyped] = useState<string | null>(null);
+  const namespaces = useNamespaceLookup(typed);
+  const onTyping = useCallback(
+    (t: { field: string; value: string } | null) =>
+      setTyped(t?.field === TEXT_VALUES && t.value !== "" ? t.value : null),
+    [],
   );
-  return { q, setQ };
+  const values = useMemo(() => ({ [TEXT_VALUES]: namespaces }), [namespaces]);
+  return { values, onTyping };
 }

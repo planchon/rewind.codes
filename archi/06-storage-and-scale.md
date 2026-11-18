@@ -398,13 +398,18 @@ Rules, enforced by the server:
 
 - **Labels.** A grant limited to labels sees only the runs carrying all of them: other runs are
   missing (404), the read model's lists filter them, and what the principal creates (runs,
-  subscriptions) gets them; a contradicting label is refused (403). Such a grant cannot claim
-  tasks, read tool statistics, nor use the permissions `members:invite`, `members:manage`,
-  `roles:write`, `api_keys:*` and `organization:write` (403).
-- **Workflows.** A workflow saved under a grant limited to labels carries those labels. Such a
-  principal only lists, reads and pins the workflows carrying its labels, and a run it starts
-  takes them as its **scope**: the scripts of that run and of the runs it starts only reach runs
-  carrying them ([workflows](03-execution.md#workflows-across-runs)).
+  subscriptions) gets them; a contradicting label is refused (403). With `tasks:work`, it claims
+  only the host-tool tasks of the runs carrying them, and the token of another run's task is
+  answered as a task that no longer exists (410): one tenant's environments (`env=dev`,
+  `env=prod`) each run their own worker, though they register the same content-addressed
+  toolset. Such a grant cannot read tool statistics, nor use the permissions `members:invite`,
+  `members:manage`, `roles:write`, `api_keys:*` and `organization:write` (403).
+- **Workflows.** A workflow saved under a grant limited to labels carries those labels, as part
+  of the version: the same workflow saved under other labels, or tenant-wide, is another version,
+  and saving it again under the same labels returns it. A tenant-wide save keeps the version it
+  always had. Such a principal only lists, reads and pins the workflows carrying its labels, and
+  a run it starts takes them as its **scope**: the scripts of that run and of the runs it starts
+  only reach runs carrying them ([workflows](03-execution.md#workflows-across-runs)).
 - **No one gives more than they hold.** Creating a key, inviting someone, setting a grant or
   writing a role requires holding every permission of the role given. Changing or removing a
   principal's grant also requires holding every permission of its current role.

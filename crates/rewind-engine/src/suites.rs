@@ -105,8 +105,8 @@ pub struct TestRetirement {
 /// What a save says about its suite.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SuiteChanges {
-    /// The version it derives from: the latest version of the same name the caller sees when
-    /// `None`.
+    /// The version it derives from: the latest version of the same name saved under the
+    /// caller's labels when `None`.
     pub parent: Option<Digest>,
     pub tests: Vec<TestInput>,
     pub update: Vec<TestUpdate>,

@@ -279,6 +279,7 @@ fn print_fixtures() {
 }
 
 const WORKFLOW: &str = include_str!("fixtures/workflow.v1.json");
+const WORKFLOW_WITH_LABELS: &str = include_str!("fixtures/workflow-labels.v1.json");
 const TOOLSET_WITH_WORKFLOWS: &str = include_str!("fixtures/toolset-workflows.v1.json");
 
 /// Every field of a workflow version.
@@ -337,6 +338,25 @@ fn the_workflow_fixture_decodes_re_encodes_and_hashes_to_its_version() {
     assert_eq!(decoded, workflow());
     assert_eq!(encode_workflow(&decoded), WORKFLOW);
     assert_eq!(Digest::of(WORKFLOW.as_bytes()), workflow().version());
+}
+
+/// A version saved under a grant limited to `env=dev`: its labels are part of its document, so
+/// it is another version than the same workflow saved tenant-wide.
+#[test]
+fn the_workflow_with_labels_fixture_decodes_re_encodes_and_hashes_to_its_version() {
+    let labelled = workflow().with_labels(BTreeMap::from([("env".to_owned(), "dev".to_owned())]));
+    let decoded = decode_workflow(WORKFLOW_WITH_LABELS).unwrap();
+    assert_eq!(decoded, labelled);
+    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_LABELS);
+    assert_eq!(
+        Digest::of(WORKFLOW_WITH_LABELS.as_bytes()),
+        labelled.version()
+    );
+    assert_ne!(labelled.version(), workflow().version());
+    assert!(
+        decode_workflow(&WORKFLOW_WITH_LABELS.replace(r#""dev""#, "1")).is_err(),
+        "a label's value is a string"
+    );
 }
 
 #[test]

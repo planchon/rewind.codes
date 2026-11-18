@@ -585,7 +585,7 @@ Conventions:
 |  | `POST /v1/runs/{id}/give-up` | `runs:quarantine` | Gives up a quarantined run |
 |  | `PUT /v1/runs/{id}/credentials` | `credentials:write` | Sets or renews the run's credentials |
 |  | `DELETE /v1/runs/{id}` | `runs:delete` | Erases the run, payloads included |
-| Host-tool tasks | `GET /v1/tasks` | `tasks:work` | Long-poll, filtered by toolset and tools |
+| Host-tool tasks | `GET /v1/tasks` | `tasks:work` | Long-poll, filtered by toolset and tools, and to the runs the caller sees (a token's namespace, a grant's labels) |
 |  | `POST /v1/tasks/{token}/heartbeat` | `tasks:work` | Extends the task's claim |
 |  | `POST /v1/tasks/{token}/defer` | `tasks:work` | The handler answers later: the task is `deferred`, without heartbeats, until `complete` or `fail` |
 |  | `POST /v1/tasks/{token}/complete` | `tasks:work` | The result; also later, asynchronously |

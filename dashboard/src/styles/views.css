@@ -46,7 +46,7 @@ table.grid td.script-cell {
   padding-top: 5px;
   padding-bottom: 5px;
   height: auto;
-  max-width: 520px;
+  max-width: 320px;
 }
 
 .script-cell > a,
@@ -56,7 +56,7 @@ table.grid td.script-cell {
 
 .script-cell .headline {
   display: block;
-  max-width: 520px;
+  max-width: 320px;
   color: var(--ink);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -139,51 +139,15 @@ a.status:hover .num {
 
 /* Tools */
 
-.stat-strip {
-  display: flex;
-  flex-wrap: wrap;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.stat-strip > div {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 8px 16px;
-  border-right: 1px solid var(--line);
-}
-
-.stat-strip > div:last-child {
-  border-right: 0;
-}
-
-.stat-strip .k {
-  color: var(--ink-3);
-  font-size: 11.5px;
-}
-
-.stat-strip .v {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.stat-strip .v .muted,
-.stat-strip .v .mono {
-  font-size: 12px;
-  font-weight: 500;
-}
-
 .tools-table .group-row td {
   background: var(--surface-2);
   font-weight: 600;
-  height: 28px;
+  height: 32px;
   color: var(--ink-2);
 }
 
-.tools-table .tool-name {
-  padding-left: 22px;
+table.grid.tools-table td.tool-name {
+  padding-left: 36px;
 }
 
 .tools-table .tool-name a {
@@ -194,10 +158,46 @@ a.status:hover .num {
   text-decoration: none;
 }
 
+/* A row that folds the rows under it: the tools of a namespace, the namespaces of the organization */
+.group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: -4px;
+  padding: 2px 6px 2px 2px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.group-toggle:hover {
+  background: var(--surface-3);
+}
+
+.group-toggle svg {
+  color: var(--ink-3);
+  flex: none;
+}
+
 .rate {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.rate-n {
+  min-width: 2ch;
+  text-align: right;
+}
+
+/* A second line under a cell's value: when a script first ran */
+.cell-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-3);
 }
 
 .rate-bar {
@@ -215,50 +215,165 @@ a.status:hover .num {
   border-radius: 0 2px 2px 0;
 }
 
-.latency-head {
+/* Latency on a log scale: the axis in the header, its gridlines behind each strip. The axis and
+   the strips share the cell's padding, so a tick and its line are at the same x. */
+
+/* Eleven columns: closer than the other tables, so the strips keep their width at 1440 px */
+table.grid.tools-table th,
+table.grid.tools-table td {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+table.grid.tools-table .latency-head,
+table.grid.tools-table .latency-cell {
+  width: 30%;
+  padding-left: 16px;
+  padding-right: 20px;
+}
+
+.tools-table thead th.latency-head {
+  height: auto;
+  padding-top: 6px;
+  padding-bottom: 4px;
+}
+
+.tools-table .rate-bar {
+  width: 32px;
+}
+
+.latency-title {
+  display: block;
+  line-height: 18px;
+}
+
+/* A table cell's min-width is a hint the layout may ignore; its content's is not. */
+.latency-axis,
+.latency-strip {
   min-width: 220px;
 }
 
-.latency-head span + span {
-  margin-left: 6px;
+.latency-axis {
+  position: relative;
+  height: 16px;
+  margin-top: 2px;
+}
+
+.latency-axis span {
+  position: absolute;
+  top: 0;
+  translate: -50% 0;
+  color: var(--ink-3);
+  font-size: 11px;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.latency-axis span.major {
+  color: var(--ink-2);
 }
 
 .latency-strip {
   position: relative;
-  height: 16px;
-  min-width: 200px;
+  height: 20px;
+}
+
+.latency-strip > span {
+  position: absolute;
+}
+
+.latency-strip .grid-line {
+  top: -9px;
+  bottom: -9px;
+  width: 1px;
+  background: var(--line);
+  opacity: 0.6;
+}
+
+.latency-strip .grid-line.major {
+  opacity: 1;
 }
 
 .latency-strip .whisker {
-  position: absolute;
-  top: 7.5px;
+  top: 9.5px;
   height: 1px;
   background: var(--ink-3);
 }
 
+.latency-strip .cap {
+  top: 5px;
+  width: 1px;
+  height: 10px;
+  background: var(--ink-3);
+}
+
 .latency-strip .box {
-  position: absolute;
-  top: 4px;
-  height: 8px;
-  border-radius: 2px;
+  top: 5px;
+  height: 10px;
+  min-width: 2px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--series-call) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--series-call) 70%, transparent);
+}
+
+.latency-strip .tick.p99 {
+  top: 3px;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: var(--ink);
+}
+
+.latency-strip .dot {
+  top: 5px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: var(--series-call);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+
+.latency-legend {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.latency-legend .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.latency-legend .lg-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
   background: var(--series-call);
 }
 
-.latency-strip .tick {
-  position: absolute;
-  top: 3px;
-  width: 2px;
+.latency-legend .lg-box {
+  width: 18px;
   height: 10px;
-  margin-left: -1px;
-  background: var(--ink-2);
-  border-radius: 1px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--series-call) 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--series-call) 70%, transparent);
 }
 
-.latency-strip .tick.max {
+.latency-legend .lg-tick {
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--ink);
+}
+
+.latency-legend .lg-whisker {
+  width: 18px;
+  height: 1px;
   background: var(--ink-3);
-  height: 6px;
-  top: 5px;
 }
 
 /* Run page */
@@ -435,28 +550,35 @@ a.status:hover .num {
   }
 }
 
-.inspector {
-  position: sticky;
-  top: 50px;
-  max-height: calc(100vh - 60px);
-  overflow: auto;
-}
-
+/* Beside the journal, the logs and the runs started: the inspector stays in view as the list
+   scrolls. The card scrolls itself, its header held, so its stroke and corners stay whole. */
 .run-side {
   position: sticky;
-  top: 92px;
-  max-height: calc(100vh - 100px);
-  overflow: auto;
+  top: calc(var(--header-height) + 16px);
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-width: 0;
 }
 
-.run-side .inspector {
-  position: static;
-  max-height: none;
-  overflow: visible;
+.run-side > .panel {
+  max-height: calc(100vh - var(--header-height) - 32px);
+  overflow: auto;
+}
+
+.run-side > .panel > .panel-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* The debugger: the source across the page, the step and the inspector under it. */
+.debug-below {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  gap: 10px;
+  align-items: start;
 }
 
 .inspector-body {
@@ -560,7 +682,6 @@ a.status:hover .num {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   background: var(--code-bg);
-  border-radius: 0 0 6px 6px;
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: var(--code-line);
@@ -1152,6 +1273,7 @@ a.status:hover .num {
   flex-wrap: wrap;
 }
 
+/* Geist's input: the stroke a shadow, a gray ring on focus, as the other inputs */
 .qbar {
   position: relative;
   flex: 1;
@@ -1162,17 +1284,29 @@ a.status:hover .num {
   height: 32px;
   padding: 0 4px 0 10px;
   background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--line);
+  transition: box-shadow 0.15s ease;
+}
+
+.qbar:hover {
+  box-shadow: 0 0 0 1px var(--line-strong);
 }
 
 .qbar:focus-within {
-  border-color: var(--focus);
-  box-shadow: 0 0 0 1px var(--focus);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 0 0 4px color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .qbar.invalid {
-  border-color: var(--critical);
+  box-shadow: 0 0 0 1px var(--critical);
+}
+
+.qbar.invalid:focus-within {
+  box-shadow:
+    0 0 0 1px var(--critical),
+    0 0 0 4px color-mix(in srgb, var(--critical) 16%, transparent);
 }
 
 .qbar-icon {
@@ -1196,7 +1330,7 @@ a.status:hover .num {
   border: 0;
   font-family: var(--font-mono);
   font-size: 12.5px;
-  line-height: 30px;
+  line-height: 32px;
   letter-spacing: 0;
   white-space: pre;
 }
@@ -1257,9 +1391,10 @@ span.q-bad {
   font-size: 12px;
 }
 
+/* Under the bar, edge to edge with it; its stroke is the menu's shadow, as the bar's is. */
 .qbar-suggestions {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 8px);
   left: 0;
   right: 0;
   z-index: 25;
@@ -1267,9 +1402,8 @@ span.q-bad {
   overflow-y: auto;
   padding: 4px;
   background: var(--surface);
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  box-shadow: var(--shadow-pop);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-menu);
 }
 
 .qbar-suggestions [role="option"] {
@@ -2368,6 +2502,20 @@ table.grid tr.row-defaults > * {
   border-bottom: 2px solid var(--line-strong);
 }
 
+/* The organization's row folds the defaults and the namespaces under it */
+.namespaces-table .row-ceiling .group-toggle {
+  display: inline-flex;
+  max-width: 100%;
+}
+
+.namespaces-table .row-ceiling .ns-note {
+  padding-left: 20px;
+}
+
+.namespaces-table tr.child-row > th {
+  padding-left: 36px;
+}
+
 .quota-meter {
   display: flex;
   flex-direction: column;
@@ -2477,8 +2625,14 @@ table.grid tr.row-defaults > * {
   border-color: color-mix(in srgb, var(--critical) 40%, var(--line));
 }
 
-.quota-form .field.col {
-  width: 180px;
+.quota-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px 18px;
+}
+
+.form-dialog-body .quota-form .field.col {
+  min-width: 0;
 }
 
 .cpu-svg {
@@ -3043,6 +3197,10 @@ table.grid tr.row-defaults > * {
 .tile:hover {
   background: var(--surface-2);
   border-color: var(--line);
+}
+
+.tile.static:hover {
+  background: transparent;
 }
 
 .tile-label {

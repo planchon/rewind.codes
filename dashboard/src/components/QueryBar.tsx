@@ -1,6 +1,8 @@
 // The query bar: one line of the query language, its terms tinted by kind, the term the server
 // could not read underlined with its message, and suggestions as the operator types (field names
-// from the grammar, values from the facets of the current query). Enter applies the query.
+// from the grammar, values from the facets of the current query and those given). Enter applies
+// the query. The views of runs read the whole language; Scripts, Tools and Namespaces read the
+// part of it their endpoint understands (`language`), and underline the rest themselves.
 import { Search, X } from "lucide-react";
 import {
   type FormEvent,
@@ -16,9 +18,11 @@ import {
 import type { Facets } from "../api/types";
 import { formatCount } from "../model/format";
 import {
-  type FieldSpec,
   type FieldValues,
   isKnownField,
+  type QueryFault,
+  type QueryLanguage,
+  RUNS_LANGUAGE,
   type Suggestion,
   splitTerms,
   suggest,
@@ -26,12 +30,7 @@ import {
   utf16Span,
 } from "../model/query";
 
-export interface QueryFault {
-  message: string;
-  /** In characters, as the server gives it. */
-  start: number;
-  end: number;
-}
+export type { QueryFault };
 
 export interface QueryBarProps {
   /** The query applied, from the URL. */
@@ -40,6 +39,8 @@ export interface QueryBarProps {
   facets?: Facets | undefined;
   /** Values to suggest that the facets do not count, per field: the namespaces. */
   values?: FieldValues | undefined;
+  /** The fields and labels the view reads: the runs' language by default. */
+  language?: QueryLanguage;
   /**
    * The field whose value is being typed, and what is typed of it; `null` when no value is.
    * For a parent that looks the values up as they are typed.
@@ -48,10 +49,6 @@ export interface QueryBarProps {
   /** The server could not read `value`: where and why. */
   fault?: QueryFault | null;
   placeholder?: string;
-  /** The fields of the language the bar writes: the runs' unless another view gives its own. */
-  fields?: readonly FieldSpec[];
-  /** What the bar searches, for its accessible name. */
-  label?: string;
   /** Beside the bar: a save button, a sort. */
   children?: ReactNode;
 }
@@ -60,11 +57,11 @@ export interface QueryBarProps {
 function Mirror({
   text,
   bad,
-  fields,
+  language,
 }: {
   text: string;
   bad: [number, number] | null;
-  fields: readonly FieldSpec[] | undefined;
+  language: QueryLanguage;
 }) {
   const parts: ReactNode[] = [];
   let at = 0;
@@ -75,7 +72,7 @@ function Mirror({
         ? "label"
         : t.kind === "text"
           ? "text"
-          : isKnownField(t, fields)
+          : isKnownField(t, language)
             ? "field"
             : "text";
     const isBad = bad !== null && t.start < bad[1] && bad[0] < t.end;
@@ -107,11 +104,10 @@ export function QueryBar({
   onSubmit,
   facets,
   values,
+  language = RUNS_LANGUAGE,
   onTyping,
   fault = null,
   placeholder = '@agent:triage status:failed tool:github.* error:timeout "rate limit"',
-  fields,
-  label = "Search runs",
   children,
 }: QueryBarProps) {
   const [draft, setDraft] = useState(value);
@@ -137,8 +133,8 @@ export function QueryBar({
   }, [value]);
 
   const suggestions = useMemo(
-    () => (open ? suggest(draft, caret, facets, 12, values, fields) : null),
-    [open, draft, caret, facets, values, fields],
+    () => (open ? suggest(draft, caret, facets, 12, values, language) : null),
+    [open, draft, caret, facets, values, language],
   );
   const typing = useRef(onTyping);
   typing.current = onTyping;
@@ -203,12 +199,12 @@ export function QueryBar({
 
   return (
     <div className="qbar-wrap">
-      <form className="qbar-row" onSubmit={submit} aria-label={label}>
+      <form className="qbar-row" onSubmit={submit} aria-label="Search runs">
         <div className={`qbar${bad ? " invalid" : ""}`}>
           <Search size={13} className="qbar-icon" aria-hidden="true" />
           <div className="qbar-field">
             <div className="qbar-mirror" ref={mirror} aria-hidden="true">
-              <Mirror text={draft} bad={bad} fields={fields} />
+              <Mirror text={draft} bad={bad} language={language} />
             </div>
             <input
               ref={input}

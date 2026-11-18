@@ -2,13 +2,14 @@
 // `members:invite` invites an email with a role and allowed labels, resends and revokes.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Send, UserPlus } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { useState } from "react";
 import { ORG_INVITATIONS, useOrgInvitations, useRoles } from "../../api/organization";
 import type { Invitation, InvitationState } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
 import {
   ConfirmButton,
   defaultRole,
@@ -46,24 +47,29 @@ function InviteForm({ onSent }: { onSent: (invitation: Invitation) => void }) {
       api.invite({ email: email.trim(), role: chosen, allowedLabels: labels.labels ?? {} }),
     onSuccess: async (invitation) => {
       await queryClient.invalidateQueries({ queryKey: ORG_INVITATIONS });
-      setEmail("");
-      labels.setText("");
       onSent(invitation);
     },
   });
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
+  const submit = () => {
     if (email.trim() && chosen && labels.labels) invite.mutate();
   };
   if (roles.isPending && access.can("roles:read")) return <Loading />;
   return (
-    <form className="panel" aria-label="Invite someone" onSubmit={submit}>
-      <div className="panel-head">
-        <UserPlus size={13} aria-hidden="true" />
-        <h2>Invite someone</h2>
-        <span className="end muted">They get an email with a link to sign in and join.</span>
-      </div>
-      <div className="panel-body form-row">
+    <DialogForm
+      title="Invite someone"
+      description="They get an email with a link to sign in and join, with this role."
+      submit={
+        <>
+          <Send size={12} /> Send the invitation
+        </>
+      }
+      pending={invite.isPending}
+      pendingLabel="Sending…"
+      disabled={!email.trim() || !chosen || !labels.labels}
+      error={invite.error}
+      onSubmit={submit}
+    >
+      <div className="form-row">
         <label className="field col grow">
           <span className="field-label">Email</span>
           <input
@@ -76,23 +82,11 @@ function InviteForm({ onSent }: { onSent: (invitation: Invitation) => void }) {
           />
         </label>
         <RoleField roles={givable} value={chosen} onChange={setRole} />
-        <LabelsField value={labels.text} onChange={labels.setText} error={labels.error} />
-        <div className="form-actions">
-          <button
-            type="submit"
-            className="btn primary"
-            disabled={!email.trim() || !chosen || !labels.labels || invite.isPending}
-          >
-            <Send size={12} /> {invite.isPending ? "Sending…" : "Send the invitation"}
-          </button>
-        </div>
       </div>
-      {invite.error && (
-        <div className="panel-body">
-          <ErrorNote error={invite.error} />
-        </div>
-      )}
-    </form>
+      <div className="form-row">
+        <LabelsField value={labels.text} onChange={labels.setText} error={labels.error} />
+      </div>
+    </DialogForm>
   );
 }
 
@@ -103,6 +97,7 @@ function Invitations() {
   const invitations = useOrgInvitations();
   const names = useMemberNames();
   const canInvite = access.can("members:invite");
+  const [inviting, setInviting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [failed, setFailed] = useState<unknown>(null);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ORG_INVITATIONS });
@@ -127,9 +122,24 @@ function Invitations() {
 
   return (
     <section className="org-section" aria-label="Invitations">
-      {canInvite && (
-        <InviteForm onSent={(inv) => setNotice(`An invitation was sent to ${inv.email}.`)} />
-      )}
+      <div className="section-bar">
+        <p className="section-intro dim">
+          Who was invited, and the role and allowed labels they get on accepting.
+        </p>
+        {canInvite && (
+          <button type="button" className="btn" onClick={() => setInviting(true)}>
+            <UserPlus size={12} /> Invite someone
+          </button>
+        )}
+      </div>
+      <FormDialog open={inviting && canInvite} onOpenChange={setInviting}>
+        <InviteForm
+          onSent={(inv) => {
+            setInviting(false);
+            setNotice(`An invitation was sent to ${inv.email}.`);
+          }}
+        />
+      </FormDialog>
       {notice && (
         <div className="notice" role="status">
           {notice}

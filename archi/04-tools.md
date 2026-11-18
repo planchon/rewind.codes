@@ -8,7 +8,7 @@ A toolset has three kinds of tools:
 | --- | --- | --- |
 | MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
 | Built-ins: `http`, `webhook`; `workflows.<name>.start` and `workflows.<name>.signal` for each workflow the toolset pins | The dispatcher of Rewind; the engine itself for `webhook` and the workflows' | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)); the workflows' start and signal runs of [workflows](03-execution.md#workflows-across-runs), in the namespace of the run that calls them |
-| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
+| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for. A worker claims the tasks of the runs its key or token sees: an end user's namespace, a grant's labels ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)) | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
 
 Rewind calls MCP tools and built-ins directly. Their results go back to the script, never to
 the agent. The harness is on the path only for its host tools, and they are optional: a

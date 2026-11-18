@@ -498,95 +498,93 @@ export function RunView() {
               )}
             </section>
 
-            <div className="run-body">
-              <section className="panel source-panel" aria-label="Source">
-                <header className="panel-head">
-                  <h2>
-                    <FileCode size={14} aria-hidden="true" /> script.ts
-                  </h2>
-                  {marks ? (
-                    <span className="mark-legend muted">
-                      <span>
-                        <b className="mk resumed">▸</b> resumed
-                      </span>
-                      <span>
-                        <b className="mk issued">①</b> issued
-                      </span>
-                      <span>
-                        <b className="mk paused">‖</b> paused
-                      </span>
-                      <span>
-                        <b className="mk done">✓</b> done
-                      </span>
+            <section className="panel source-panel" aria-label="Source">
+              <header className="panel-head">
+                <h2>
+                  <FileCode size={14} aria-hidden="true" /> script.ts
+                </h2>
+                {marks ? (
+                  <span className="mark-legend muted">
+                    <span>
+                      <b className="mk resumed">▸</b> resumed
                     </span>
-                  ) : (
-                    <span className="muted">each line with what it caused</span>
-                  )}
-                  {unattributed.length > 0 && (
-                    <span className="end muted" title="Activities recorded without a callsite">
-                      {unattributed.length} without a line
+                    <span>
+                      <b className="mk issued">①</b> issued
                     </span>
-                  )}
-                </header>
-                {script.isPending ? (
-                  <Loading>Loading the source…</Loading>
-                ) : script.isError ? (
-                  <div className="panel-body">
-                    <ProblemView error={script.error} title="The source could not be read" />
-                  </div>
+                    <span>
+                      <b className="mk paused">‖</b> paused
+                    </span>
+                    <span>
+                      <b className="mk done">✓</b> done
+                    </span>
+                  </span>
                 ) : (
-                  <CodeView
-                    source={script.data.source}
-                    notesTitle="What each line caused"
-                    notes={(line) => (
-                      <Notes
-                        model={atCursor}
-                        line={line}
-                        selected={selectedIdx}
-                        now={now}
-                        onSelectEntry={selectEntry}
-                        onSelectLine={selectLine}
-                      />
-                    )}
-                    mark={mark}
-                    gutter={
-                      marks
-                        ? (line) => {
-                            const m = marks.get(line);
-                            return m ? (
-                              <span className={`mk ${m.kind}`} title={markMeaning(m)}>
-                                {markSymbol(m)}
-                              </span>
-                            ) : (
-                              <span className="mk" />
-                            );
-                          }
-                        : undefined
-                    }
-                    targets={targets ? (line) => targets.byLine.get(line) ?? [] : undefined}
-                    targetClass={(key) =>
-                      `${watches.includes(key) ? "pinned" : ""}${hover?.key === key ? " hovered" : ""}`.trim()
-                    }
-                    targetEvents={targets ? targetEvents : undefined}
-                    selectedLine={selectedLine}
-                    focusLine={selectedLine}
-                    onLineClick={selectLine}
-                  />
+                  <span className="muted">each line with what it caused</span>
                 )}
-              </section>
-              <div className="run-side">
-                <StepPanel
-                  cursor={cursor}
-                  model={model}
-                  watches={watches}
-                  targets={targets?.byKey ?? new Map()}
-                  ctx={ctx}
-                  onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
-                  onSelectLine={selectLine}
-                  onSelectEntry={selectEntry}
+                {unattributed.length > 0 && (
+                  <span className="end muted" title="Activities recorded without a callsite">
+                    {unattributed.length} without a line
+                  </span>
+                )}
+              </header>
+              {script.isPending ? (
+                <Loading>Loading the source…</Loading>
+              ) : script.isError ? (
+                <div className="panel-body">
+                  <ProblemView error={script.error} title="The source could not be read" />
+                </div>
+              ) : (
+                <CodeView
+                  source={script.data.source}
+                  notesTitle="What each line caused"
+                  notes={(line) => (
+                    <Notes
+                      model={atCursor}
+                      line={line}
+                      selected={selectedIdx}
+                      now={now}
+                      onSelectEntry={selectEntry}
+                      onSelectLine={selectLine}
+                    />
+                  )}
+                  mark={mark}
+                  gutter={
+                    marks
+                      ? (line) => {
+                          const m = marks.get(line);
+                          return m ? (
+                            <span className={`mk ${m.kind}`} title={markMeaning(m)}>
+                              {markSymbol(m)}
+                            </span>
+                          ) : (
+                            <span className="mk" />
+                          );
+                        }
+                      : undefined
+                  }
+                  targets={targets ? (line) => targets.byLine.get(line) ?? [] : undefined}
+                  targetClass={(key) =>
+                    `${watches.includes(key) ? "pinned" : ""}${hover?.key === key ? " hovered" : ""}`.trim()
+                  }
+                  targetEvents={targets ? targetEvents : undefined}
+                  selectedLine={selectedLine}
+                  focusLine={selectedLine}
+                  onLineClick={selectLine}
                 />
-                {inspector}
-              </div>
+              )}
+            </section>
+            <div className="debug-below">
+              <StepPanel
+                cursor={cursor}
+                model={model}
+                watches={watches}
+                targets={targets?.byKey ?? new Map()}
+                ctx={ctx}
+                onUnwatch={(key) => setWatches((w) => w.filter((k) => k !== key))}
+                onSelectLine={selectLine}
+                onSelectEntry={selectEntry}
+              />
+              {inspector}
             </div>
             {hover && hovered && (
               <ValuePopover

@@ -700,8 +700,15 @@ fn lease_from_row(row: &PgRow) -> Result<Lease, Error> {
     })
 }
 
-/// The host-tool selection of a claim: tenant, toolset, tools and namespace.
-type HostSelection<'a> = (&'a TenantId, Option<Digest>, Vec<String>, Option<&'a str>);
+/// The host-tool selection of a claim: tenant, toolset, tools, namespace, and the labels its
+/// runs carry (JSON).
+type HostSelection<'a> = (
+    &'a TenantId,
+    Option<Digest>,
+    Vec<String>,
+    Option<&'a str>,
+    String,
+);
 
 /// What a claim knows of a concurrency slot: another claim is deciding on it, or this many
 /// calls are in flight.
@@ -1226,21 +1233,28 @@ impl PostgresStore {
             TaskFilter::Host {
                 tenant: host_tenant,
                 namespace,
+                labels,
                 toolset,
                 tools,
             } => {
+                // A run's namespace and labels are read by its key, a task at a time: the due
+                // tasks are few, and a label's runs may be many.
                 selection.push_str(
                     " AND NOT dispatched AND tenant = $6 \
                      AND ($7::bytea IS NULL OR toolset = $7) \
                      AND (cardinality($8::text[]) = 0 OR tool = ANY($8)) \
-                     AND ($9::text IS NULL OR run_id IN \
-                         (SELECT id FROM runs WHERE tenant = $6 AND namespace = $9))",
+                     AND (($9::text IS NULL AND $10::jsonb = '{}'::jsonb) OR EXISTS \
+                         (SELECT 1 FROM runs WHERE runs.tenant = $6 \
+                          AND runs.id = tool_tasks.run_id \
+                          AND ($9::text IS NULL OR runs.namespace = $9) \
+                          AND runs.labels @> $10::jsonb))",
                 );
                 host = Some((
                     host_tenant,
                     *toolset,
                     tools.iter().cloned().collect(),
                     namespace.as_ref().map(NamespaceName::as_str),
+                    encode_labels(labels),
                 ));
             }
         }
@@ -1281,12 +1295,13 @@ impl PostgresStore {
             if let Some(tenants) = &scope_tenants {
                 statement = statement.bind(tenants.clone());
             }
-            if let Some((host_tenant, toolset, tools, namespace)) = &host {
+            if let Some((host_tenant, toolset, tools, namespace, labels)) = &host {
                 statement = statement
                     .bind(tenant(host_tenant))
                     .bind(toolset.map(bytes))
                     .bind(tools.clone())
-                    .bind(*namespace);
+                    .bind(*namespace)
+                    .bind(labels.as_str());
             }
             let rows = statement.fetch_all(&mut *tx).await?;
             let tasks = rows
@@ -1731,7 +1746,6 @@ impl PostgresStore {
         &self,
         tenant_id: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> Result<Option<StoredWorkflow>, Fail> {
         let version = workflow.version();
@@ -1745,7 +1759,7 @@ impl PostgresStore {
         .bind(bytes(version))
         .bind(workflow.name())
         .bind(rewind_format::encode_workflow(workflow))
-        .bind(encode_labels(labels))
+        .bind(encode_labels(workflow.labels()))
         .bind(ts(now))
         .fetch_optional(&mut *tx)
         .await?;
@@ -2525,12 +2539,10 @@ impl JournalStore for PostgresStore {
         &self,
         tenant_id: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> Result<StoredWorkflow, StoreError> {
         let version = workflow.version();
-        let inserted =
-            retrying(|| self.put_workflow_once(tenant_id, workflow, labels, now)).await?;
+        let inserted = retrying(|| self.put_workflow_once(tenant_id, workflow, now)).await?;
         if let Some(stored) = inserted {
             return Ok(stored);
         }

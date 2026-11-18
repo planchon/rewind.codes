@@ -9,9 +9,10 @@ calls, trace id and labels. A run that is still going updates live, step by step
 
 ## Debugger
 
-The debugger is the source of the script, with what each line caused beside it: tool calls with their duration, log
-lines, timers, signal waits. Above it, the **timeline** shows each call, timer and signal wait as a span, with idle time
-compressed. When the run waits, a banner says for what, at which line, and how to answer.
+The debugger is the source of the script, across the page, with what each line caused beside it: tool calls with their
+duration, log lines, timers, signal waits. Above it, the **timeline** shows each call, timer and signal wait as a span,
+with idle time compressed. Under it, the **step** and what you selected: a line, a note beside it, a span of the
+timeline. When the run waits, a banner says for what, at which line, and how to answer.
 
 <Frame caption="A run waiting for the signal approval, at line 11, after two calls">
   <img src="/images/dashboard/run-debugger-light.webp" alt="The debugger: a waiting banner, the timeline, the source with each call beside its line, and the step inspector" className="block dark:hidden" />
@@ -26,14 +27,14 @@ cancellation) and what the script did in response. The cursor steps through them
 - **Step back**, **Step**, first and last, or the <kbd>←</kbd> and <kbd>→</kbd> keys. **every step** also stops on the
   steps that change nothing in the source.
 - At each step, the source marks the awaits that just resumed, the calls issued, those still open and those done. The
-  panel on the right says why the run woke up, what it did, and where it is paused.
+  panel under the source says why the run woke up, what it did, and where it is paused.
 - **Hover** an underlined call to see its arguments and result as known at that step, or a variable bound to an awaited
   call (`const issues = await github.list_issues(…)`), or `input`, to see its value. **Click** to pin it as a watch.
 - The step is in the URL (`?step=`): a link opens the run at that moment. On a live run, the cursor follows the head.
 
 <Frame caption="Hovering issues at step 3: the value github.list_issues returned, with a watch pinned">
-  <img src="/images/dashboard/run-time-cursor-light.webp" alt="The time cursor: a hover showing the value of issues, and a watch in the side panel" className="block dark:hidden" />
-  <img src="/images/dashboard/run-time-cursor-dark.webp" alt="The time cursor: a hover showing the value of issues, and a watch in the side panel" className="hidden dark:block" />
+  <img src="/images/dashboard/run-time-cursor-light.webp" alt="The time cursor: a hover showing the value of issues, pinned as a watch" className="block dark:hidden" />
+  <img src="/images/dashboard/run-time-cursor-dark.webp" alt="The time cursor: a hover showing the value of issues, pinned as a watch" className="hidden dark:block" />
 </Frame>
 
 <Note>
@@ -42,7 +43,7 @@ cancellation) and what the script did in response. The cursor steps through them
 </Note>
 
 Payloads show their size, digest and preview; their full value loads on demand, as a tree whose objects and arrays
-fold.
+fold. The arrows at the right of a payload open it large, to read a long input or result at the width of the screen.
 
 ## Journal
 

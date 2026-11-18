@@ -801,9 +801,9 @@ impl JournalStore for TursoStore {
         &self,
         tenant_id: &TenantId,
         workflow: &Workflow,
-        labels: &BTreeMap<String, String>,
         now: Timestamp,
     ) -> Result<StoredWorkflow, StoreError> {
+        let labels = workflow.labels();
         let connection = self.connection().await?;
         let connection = &*connection;
         transaction(connection, async {
@@ -1912,6 +1912,7 @@ impl JournalStore for TursoStore {
                     namespace,
                     toolset,
                     tools,
+                    ..
                 } => {
                     let mut clause = "t.dispatched = 0 AND r.tenant = ?".to_owned();
                     filter_params.push(tenant(host_tenant));
@@ -1930,18 +1931,26 @@ impl JournalStore for TursoStore {
                     clause
                 }
             };
+            // A grant limited to labels claims the tasks of the runs carrying them only: the
+            // run's labels, one JSON column, are read with the task and filtered here.
+            let required = match filter {
+                TaskFilter::Host { labels, .. } => labels.clone(),
+                _ => BTreeMap::new(),
+            };
             // Due tasks are read a page at a time, in the order they became due: a task
             // without a free concurrency slot is skipped, so a claim may read past `max`.
             let page = max.saturating_mul(2).max(32);
             let first_page = format!(
-                "SELECT {columns}, t.due_at FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                "SELECT {columns}, t.due_at, r.labels FROM tool_tasks t \
+                 JOIN runs r ON r.id = t.run_id \
                  WHERE t.due_at <= ? AND r.status NOT IN {terminal} AND {selection} \
                  ORDER BY t.due_at, t.run_id, t.seq LIMIT ?",
                 columns = task_columns!(),
                 terminal = terminal!(),
             );
             let next_page = format!(
-                "SELECT {columns}, t.due_at FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                "SELECT {columns}, t.due_at, r.labels FROM tool_tasks t \
+                 JOIN runs r ON r.id = t.run_id \
                  WHERE t.due_at <= ? AND r.status NOT IN {terminal} AND {selection} \
                  AND (t.due_at > ? OR (t.due_at = ? AND (t.run_id > ? \
                       OR (t.run_id = ? AND t.seq > ?)))) \
@@ -1984,6 +1993,11 @@ impl JournalStore for TursoStore {
                         mcp_server,
                     } = task_from_row(row)?;
                     after = Some((row.column(TASK_COLUMNS)?, task.task.run.id, task.task.seq));
+                    if !required.is_empty()
+                        && !carries(&decode_labels(&row.text(TASK_COLUMNS + 1)?)?, &required)
+                    {
+                        continue;
+                    }
 
                     let tool_key = (task.task.run.id, task.tool.clone());
                     let in_flight = match per_tool.get(&tool_key) {

@@ -14,7 +14,8 @@ use crate::toolsets::Declarations;
 /// `POST /v1/workflows`: checks a workflow and saves it as a new version. Its script is checked
 /// against its toolset and against its own schemas: its default export must take the input and
 /// return the output, and `signal()` only takes the declared names. Saving the same workflow
-/// again returns the version saved first (200).
+/// again under the same labels returns the version saved first (200): the labels of a key limited
+/// to labels are part of the version, so such a key saves a version of its own.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schema(example = json!({
@@ -49,7 +50,7 @@ pub struct CreateWorkflow {
     #[schema(value_type = Object)]
     pub signals: BTreeMap<String, Value>,
     /// The version it derives from, `name@<version>` or a version: the latest version of the
-    /// same name the caller sees when absent. Its suite is inherited.
+    /// same name saved under the caller's labels when absent. Its suite is inherited.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// New tests: inline, by the digest of a recorded test, or a recorded test with a new
@@ -183,8 +184,8 @@ pub struct Workflow {
     pub output: Value,
     #[schema(value_type = Object)]
     pub signals: BTreeMap<String, Value>,
-    /// The labels of the API key that saved it: a key limited to labels only sees the workflows
-    /// carrying them.
+    /// The labels of the key that saved it, part of the version: a key limited to labels only
+    /// sees the workflows carrying them. Empty for a version saved tenant-wide.
     pub labels: Labels,
     pub created_at: Timestamp,
     /// How a script that starts it sees it: its declaration in `rewind:workflows`, and its line

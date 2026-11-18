@@ -9,7 +9,7 @@ import { usePayloadValue } from "../../api/queries";
 import type { Entry, Payload } from "../../api/types";
 import { useSettings } from "../../app/settings";
 import { ProblemView } from "../../components/bits";
-import { JsonValue } from "../../components/Payload";
+import { JsonBox } from "../../components/Payload";
 import { formatBytes, formatDuration, formatOffset, formatTime } from "../../model/format";
 import type { Activity, RunModel } from "../../model/run";
 import {
@@ -244,7 +244,7 @@ function LoadedValue({
 function JsonBlock({ value }: { value: unknown }) {
   return (
     <div className="payload-body value-block">
-      <JsonValue value={value} />
+      <JsonBox name="value" value={value} />
     </div>
   );
 }

@@ -22,7 +22,8 @@
 //!   the toolset's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
 //!   "toolset":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
-//!   one, in its canonical form, so that its bytes hash to the version;
+//!   one and `"labels":{…}` when it was saved under a grant limited to labels, in its canonical
+//!   form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
 //!   its canonical form, so that its bytes hash to the test's digest.
 //!

@@ -40,7 +40,7 @@ import {
 } from "../../model/query";
 import { Seg } from "../FilterBits";
 import { RunTable } from "../RunTable";
-import { BUCKETS, useSearchQuery, useWindow } from "../search";
+import { BUCKETS, useRunQueryValues, useSearchQuery, useWindow } from "../search";
 import { FailureGroups } from "./FailureGroups";
 import { FilterGroups, TimelineSelect, timelineOf, withTimeline } from "./Filters";
 import { WaitingRuns } from "./WaitingRuns";
@@ -283,6 +283,7 @@ export function ObservabilityView() {
   const { view: raw } = useParams();
   const view = VIEWS.find((v) => v.key === (raw ?? "all"));
   const { q, setQ } = useSearchQuery();
+  const lookup = useRunQueryValues();
   const [params, setParams] = useSearchParams();
   const [win, setWin] = useWindow();
 
@@ -360,6 +361,8 @@ export function ObservabilityView() {
             value={q}
             onSubmit={setQ}
             facets={shown.data?.facets}
+            values={lookup.values}
+            onTyping={lookup.onTyping}
             fault={fault}
             placeholder='@agent:triage status:failed tool:github.* error:timeout "rate limit"'
           >
