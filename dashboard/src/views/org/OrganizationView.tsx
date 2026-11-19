@@ -8,7 +8,7 @@ import { Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { OrgAvatar } from "../../app/AccountMenus";
 import { SECTIONS, useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
-import { PageSidebar } from "../../app/sidebar";
+import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
 import { CopyButton } from "../../components/bits";
 import { PageHeader } from "../../components/PageHeader";
 
@@ -22,6 +22,7 @@ const ICONS: Record<string, ReactNode> = {
 
 export function OrganizationView() {
   const access = useAccess();
+  const folded = useSidebarFolded();
   const { pathname } = useLocation();
   const org = access.organization;
   const current = access.sections.find((s) => pathname.startsWith(`/organization/${s.path}`));
@@ -54,7 +55,12 @@ export function OrganizationView() {
         {access.sections.length > 0 && (
           <nav className="nav" aria-label="Organization">
             {access.sections.map((s) => (
-              <NavLink key={s.path} to={`/organization/${s.path}`} className="nav-item">
+              <NavLink
+                key={s.path}
+                to={`/organization/${s.path}`}
+                className="nav-item"
+                title={folded ? s.title : undefined}
+              >
                 <span className="nav-icon" aria-hidden="true">
                   {ICONS[s.path]}
                 </span>

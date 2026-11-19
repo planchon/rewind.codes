@@ -2951,7 +2951,7 @@ table.grid tr.row-defaults > * {
 }
 
 .view-menu {
-  width: calc(var(--sidebar-width) - 16px);
+  width: max(240px, calc(var(--sidebar-width) - 16px));
 }
 
 /* Observability: the saved searches */

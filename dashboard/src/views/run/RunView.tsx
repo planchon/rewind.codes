@@ -20,7 +20,7 @@ import { ApiError } from "../../api/client";
 import { useRun, useRunJournal, useScript } from "../../api/queries";
 import { isEnded } from "../../api/types";
 import { runBackPath } from "../../app/runLinks";
-import { PageSidebar } from "../../app/sidebar";
+import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
 import { Empty, Loading, ProblemView, RunId, useNow } from "../../components/bits";
 import { CodeView, type LineMark } from "../../components/CodeView";
 import { PageHeader } from "../../components/PageHeader";
@@ -266,6 +266,7 @@ export function RunView() {
   const { id = "", section: rawSection } = useParams();
   const section = (rawSection ?? "debugger") as Section;
   const location = useLocation();
+  const folded = useSidebarFolded();
   const back = runBackPath(location.state);
   const [params, setParams] = useSearchParams();
   const run = useRun(id);
@@ -448,6 +449,7 @@ export function RunView() {
               to={sectionTo(n.section)}
               state={location.state}
               className="nav-item"
+              title={folded ? n.label : undefined}
               aria-current={section === n.section ? "page" : undefined}
             >
               <span className="nav-icon" aria-hidden="true">

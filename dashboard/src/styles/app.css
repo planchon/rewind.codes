@@ -177,6 +177,28 @@ strong {
   padding: 10px 8px 8px;
 }
 
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-top > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-fold {
+  flex: none;
+  width: var(--row-height);
+  height: var(--row-height);
+  color: var(--ink-3);
+}
+
+.sidebar-fold:hover {
+  color: var(--ink);
+}
+
 .scope {
   display: flex;
   align-items: center;
@@ -1635,7 +1657,7 @@ button.label:hover {
 }
 
 .scope-menu {
-  width: calc(var(--sidebar-width) - 16px);
+  width: max(240px, calc(var(--sidebar-width) - 16px));
 }
 
 .account-menu {
@@ -2269,6 +2291,99 @@ button.journal-row {
   color: inherit;
 }
 
+/* The folded sidebar: a rail of icons. The views, a page's own navigation and the view picker
+   keep their icon; names, counts, details and filters hide; each icon names itself on hover. */
+
+@media (min-width: 861px) {
+  :root[data-sidebar="folded"] .sidebar-head {
+    padding: 10px 6px 8px;
+  }
+
+  :root[data-sidebar="folded"] .sidebar-top {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  :root[data-sidebar="folded"] .sidebar-top > :first-child {
+    flex: none;
+  }
+
+  :root[data-sidebar="folded"] .scope {
+    justify-content: center;
+    width: var(--row-height);
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .scope-slash,
+  :root[data-sidebar="folded"] .scope-name,
+  :root[data-sidebar="folded"] .scope .badge,
+  :root[data-sidebar="folded"] .scope-chevron,
+  :root[data-sidebar="folded"] .org-avatar {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .find-button {
+    justify-content: center;
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .find-button span,
+  :root[data-sidebar="folded"] .find-button .kbd {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .sidebar-pane {
+    padding: 2px 6px 16px;
+  }
+
+  :root[data-sidebar="folded"] .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .nav-label,
+  :root[data-sidebar="folded"] .nav-end {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .pane-head {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-sidebar="folded"] .pane-head span {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .pane-body > :not(.nav, :root[data-sidebar="folded"] .view-select) {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .view-select {
+    justify-content: center;
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .view-select-label,
+  :root[data-sidebar="folded"] .view-select .count,
+  :root[data-sidebar="folded"] .view-select-chevron {
+    display: none;
+  }
+
+  :root[data-sidebar="folded"] .sidebar-foot {
+    padding: 8px 6px;
+  }
+
+  :root[data-sidebar="folded"] .account {
+    justify-content: center;
+    padding: 0;
+  }
+
+  :root[data-sidebar="folded"] .account-name,
+  :root[data-sidebar="folded"] .account-end {
+    display: none;
+  }
+}
+
 /* Narrow screens: the sidebar on top */
 
 @media (max-width: 860px) {
@@ -2283,7 +2398,8 @@ button.journal-row {
     border-bottom: 1px solid var(--line);
   }
 
-  .sidebar-resizer {
+  .sidebar-resizer,
+  .sidebar-fold {
     display: none;
   }
 

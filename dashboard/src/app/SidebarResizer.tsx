@@ -1,49 +1,15 @@
-// The edge of the sidebar, dragged to resize it: the width lives in `--sidebar-width` on the root,
-// so the menus sized after the sidebar follow, and in browser storage, so it is kept. A
-// double-click gives the default width back; the arrows move it by 16 px, Home and End to its
-// bounds.
-import {
-  type KeyboardEvent,
-  type PointerEvent,
-  useCallback,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import { read, write } from "./storage";
+// The edge of the sidebar, dragged to resize it. A double-click gives the default width back;
+// the arrows move it by 16 px, Home and End to its bounds. Folded, the sidebar has no edge.
+import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { type KeyboardEvent, type PointerEvent, useEffect, useRef } from "react";
+import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, useSidebar } from "./sidebar";
 
-export const SIDEBAR_DEFAULT = 256;
-export const SIDEBAR_MIN = 200;
-export const SIDEBAR_MAX = 480;
-const KEY = "rewind.sidebar";
 const STEP = 16;
 
-const clamp = (px: number) => Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, px)));
-
-function stored(): number {
-  const px = Number(read("local", KEY));
-  return Number.isFinite(px) && px >= SIDEBAR_MIN && px <= SIDEBAR_MAX ? px : SIDEBAR_DEFAULT;
-}
-
-function save(px: number) {
-  write("local", KEY, px === SIDEBAR_DEFAULT ? null : String(px));
-}
-
 export function SidebarResizer() {
-  const [width, setWidth] = useState(stored);
+  const { width, setWidth, folded } = useSidebar();
   const drag = useRef<{ x: number; width: number } | null>(null);
-
-  useLayoutEffect(() => {
-    const root = document.documentElement.style;
-    if (width === SIDEBAR_DEFAULT) root.removeProperty("--sidebar-width");
-    else root.setProperty("--sidebar-width", `${width}px`);
-  }, [width]);
-
-  const set = useCallback((px: number) => {
-    const next = clamp(px);
-    setWidth(next);
-    save(next);
-  }, []);
+  if (folded) return null;
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -54,11 +20,11 @@ export function SidebarResizer() {
   };
   const move = (e: PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    setWidth(clamp(drag.current.width + e.clientX - drag.current.x));
+    setWidth(drag.current.width + e.clientX - drag.current.x, false);
   };
   const up = (e: PointerEvent<HTMLDivElement>) => {
     if (!drag.current) return;
-    set(drag.current.width + e.clientX - drag.current.x);
+    setWidth(drag.current.width + e.clientX - drag.current.x);
     drag.current = null;
     delete document.documentElement.dataset.resizing;
   };
@@ -75,7 +41,7 @@ export function SidebarResizer() {
               : null;
     if (next === null) return;
     e.preventDefault();
-    set(next);
+    setWidth(next);
   };
 
   return (
@@ -95,7 +61,44 @@ export function SidebarResizer() {
       onPointerUp={up}
       onPointerCancel={up}
       onKeyDown={key}
-      onDoubleClick={() => set(SIDEBAR_DEFAULT)}
+      onDoubleClick={() => setWidth(SIDEBAR_DEFAULT)}
     />
   );
+}
+
+/** Folds the sidebar to its icons, or unfolds it; `[` does the same. */
+export function SidebarFold() {
+  const { folded, setFolded } = useSidebar();
+  const label = folded ? "Expand the sidebar" : "Collapse the sidebar to its icons";
+  return (
+    <button
+      type="button"
+      className="icon-btn sidebar-fold"
+      aria-label={label}
+      aria-pressed={folded}
+      title={`${label} ([)`}
+      onClick={() => setFolded(!folded)}
+    >
+      {folded ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+    </button>
+  );
+}
+
+/** `[` folds or unfolds the sidebar, outside the fields where it is typed. */
+export function useFoldShortcut() {
+  const { folded, setFolded } = useSidebar();
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== "[" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']")
+      )
+        return;
+      e.preventDefault();
+      setFolded(!folded);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [folded, setFolded]);
 }
