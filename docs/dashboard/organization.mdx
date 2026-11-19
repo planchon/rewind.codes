@@ -1,6 +1,6 @@
 ---
 title: "Organization"
-description: "Members, invitations, roles and API keys: who may see and do what."
+description: "Members, invitations, roles, API keys and connections: who may see and do what."
 ---
 
 Open your organization from the account menu at the bottom of the sidebar. Each part is shown to whoever holds its
@@ -72,6 +72,21 @@ before you close the panel.
   Give each process the smallest role it needs: `harness` for your backend, `worker` for a host-tool worker, a key
   limited to an agent's labels for that agent's tools. End users' agents get [tokens](/sdk/end-users#tokens), not keys.
 </Tip>
+
+## Connections
+
+The [connections](/claude) that open your organization: Claude, or another MCP client, acting for one of its members.
+Each shows the person, the client, the access its person gave here (Read or Run), the labels it is limited to, and when
+it was last used. A connection never holds more than its person's own role here, and never administers anything.
+
+<Frame>
+  <img src="/images/dashboard/organization-connections-light.webp" alt="The connections that open the organization: the person, the client, the access, the labels, the last use" className="block dark:hidden" />
+  <img src="/images/dashboard/organization-connections-dark.webp" alt="The connections that open the organization: the person, the client, the access, the labels, the last use" className="hidden dark:block" />
+</Frame>
+
+Whoever may read the members sees them; whoever may manage the members (`members:manage`) can **Remove from
+organization**: the connection loses this organization at once, and keeps the person's others. Removing a member
+removes their connections from the organization too.
 
 ## Settings
 

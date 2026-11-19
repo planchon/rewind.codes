@@ -25,7 +25,7 @@
         "groups": [
           {
             "group": "Get started",
-            "pages": ["index", "why-rewind", "quickstart"]
+            "pages": ["index", "why-rewind", "quickstart", "claude"]
           },
           {
             "group": "How it works",

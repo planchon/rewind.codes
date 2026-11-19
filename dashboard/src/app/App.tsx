@@ -22,6 +22,7 @@ import { useAccess } from "./access";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
+import { restoreRoute } from "./pendingRoute";
 import { SessionProvider, type SessionProviderProps, useSession } from "./session";
 import { SettingsProvider } from "./settings";
 
@@ -195,6 +196,12 @@ export const routes: RouteObject[] = [
             }),
           },
           {
+            path: "connections",
+            lazy: async () => ({
+              Component: (await import("../views/org/ConnectionsView")).ConnectionsView,
+            }),
+          },
+          {
             path: "settings",
             lazy: async () => ({
               Component: (await import("../views/org/SettingsView")).SettingsView,
@@ -202,8 +209,31 @@ export const routes: RouteObject[] = [
           },
         ],
       },
+      // Claude: Connect Claude, and the person's connections.
+      {
+        path: "connect",
+        lazy: async () => ({
+          Component: (await import("../views/claude/ConnectView")).ConnectView,
+        }),
+      },
+      {
+        path: "account/connections",
+        lazy: async () => ({
+          Component: (await import("../views/claude/AccountConnectionsView"))
+            .AccountConnectionsView,
+        }),
+      },
       { path: "*", element: <NotFound /> },
     ],
+  },
+  // The consent of an MCP client, reached from `/oauth/authorize`: a page of its own, as a
+  // sign-in is, outside the frame.
+  {
+    path: "/connect/authorize",
+    errorElement: <RouteError />,
+    lazy: async () => ({
+      Component: (await import("../views/claude/ConsentView")).ConsentView,
+    }),
   },
 ];
 
@@ -270,7 +300,11 @@ export function Providers({
 }
 
 export function App() {
-  const [router] = useState(() => createHashRouter(routes));
+  const [router] = useState(() => {
+    // Back from GitHub on `/#/`: the address the sign-in started from.
+    restoreRoute();
+    return createHashRouter(routes);
+  });
   return (
     <Providers>
       <RouterProvider router={router} />

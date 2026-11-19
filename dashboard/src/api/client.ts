@@ -46,6 +46,7 @@ import type {
   Test,
   ToolStatsPage,
   ToolStatsQuery,
+  ToolsetSummary,
   Trace,
   UpdateOrganization,
   Workflow,
@@ -298,6 +299,11 @@ export class Api {
     return this.unwrap(
       await this.client.GET("/v1/tests/{digest}", { params: { path: { digest } }, signal }),
     );
+  }
+
+  /** The toolsets the organization registered, without their schemas. */
+  async toolsets(signal?: AbortSignal): Promise<ToolsetSummary[]> {
+    return this.unwrap(await this.client.GET("/v1/toolsets", { signal })).toolsets;
   }
 
   async toolStats(query: ToolStatsQuery, signal?: AbortSignal): Promise<ToolStatsPage> {

@@ -14,6 +14,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  Plug,
   Plus,
   SlidersHorizontal,
   Sun,
@@ -319,11 +320,14 @@ export function AccountMenu({
   user,
   server,
   onOrganization,
+  onConnections,
 }: {
   user: User | null;
   server?: string | null;
   /** Opens the organization's parts; the onboarding has none. */
   onOrganization?: () => void;
+  /** Opens the member's connections (Account › Connections); a key has none. */
+  onConnections?: () => void;
 }) {
   const { phase, key, signOut } = useSession();
   // The onboarding has no access yet: a member without organization.
@@ -379,15 +383,22 @@ export function AccountMenu({
                   </span>
                 )}
               </div>
+              {(organization || (user && onConnections)) && (
+                <Menu.Separator className="menu-separator" />
+              )}
               {organization && (
-                <>
-                  <Menu.Separator className="menu-separator" />
-                  <Menu.Item className="menu-item" onClick={organization}>
-                    <SlidersHorizontal size={14} aria-hidden="true" />
-                    <span className="menu-item-text">Organization</span>
-                    <ChevronRight size={14} className="menu-item-end" aria-hidden="true" />
-                  </Menu.Item>
-                </>
+                <Menu.Item className="menu-item" onClick={organization}>
+                  <SlidersHorizontal size={14} aria-hidden="true" />
+                  <span className="menu-item-text">Organization</span>
+                  <ChevronRight size={14} className="menu-item-end" aria-hidden="true" />
+                </Menu.Item>
+              )}
+              {user && onConnections && (
+                <Menu.Item className="menu-item" onClick={onConnections}>
+                  <Plug size={14} aria-hidden="true" />
+                  <span className="menu-item-text">Connections</span>
+                  <ChevronRight size={14} className="menu-item-end" aria-hidden="true" />
+                </Menu.Item>
               )}
               <Menu.Separator className="menu-separator" />
               <SettingsItems />

@@ -123,6 +123,16 @@ const SHOTS: Shot[] = [
     element: (page) => page.locator('section[aria-label="The new key"]'),
     last: true,
   },
+  { name: "connect", open: (page) => go(page, "/connect"), height: 1500 },
+  {
+    name: "consent",
+    // `pnpm dev:mock` keeps a request of claude.ai waiting, at a fixed address.
+    open: (page) => go(page, "/connect/authorize?request=claude-demo"),
+    // The card alone: the page around it is empty.
+    element: (page) => page.locator(".gate-card"),
+  },
+  { name: "account-connections", open: (page) => go(page, "/account/connections") },
+  { name: "organization-connections", open: (page) => go(page, "/organization/connections") },
   {
     name: "find",
     async open(page) {

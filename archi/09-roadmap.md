@@ -150,7 +150,7 @@ connections and MCP on the 19th.
 | Server | `rewind-server`, `rewind-api` | Nothing | Engine ports, HTTP API `/v1`, access and identity, namespaces |
 | CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib, namespaces |
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset, namespaces |
-| Dashboard | `dashboard` | Nothing | HTTP API `/v1`, access and identity, namespaces |
+| Dashboard | `dashboard` | The generated types of the connections and the consent, once `api/openapi.json` has them (hand-written in `src/api/connections.ts`); Connect Claude, the consent and the connections were built on 19 November 2026 | HTTP API `/v1`, access and identity, namespaces, connections and MCP |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Claude as a harness | `rewind-agent-tools`, `rewind-mcp-server`, `rewind-server`, the stores, `rewind-cli`, `dashboard` | Everything: designed on 19 November 2026 | Connections and MCP, HTTP API `/v1`, access and identity, namespaces |
 | Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Setting WorkOS's variables on Railway's api service, and deploying the dashboard with its `/auth` rewrite | Engine ports, HTTP API `/v1`, access and identity |

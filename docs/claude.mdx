@@ -1,0 +1,194 @@
+---
+title: "Use Rewind from Claude"
+description: "Add Rewind to claude.ai, Claude Desktop, the mobile apps or Claude Code as a connector: Claude writes, tests and runs the scripts, and follows their runs."
+---
+
+Rewind is an MCP server at `https://api.rewind.codes/mcp`. Add it to Claude as a custom connector and Claude becomes
+the harness: it writes TypeScript scripts against your toolsets, checks and tests them, starts them, follows their runs
+and answers their signals, with the same [agent tools](/sdk/agent-tools) your own harness would give a model. Every run
+is journaled as any other, so you look at it in the [dashboard](/dashboard/introduction) like the rest.
+
+You connect with your own Rewind account. Claude then acts for you, in the organizations you choose, never with more
+rights than you hold.
+
+<Frame>
+  <img src="/images/dashboard/connect-light.webp" alt="Connect Claude: a toolset, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="block dark:hidden" />
+  <img src="/images/dashboard/connect-dark.webp" alt="Connect Claude: a toolset, the connector's URL and the steps per client, the authorization, the connection seen arriving, a first message" className="hidden dark:block" />
+</Frame>
+
+The dashboard's **Connect Claude** page, in the sidebar, walks through the steps below and sees your connection arrive.
+
+## Before you start
+
+Claude writes scripts against a [toolset](/sdk/toolsets): the MCP servers and host tools the scripts may call. Your
+organization needs at least one; Connect Claude lists them. Register one with the SDK (`rewind.toolsets.create`) or the
+CLI (`rewind toolsets add toolset.json`).
+
+<Warning>
+  Host tools run in your own worker. Claude reaches them only while that worker runs: a script calling one waits for
+  it otherwise.
+</Warning>
+
+## Add the connector
+
+<Tabs>
+  <Tab title="claude.ai (Pro, Max)">
+    1. In Claude, open **Customize › Connectors**, then **Add › Add custom connector**.
+    2. Name it **Rewind**, with the URL `https://api.rewind.codes/mcp`.
+    3. Keep the settings marked **Detected** as they are, *Use Claude's published identity* among them.
+    4. **Add**, then **Connect**: Claude opens Rewind's page to [authorize it](#authorize-claude).
+
+    The connector follows you to Claude Desktop and the mobile apps.
+  </Tab>
+  <Tab title="Team, Enterprise">
+    1. An Owner of the Claude organization adds Rewind once: **Organization settings › Connectors › Add › Custom ›
+       Web**, named **Rewind**, with the URL `https://api.rewind.codes/mcp`.
+    2. Each member then finds Rewind in **Customize › Connectors** and **Connect**s with their own Rewind account.
+
+    Everyone gets their own connection, within their own role in Rewind.
+  </Tab>
+  <Tab title="Claude Code">
+    ```bash
+    claude mcp add --transport http rewind https://api.rewind.codes/mcp
+    ```
+
+    Then run `/mcp` in Claude Code, pick **rewind** and sign in: the browser opens Rewind's page to
+    [authorize it](#authorize-claude).
+
+    With `--scope project`, the command writes the server to the repository's `.mcp.json`, to share it with the team.
+    Each person still signs in with their own account.
+  </Tab>
+  <Tab title="Other MCP clients">
+    Add a remote MCP server (Streamable HTTP) with the URL `https://api.rewind.codes/mcp`. A client that signs in with
+    OAuth finds Rewind's sign-in from the URL and registers itself; you authorize it as you would Claude.
+
+    A client without a browser sends a key instead: see [Without a browser](#without-a-browser).
+  </Tab>
+</Tabs>
+
+## Authorize Claude
+
+Claude opens Rewind's page in your browser. Sign in if asked, then choose what Claude may open:
+
+- **The organizations.** Tick each organization Claude may reach. The one open in the dashboard is ticked already;
+  an organization where your role gives neither access cannot be ticked.
+- **An access for each.** **Read** lets Claude read runs, namespaces, toolsets and workflows. **Run** also lets it
+  check, test and start scripts, and signal and cancel runs. An access your role does not give is not offered.
+- **Only what Claude starts.** The runs Claude starts carry the label `via: claude`, and Claude sees only the runs
+  carrying it. Untick it to let Claude read and steer the organization's other runs too, to debug them for instance.
+
+<Frame>
+  <img src="/images/dashboard/consent-light.webp" alt="Rewind's authorization page: the organizations with their access, the label via=claude, Deny and Allow" className="block dark:hidden mx-auto max-w-md" />
+  <img src="/images/dashboard/consent-dark.webp" alt="Rewind's authorization page: the organizations with their access, the label via=claude, Deny and Allow" className="hidden dark:block mx-auto max-w-md" />
+</Frame>
+
+**Allow** sends you back to Claude, connected. Claude never gets more than your own role gives, at every call: if your
+role shrinks, so does Claude's reach. It never administers anything: no members, roles, keys, credentials, toolsets
+nor workflows.
+
+The page names where it returns. When it returns to a program on your computer (`localhost`, as Claude Code does),
+allow it only if you started that program yourself.
+
+## In the conversation
+
+Nothing is pinned when you connect: the organization, the namespace and the toolset are chosen in the conversation.
+Name them in your message, or let Claude find them with `list_orgs`, `list_namespaces` and `list_toolsets`:
+
+```text
+With Rewind, org Acme, toolset 079b37894847…, namespace demo: show me what this toolset can do, then write a short
+script that uses it. Check it and test it, and run it once I agree.
+```
+
+The toolset is named by its id, as `list_toolsets` gives it. The namespace is the [end user](/concepts/end-users) the
+runs act for: a new name creates it at its first run. Connect Claude writes this message for you, with your
+organization and a toolset of it.
+
+## The tools
+
+| Tool | Does | Access |
+| --- | --- | --- |
+| `list_orgs` | The organizations the connection opens, with their access | Read |
+| `list_namespaces` | The namespaces of an organization, by prefix | Read |
+| `list_toolsets` | The toolsets of an organization, with their servers and tools | Read |
+| `search_tools` | The declarations of a toolset's tools that match a query | Read |
+| `get_workflow` | A [workflow](/sdk/workflows)'s source, schemas, suite and lineage | Read |
+| `check_script` | Type-checks a script against the toolset | Run |
+| `test_script` | Runs [tests](/sdk/testing) against a script, in mock mode and virtual time | Run |
+| `get_run` | A run's state and trace, or one journal entry in full | Read |
+| `list_runs` | The runs the connection sees: those Claude started, unless you unticked the label | Read |
+| `record_tests` | Records tests from a workflow's past runs | Read |
+| `run_script` | Type-checks a script and starts a run; returns its output, its error, or what it waits for | Run |
+| `retry_run` | Starts a new run from a failed one with a corrected script, reusing the calls already made | Run |
+| `signal_run` | Sends a signal to a run | Run |
+| `cancel_run` | Cancels a run | Run |
+
+The tools take the organization (`org`, its name or id, left out when the connection opens one only), and the
+namespace and the toolset where they need them. They are the SDK's [agent tools](/sdk/agent-tools) but
+`save_workflow`: Claude does not save workflows. A result holds at most 80,000 characters, the rest read page by page,
+and `run_script` waits for the run's end 30 seconds by default, 200 at most, before it returns the run's state.
+
+## Good practices
+
+- **One connection per person.** Everyone connects with their own Rewind account, never a shared one.
+- **Name the organization, the namespace and the toolset** in your message: Claude asks nothing before it starts.
+- **The least access that works.** Read to look at runs; Run only where Claude should start them.
+- **Keep Claude's confirmation** on `run_script`, `retry_run`, `signal_run` and `cancel_run`. The read-only tools
+  (`list_*`, `search_tools`, `get_workflow`, `check_script`, `test_script`, `get_run`, `list_runs`) may be "Always
+  allow".
+- **Secrets stay in Rewind.** The credentials of your MCP servers live in the [toolset](/sdk/toolsets#credentials),
+  never in the chat.
+- **Revoke** a connection you no longer use.
+
+## Change or revoke a connection
+
+Open **Connections** from the account menu, at the bottom of the dashboard's sidebar. Each connection shows its client,
+the organizations it opens with their access and labels, and when it was made and last used. **Edit** changes the
+organizations, accesses and labels: Claude keeps working without reconnecting. **Revoke** ends the connection at once.
+
+<Frame>
+  <img src="/images/dashboard/account-connections-light.webp" alt="Account › Connections: Claude and Claude Code, the organizations each opens with its access" className="block dark:hidden" />
+  <img src="/images/dashboard/account-connections-dark.webp" alt="Account › Connections: Claude and Claude Code, the organizations each opens with its access" className="hidden dark:block" />
+</Frame>
+
+Whoever administers your organization sees the connections that open it, in
+[Organization › Connections](/dashboard/organization#connections), and may remove the organization from one. Leaving
+an organization removes it from your connections.
+
+## Without a browser
+
+`/mcp` also takes an [API key](/dashboard/organization#api-keys) or an [end user's token](/sdk/end-users#tokens) as
+`Authorization: Bearer`, for what cannot sign in through a browser: CI, a headless agent, the Claude API's MCP
+connector. A key acts in its organization with its role, and a token in its namespace with its permissions: `org` and
+`namespace` may repeat them, not name others.
+
+<CodeGroup>
+```bash Claude Code
+claude mcp add --transport http rewind https://api.rewind.codes/mcp \
+  --header "Authorization: Bearer $REWIND_API_KEY"
+```
+
+```ts Claude API
+import Anthropic from "@anthropic-ai/sdk";
+
+const anthropic = new Anthropic();
+
+const message = await anthropic.beta.messages.create({
+  model: "claude-opus-5-5",
+  max_tokens: 16000,
+  betas: ["mcp-client-2025-11-20", "server-side-fallback-2026-07-01"],
+  fallbacks: "default",
+  mcp_servers: [
+    {
+      type: "url",
+      url: "https://api.rewind.codes/mcp",
+      name: "rewind",
+      authorization_token: process.env.REWIND_API_KEY,
+    },
+  ],
+  tools: [{ type: "mcp_toolset", mcp_server_name: "rewind" }],
+  messages: [{ role: "user", content: "With Rewind, toolset 079b37894847…, namespace demo: …" }],
+});
+```
+</CodeGroup>
+
+Give such a key the least role that works, and limit it to labels when it should see only its own runs.

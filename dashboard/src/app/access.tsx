@@ -24,6 +24,13 @@ export const SECTIONS: readonly Section[] = [
   },
   { path: "roles", title: "Roles", permission: "roles:read", needsOrganization: false },
   { path: "api-keys", title: "API keys", permission: "api_keys:read", needsOrganization: false },
+  // People's connections, which open the organization: a WorkOS organization's members'.
+  {
+    path: "connections",
+    title: "Connections",
+    permission: "members:read",
+    needsOrganization: true,
+  },
   {
     path: "settings",
     title: "Settings",

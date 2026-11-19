@@ -2,7 +2,7 @@
 // roles and their permissions, the API keys, the settings; each part shown to whoever holds its
 // permission, and listed in the organization's own sidebar.
 
-import { KeyRound, Mail, Shield, SlidersHorizontal, Users } from "lucide-react";
+import { KeyRound, Mail, Plug, Shield, SlidersHorizontal, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { OrgAvatar } from "../../app/AccountMenus";
@@ -17,6 +17,7 @@ const ICONS: Record<string, ReactNode> = {
   invitations: <Mail size={16} />,
   roles: <Shield size={16} />,
   "api-keys": <KeyRound size={16} />,
+  connections: <Plug size={16} />,
   settings: <SlidersHorizontal size={16} />,
 };
 
@@ -91,8 +92,8 @@ export function SectionGate({ path, children }: { path: string; children: ReactN
       <div className="no-permission" role="alert">
         <h1>{section.title}: a member's view</h1>
         <p>
-          Members, invitations and settings are those of an organization, seen by its members once
-          signed in. An API key reaches its tenant's roles and keys.
+          Members, invitations, connections and settings are those of an organization, seen by its
+          members once signed in. An API key reaches its tenant's roles and keys.
         </p>
       </div>
     );
