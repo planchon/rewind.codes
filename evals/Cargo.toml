@@ -10,6 +10,7 @@ license.workspace = true
 # Tooling (archi/07-code-architecture.md, "Dependency rules"): wires the adapters like a
 # composition root, and nothing depends on it.
 [dependencies]
+rewind-agent-tools.workspace = true
 rewind-api.workspace = true
 rewind-check.workspace = true
 rewind-codegen.workspace = true

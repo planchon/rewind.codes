@@ -1,12 +1,19 @@
-//! The agent tools' definitions, as the SDK gives them to a model
+//! The agent tools' definitions.
+//!
+//! The SDK's set, as the SDK gives them to a model
 //! (`sdk/typescript/src/agent-tools/definitions.ts`): the same names, descriptions and input
 //! schemas, word for word. The keys of a schema's objects come sorted, as `serde_json` keeps
 //! them; the SDK keeps the order it writes them in.
+//!
+//! The MCP set (`archi/07-code-architecture.md`, "MCP and OAuth"): the same tools but
+//! `save_workflow`, with `list_orgs`, `list_namespaces` and `list_toolsets` to find what the
+//! caller reaches, the organization, the namespace and the toolset as arguments, and for each
+//! tool a title, its annotations and the permission it needs.
 
+use rewind_api::access::Permission;
 use serde_json::{Value, json};
 
-/// The names of the agent tools, in the SDK's order. The evals' world always has a toolset,
-/// so the tools that need one are always there, as the SDK gives them all with a toolset.
+/// The names of the agent tools of the SDK's set, in the SDK's order.
 pub const AGENT_TOOLS: [&str; 12] = [
     "run_script",
     "check_script",
@@ -463,6 +470,319 @@ pub fn definitions() -> Vec<ToolDefinition> {
         .collect()
 }
 
+// -------------------------------------------------------------------------------------------
+// The MCP set
+
+/// The names of the agent tools of the MCP set, in the order `tools/list` gives them: from an
+/// organization to a run.
+pub const MCP_TOOLS: [&str; 14] = [
+    "list_orgs",
+    "list_namespaces",
+    "list_toolsets",
+    "search_tools",
+    "check_script",
+    "test_script",
+    "run_script",
+    "get_run",
+    "list_runs",
+    "signal_run",
+    "cancel_run",
+    "retry_run",
+    "get_workflow",
+    "record_tests",
+];
+
+/// What a tool does to the world, for the client: MCP's tool annotations. The client asks the
+/// person before a tool that is not read-only, and warns before a destructive one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Annotations {
+    /// It changes nothing in Rewind or outside.
+    pub read_only: bool,
+    /// It may end or undo what exists.
+    pub destructive: bool,
+    /// Calling it again with the same arguments changes nothing more.
+    pub idempotent: bool,
+    /// What it starts reaches the world outside Rewind: the toolset's servers.
+    pub open_world: bool,
+}
+
+impl Annotations {
+    /// Reads only.
+    pub const READ: Self = Self {
+        read_only: true,
+        destructive: false,
+        idempotent: true,
+        open_world: false,
+    };
+}
+
+/// A tool of the MCP set.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpTool {
+    pub name: &'static str,
+    /// What a person reads in the client.
+    pub title: &'static str,
+    /// Written for the model: what the tool does, and where its arguments come from.
+    pub description: String,
+    pub input_schema: Value,
+    pub annotations: Annotations,
+    /// The permission it needs in the organization it acts in; none for `list_orgs`.
+    pub permission: Option<Permission>,
+}
+
+fn org() -> Value {
+    json!({
+        "type": "string",
+        "description": "The organization to act in: its id or its name, as list_orgs gives them. Leave it out when you reach one organization only."
+    })
+}
+
+fn namespace_for(what: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": format!(
+            "The namespace {what}: one end user of the organization, whose runs are kept apart from the others'. A name list_namespaces gives, or a new name (1 to 128 letters, digits, -, _, ., : and @), which creates the namespace at its first run."
+        )
+    })
+}
+
+fn namespace_filter() -> Value {
+    json!({
+        "type": "string",
+        "description": "Only in this namespace, as list_namespaces gives them. Every namespace you may read when absent."
+    })
+}
+
+fn toolset_required(what: &str) -> Value {
+    json!({
+        "type": "string",
+        "description": format!("The toolset {what}: its id, as list_toolsets gives it.")
+    })
+}
+
+fn toolset_of_script() -> Value {
+    json!({
+        "type": "string",
+        "description": "The toolset whose tools the script imports from \"rewind:tools\": its id, as list_toolsets gives it. Without it, the script has only the built-in `webhook`."
+    })
+}
+
+/// The toolset of `get_workflow` and `record_tests`, as 07's table gives it: the SDK offers
+/// them only with a toolset; `/v1` finds a workflow by its name alone.
+fn toolset_of_workflow() -> Value {
+    json!({
+        "type": "string",
+        "description": "The toolset whose scripts start the workflow, as list_toolsets gives it. Optional: the workflow is found by its name in the organization."
+    })
+}
+
+/// The wait of the MCP set: 30 s when absent, 200 s at most (Claude gives a call 240 s).
+fn mcp_wait(schema: &Value) -> Value {
+    let described = schema["description"].as_str().unwrap_or_default();
+    with_description(
+        schema.clone(),
+        &format!("{described} 30s when absent, 200s at most."),
+    )
+}
+
+/// The definition of an agent tool of the MCP set.
+pub fn mcp_tool(name: &str) -> Option<McpTool> {
+    let annotations = |destructive, idempotent, open_world| Annotations {
+        read_only: false,
+        destructive,
+        idempotent,
+        open_world,
+    };
+    // The tools of their own.
+    match name {
+        "list_orgs" => {
+            return Some(McpTool {
+                name: "list_orgs",
+                title: "List organizations",
+                description: "List the organizations you reach, with their id, their name and what you may do in each. Every other tool acts in one of them, given as `org`; leave `org` out when there is only one. Call it first when the person has not said which organization to use.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                annotations: Annotations::READ,
+                permission: None,
+            });
+        }
+        "list_namespaces" => {
+            return Some(McpTool {
+                name: "list_namespaces",
+                title: "List namespaces",
+                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, credentials and limits are kept apart from the others'. check_script, test_script and run_script act in the namespace you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "org": org(),
+                        "prefix": { "type": "string", "description": "Only the namespaces whose name starts with this." }
+                    },
+                    "additionalProperties": false
+                }),
+                annotations: Annotations::READ,
+                permission: Some(Permission::NamespacesRead),
+            });
+        }
+        "list_toolsets" => {
+            return Some(McpTool {
+                name: "list_toolsets",
+                title: "List toolsets",
+                description: "List the toolsets of an organization: each pins MCP servers and their tools, which scripts import from \"rewind:tools\", and the workflows they import from \"rewind:workflows\". Give a toolset's id as `toolset` to search_tools, check_script, test_script and run_script, and read its tools' declarations with search_tools before you write a script.".into(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": { "org": org() },
+                    "additionalProperties": false
+                }),
+                annotations: Annotations::READ,
+                permission: Some(Permission::ToolsetsRead),
+            });
+        }
+        _ => {}
+    }
+    let sdk = definition(name)?;
+    let mut schema = sdk.input_schema;
+    let mut description = sdk.description.to_owned();
+    let mut required: Vec<&str> = Vec::new();
+    let mut extra = vec![("org", org())];
+    let (title, permission, annotations, place) = match name {
+        "search_tools" => {
+            extra.push(("toolset", toolset_required("whose tools to search")));
+            required.push("toolset");
+            (
+                "Search tools",
+                Permission::ToolsetsRead,
+                Annotations::READ,
+                "Give the toolset as `toolset`, as list_toolsets gives it.",
+            )
+        }
+        "check_script" => {
+            extra.push(("namespace", namespace_for("the script is checked for")));
+            extra.push(("toolset", toolset_of_script()));
+            required.push("namespace");
+            (
+                "Check a script",
+                Permission::RunsStart,
+                Annotations::READ,
+                "Give the namespace it will run in as `namespace`, and its toolset as `toolset`.",
+            )
+        }
+        "test_script" => {
+            extra.push(("namespace", namespace_for("the tests run for")));
+            extra.push(("toolset", toolset_of_script()));
+            required.push("namespace");
+            description = description.replace(
+                "this is how you check a fix or a change of a workflow before save_workflow",
+                "this is how you check a fix of a workflow's run before retry_run",
+            );
+            (
+                "Test a script",
+                Permission::RunsStart,
+                Annotations::READ,
+                "Give the namespace as `namespace`, and the script's toolset as `toolset`.",
+            )
+        }
+        "run_script" => {
+            extra.push(("namespace", namespace_for("the run acts for")));
+            extra.push(("toolset", toolset_of_script()));
+            required.push("namespace");
+            schema["properties"]["wait"] = mcp_wait(&schema["properties"]["wait"]);
+            (
+                "Run a script",
+                Permission::RunsStart,
+                annotations(false, false, true),
+                "Give the namespace the run acts for as `namespace` (list_namespaces), and the toolset whose tools it imports as `toolset` (list_toolsets).",
+            )
+        }
+        "get_run" => {
+            extra.push(("namespace", namespace_filter()));
+            schema["properties"]["wait"] = mcp_wait(&schema["properties"]["wait"]);
+            (
+                "Read a run",
+                Permission::RunsRead,
+                Annotations::READ,
+                "Give the organization of the run as `org`.",
+            )
+        }
+        "list_runs" => {
+            extra.push(("namespace", namespace_filter()));
+            description =
+                "List the runs you may read in the organization, most recent first: with `namespace`, those of one end user only."
+                    .into();
+            (
+                "List runs",
+                Permission::RunsRead,
+                Annotations::READ,
+                "Give the organization as `org`.",
+            )
+        }
+        "signal_run" => (
+            "Signal a run",
+            Permission::RunsControl,
+            annotations(false, false, false),
+            "Give the organization of the run as `org`.",
+        ),
+        "cancel_run" => (
+            "Cancel a run",
+            Permission::RunsControl,
+            annotations(true, true, false),
+            "Give the organization of the run as `org`.",
+        ),
+        "retry_run" => (
+            "Retry a run",
+            Permission::RunsStart,
+            annotations(false, false, true),
+            "Give the organization of the run as `org`: the new run takes its namespace and its toolset.",
+        ),
+        "get_workflow" => {
+            extra.push(("toolset", toolset_of_workflow()));
+            (
+                "Read a workflow",
+                Permission::ToolsetsRead,
+                Annotations::READ,
+                "Give the organization as `org`.",
+            )
+        }
+        "record_tests" => {
+            extra.push(("toolset", toolset_of_workflow()));
+            description = description.replace(
+                "pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
+                "pass their digests in test_script's `tests` to run them against a script, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
+            );
+            (
+                "Record tests",
+                Permission::RunsRead,
+                annotations(false, true, false),
+                "Give the organization as `org`.",
+            )
+        }
+        _ => return None,
+    };
+    for (key, value) in extra {
+        schema["properties"][key] = value;
+    }
+    if !required.is_empty()
+        && let Some(list) = schema["required"].as_array_mut()
+    {
+        list.extend(required.into_iter().map(Value::from));
+    }
+    Some(McpTool {
+        name: sdk.name,
+        title,
+        description: format!("{description} {place}"),
+        input_schema: schema,
+        annotations,
+        permission: Some(permission),
+    })
+}
+
+/// Every agent tool of the MCP set.
+pub fn mcp_tools() -> Vec<McpTool> {
+    MCP_TOOLS.iter().filter_map(|name| mcp_tool(name)).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +806,85 @@ mod tests {
         for name in NEEDS_TOOLSET {
             assert!(AGENT_TOOLS.contains(&name), "{name}");
         }
+    }
+
+    #[test]
+    fn the_mcp_set_has_titles_annotations_permissions_and_its_arguments() {
+        let tools = mcp_tools();
+        assert_eq!(tools.len(), MCP_TOOLS.len());
+        assert!(tools.iter().all(|tool| tool.name != "save_workflow"));
+        for tool in &tools {
+            assert!(!tool.title.is_empty(), "{}", tool.name);
+            assert_eq!(tool.input_schema["type"], "object", "{}", tool.name);
+            assert_eq!(tool.input_schema["additionalProperties"], false);
+            assert!(
+                !tool.description.contains("save_workflow"),
+                "{}: {}",
+                tool.name,
+                tool.description
+            );
+            let org = tool.input_schema["properties"].get("org").is_some();
+            assert_eq!(org, tool.name != "list_orgs", "{}", tool.name);
+            assert_eq!(tool.permission.is_none(), tool.name == "list_orgs");
+        }
+        let tool = |name: &str| tools.iter().find(|tool| tool.name == name).unwrap();
+        let required = |name: &str| tool(name).input_schema["required"].clone();
+        assert_eq!(required("run_script"), json!(["code", "namespace"]));
+        assert_eq!(required("check_script"), json!(["code", "namespace"]));
+        assert_eq!(required("test_script"), json!(["code", "namespace"]));
+        assert_eq!(required("search_tools"), json!(["query", "toolset"]));
+        assert_eq!(required("get_run"), json!(["run_id"]));
+        assert!(tool("get_run").input_schema["properties"]["namespace"].is_object());
+        assert!(tool("list_runs").input_schema["properties"]["namespace"].is_object());
+        assert!(tool("list_namespaces").input_schema["properties"]["prefix"].is_object());
+        for name in ["get_workflow", "record_tests"] {
+            assert!(
+                tool(name).input_schema["properties"]["toolset"].is_object(),
+                "{name}"
+            );
+        }
+        assert_eq!(required("get_workflow"), json!(["name"]));
+        assert!(
+            tool("run_script").input_schema["properties"]["wait"]["description"]
+                .as_str()
+                .unwrap()
+                .ends_with("30s when absent, 200s at most.")
+        );
+
+        let read_only: Vec<&str> = tools
+            .iter()
+            .filter(|tool| tool.annotations.read_only)
+            .map(|tool| tool.name)
+            .collect();
+        assert_eq!(
+            read_only,
+            [
+                "list_orgs",
+                "list_namespaces",
+                "list_toolsets",
+                "search_tools",
+                "check_script",
+                "test_script",
+                "get_run",
+                "list_runs",
+                "get_workflow"
+            ]
+        );
+        let flagged = |flag: fn(&Annotations) -> bool| -> Vec<&str> {
+            tools
+                .iter()
+                .filter(|tool| flag(&tool.annotations))
+                .map(|tool| tool.name)
+                .collect()
+        };
+        assert_eq!(flagged(|a| a.destructive), ["cancel_run"]);
+        assert_eq!(flagged(|a| a.open_world), ["run_script", "retry_run"]);
+        assert_eq!(tool("signal_run").permission, Some(Permission::RunsControl));
+        assert_eq!(
+            tool("list_namespaces").permission,
+            Some(Permission::NamespacesRead)
+        );
+        assert_eq!(tool("record_tests").permission, Some(Permission::RunsRead));
     }
 
     /// The same checks as the SDK's ("describe the test document: its world, its signals and its

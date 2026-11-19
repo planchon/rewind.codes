@@ -1,10 +1,12 @@
 //! What the agent tools say to the model: a port of the SDK's
 //! `sdk/typescript/src/agent-tools/render.ts` and `bound.ts`, on the same DTOs, so that a model
-//! reads in the evals what it reads through the SDK. Plain text, short, bounded, pointing at
-//! the next useful call.
+//! reads here what it reads through the SDK; and what the MCP set says of the organizations,
+//! namespaces and toolsets a caller reaches. Plain text, short, bounded, pointing at the next
+//! useful call.
 
 use std::collections::BTreeSet;
 
+use rewind_api::access::Permission;
 use rewind_api::common::{Callsite, Payload, RunStatus};
 use rewind_api::runs::{FailedCall, Run, RunError, RunSummary, Waiting};
 use rewind_api::scripts::{CheckResult, Diagnostic, Severity};
@@ -34,6 +36,7 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// The SDK's bounds: a page of output of `output` bytes, and room around it for a trace.
     pub fn for_output(output: usize) -> Self {
         let trace = (output / 2).max(4096);
         Self {
@@ -49,6 +52,25 @@ impl Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self::for_output(OUTPUT_LIMIT)
+    }
+}
+
+/// What one result of the MCP set holds at most: 80 000 bytes, so at most 80 000 characters
+/// (Claude Code takes 25 000 tokens of a result by default).
+pub const MCP_RESULT_LIMIT: usize = 80_000;
+
+impl Limits {
+    /// Bounds whose whole result is `total` bytes: half for a page of output, a quarter for a
+    /// trace, the rest for the parts around them.
+    pub fn for_total(total: usize) -> Self {
+        let output = total / 2;
+        Self {
+            output,
+            trace: total / 4,
+            value: (output / 64).max(1024),
+            line: 2048,
+            total,
+        }
     }
 }
 
@@ -1097,10 +1119,225 @@ pub fn plural(count: usize, noun: &str) -> String {
     format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
 }
 
+// -------------------------------------------------------------------------------------------
+// What a caller reaches (the MCP set)
+
+/// What the tools of the MCP set do with a permission, for `list_orgs`; `None` for those they
+/// never use.
+fn permission_phrase(permission: Permission) -> Option<&'static str> {
+    Some(match permission {
+        Permission::RunsRead => "read runs and record tests",
+        Permission::RunsStart => "check, test, run and retry scripts",
+        Permission::RunsControl => "signal and cancel runs",
+        Permission::ToolsetsRead => "read toolsets and workflows",
+        Permission::NamespacesRead => "list namespaces",
+        _ => return None,
+    })
+}
+
+/// An organization the caller reaches, as `list_orgs` shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrganizationView<'a> {
+    pub id: &'a str,
+    pub name: Option<&'a str>,
+    pub permissions: &'a [Permission],
+}
+
+/// `list_orgs`: the organizations, with what the tools may do in each.
+pub fn describe_orgs(organizations: &[OrganizationView<'_>]) -> String {
+    if organizations.is_empty() {
+        return "You reach no organization: ask the person to open one to this connection in Rewind's dashboard.".to_owned();
+    }
+    let mut lines = vec![if organizations.len() == 1 {
+        "You reach one organization: the tools act in it without `org`.".to_owned()
+    } else {
+        format!(
+            "You reach {} organizations: give one as `org`, by its id or its name.",
+            organizations.len()
+        )
+    }];
+    for organization in organizations {
+        let mut phrases: Vec<&str> = organization
+            .permissions
+            .iter()
+            .filter_map(|permission| permission_phrase(*permission))
+            .collect();
+        phrases.dedup();
+        let who = match organization.name {
+            Some(name) => format!("{name} (id {})", organization.id),
+            None => format!("id {}", organization.id),
+        };
+        lines.push(if phrases.is_empty() {
+            format!("- {who}: these tools can do nothing there.")
+        } else {
+            format!("- {who}: you may {}.", phrases.join(", "))
+        });
+    }
+    lines.join("\n")
+}
+
+/// `list_namespaces`: a page of namespaces, the most active first.
+pub fn describe_namespaces(
+    list: &rewind_api::namespaces::NamespaceList,
+    prefix: Option<&str>,
+) -> String {
+    let starting = prefix
+        .map(|prefix| format!(" starting with {}", quoted(prefix)))
+        .unwrap_or_default();
+    if list.namespaces.is_empty() {
+        return format!(
+            "No namespace{starting}. A namespace is created by the first run that names it: give a new name as `namespace` to run_script."
+        );
+    }
+    let mut lines = vec![format!(
+        "{} namespace{}{starting}, the most active this month ({}) first:",
+        list.total,
+        if list.total == 1 { "" } else { "s" },
+        list.month
+    )];
+    for namespace in &list.namespaces {
+        let usage = &namespace.usage;
+        let mut parts = vec![
+            plural(
+                usize::try_from(usage.runs_started).unwrap_or(usize::MAX),
+                "run",
+            ) + " this month",
+            format!("{} active", usage.active_runs),
+            format!("last active {}", namespace.last_active_at),
+        ];
+        if namespace.deleting_since.is_some() {
+            parts.push("being erased: it takes no run".to_owned());
+        }
+        lines.push(format!(
+            "- {}: {}",
+            namespace.name.as_str(),
+            parts.join(", ")
+        ));
+    }
+    if list.next.is_some() {
+        lines.push(format!(
+            "{} more: narrow the list with `prefix`.",
+            u64::try_from(list.namespaces.len())
+                .map_or(0, |shown| list.total.saturating_sub(shown))
+        ));
+    }
+    lines.push("Give one as `namespace` to check_script, test_script and run_script.".to_owned());
+    lines.join("\n")
+}
+
+/// Tool names `list_toolsets` shows per toolset; `search_tools` gives the rest.
+const LISTED_TOOLS: usize = 20;
+
+/// `list_toolsets`: each toolset's id, servers, tools and workflows.
+pub fn describe_toolsets(list: &rewind_api::toolsets::ToolsetList) -> String {
+    if list.toolsets.is_empty() {
+        return "No toolset in this organization: a script can only use the built-in `webhook`. A toolset is registered with POST /v1/toolsets, outside these tools.".to_owned();
+    }
+    let mut lines = vec![format!(
+        "{}: give one's id as `toolset`.",
+        plural(list.toolsets.len(), "toolset")
+    )];
+    for toolset in &list.toolsets {
+        lines.push(format!("- {}", toolset.id));
+        if !toolset.servers.is_empty() {
+            let servers: Vec<String> = toolset
+                .servers
+                .iter()
+                .map(|server| {
+                    format!(
+                        "{} ({})",
+                        server.name,
+                        plural(server.tools as usize, "tool")
+                    )
+                })
+                .collect();
+            lines.push(format!("  servers: {}", servers.join(", ")));
+        }
+        if !toolset.tools.is_empty() {
+            let shown: Vec<&str> = toolset
+                .tools
+                .iter()
+                .take(LISTED_TOOLS)
+                .map(String::as_str)
+                .collect();
+            let more = toolset.tools.len().saturating_sub(LISTED_TOOLS);
+            lines.push(format!(
+                "  tools: {}{}",
+                shown.join(", "),
+                if more > 0 {
+                    format!(", and {more} more: find them with search_tools")
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        if !toolset.workflows.is_empty() {
+            lines.push(format!("  workflows: {}", toolset.workflows.join(", ")));
+        }
+    }
+    lines.push(
+        "Read the declarations of the tools you need with search_tools before you write a script."
+            .to_owned(),
+    );
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn what_a_caller_reaches_is_listed_with_how_to_name_it() {
+        assert_eq!(
+            describe_orgs(&[]),
+            "You reach no organization: ask the person to open one to this connection in Rewind's dashboard."
+        );
+        let reader = [
+            Permission::RunsRead,
+            Permission::ToolsetsRead,
+            Permission::TokensWrite,
+        ];
+        assert_eq!(
+            describe_orgs(&[
+                OrganizationView {
+                    id: "org_1",
+                    name: Some("Acme"),
+                    permissions: &reader
+                },
+                OrganizationView {
+                    id: "org_2",
+                    name: None,
+                    permissions: &[Permission::TokensWrite]
+                },
+            ]),
+            "You reach 2 organizations: give one as `org`, by its id or its name.\n- Acme (id org_1): you may read runs and record tests, read toolsets and workflows.\n- id org_2: these tools can do nothing there."
+        );
+
+        let toolsets: rewind_api::toolsets::ToolsetList = serde_json::from_value(json!({
+            "toolsets": [{
+                "id": "ab".repeat(32),
+                "servers": [{ "name": "github", "transport": "http", "tools": 25 }],
+                "tools": (0..25).map(|n| format!("github.tool_{n}")).collect::<Vec<_>>(),
+                "workflows": ["triage"]
+            }]
+        }))
+        .unwrap();
+        let text = describe_toolsets(&toolsets);
+        assert!(text.starts_with(&format!("1 toolset: give one's id as `toolset`.\n- {}\n  servers: github (25 tools)\n  tools: github.tool_0, ", "ab".repeat(32))), "{text}");
+        assert!(
+            text.contains(
+                "github.tool_19, and 5 more: find them with search_tools\n  workflows: triage\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            describe_toolsets(&rewind_api::toolsets::ToolsetList {
+                toolsets: Vec::new()
+            })
+            .starts_with("No toolset in this organization")
+        );
+    }
 
     #[test]
     fn slices_never_cut_a_character() {

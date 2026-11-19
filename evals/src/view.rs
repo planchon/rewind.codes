@@ -1,6 +1,6 @@
 //! The engine's state as the HTTP API `/v1` shows it (`rewind-api`'s DTOs), built as `rewind-server`
-//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`), so that the agent tools render
-//! what the SDK's agent tools render from the server's answers.
+//! builds it (`crates/rewind-server/src/views.rs`, `error.rs`, `http/toolsets.rs`), so that the
+//! agent tools render what they render from the server's answers.
 //!
 //! The evals cannot depend on `rewind-server`, a composition root: what follows repeats its
 //! rules. Two differences: `attempts` stays empty (the server reads it from the read model,
@@ -563,6 +563,95 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
                 reason: updated.reason.clone(),
             })
             .collect(),
+    }
+}
+
+/// The payload an event holds, if any (`rewind-server`'s `views::payload_of`).
+pub fn payload_of(event: &Event) -> Option<&rewind_core::Payload> {
+    match event {
+        Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(&started.input),
+        Event::Command(Command::ScheduleToolCall { args, .. }) => Some(args),
+        Event::Command(Command::CompleteRun { output }) => Some(output),
+        Event::Completion(Completion::ToolCallCompleted { result, .. }) => Some(result),
+        Event::Completion(Completion::SignalReceived { payload, .. }) => Some(payload),
+        _ => None,
+    }
+}
+
+/// The servers of a toolset, with their tools counted (`rewind-server`'s `toolsets::servers`).
+fn servers(toolset: &rewind_core::Toolset) -> Vec<rewind_api::toolsets::ServerSummary> {
+    use rewind_core::{McpTransport, ToolRoute};
+    toolset
+        .servers()
+        .iter()
+        .map(|server| rewind_api::toolsets::ServerSummary {
+            name: server.name.clone(),
+            transport: match server.transport {
+                McpTransport::Http { .. } => rewind_api::toolsets::McpTransport::Http,
+                McpTransport::Stdio { .. } => rewind_api::toolsets::McpTransport::Stdio,
+            },
+            tools: u32::try_from(
+                toolset
+                    .tools()
+                    .iter()
+                    .filter(|tool| matches!(&tool.route, ToolRoute::Mcp { server: of } if *of == server.name))
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+        })
+        .collect()
+}
+
+/// A stored toolset, as `POST /v1/toolsets` shows it (`rewind-server`'s `toolsets::view`).
+pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::toolsets::Toolset {
+    use rewind_api::toolsets::{OnInterruption, Route, Tool, ToolPolicy};
+    use rewind_core::{Interruption, ToolRoute};
+    let toolset = &stored.toolset;
+    rewind_api::toolsets::Toolset {
+        id: toolset.digest().to_hex(),
+        servers: servers(toolset),
+        tools: toolset
+            .tools()
+            .iter()
+            .map(|tool| Tool {
+                name: tool.name.clone(),
+                route: match tool.route {
+                    ToolRoute::Mcp { .. } => Route::Mcp,
+                    ToolRoute::Host { .. } => Route::Host,
+                    ToolRoute::Builtin(_) => Route::Builtin,
+                },
+                server: match &tool.route {
+                    ToolRoute::Mcp { server } => Some(server.clone()),
+                    _ => None,
+                },
+                description: tool.description.clone().unwrap_or_default(),
+                input_schema: tool.input_schema.clone(),
+                output_schema: tool.output_schema.clone(),
+                policy: ToolPolicy {
+                    on_interruption: Some(match tool.policy.on_interruption {
+                        Interruption::Retry => OnInterruption::Retry,
+                        Interruption::AtMostOnce => OnInterruption::AtMostOnce,
+                    }),
+                    approval: Some(tool.policy.approval),
+                    timeout: tool.policy.execution_timeout.map(Into::into),
+                    heartbeat_timeout: Some(tool.policy.heartbeat_timeout.into()),
+                    concurrency: Some(tool.policy.concurrency),
+                },
+            })
+            .collect(),
+        workflows: toolset
+            .workflows()
+            .iter()
+            .map(|workflow| rewind_api::workflows::PinnedWorkflow {
+                name: workflow.name.clone(),
+                version: workflow.version.to_hex(),
+                description: workflow.description.clone(),
+            })
+            .collect(),
+        declarations: rewind_api::toolsets::Declarations {
+            dts: stored.declarations.typescript.clone(),
+            prompt: stored.declarations.prompt.clone(),
+        },
     }
 }
 

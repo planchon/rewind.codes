@@ -21,7 +21,7 @@ use crate::access::{
 use crate::admin::ServerInfo;
 use crate::common::Duration;
 use crate::events::{Entry, EventsQuery, StreamEvent};
-use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE};
+use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
 use crate::namespaces::{
     CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
     NamespaceListQuery, NamespaceName, NamespaceQuery, PutCeiling, PutNamespace,
@@ -61,6 +61,8 @@ pub struct Client {
     api_key: Option<HeaderValue>,
     /// Sent as `Rewind-Namespace` on every request.
     namespace: Option<NamespaceName>,
+    /// Sent as `Rewind-Organization` on every request.
+    organization: Option<HeaderValue>,
 }
 
 /// The API key is never printed.
@@ -70,13 +72,16 @@ impl fmt::Debug for Client {
             .field("base", &self.base.as_str())
             .field("api_key", &self.api_key.as_ref().map(|_| "…"))
             .field("namespace", &self.namespace)
+            .field("organization", &self.organization)
             .finish()
     }
 }
 
 impl Client {
     /// A client of the server at `base_url` (`https://rewind.example.com`, possibly with a path
-    /// prefix), authenticated with `api_key` (`rewind_sk_…`) when given.
+    /// prefix), authenticated with `api_key` when given: any Bearer the API takes, an API key
+    /// (`rewind_sk_…`), an end user's token (`rewind_nt_…` or a JWT) or a connection's access
+    /// token (`rewind_ct_…`, with [`with_organization`](Self::with_organization)).
     pub fn remote(base_url: &str, api_key: Option<&str>) -> Result<Self, Error> {
         let base = Url::parse(base_url)
             .map_err(|error| Error::Config(format!("invalid base URL {base_url:?}: {error}")))?;
@@ -99,6 +104,7 @@ impl Client {
             base,
             api_key,
             namespace: None,
+            organization: None,
         })
     }
 
@@ -115,6 +121,7 @@ impl Client {
             base: Url::parse(EMBEDDED_BASE).map_err(|error| Error::Config(error.to_string()))?,
             api_key: None,
             namespace: None,
+            organization: None,
         })
     }
 
@@ -131,6 +138,25 @@ impl Client {
     /// The namespace this client sends, if any.
     pub fn namespace(&self) -> Option<&NamespaceName> {
         self.namespace.as_ref()
+    }
+
+    /// The same client, acting in `organization` (a tenant's id): every request carries
+    /// `Rewind-Organization`. A connection's token needs it on the tenant's data; other callers
+    /// may repeat their own tenant.
+    pub fn with_organization(&self, organization: &str) -> Result<Self, Error> {
+        let value = HeaderValue::from_str(organization)
+            .map_err(|_| Error::invalid("organization", "it holds characters a header cannot"))?;
+        Ok(Self {
+            organization: Some(value),
+            ..self.clone()
+        })
+    }
+
+    /// The organization this client sends, if any.
+    pub fn organization(&self) -> Option<&str> {
+        self.organization
+            .as_ref()
+            .and_then(|value| value.to_str().ok())
     }
 
     pub fn base_url(&self) -> &Url {
@@ -877,6 +903,9 @@ impl Client {
         }
         if let Some(namespace) = &self.namespace {
             request = request.header(NAMESPACE, namespace.as_str());
+        }
+        if let Some(organization) = &self.organization {
+            request = request.header(ORGANIZATION, organization.clone());
         }
         request
     }

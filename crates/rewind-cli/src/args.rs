@@ -96,6 +96,16 @@ pub(crate) enum Command {
     /// Record tests from a workflow's past runs.
     #[command(subcommand)]
     Workflows(WorkflowsCommand),
+    /// Serve the agent tools over MCP on stdin and stdout, to debug them.
+    #[command(
+        long_about = "Serves the agent tools over MCP on stdin and stdout, against the embedded \
+            server of the state directory (.rewind/, or --dir), started on demand, as its tenant \
+            `local`: to debug them with an MCP client on this machine, such as the MCP Inspector \
+            (npx @modelcontextprotocol/inspector rewind mcp) or Claude Code (claude mcp add \
+            rewind -- rewind mcp). Never a remote server: Claude reaches a deployed Rewind at its \
+            /mcp URL, with OAuth. --namespace narrows the reads that name no namespace."
+    )]
+    Mcp,
 }
 
 #[derive(Debug, Subcommand)]

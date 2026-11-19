@@ -10,6 +10,7 @@ publish = false
 license = "FSL-1.1-ALv2"
 
 [workspace.dependencies]
+rewind-agent-tools = { path = "crates/rewind-agent-tools" }
 rewind-api = { path = "crates/rewind-api" }
 rewind-blob = { path = "crates/rewind-blob" }
 rewind-check = { path = "crates/rewind-check" }
@@ -18,6 +19,7 @@ rewind-core = { path = "crates/rewind-core" }
 rewind-engine = { path = "crates/rewind-engine" }
 rewind-format = { path = "crates/rewind-format" }
 rewind-mcp = { path = "crates/rewind-mcp" }
+rewind-mcp-server = { path = "crates/rewind-mcp-server" }
 rewind-otel = { path = "crates/rewind-otel" }
 rewind-runtime = { path = "crates/rewind-runtime" }
 rewind-server = { path = "crates/rewind-server" }
@@ -50,6 +52,9 @@ flate2 = "1"
 futures-util = { version = "0.3", default-features = false }
 getrandom = "0.3"
 hmac = "0.13"
+# The request parts rewind-mcp-server reads its caller from (rmcp's streamable HTTP server
+# gives them to its handler), the version rmcp and axum build.
+http = "1"
 # The networks of the internal MCP servers an operator allows (`--allow-internal-mcp 10.0.0.0/8`).
 ipnet = "2"
 # Timestamps of the HTTP API (RFC 3339).
@@ -71,7 +76,8 @@ quick_cache = "0.7"
 regex = "1"
 # The HTTP client of rewind-api: HTTPS with rustls, and the embedded server's unix socket.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls"] }
-# The MCP SDK: clients in rewind-mcp, servers in its tests.
+# The MCP SDK: clients in rewind-mcp, Rewind's own MCP server in rewind-mcp-server, servers in
+# the tests.
 rmcp = { version = "3.9", default-features = false }
 # The CPU clock of the isolate's thread (`CLOCK_THREAD_CPUTIME_ID`), without unsafe code.
 rustix = { version = "1", default-features = false, features = ["std"] }

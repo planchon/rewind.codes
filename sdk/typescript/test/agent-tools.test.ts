@@ -338,7 +338,7 @@ describe("run_script", () => {
     await rewind
       .agentTools({ labels: { b: "2", a: "1" } })
       .handle("run_script", { code: "x" }, { toolCallId: "call_0" });
-    // The same vectors as the evals' Rust port (`evals/src/agent/mod.rs`).
+    // The same vectors as the Rust port (`crates/rewind-agent-tools/src/keys.rs`).
     expect(server.requests.slice(1).map((request) => request.headers["idempotency-key"])).toEqual([
       "60b258a9b3d4fedc3e76a4687e2f18f3a6b35dd43a5afde3743c2484c38598a5",
       "57b1f343b2298f8dca3d00127f9f7b7b280934708c580ea73c339dff509f7eb1",
