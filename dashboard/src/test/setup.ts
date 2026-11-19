@@ -29,3 +29,7 @@ Object.defineProperties(HTMLElement.prototype, {
   clientWidth: { configurable: true, get: () => 1000 },
   clientHeight: { configurable: true, get: () => 400 },
 });
+
+// The window's virtualizer (the run's timeline) writes the page's offset back when it mounts;
+// jsdom has no scrolling to do it with.
+window.scrollTo = () => {};

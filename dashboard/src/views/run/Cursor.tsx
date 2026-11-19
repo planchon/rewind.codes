@@ -130,25 +130,6 @@ export function CursorBar({
   const last = steps.length - 1;
   return (
     <section className="cursor-bar" aria-label="Time cursor">
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label="First step"
-        title="First step (Home)"
-        disabled={n === 0}
-        onClick={() => cursor.go(0)}
-      >
-        <ChevronFirst size={15} />
-      </button>
-      <button
-        type="button"
-        className="btn small"
-        disabled={n === 0}
-        onClick={() => cursor.move(-1)}
-        title="The previous step (←)"
-      >
-        <ChevronLeft size={13} /> Step back
-      </button>
       <div className="cursor-pos" aria-live="polite">
         <span className="cursor-step">
           Step {n + 1} of {steps.length}
@@ -160,56 +141,77 @@ export function CursorBar({
           {step.last > step.first ? `–${step.last}` : ""}
         </span>
       </div>
-      <button
-        type="button"
-        className="btn small"
-        disabled={n === last}
-        onClick={() => cursor.move(1)}
-        title="The next step (→)"
-      >
-        Step <ChevronRight size={13} />
-      </button>
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label="Last step"
-        title="Last step (End)"
-        disabled={n === last}
-        onClick={() => cursor.go(last)}
-      >
-        <ChevronLast size={15} />
-      </button>
-      <label className="check" title="Also stop at the steps that issue nothing">
-        <input
-          type="checkbox"
-          checked={cursor.every}
-          onChange={(e) => cursor.setEvery(e.target.checked)}
-        />
-        every step
-      </label>
-      {ending && (
-        <button
-          type="button"
-          className={`end-chip end-chip-${ending.kind}`}
-          aria-current={ending.step === n ? "step" : undefined}
-          title={ending.step === n ? undefined : `Go to step ${ending.step + 1}`}
-          onClick={() => cursor.go(ending.step)}
-        >
-          <EndGlyph kind={ending.kind} size={12} />
-          {ENDED[ending.kind]} {ending.step === n ? "in this step" : `in step ${ending.step + 1}`}
-        </button>
-      )}
-      <span className="cursor-hint">
-        {live && atHead ? (
-          <span className="tone-info">following the head · </span>
-        ) : live ? (
-          <button type="button" className="link-btn" onClick={() => cursor.go(last)}>
-            Follow the head ·{" "}
+      {/* Right-aligned, each control of a fixed width: moving the cursor moves none of them. */}
+      <div className="cursor-controls">
+        {live &&
+          (atHead ? (
+            <span className="cursor-live tone-info">following the head</span>
+          ) : (
+            <button type="button" className="link-btn cursor-live" onClick={() => cursor.go(last)}>
+              Follow the head
+            </button>
+          ))}
+        {ending && (
+          <button
+            type="button"
+            className={`end-chip end-chip-${ending.kind}`}
+            aria-current={ending.step === n ? "step" : undefined}
+            title={ending.step === n ? "The step shown" : `Go to step ${ending.step + 1}`}
+            onClick={() => cursor.go(ending.step)}
+          >
+            <EndGlyph kind={ending.kind} size={12} />
+            {ENDED[ending.kind]} in step {ending.step + 1}
           </button>
-        ) : null}
-        <span className="kbd">←</span> <span className="kbd">→</span> step · hover the underlined
-        code · click to watch
-      </span>
+        )}
+        <label className="check" title="Also stop at the steps that issue nothing">
+          <input
+            type="checkbox"
+            checked={cursor.every}
+            onChange={(e) => cursor.setEvery(e.target.checked)}
+          />
+          every step
+        </label>
+        <div className="cursor-nav">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="First step"
+            title="First step (Home)"
+            disabled={n === 0}
+            onClick={() => cursor.go(0)}
+          >
+            <ChevronFirst size={15} />
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            disabled={n === 0}
+            onClick={() => cursor.move(-1)}
+            title="The previous step (←)"
+          >
+            <ChevronLeft size={13} /> Step back
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            disabled={n === last}
+            onClick={() => cursor.move(1)}
+            title="The next step (→)"
+          >
+            Step <ChevronRight size={13} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Last step"
+            title="Last step (End)"
+            disabled={n === last}
+            onClick={() => cursor.go(last)}
+          >
+            <ChevronLast size={15} />
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

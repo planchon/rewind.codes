@@ -1,8 +1,9 @@
 // The run's timeline: one row per tool call, timer and signal wait, on an axis where long idle
 // gaps are compressed into marked breaks. Open spans end at "now" while the run goes on, with
-// their planned end (a timer's fire time, a wait's timeout) dashed beyond.
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { type PointerEvent, useMemo, useRef } from "react";
+// their planned end (a timer's fire time, a wait's timeout) dashed beyond. Every row shows, with
+// no scroll of its own: the page scrolls them, and only those near the window are drawn.
+import { useWindowVirtualizer } from "@tanstack/react-virtual";
+import { type PointerEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTooltip } from "../../components/Tooltip";
 import { formatDuration, formatOffset } from "../../model/format";
 import type { Activity, RunModel } from "../../model/run";
@@ -37,7 +38,7 @@ export interface TimelineProps {
 }
 
 export function Timeline({ model, now, selected, onSelect, cursor }: TimelineProps) {
-  const scroller = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const tip = useTooltip();
 
@@ -64,12 +65,13 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
     return { rows, scale: buildTimeScale(times), logs: model.logs, endAt };
   }, [model, now]);
 
-  const virtual = useVirtualizer({
+  const top = useListTop(list, rows.length > 0);
+  const virtual = useWindowVirtualizer({
     count: rows.length,
-    getScrollElement: () => scroller.current,
     estimateSize: () => ROW,
     overscan: 12,
-    initialRect: { width: 800, height: 300 },
+    scrollMargin: top,
+    initialRect: { width: 800, height: 800 },
   });
 
   if (rows.length === 0 && logs.length === 0) {
@@ -219,11 +221,7 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
           </div>
         </div>
       )}
-      <div
-        className="tl-rows"
-        ref={scroller}
-        style={{ maxHeight: Math.min(rows.length, 14) * ROW + 2 }}
-      >
+      <div className="tl-rows" ref={list}>
         <div style={{ height: virtual.getTotalSize(), position: "relative" }}>
           {scale.breaks.map((b) => (
             <span
@@ -264,7 +262,13 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
               <div
                 key={a.idx}
                 className={`tl-row${selected === a.idx ? " selected" : ""}${future(a) ? " future" : ""}`}
-                style={{ position: "absolute", top: item.start, left: 0, right: 0, height: ROW }}
+                style={{
+                  position: "absolute",
+                  top: item.start - top,
+                  left: 0,
+                  right: 0,
+                  height: ROW,
+                }}
               >
                 <button
                   type="button"
@@ -325,4 +329,21 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
       {tip.view}
     </div>
   );
+}
+
+/** Where the list starts in the page, which the window's virtualizer counts its rows from; again
+ * whenever the page above it changes size. */
+function useListTop(list: { current: HTMLElement | null }, shown: boolean): number {
+  const [top, setTop] = useState(0);
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (!shown || !el) return;
+    const measure = () => setTop(Math.round(el.getBoundingClientRect().top + window.scrollY));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(document.body);
+    return () => observer.disconnect();
+  }, [list, shown]);
+  return top;
 }

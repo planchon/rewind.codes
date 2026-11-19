@@ -18,6 +18,7 @@ import { queryLink } from "../model/query";
 import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
 import { useAccess } from "./access";
 import { FindDialog, useFindShortcut } from "./Find";
+import { SidebarFold, SidebarResizer, useFoldShortcut } from "./SidebarResizer";
 import { useSession } from "./session";
 import { SidebarProvider, useSidebar } from "./sidebar";
 
@@ -50,10 +51,12 @@ function NavItem({
   /** Shows the view's own sidebar again, when it is the current page. */
   onReopen?: () => void;
 }) {
+  const { folded } = useSidebar();
   return (
     <Link
       to={to}
       className="nav-item"
+      title={folded ? label : undefined}
       aria-current={current ? "page" : undefined}
       onClick={(e) => {
         if (current && onReopen) {
@@ -135,8 +138,9 @@ function MainNav() {
 }
 
 function Sidebar({ onFind }: { onFind: () => void }) {
-  const { pane, showViews, setShowViews, setSlot } = useSidebar();
+  const { pane, showViews, setShowViews, setSlot, folded } = useSidebar();
   const navigate = useNavigate();
+  useFoldShortcut();
   const { phase } = useSession();
   const server = useServerLine();
   const paneShown = pane !== null && !showViews;
@@ -144,8 +148,16 @@ function Sidebar({ onFind }: { onFind: () => void }) {
   return (
     <aside className="sidebar" aria-label="Sidebar">
       <div className="sidebar-head">
-        <OrganizationSwitcher />
-        <button type="button" className="find-button" onClick={onFind}>
+        <div className="sidebar-top">
+          <OrganizationSwitcher />
+          <SidebarFold />
+        </div>
+        <button
+          type="button"
+          className="find-button"
+          onClick={onFind}
+          title={folded ? "Find (F)" : undefined}
+        >
           <Search size={14} aria-hidden="true" />
           <span>Find</span>
           <kbd className="kbd">F</kbd>
@@ -194,6 +206,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
           onConnections={() => void navigate("/account/connections")}
         />
       </div>
+      <SidebarResizer />
     </aside>
   );
 }

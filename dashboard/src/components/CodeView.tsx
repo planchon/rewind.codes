@@ -1,9 +1,11 @@
 // A TypeScript source with line numbers and, beside each line, notes about it: on a run's page,
-// the tool calls, timers, signal waits and logs that line caused. Three stacks of equal-height
-// rows (numbers, code, notes) keep the code scrollable sideways while the notes stay in place.
+// the tool calls, timers, signal waits and logs that line caused. The source shows whole: no
+// scroll of its own, long lines wrapped. Each line is a row of one grid (its number, its code,
+// its notes), so a wrapped line keeps its number and its notes beside it.
 // Parts of a line can be targets (a call, a variable): hovered, focused or clicked, they report
 // their key, for the values a run's time cursor shows.
 import {
+  type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -71,6 +73,12 @@ function pieces(tokens: Token[], targets: LineTarget[]) {
     at += token.text.length;
   }
   return out;
+}
+
+/** The spaces a line starts with: its wrapped parts go on further in than that. */
+function indentOf(tokens: Token[]): number {
+  const text = tokens.map((t) => t.text).join("");
+  return text.length - text.trimStart().length;
 }
 
 function targetOf(e: { target: EventTarget }): HTMLElement | null {
@@ -142,7 +150,7 @@ export function CodeView({
           const n = i + 1;
           return (
             // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the notes column has the keyboard targets
-            <div key={n} className={rowClass(n)} onClick={click(n)}>
+            <div key={n} className={rowClass(n)} style={{ gridRow: n }} onClick={click(n)}>
               {gutter?.(n)}
               {n}
             </div>
@@ -164,7 +172,13 @@ export function CodeView({
             const lineTargets = targets?.(n) ?? [];
             return (
               // biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: the notes column has the keyboard targets
-              <div key={n} className={rowClass(n)} data-line={n} onClick={click(n)}>
+              <div
+                key={n}
+                className={rowClass(n)}
+                style={{ gridRow: n, "--indent": indentOf(tokens) } as CSSProperties}
+                data-line={n}
+                onClick={click(n)}
+              >
                 {tokens.length === 0
                   ? " "
                   : lineTargets.length === 0
@@ -224,7 +238,7 @@ export function CodeView({
           {lines.map((_, i) => {
             const n = i + 1;
             return (
-              <div key={n} className={rowClass(n)}>
+              <div key={n} className={rowClass(n)} style={{ gridRow: n }}>
                 {notes(n)}
               </div>
             );

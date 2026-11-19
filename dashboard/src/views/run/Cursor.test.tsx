@@ -180,7 +180,7 @@ describe("the time cursor", () => {
     ) as RunFixture;
     renderApp(`/runs/${run.id}`, { world });
     await waitFor(() =>
-      expect(within(bar()).getByRole("button", { name: /Failed in this step/ })).toBeVisible(),
+      expect(within(bar()).getByRole("button", { name: /Failed in step \d+/ })).toBeVisible(),
     );
     await waitFor(() =>
       expect(document.querySelector(".code-text .code-row.mark-error")).toHaveAttribute(
@@ -206,13 +206,20 @@ describe("the time cursor", () => {
     await waitFor(() => expect(search(router).get("step")).not.toBeNull());
     const pinned = search(router).get("step");
     clock = NOW + 120_000;
-    await waitFor(() => expect(screen.getByText("complete journal")).toBeInTheDocument(), {
-      timeout: 4_000,
-    });
+    await waitFor(
+      () =>
+        expect(
+          within(bar()).getByRole("button", { name: /Completed in step \d+/ }),
+        ).toBeInTheDocument(),
+      { timeout: 4_000 },
+    );
     // New entries arrived: the cursor stays where the operator put it.
     expect(search(router).get("step")).toBe(pinned);
     await user.click(within(bar()).getByRole("button", { name: "Last step" }));
     await waitFor(() => expect(search(router).get("step")).toBeNull());
-    expect(within(bar()).getByRole("button", { name: /Completed in this step/ })).toBeVisible();
+    expect(within(bar()).getByRole("button", { name: /Completed in step \d+/ })).toHaveAttribute(
+      "aria-current",
+      "step",
+    );
   });
 });

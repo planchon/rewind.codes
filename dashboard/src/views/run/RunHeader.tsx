@@ -19,7 +19,7 @@ function LiveState({ state }: { state: JournalState }) {
     connecting: "connecting…",
     live: "live",
     retrying: "reconnecting…",
-    ended: "complete journal",
+    ended: "",
     error: "stream failed",
   }[state];
   return (
@@ -71,24 +71,24 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
   );
 }
 
-/** The run at the head of its sidebar: its status, when it started, its id, its stream. */
+/** The run at the head of its sidebar: its status and its id, on one line. Tags follow only
+ * when they say something: the stream while the run goes on, a mock run, a quarantine. When it
+ * started and how long it lasted are in its details below. */
 export function RunCard({ run, state }: { run: Run; state: JournalState }) {
+  const live = state !== "ended";
   return (
-    <div className="run-card">
-      <div className="run-card-status">
+    <div className="run-ident">
+      <div className="run-ident-line">
         <StatusBadge status={run.status} />
-        <span className="run-card-ago">
-          <Ago ms={Date.parse(run.createdAt)} />
-        </span>
-      </div>
-      <span className="run-card-id">
         <RunId id={run.id} />
-      </span>
-      <div className="run-card-tags">
-        <LiveState state={state} />
-        {run.mode === "mock" && <MockTag />}
-        {run.quarantine && <QuarantineTag />}
       </div>
+      {(live || run.mode === "mock" || run.quarantine) && (
+        <div className="run-ident-tags">
+          {live && <LiveState state={state} />}
+          {run.mode === "mock" && <MockTag />}
+          {run.quarantine && <QuarantineTag />}
+        </div>
+      )}
     </div>
   );
 }
