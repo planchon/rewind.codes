@@ -827,7 +827,9 @@ mod tests {
         // `/v1` finds a workflow by its name alone: no toolset to give.
         for name in ["get_workflow", "record_tests"] {
             assert!(
-                tool(name).input_schema["properties"].get("toolset").is_none(),
+                tool(name).input_schema["properties"]
+                    .get("toolset")
+                    .is_none(),
                 "{name}"
             );
         }
