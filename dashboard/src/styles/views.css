@@ -3825,3 +3825,504 @@ table.grid.compact th {
   padding: 16px;
   font-size: 13px;
 }
+
+/* Claude: Connect Claude, the consent, the connections */
+
+.ext-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+}
+
+.connect-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  align-items: start;
+  gap: 24px;
+  max-width: 1180px;
+}
+
+.connect-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: calc(var(--header-height) + 8px);
+}
+
+@media (max-width: 1100px) {
+  .connect-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connect-side {
+    position: static;
+  }
+}
+
+/* A page read top to bottom: numbered steps on a line */
+
+.steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 16px;
+  padding-bottom: 28px;
+}
+
+.step::before {
+  content: "";
+  position: absolute;
+  left: 13.5px;
+  top: 32px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--line);
+}
+
+.step:last-child {
+  padding-bottom: 0;
+}
+
+.step:last-child::before {
+  display: none;
+}
+
+.step-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+  color: var(--ink);
+  font: 500 13px / 1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.step.done .step-mark {
+  background: var(--good-soft);
+  box-shadow: none;
+  color: var(--good-ink);
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 3px;
+}
+
+.step-title {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: -0.32px;
+}
+
+.step-text {
+  margin: 0;
+  color: var(--ink-2);
+  max-width: 72ch;
+}
+
+.toolset-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-md);
+  overflow: clip;
+}
+
+.toolset-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.toolset-list li:last-child {
+  border-bottom: 0;
+}
+
+.toolset-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.toolset-warning {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--warning);
+}
+
+.connect-note {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--ink);
+  font-size: 13px;
+  max-width: 72ch;
+}
+
+.connect-note svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.copy-block {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
+  min-width: 0;
+  max-width: 720px;
+}
+
+.copy-block code {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: pre;
+  user-select: all;
+}
+
+.copy-block.wrap code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.copy-block .btn {
+  flex: none;
+  align-self: flex-start;
+}
+
+.connect-tabs {
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  border-radius: var(--radius-md);
+  overflow: clip;
+  max-width: 720px;
+}
+
+.connect-tabs .tabs {
+  flex-wrap: wrap;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.connect-tabs .tabs button {
+  font-size: 13px;
+  height: 28px;
+}
+
+.client-panel {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.client-panel p {
+  margin: 0;
+}
+
+.client-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.access-list {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  font-size: 13px;
+}
+
+.access-list dt {
+  font-weight: 600;
+}
+
+.access-list dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+
+.access-list.small {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.connect-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-border);
+  font-size: 13px;
+  max-width: 720px;
+}
+
+.connect-status.good {
+  background: var(--good-soft);
+  box-shadow: none;
+}
+
+.practices {
+  margin: 0;
+  padding-left: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.practices strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.conn-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.conn-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.client-name {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.client-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+}
+
+.client-name .muted {
+  font-size: 11.5px;
+}
+
+.conn-orgs {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conn-orgs li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+table.grid .conn-orgs {
+  margin: 0;
+}
+
+.conn-org-name {
+  font-weight: 500;
+}
+
+/* The consent: a card of its own, as the sign-in's, wider for its organizations */
+
+.gate-card.consent-card {
+  width: min(520px, 100%);
+}
+
+.consent-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.consent-meta {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.gate-card .consent-meta {
+  margin: 0;
+}
+
+.consent-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-soft);
+  font-size: 13px;
+}
+
+.gate-card .consent-warning {
+  color: var(--ink);
+}
+
+.consent-warning svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.consent-orgs {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.consent-orgs > legend {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
+.consent-org {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.consent-org.disabled {
+  opacity: 0.6;
+}
+
+.consent-org-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-right: auto;
+  cursor: pointer;
+}
+
+.consent-org.disabled .consent-org-check {
+  cursor: not-allowed;
+}
+
+.consent-org-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.consent-org .input,
+.conn-edit-row select.input {
+  width: 96px;
+  height: 30px;
+  flex: none;
+}
+
+.gate-card .consent-org .input {
+  height: 30px;
+}
+
+.stack.tight {
+  gap: 4px;
+}
+
+.consent-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.consent-expiry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  font-size: 12px;
+}
+
+/* Account › Connections: what a connection opens, in a dialog */
+
+.conn-edit {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conn-edit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px minmax(0, 1.2fr);
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.conn-edit-row .input {
+  height: 30px;
+  min-width: 0;
+}
+
+.conn-edit-row .field-hint {
+  grid-column: 1 / -1;
+}

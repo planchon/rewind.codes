@@ -17,6 +17,7 @@ import {
 } from "react";
 import { Api, ApiError, type AuthAnswer } from "../api/client";
 import type { AuthConfig, Authenticated, AuthState } from "../api/types";
+import { keepRoute } from "./pendingRoute";
 import { read, write } from "./storage";
 
 const KEY = "rewind.key";
@@ -74,8 +75,10 @@ export interface Session {
   waitlisted(email: string): void;
   /** Back to the first page of the sign-in. */
   backToSignIn(): void;
-  /** Leaves for GitHub, through `/auth/github`. */
+  /** Leaves for GitHub, through `/auth/github`, keeping the address to come back to. */
   signInWithGithub(): void;
+  /** Leaves the dashboard for another address (an MCP client's redirect after the consent). */
+  assign(url: string): void;
   /** Asks the server again after it could not be reached. */
   retry(): void;
 }
@@ -374,10 +377,15 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
 
   const backToSignIn = useCallback(() => signedOut(null), [signedOut]);
 
+  const leave = useCallback(
+    (url: string) => (assign ?? ((to: string) => window.location.assign(to)))(url),
+    [assign],
+  );
+
   const signInWithGithub = useCallback(() => {
-    const url = api.githubUrl(invitationToken);
-    (assign ?? ((to: string) => window.location.assign(to)))(url);
-  }, [api, assign, invitationToken]);
+    keepRoute();
+    leave(api.githubUrl(invitationToken));
+  }, [api, leave, invitationToken]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
@@ -398,6 +406,7 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
       waitlisted,
       backToSignIn,
       signInWithGithub,
+      assign: leave,
       retry,
     }),
     [
@@ -414,6 +423,7 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
       waitlisted,
       backToSignIn,
       signInWithGithub,
+      leave,
       retry,
     ],
   );

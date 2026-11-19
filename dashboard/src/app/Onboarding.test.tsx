@@ -48,7 +48,7 @@ describe("the onboarding", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["Members", "Invitations", "Roles", "API keys", "Settings"]);
+    ).toEqual(["Members", "Invitations", "Roles", "API keys", "Connections", "Settings"]);
     const table = await screen.findByRole("table");
     await waitFor(() => expect(within(table).getByText("Margaret Hamilton")).toBeInTheDocument());
     expect(within(table).getByText("owner")).toBeInTheDocument();

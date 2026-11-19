@@ -8,6 +8,7 @@ import {
   FileCode,
   FlaskConical,
   LayoutGrid,
+  Plug,
   Search,
   Users,
   Wrench,
@@ -130,6 +131,12 @@ function MainNav() {
           current={pathname.startsWith("/namespaces")}
         />
       )}
+      <NavItem
+        to="/connect"
+        icon={<Plug size={16} />}
+        label="Connect Claude"
+        current={pathname === "/connect"}
+      />
     </div>
   );
 }
@@ -190,6 +197,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
           user={member}
           server={server}
           onOrganization={() => void navigate("/organization")}
+          onConnections={() => void navigate("/account/connections")}
         />
       </div>
     </aside>

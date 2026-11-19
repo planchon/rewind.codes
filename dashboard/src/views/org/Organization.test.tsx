@@ -41,7 +41,7 @@ describe("the Organization view", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["Members", "Invitations", "Roles"]);
+    ).toEqual(["Members", "Invitations", "Roles", "Connections"]);
     const table = await screen.findByRole("table");
     expect(within(row(table, "Ada Lovelace")).getByText("owner")).toBeInTheDocument();
     expect(within(table).queryByRole("columnheader", { name: "Actions" })).toBeNull();

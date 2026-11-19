@@ -11,6 +11,7 @@ import type {
 } from "../api/types";
 import type { Caller } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
+import { connectionHandlers } from "./connection-handlers";
 import type { World } from "./fixtures";
 import { headerNamespace, namespaceHandlers } from "./namespace-handlers";
 import { invalidQuery, problem } from "./problem";
@@ -102,6 +103,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
 
     ...workflowHandlers(world),
 
+    ...connectionHandlers(world),
+
     http.get("*/v1/server", () =>
       HttpResponse.json({
         version: "0.1.0",
@@ -109,7 +112,9 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
         roles: ["api", "worker"],
         embedded: world.embedded,
         virtualTime: false,
-      }),
+        // Not in the generated `ServerInfo` yet (`src/api/connections.ts`).
+        ...world.connections.mcp,
+      } as never),
     ),
 
     http.get("*/v1/runs", ({ request }) =>

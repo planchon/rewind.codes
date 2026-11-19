@@ -10,6 +10,7 @@ import { ErrorNote } from "../components/ErrorNote";
 import { displayName } from "../model/access";
 import { AccountMenu, useJoinOrCreate } from "./AccountMenus";
 import { Brand } from "./Brand";
+import { atConsent } from "./pendingRoute";
 import { useSession } from "./session";
 
 export function Onboarding() {
@@ -46,6 +47,12 @@ export function Onboarding() {
             create your own: you will be its owner.
           </p>
         </div>
+        {atConsent() && (
+          <p className="gate-note" role="note">
+            Claude is waiting for your answer. Open, join or create an organization first: you then
+            choose what Claude may open in it.
+          </p>
+        )}
 
         {organizations.length > 0 && (
           <section className="panel" aria-labelledby="your-organizations">

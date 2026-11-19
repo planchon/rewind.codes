@@ -19,7 +19,8 @@ const ACCOUNTS = `
 [mock]   margaret@example.net  no organization yet, invited to Globex
 [mock]   any other email       sign-ups are closed: the waitlist
 [mock] "Continue with GitHub" signs in as ada@example.net.
-[mock] Namespaces: bob is above his CPU quota, chen pays for more, erin is blocked.`;
+[mock] Namespaces: bob is above his CPU quota, chen pays for more, erin is blocked.
+[mock] Connections: Ada connected Claude (Acme, Globex) and Claude Code (Acme), Grace Claude (Acme).`;
 
 export function mockApi(): Plugin {
   return {
@@ -42,6 +43,8 @@ export function mockApi(): Plugin {
             (i: { state: string }) => i.state === "pending",
           ))
             log(`[mock] invitation for ${inv.email}: /?invitation_token=${inv.token}`);
+          for (const id of world.connections.requests.keys())
+            log(`[mock] Claude asks for access: /#/connect/authorize?request=${id}`);
         }
         return createHandlers(world) as unknown[];
       };

@@ -398,6 +398,9 @@ export function accessHandlers(world: World) {
         );
       grantsOf(access, tenant).delete(principal);
       access.memberships.splice(at, 1);
+      // Their connections lose the organization with them.
+      for (const c of world.connections.connections)
+        if (c.userId === userId) grantsOf(access, tenant).delete(`connection:${c.id}`);
       return noContent();
     }),
 

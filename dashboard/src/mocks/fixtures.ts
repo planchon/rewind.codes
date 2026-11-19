@@ -4,6 +4,7 @@
 // (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
 import type { Labels, Quarantine, Run, Waiting } from "../api/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
+import { type ConnectionWorld, createConnectionWorld } from "./connections";
 import { fakeDigest, JournalBuilder } from "./journal";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
 import { createWorkflowWorld, type RecordedRun, type WorkflowWorld } from "./workflows";
@@ -57,6 +58,8 @@ export interface World {
   namespaces: Map<string, NamespaceWorld>;
   /** The workflows' versions and their suites, and the stored tests: the tenant's. */
   workflows: WorkflowWorld;
+  /** People's connections, the requests waiting for their consent, the toolsets, `/mcp`. */
+  connections: ConnectionWorld;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -368,6 +371,8 @@ export interface WorldOptions {
   githubEmail?: string;
   /** Where the codes and invitation links a deployment would email go. */
   log?: (line: string) => void;
+  /** What `GET /v1/server` says of `/mcp`; by default served with OAuth when WorkOS is. */
+  mcp?: { mcpUrl: string | null; oauth: boolean };
 }
 
 /**
@@ -1192,6 +1197,10 @@ export function createWorld(options: WorldOptions): World {
       triageToolset: TOOLSET_GITHUB,
       digestToolset: TOOLSET_DIGEST,
       recorded: recordedRuns,
+    }),
+    connections: createConnectionWorld(access, {
+      ...(options.mcp ? { mcp: options.mcp } : {}),
+      ...(options.live ? { live: true } : {}),
     }),
   };
   if (options.requireKey) world.requireKey = options.requireKey;

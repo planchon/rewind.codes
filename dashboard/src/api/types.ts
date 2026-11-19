@@ -31,6 +31,7 @@ export type ScriptPage = Schemas["ScriptPage"];
 export type ToolStats = Schemas["ToolStats"];
 export type ToolStatsPage = Schemas["ToolStatsPage"];
 export type ServerInfo = Schemas["ServerInfo"];
+export type ToolsetSummary = Schemas["ToolsetSummary"];
 export type QuotaReached = Schemas["QuotaReached"];
 /**
  * An answer that is not a success. The document flattens an optional `QuotaReached` into it
