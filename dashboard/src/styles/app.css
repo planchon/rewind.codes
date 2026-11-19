@@ -16,8 +16,9 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 20px;
+  /* Body: what has no size of its own is read as the body, never as a control. */
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* No elastic bounce past the page's edges (macOS), nor a swipe back from it. */
@@ -52,7 +53,7 @@ code,
 pre,
 .mono {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-body);
   font-variant-ligatures: none;
 }
 
@@ -62,9 +63,16 @@ pre {
 
 h1,
 h2,
-h3 {
+h3,
+h4 {
   margin: 0;
-  font-weight: 600;
+  font-weight: var(--weight-title);
+}
+
+/* The browser's `bolder` is 700, which the scale never uses. */
+b,
+strong {
+  font-weight: var(--weight-title);
 }
 
 .sr-only {
@@ -136,9 +144,10 @@ h3 {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
+  font-size: var(--text-control);
 }
 
 .scope:hover,
@@ -198,6 +207,7 @@ h3 {
   color: var(--ink-3);
   cursor: pointer;
   text-align: left;
+  font-size: var(--text-control);
 }
 
 .find-button:hover {
@@ -220,7 +230,7 @@ h3 {
   background: var(--surface);
   box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink-2);
-  font: 400 12px / 16px var(--font-sans);
+  font: 400 var(--text-small) / var(--leading-small) var(--font-sans);
 }
 
 /* The views, and the page's own sidebar, on top of each other: one is shown */
@@ -275,6 +285,7 @@ h3 {
   padding: 0 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-2);
+  font-size: var(--text-control);
 }
 
 .nav-item:hover {
@@ -312,7 +323,7 @@ h3 {
 }
 
 .nav-meta {
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -329,6 +340,7 @@ h3 {
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
+  font-size: var(--text-control);
 }
 
 .pane-head:hover {
@@ -342,7 +354,7 @@ h3 {
 
 .pane-head span {
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-align: center;
   white-space: nowrap;
   overflow: hidden;
@@ -364,7 +376,7 @@ h3 {
 
 .pane-label {
   padding: 4px 10px;
-  font: 500 12px / 16px var(--font-sans);
+  font: var(--weight-medium) var(--text-small) / var(--leading-small) var(--font-sans);
   color: var(--ink-3);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -373,7 +385,7 @@ h3 {
 .pane-hint {
   margin: 0;
   padding: 0 10px;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-3);
 }
 
@@ -395,6 +407,7 @@ h3 {
   color: var(--ink);
   text-align: left;
   cursor: pointer;
+  font-size: var(--text-control);
 }
 
 .account:hover,
@@ -469,11 +482,12 @@ h3 {
   gap: 8px;
   min-width: 0;
   white-space: nowrap;
+  font-size: var(--text-control);
 }
 
 .page-header-title h1 {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-title);
+  font-weight: var(--weight-medium);
   line-height: 20px;
   min-width: 0;
   overflow: hidden;
@@ -485,6 +499,7 @@ h3 {
 
 .page-header-crumbs {
   color: var(--ink-2);
+  font-size: var(--text-control);
 }
 
 .page-header-crumbs a {
@@ -537,7 +552,7 @@ h3 {
 }
 
 .section-head h2 {
-  font-size: 16px;
+  font-size: var(--text-heading);
   line-height: 24px;
   letter-spacing: -0.32px;
 }
@@ -546,7 +561,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-2);
 }
 
@@ -573,8 +588,8 @@ h3 {
   color: var(--ink);
   cursor: pointer;
   white-space: nowrap;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
   text-decoration: none;
   transition:
     background 0.15s ease,
@@ -615,7 +630,7 @@ h3 {
 .btn.small {
   height: 28px;
   padding: 0 10px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .btn.icon-only {
@@ -668,7 +683,7 @@ h3 {
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--line);
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--text-control);
   transition: box-shadow 0.15s ease;
 }
 
@@ -687,7 +702,7 @@ h3 {
 
 .input.mono {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .input::placeholder {
@@ -734,7 +749,7 @@ select.input {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-body);
   white-space: nowrap;
 }
 
@@ -748,7 +763,7 @@ select.input {
 .seg .seg-item[data-checked] {
   background: var(--surface-3);
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .seg button[aria-pressed="true"] .glyph {
@@ -759,7 +774,7 @@ select.input {
   height: 24px;
   min-width: 28px;
   padding: 0 7px;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 fieldset.seg {
@@ -777,7 +792,7 @@ fieldset.seg {
 
 .field > .field-label {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .field.col {
@@ -793,7 +808,7 @@ fieldset.seg {
 
 .field-hint {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-small);
   margin: 0;
 }
 
@@ -821,8 +836,8 @@ fieldset.seg {
 }
 
 .panel-head h2 {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-title);
+  font-weight: var(--weight-title);
   letter-spacing: -0.28px;
   display: inline-flex;
   align-items: center;
@@ -838,7 +853,7 @@ fieldset.seg {
 
 .panel-head .end a {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .panel-body {
@@ -862,8 +877,8 @@ fieldset.seg {
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
-  font-weight: 500;
-  font-size: 14px;
+  font-weight: var(--weight-medium);
+  font-size: var(--text-control);
 }
 
 .tabs button[aria-selected="true"] {
@@ -883,7 +898,7 @@ fieldset.seg {
   border-radius: 9999px;
   background: var(--surface-3);
   color: var(--ink-2);
-  font: 500 12px / 16px var(--font-sans);
+  font: var(--weight-medium) var(--text-small) / var(--leading-small) var(--font-sans);
   font-variant-numeric: tabular-nums;
 }
 
@@ -900,7 +915,7 @@ table.grid {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 table.grid th {
@@ -909,7 +924,7 @@ table.grid th {
   z-index: 1;
   text-align: left;
   font-weight: 400;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-2);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
@@ -957,7 +972,7 @@ table.grid .row-link {
   padding: 10px 12px;
   border-top: 1px solid var(--line);
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 /* Statuses: a dot and a word */
@@ -967,7 +982,7 @@ table.grid .row-link {
   align-items: center;
   gap: 8px;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .status-word {
@@ -1026,8 +1041,8 @@ table.grid .row-link {
 }
 
 .status.large {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-control);
+  font-weight: var(--weight-medium);
 }
 
 .dot {
@@ -1092,8 +1107,8 @@ table.grid .row-link {
   height: 20px;
   padding: 0 8px;
   border-radius: 9999px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
   white-space: nowrap;
   color: var(--ink);
   background: var(--surface-3);
@@ -1124,7 +1139,7 @@ table.grid .row-link {
   height: 20px;
   padding: 0 7px;
   border-radius: 9999px;
-  font: 500 12px / 16px var(--font-sans);
+  font: var(--weight-medium) var(--text-small) / var(--leading-small) var(--font-sans);
   white-space: nowrap;
 }
 
@@ -1152,7 +1167,7 @@ table.grid .row-link {
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--line);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
   white-space: nowrap;
   color: var(--ink);
   max-width: 220px;
@@ -1184,7 +1199,7 @@ button.label:hover {
 .digest,
 .run-id {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink);
   white-space: nowrap;
 }
@@ -1242,7 +1257,7 @@ button.label:hover {
 }
 
 .problem h3 {
-  font-size: 14px;
+  font-size: var(--text-title);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1255,7 +1270,7 @@ button.label:hover {
 
 .problem .slug {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
   margin-left: auto;
 }
@@ -1322,7 +1337,7 @@ button.label:hover {
 
 .gate-error {
   color: var(--critical-ink);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-card .brand {
@@ -1347,7 +1362,7 @@ button.label:hover {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-or {
@@ -1355,7 +1370,7 @@ button.label:hover {
   align-items: center;
   gap: 12px;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-or::before,
@@ -1378,13 +1393,13 @@ button.label:hover {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-foot {
   margin: 0;
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-done {
@@ -1402,11 +1417,11 @@ button.label:hover {
   align-items: center;
   gap: 8px;
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--weight-title);
 }
 
 .brand-name {
-  font-size: 14px;
+  font-size: var(--text-control);
 }
 
 .choices {
@@ -1444,12 +1459,12 @@ button.label:hover {
 }
 
 .choice-name {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .choice-id {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .onboarding-shell {
@@ -1516,7 +1531,7 @@ button.label:hover {
   background: var(--critical-soft);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink);
   white-space: normal;
   text-align: left;
@@ -1531,7 +1546,7 @@ button.label:hover {
 .error-note .slug {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -1544,7 +1559,7 @@ button.label:hover {
   padding: 10px 12px;
   background: var(--good-soft);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 /* Menus and dialogs (Base UI), a floating material: 12 px, a detached shadow, 36 px rows */
@@ -1585,7 +1600,7 @@ button.label:hover {
 
 .menu-label {
   padding: 8px 8px 4px;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -1600,7 +1615,7 @@ button.label:hover {
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
-  font-size: 14px;
+  font-size: var(--text-control);
   text-align: left;
   cursor: pointer;
   outline: 0;
@@ -1619,7 +1634,7 @@ button.label:hover {
 }
 
 .menu-item[aria-current] {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .menu-item-icon {
@@ -1640,7 +1655,7 @@ button.label:hover {
   margin-left: auto;
   flex: none;
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .menu-separator {
@@ -1654,14 +1669,14 @@ button.label:hover {
   flex-direction: column;
   gap: 2px;
   padding: 8px 8px 6px;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-2);
 }
 
 .menu-who strong {
   color: var(--ink);
-  font-weight: 500;
-  font-size: 14px;
+  font-weight: var(--weight-medium);
+  font-size: var(--text-control);
 }
 
 .menu-who-role {
@@ -1682,7 +1697,7 @@ button.label:hover {
 
 .menu-meta {
   padding: 4px 8px 6px;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -1733,7 +1748,7 @@ button.label:hover {
   font-size: 20px;
   line-height: 26px;
   letter-spacing: -0.4px;
-  font-weight: 600;
+  font-weight: var(--weight-title);
 }
 
 .dialog-text {
@@ -1832,7 +1847,7 @@ button.label:hover {
   border: 0;
   background: transparent;
   color: var(--ink);
-  font-size: 16px;
+  font-size: var(--text-heading);
   outline: 0;
 }
 
@@ -1868,7 +1883,7 @@ button.label:hover {
 
 .find-detail {
   color: var(--ink-3);
-  font-size: 13px;
+  font-size: var(--text-body);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1900,7 +1915,7 @@ button.label:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 16px;
+  font-size: var(--text-heading);
 }
 
 .no-permission p {
@@ -1919,15 +1934,15 @@ button.label:hover {
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-menu);
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink);
 }
 
 .tooltip .tt-title {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   margin-bottom: 4px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .tooltip dl {
@@ -1948,7 +1963,7 @@ button.label:hover {
 
 .tooltip dt.status {
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-body);
   gap: 6px;
 }
 
@@ -1959,7 +1974,7 @@ button.label:hover {
   grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 16px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .kv dt {
@@ -1989,17 +2004,17 @@ button.label:hover {
   padding: 0 4px 0 10px;
   background: var(--ds-background-200);
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .payload-head .name {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .payload-head .meta {
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .payload-head .end {
@@ -2053,18 +2068,18 @@ button.label:hover {
   min-height: 48px;
   padding: 0 8px 0 20px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .value-dialog-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-title);
+  font-weight: var(--weight-title);
 }
 
 .value-dialog-head .meta {
   color: var(--ink-3);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .value-dialog-head .end {
@@ -2086,13 +2101,13 @@ button.label:hover {
 }
 
 .value-dialog-body .json-tree {
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.65;
 }
 
 .value-dialog-body pre {
   padding: 16px 20px;
-  font-size: 13px;
+  font-size: var(--text-body);
   line-height: 1.65;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -2111,7 +2126,7 @@ button.label:hover {
 
 .payload-body pre {
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2128,7 +2143,7 @@ button.label:hover {
 .payload-preview code {
   color: var(--ink-2);
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .j-key {
@@ -2206,7 +2221,7 @@ button.journal-row {
   border-bottom: 1px solid var(--line);
   background: transparent;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: inherit;
 }
 
@@ -2253,7 +2268,7 @@ button.journal-row {
   background: var(--surface-3);
   box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--weight-title);
   line-height: 1;
 }
 

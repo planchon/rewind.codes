@@ -72,9 +72,14 @@ export function useFailures(
   });
 }
 
-export function useRun(id: string) {
+/** One run's details; `enabled` false until they are needed (a hover card that opens). */
+export function useRun(id: string, enabled = true) {
   const { api } = useScope();
-  return useQuery({ queryKey: ["run", id], queryFn: ({ signal }) => api.run(id, signal) });
+  return useQuery({
+    queryKey: ["run", id],
+    queryFn: ({ signal }) => api.run(id, signal),
+    enabled,
+  });
 }
 
 export function useScripts(

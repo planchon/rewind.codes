@@ -103,7 +103,7 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
         <div className="tt-title">{activityTitle(a)}</div>
         <dl>
           <dt>outcome</dt>
-          <dd>{activityOutcome(a).replace("_", " ")}</dd>
+          <dd>{activityOutcome(a, model.end !== null).replace("_", " ")}</dd>
           <dt>start</dt>
           <dd>{formatOffset(r.start - t0)}</dd>
           {d !== null && (
@@ -256,7 +256,7 @@ export function Timeline({ model, now, selected, onSelect, cursor }: TimelinePro
             const r = rows[item.index];
             if (!r) return null;
             const a = r.activity;
-            const outcome = activityOutcome(a);
+            const outcome = activityOutcome(a, model.end !== null);
             const open = outcome === "open";
             const left = scale.x(r.start);
             const right = scale.x(r.end);

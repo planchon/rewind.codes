@@ -9,7 +9,7 @@ describe("ScriptsView", () => {
     renderApp("/scripts");
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
-    expect(rows).toHaveLength(8);
+    expect(rows).toHaveLength(9);
     const forecast = rows.find((r) =>
       within(r).queryByText("// One-shot lookup started by the support agent."),
     );

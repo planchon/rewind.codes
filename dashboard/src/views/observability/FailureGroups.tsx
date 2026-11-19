@@ -9,6 +9,7 @@ import { useRunLinkState } from "../../app/runLinks";
 import { Ago, Empty, Loading, ProblemView, RunId } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
 import { StatusBadge } from "../../components/Status";
+import { isCancellation } from "../../model/ending";
 import { RANGES, type RangeKey } from "../../model/filters";
 import { formatCount, formatDuration, splitLabel } from "../../model/format";
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
@@ -98,7 +99,9 @@ export function FailureGroups({
                   </span>
                 </td>
                 <td>
-                  <span className="mono run-error">{g.error}</span>
+                  <span className={`mono run-error${isCancellation(g.error) ? " cancelled" : ""}`}>
+                    {g.error}
+                  </span>
                 </td>
                 <td className="right num">
                   <Link to={groupLink(g.fingerprint)}>{formatCount(g.runs)}</Link>

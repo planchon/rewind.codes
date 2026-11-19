@@ -174,6 +174,53 @@ export default async function main(input: { city: string }) {
 `,
 );
 
+/**
+ * A notifications workflow that never returns: it loops on \`signal("notify")\` (line 25) until
+ * its deadline cancels it, as the run 01a1e9ea-…-2f2ec0a9da28 of dev_notifications did.
+ */
+const DEV_NOTIFICATIONS = script(
+  "dev_notifications.ts",
+  `import { dax } from "rewind:tools";
+import { signal } from "rewind";
+
+// The user's notifications for one day: the one door to the lock screen.
+// Every goal asks it with \`dax.notify\`; it alone calls \`dax.push\`, and holds
+// the policy: nothing in the quiet hours, at most \`perDay\` a day, the most
+// urgent first when several wait.
+
+type Input = {
+  user: string;
+  settings: { perDay: number; quietFrom: number; quietTo: number };
+};
+
+type Notify = { goal: string; title: string; body: string; urgency: "low" | "normal" | "urgent" };
+
+const URGENCY = { low: 0, normal: 1, urgent: 2 } as const;
+
+export default async function main({ user, settings }: Input) {
+  let sent = 0;
+  const held: Notify[] = [];
+
+  // Each goal's request arrives as a signal, and is pushed now or held for
+  // later.
+  while (true) {
+    const note = await signal<Notify>("notify");
+    const hour = new Date().getHours();
+    const wraps = settings.quietFrom > settings.quietTo;
+    const quiet = wraps ? hour >= settings.quietFrom || hour < settings.quietTo : hour >= settings.quietFrom && hour < settings.quietTo;
+    const capped = sent >= settings.perDay || (sent === settings.perDay - 1 && (URGENCY[note.urgency] < URGENCY.urgent));
+    if (quiet || capped) {
+      held.push(note);
+      held.sort((a, b) => URGENCY[b.urgency] - URGENCY[a.urgency]);
+      continue;
+    }
+    await dax.push({ user, goal: note.goal, title: note.title, body: note.body });
+    sent += 1;
+  }
+}
+`,
+);
+
 /** The script of crates/rewind-e2e/corpus/epoch-1/blue/triage_workflow. */
 const TRIAGE_WORKFLOW = script(
   "triage_workflow.ts",
@@ -234,6 +281,10 @@ export default async function main(input: { repos: string[] }) {
 export const WORKFLOWS = {
   triage: { name: "triage", version: fakeDigest("workflow:triage") },
   digest: { name: "digest", version: fakeDigest("workflow:digest") },
+  devNotifications: {
+    name: "dev_notifications",
+    version: fakeDigest("workflow:dev_notifications"),
+  },
 };
 
 export const SCRIPTS = {
@@ -245,6 +296,7 @@ export const SCRIPTS = {
   TRIAGE_WORKFLOW,
   TRIAGE_REPO,
   TRIAGE_ALL,
+  DEV_NOTIFICATIONS,
 };
 
 /**
@@ -331,6 +383,7 @@ const TOOLSET_DIGEST = fakeDigest("toolset:github,llm,slack");
 const TOOLSET_CRM = fakeDigest("toolset:ask_user,crm");
 const TOOLSET_WEATHER = fakeDigest("toolset:weather");
 const TOOLSET_WORKFLOWS = fakeDigest("toolset:github,slack+workflows:digest,triage");
+const TOOLSET_DAX = fakeDigest("toolset:dax");
 
 /** A deterministic UUID v7 for a run started at `at`. */
 export function runId(at: number, n: number): string {
@@ -908,6 +961,50 @@ export function createWorld(options: WorldOptions): World {
       );
   }
 
+  // dev_notifications: its script loops on signal("notify") and never returns; its deadline
+  // passed after 11h29m, which cancelled it in the await (no frame of script.ts in the stack).
+  {
+    const start = now - DAY - 2 * HOUR;
+    const ttl = 11 * HOUR + 29 * MINUTE;
+    const r = run(
+      start,
+      DEV_NOTIFICATIONS,
+      TOOLSET_DAX,
+      {
+        dax: "iteration",
+        env: "development",
+        goal: "6afc64fdf4d56d8262048836",
+        iteration: "6afc64fe1c0b5e2a9d7f3a41",
+        kind: "routine",
+        routine: "notifications_daily",
+      },
+      { user: "6afc64fd2de4a3f3f4c9e127", settings: { perDay: 4, quietFrom: 22, quietTo: 8 } },
+      {
+        id: "01a1e9ea-8258-7525-9241-2f2ec0a9da28",
+        namespace: "6afc64fd2de4a3f3f4c9e127",
+        workflow: WORKFLOWS.devNotifications,
+      },
+    );
+    r.journal = new JournalBuilder(start)
+      .started({
+        script: DEV_NOTIFICATIONS.digest,
+        toolset: TOOLSET_DAX,
+        input: {
+          user: "6afc64fd2de4a3f3f4c9e127",
+          settings: { perDay: 4, quietFrom: 22, quietTo: 8 },
+        },
+        ttlMs: ttl,
+      })
+      .awaitSignal("notify", 25, undefined, 24)
+      .after(ttl)
+      .cancelRequested("ttl")
+      .failRun(
+        "CancelledError",
+        "run cancelled: its deadline has passed",
+        "CancelledError: run cancelled: its deadline has passed",
+      );
+  }
+
   // onboarding: a scenario in mock mode, in virtual time.
   {
     const r = run(
@@ -1180,6 +1277,7 @@ export function createWorld(options: WorldOptions): World {
       TRIAGE_WORKFLOW,
       TRIAGE_REPO,
       TRIAGE_ALL,
+      DEV_NOTIFICATIONS,
     ],
     runs,
     payloads,

@@ -1,5 +1,5 @@
 // The run's card, details and actions (in its sidebar and its header), and its banners: how it
-// failed, why it is quarantined, what it waits for.
+// ended (RunEnd.tsx), why it is quarantined, what it waits for.
 import { Download, GitFork } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -12,6 +12,7 @@ import { formatCount, formatDuration, formatRelative, shortRunId } from "../../m
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
 import { endedRunOf, workflowRef } from "../../model/workflows";
+import { endingOf, RunEndBanner } from "./RunEnd";
 
 function LiveState({ state }: { state: JournalState }) {
   const text = {
@@ -331,71 +332,17 @@ export function RunBanners({
     );
   }
 
-  if (run.error) {
-    const e = run.error;
-    const failedCall = e.failedCall;
-    const call = failedCall ? model.calls.find((c) => c.seq === failedCall.seq) : undefined;
+  const ending = endingOf(run, model);
+  if (ending && ending.kind !== "completed") {
     banners.push(
-      <section
-        key="e"
-        className={`banner ${run.status === "cancelled" ? "tone-neutral-banner" : "tone-critical-banner"}`}
-        aria-label="Error"
-      >
-        <h3>
-          <span>
-            <span className="mono">{e.name}</span>: {e.message}
-          </span>
-        </h3>
-        <p className="banner-links">
-          {e.location && (
-            <button
-              type="button"
-              className="link-btn mono"
-              onClick={() => e.location && onSelectLine(e.location.line)}
-            >
-              script.ts:{e.location.line}:{e.location.column}
-            </button>
-          )}
-          {failedCall && (
-            <button
-              type="button"
-              className="link-btn"
-              onClick={() => call && onSelectEntry(call.idx)}
-              disabled={!call}
-            >
-              thrown by{" "}
-              <span className="mono">
-                #{failedCall.seq} {failedCall.tool}
-              </span>
-              : {failedCall.error.kind}, {failedCall.error.message}
-            </button>
-          )}
-          {model.cancel && (
-            <span className="muted">
-              cancellation requested ({model.cancel.reason})
-              {model.cancel.message ? `: ${model.cancel.message}` : ""}
-            </span>
-          )}
-        </p>
-        {e.frame && <pre className="frame">{e.frame}</pre>}
-        {e.stack && (
-          <details>
-            <summary>Stack</summary>
-            <pre className="frame">{e.stack}</pre>
-          </details>
-        )}
-      </section>,
-    );
-  }
-
-  if (run.abort) {
-    banners.push(
-      <section key="a" className="banner tone-serious-banner" aria-label="Abort">
-        <h3>
-          Aborted by the host: <span className="mono">{run.abort.kind}</span>
-        </h3>
-        <p>{run.abort.message}</p>
-      </section>,
+      <RunEndBanner
+        key="end"
+        run={run}
+        ending={ending}
+        model={model}
+        onSelectEntry={onSelectEntry}
+        onSelectLine={onSelectLine}
+      />,
     );
   }
 

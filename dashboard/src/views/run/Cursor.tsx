@@ -10,6 +10,8 @@ import type { Entry, Payload } from "../../api/types";
 import { useSettings } from "../../app/settings";
 import { ProblemView } from "../../components/bits";
 import { JsonBox } from "../../components/Payload";
+import { EndGlyph } from "../../components/Status";
+import { type EndKind, pendingBefore } from "../../model/ending";
 import { formatBytes, formatDuration, formatOffset, formatTime } from "../../model/format";
 import type { Activity, RunModel } from "../../model/run";
 import {
@@ -23,6 +25,7 @@ import {
   stepFromParam,
   stepOf,
 } from "../../model/steps";
+import { ENDED } from "./RunEnd";
 import type { BindingTarget, Target } from "./targets";
 
 export interface TimeCursor {
@@ -109,18 +112,16 @@ export function useCursorKeys(cursor: TimeCursor) {
   }, []);
 }
 
-const ENDING = { completed: "completed", failed: "failed", aborted: "was aborted" } as const;
-
 export function CursorBar({
   cursor,
   live,
-  failedStep,
+  ending,
   t0,
 }: {
   cursor: TimeCursor;
   live: boolean;
-  /** The step a failed run failed in. */
-  failedStep: number | null;
+  /** The step the run ended in, and how. */
+  ending: { step: number; kind: EndKind } | null;
   t0: number | null;
 }) {
   const { zone } = useSettings();
@@ -149,10 +150,10 @@ export function CursorBar({
         <ChevronLeft size={13} /> Step back
       </button>
       <div className="cursor-pos" aria-live="polite">
-        <b>
+        <span className="cursor-step">
           Step {n + 1} of {steps.length}
-        </b>
-        <span className="muted num">
+        </span>
+        <span className="cursor-when num">
           {formatTime(step.at, zone)}
           {zone === "utc" ? " UTC" : ""}
           {t0 !== null ? ` · ${formatOffset(step.at - t0)}` : ""} · entries {step.first}
@@ -186,17 +187,19 @@ export function CursorBar({
         />
         every step
       </label>
-      {failedStep !== null && (
+      {ending && (
         <button
           type="button"
-          className={`link-btn cursor-failed${failedStep === n ? " here" : ""}`}
-          onClick={() => cursor.go(failedStep)}
+          className={`end-chip end-chip-${ending.kind}`}
+          aria-current={ending.step === n ? "step" : undefined}
+          title={ending.step === n ? undefined : `Go to step ${ending.step + 1}`}
+          onClick={() => cursor.go(ending.step)}
         >
-          ✕ {failedStep === n ? "the run failed in this step" : `failed in step ${failedStep + 1}`}
+          <EndGlyph kind={ending.kind} size={12} />
+          {ENDED[ending.kind]} {ending.step === n ? "in this step" : `in step ${ending.step + 1}`}
         </button>
       )}
-      {step.ends === "completed" && n === last && <span className="tone-good">✓ completed</span>}
-      <span className="cursor-hint muted">
+      <span className="cursor-hint">
         {live && atHead ? (
           <span className="tone-info">following the head · </span>
         ) : live ? (
@@ -772,16 +775,19 @@ export function StepPanel({
       break;
     }
     case "cancel_requested":
-      woke = (
-        <>
-          Cancellation requested ({e.reason}){e.message ? `: ${e.message}` : ""}
-        </>
-      );
+      woke =
+        e.reason === "ttl" ? (
+          <>Its deadline passed: the scheduler requested its cancellation</>
+        ) : (
+          <>Cancellation was requested{e.message ? <>: “{e.message}”</> : null}</>
+        );
       break;
     default:
       woke = <span className="mono">{e.type}</span>;
   }
 
+  // A cancellation rejects every pending await with CancelledError (archi/03-execution.md).
+  const rejected = e.type === "cancel_requested" ? pendingBefore(model, step.first) : [];
   const did = step.committed.map((entry) => {
     const ev = entry.event;
     const key = entry.idx;
@@ -842,18 +848,26 @@ export function StepPanel({
             <PayloadValue payload={ev.output} runId={ctx.runId} compact />
           </li>
         );
-      case "fail_run":
+      case "fail_run": {
+        const kind = step.ends === "cancelled" ? "cancelled" : "failed";
         return (
-          <li key={key} className="tone-critical">
-            <span className="mk">✕</span> threw <span className="mono">{ev.error.name}</span>:{" "}
-            {ev.error.message}
+          <li key={key} className="step-end">
+            <EndGlyph kind={kind} size={13} />
+            <span>
+              {kind === "cancelled" ? "ended cancelled with" : "threw"}{" "}
+              <code className={`err-name end-${kind}`}>{ev.error.name}</code> {ev.error.message}
+            </span>
           </li>
         );
+      }
       case "run_aborted":
         return (
-          <li key={key} className="tone-critical">
-            <span className="mk">✕</span> was aborted:{" "}
-            <span className="mono">{ev.reason.kind}</span>, {ev.reason.message}
+          <li key={key} className="step-end">
+            <EndGlyph kind="aborted" size={13} />
+            <span>
+              was aborted by the host:{" "}
+              <code className="err-name end-aborted">{ev.reason.kind}</code> {ev.reason.message}
+            </span>
           </li>
         );
       default:
@@ -906,7 +920,17 @@ export function StepPanel({
         <div>
           <h4>Then it</h4>
           <ul className="step-list">
-            {did.length > 0 ? (
+            {rejected.map((p) => (
+              <li key={`rejected-${p.activity.idx}`} className="step-end">
+                <EndGlyph kind="cancelled" size={13} />
+                <span>
+                  the await of {p.what} threw{" "}
+                  <code className="err-name end-cancelled">CancelledError</code>
+                </span>
+                {line(p.line ?? undefined)}
+              </li>
+            ))}
+            {did.length > 0 || rejected.length > 0 ? (
               did
             ) : (
               <li className="muted">
@@ -920,9 +944,12 @@ export function StepPanel({
           <h4>{step.ends ? "Ended" : "Now paused on"}</h4>
           <ul className="step-list">
             {step.ends ? (
-              <li className={step.ends === "completed" ? "tone-good" : "tone-critical"}>
-                {ENDING[step.ends]} at{" "}
-                {time(Date.parse(model.entries[step.last]?.recordedAt ?? ""))}
+              <li className="step-end">
+                <EndGlyph kind={step.ends} size={13} />
+                <span>
+                  {ENDED[step.ends]} at{" "}
+                  {time(Date.parse(model.entries[step.last]?.recordedAt ?? ""))}
+                </span>
               </li>
             ) : paused.length > 0 ? (
               paused

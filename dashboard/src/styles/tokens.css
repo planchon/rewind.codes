@@ -92,6 +92,28 @@
   --focus-ring: 0 0 0 2px var(--ds-background-100), 0 0 0 4px var(--focus);
   --ease: cubic-bezier(0.175, 0.885, 0.32, 1.1);
 
+  /* Type: four sizes, three weights (archi/08, "Taken for the dashboard's type scale").
+     - 14px, title: a card's, a banner's, a hover card's title (600); controls (500).
+     - 13px, body: what is read, sentences, values, table cells, code (400); the word that
+       leads a line, a step's position, a name (500).
+     - 12px, small: what qualifies it, labels (500, ink-2), metadata and hints (400, ink-3),
+       chips and inline values (mono).
+     - 16px, heading: a page's section. 11px only for axis ticks and keys.
+     Never 700, and never a half pixel. The figures (a tile's number, the sign-in's and a
+     dialog's titles, 20 to 24px) are the only sizes outside it. */
+  --text-heading: 16px;
+  --text-title: 14px;
+  --text-control: 14px;
+  --text-body: 13px;
+  --text-small: 12px;
+  --text-micro: 11px;
+  --leading-heading: 24px;
+  --leading-title: 20px;
+  --leading-body: 20px;
+  --leading-small: 16px;
+  --weight-title: 600;
+  --weight-medium: 500;
+
   /* The frame, as measured on Vercel's dashboard */
   --sidebar-width: 256px;
   --header-height: 56px;

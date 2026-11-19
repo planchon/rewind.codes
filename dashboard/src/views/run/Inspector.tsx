@@ -150,7 +150,7 @@ function ActivityDetail({
 }) {
   const t0 = model.firstAt;
   const a = activity;
-  const outcome = activityOutcome(a);
+  const outcome = activityOutcome(a, model.end !== null);
   const workflowCall = a.kind === "tool_call" ? workflowCallOf(a.tool) : null;
   const startedRun = a.kind === "tool_call" ? startedRunOf(a) : null;
   const signalTarget =
@@ -404,7 +404,7 @@ function LineDetail({
                 {a.kind === "log" ? (
                   <span className={`log-level level-${a.level}`}>{a.level}</span>
                 ) : (
-                  <OutcomeBadge outcome={activityOutcome(a)} word="" />
+                  <OutcomeBadge outcome={activityOutcome(a, model.end !== null)} word="" />
                 )}
                 <span className="mono">{a.kind === "log" ? a.message : activityTitle(a)}</span>
                 {a.kind !== "log" && a.end && (

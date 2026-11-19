@@ -22,9 +22,13 @@ export function activityTitle(a: Activity): string {
   }
 }
 
-export function activityOutcome(a: Activity): Outcome {
+/**
+ * What became of an activity. One still open when the run ended (`runEnded`) was cancelled: a
+ * terminal status clears everything pending (archi/02-journal.md, "Run state").
+ */
+export function activityOutcome(a: Activity, runEnded = false): Outcome {
   if (a.kind === "log") return "ok";
-  if (a.end === null) return "open";
+  if (a.end === null) return runEnded ? "cancelled" : "open";
   // The end of a run this run waited for: `result()` rejects unless that run completed.
   if (a.kind === "signal" && a.end.outcome === "received" && endedRunOf(a.name) !== null) {
     const status = readRunEnd(a.end.payload).status;

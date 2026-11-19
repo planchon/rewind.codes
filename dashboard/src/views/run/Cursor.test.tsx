@@ -180,9 +180,7 @@ describe("the time cursor", () => {
     ) as RunFixture;
     renderApp(`/runs/${run.id}`, { world });
     await waitFor(() =>
-      expect(
-        within(bar()).getByRole("button", { name: /the run failed in this step/ }),
-      ).toBeVisible(),
+      expect(within(bar()).getByRole("button", { name: /Failed in this step/ })).toBeVisible(),
     );
     await waitFor(() =>
       expect(document.querySelector(".code-text .code-row.mark-error")).toHaveAttribute(
@@ -215,6 +213,6 @@ describe("the time cursor", () => {
     expect(search(router).get("step")).toBe(pinned);
     await user.click(within(bar()).getByRole("button", { name: "Last step" }));
     await waitFor(() => expect(search(router).get("step")).toBeNull());
-    expect(bar()).toHaveTextContent(/completed/);
+    expect(within(bar()).getByRole("button", { name: /Completed in this step/ })).toBeVisible();
   });
 });

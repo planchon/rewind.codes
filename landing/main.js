@@ -268,7 +268,7 @@
     for (const el of reveals) {
       const group = Array.from(el.parentElement.children).filter((c) => c.hasAttribute("data-reveal"));
       const i = group.indexOf(el);
-      if (el.matches(".pillar, .story, .shift-grid article")) {
+      if (el.matches(".pillar, .shift-grid article")) {
         el.style.setProperty("--delay", `${(i % 4) * 0.08}s`);
       }
     }

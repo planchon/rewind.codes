@@ -12,6 +12,7 @@ import { Meter, StackedBars, Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { SaveSearch } from "../components/SaveSearch";
+import { isCancellation } from "../model/ending";
 import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount, formatDuration, formatPercent, formatTime } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
@@ -248,7 +249,11 @@ export function OverviewView() {
                       title={g.signature}
                     >
                       <span className="rank-name mono">{g.signature}</span>
-                      <Meter value={g.runs} max={groups[0]?.runs ?? 1} />
+                      <Meter
+                        value={g.runs}
+                        max={groups[0]?.runs ?? 1}
+                        tone={isCancellation(g.error) ? "neutral" : "critical"}
+                      />
                       <span className="num">{formatCount(g.runs)}</span>
                     </Link>
                   </li>

@@ -4,19 +4,11 @@ import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query
 import { Link, useNavigate } from "react-router";
 import type { RunPage, RunSummary } from "../api/types";
 import { useRunLinkState } from "../app/runLinks";
-import {
-  Ago,
-  Digest,
-  Empty,
-  LabelList,
-  Loading,
-  ProblemView,
-  RunId,
-  useNow,
-} from "../components/bits";
+import { Ago, Digest, Empty, Loading, ProblemView, RunId, useNow } from "../components/bits";
 import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../model/format";
 import { fieldTerm, queryLink } from "../model/query";
+import { RunEnd, RunLabels } from "./RunCells";
 
 export interface RunTableProps {
   query: UseInfiniteQueryResult<InfiniteData<RunPage>>;
@@ -76,7 +68,9 @@ export function RunTable({
               Calls
             </th>
             {showWakes && <th title="When a waiting run wakes by itself">Wakes</th>}
-            {showError && <th>Error</th>}
+            {showError && (
+              <th title="The error the run ended with: hover it for the cause">Error</th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -108,12 +102,7 @@ export function RunTable({
                     </Link>
                   )}
                 </span>
-                {Object.keys(run.labels).length > 0 && (
-                  <LabelList
-                    labels={run.labels}
-                    {...(onPickLabel ? { onPick: onPickLabel } : {})}
-                  />
-                )}
+                <RunLabels labels={run.labels} onPick={onPickLabel} />
               </td>
               <td>
                 <span className="labels">
@@ -140,14 +129,11 @@ export function RunTable({
               {!hideScript && (
                 <td>
                   {onPickScript ? (
-                    <button
-                      type="button"
-                      className="link-btn"
-                      title="Only runs of this script"
-                      onClick={() => onPickScript(run.script)}
-                    >
-                      <Digest digest={run.script} />
-                    </button>
+                    <Digest
+                      digest={run.script}
+                      onPick={() => onPickScript(run.script)}
+                      pickTitle="Only runs of this script"
+                    />
                   ) : (
                     <Digest digest={run.script} />
                   )}
@@ -174,16 +160,8 @@ export function RunTable({
                 </td>
               )}
               {showError && (
-                <td className="error-cell">
-                  {run.error && (
-                    <span
-                      className="error-text"
-                      title={`${run.error}${run.errorMessage ? `: ${run.errorMessage}` : ""}${run.errorLine ? ` (line ${run.errorLine})` : ""}`}
-                    >
-                      <span className="mono run-error">{run.error}</span>
-                      {run.errorMessage && <span className="dim">{run.errorMessage}</span>}
-                    </span>
-                  )}
+                <td className="end-td">
+                  <RunEnd run={run} />
                 </td>
               )}
             </tr>

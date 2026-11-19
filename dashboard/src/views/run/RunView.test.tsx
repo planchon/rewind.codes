@@ -25,9 +25,12 @@ describe("RunView", () => {
     const run = find(world, (r) => r.labels.conversation === "c-39" && r.script === SCRIPTS.TRIAGE);
     const { router } = renderApp(`/runs/${run.id}`, { world });
 
-    expect(await screen.findByRole("region", { name: "Error" })).toHaveTextContent(
-      "ToolError: github.close_issue: Resource not accessible by integration (403)",
-    );
+    const banner = await screen.findByRole("region", { name: "How the run ended" });
+    expect(within(banner).getByRole("heading", { name: "Failed" })).toBeVisible();
+    expect(within(banner).getByText("ToolError")).toBeVisible();
+    expect(
+      within(banner).getByText("github.close_issue: Resource not accessible by integration (403)"),
+    ).toBeVisible();
     // The journal arrives through the event stream.
     await waitFor(() =>
       expect(within(notesOf(14)).getByRole("button")).toHaveTextContent(
@@ -61,12 +64,49 @@ describe("RunView", () => {
     expect(search(router).get("entry")).not.toBeNull();
   });
 
+  it("tells a cancellation at the deadline as a cancellation, never as a failure", async () => {
+    const world = createWorld({ now: NOW });
+    const run = find(world, (r) => r.script === SCRIPTS.DEV_NOTIFICATIONS);
+    renderApp(`/runs/${run.id}`, { world });
+
+    const banner = await screen.findByRole("region", { name: "How the run ended" });
+    expect(
+      within(banner).getByRole("heading", { name: "Cancelled at its deadline" }),
+    ).toBeVisible();
+    await waitFor(() =>
+      expect(banner).toHaveTextContent(
+        'Its deadline passed: a TTL of 11h 29m from its start. When it came, it was awaiting signal "notify" L25.',
+      ),
+    );
+    expect(within(banner).getByText("CancelledError")).toBeVisible();
+    expect(within(banner).getByText("run cancelled: its deadline has passed")).toBeVisible();
+    // A stack without frames adds nothing.
+    expect(within(banner).queryByText("Stack")).toBeNull();
+
+    const bar = screen.getByRole("region", { name: "Time cursor" });
+    expect(within(bar).getByRole("button", { name: /Cancelled in this step/ })).toBeVisible();
+    expect(bar).not.toHaveTextContent(/failed/i);
+
+    const step = screen.getByRole("region", { name: "Step" });
+    expect(step).toHaveTextContent(
+      "Woke up becauseIts deadline passed: the scheduler requested its cancellation",
+    );
+    expect(step).toHaveTextContent('the await of signal "notify" threw CancelledErrorL25');
+    expect(step).toHaveTextContent(
+      "ended cancelled with CancelledError run cancelled: its deadline has passed",
+    );
+    expect(step).toHaveTextContent(/EndedCancelled at /);
+    expect(step).not.toHaveTextContent(/failed|threw CancelledError:/);
+    // The wait the cancellation rejected is not still waiting.
+    expect(within(notesOf(25)).getByRole("button")).toHaveTextContent('signal "notify"cancelled');
+  });
+
   it("selects the failed call from the banner", async () => {
     const user = userEvent.setup();
     const world = createWorld({ now: NOW });
     const run = find(world, (r) => r.labels.conversation === "c-39" && r.script === SCRIPTS.TRIAGE);
     renderApp(`/runs/${run.id}`, { world });
-    const banner = await screen.findByRole("region", { name: "Error" });
+    const banner = await screen.findByRole("region", { name: "How the run ended" });
     await waitFor(() =>
       expect(within(banner).getByRole("button", { name: /thrown by #6/ })).toBeEnabled(),
     );

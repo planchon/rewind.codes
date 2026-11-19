@@ -36,8 +36,13 @@
 }
 
 .run-error {
-  font-size: 11.5px;
-  color: var(--critical);
+  font-size: var(--text-small);
+  color: var(--critical-ink);
+}
+
+/* A cancellation is not a failure: gray. */
+.run-error.cancelled {
+  color: var(--ink-2);
 }
 
 /* Scripts */
@@ -64,7 +69,7 @@ table.grid td.script-cell {
 }
 
 .script-cell .digest {
-  font-size: 11px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -126,7 +131,7 @@ table.grid td.script-cell {
 .outcome-counts .status {
   gap: 3px;
   color: var(--ink);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 a.status:hover {
@@ -141,7 +146,7 @@ a.status:hover .num {
 
 .tools-table .group-row td {
   background: var(--surface-2);
-  font-weight: 600;
+  font-weight: var(--weight-title);
   height: 32px;
   color: var(--ink-2);
 }
@@ -196,7 +201,7 @@ table.grid.tools-table td.tool-name {
 /* A second line under a cell's value: when a script first ran */
 .cell-sub {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -264,7 +269,7 @@ table.grid.tools-table .latency-cell {
   top: 0;
   translate: -50% 0;
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-micro);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -386,7 +391,7 @@ table.grid.tools-table .latency-cell {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
   margin-right: 6px;
 }
@@ -427,10 +432,12 @@ table.grid.tools-table .latency-cell {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
 .banner h3 {
-  font-size: 13px;
+  font-size: var(--text-title);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -446,7 +453,7 @@ table.grid.tools-table .latency-cell {
 .banner .hint,
 .waiting .hint {
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .banner-links {
@@ -458,7 +465,7 @@ table.grid.tools-table .latency-cell {
 .banner details summary {
   cursor: pointer;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .frame {
@@ -466,10 +473,73 @@ table.grid.tools-table .latency-cell {
   border-radius: 4px;
   background: var(--code-bg);
   border: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: var(--text-small);
   line-height: 1.5;
   overflow-x: auto;
   white-space: pre;
+}
+
+/* How the run ended: a title with its mark and when, the story, then the error, its name apart
+   from its message. A cancellation is gray; a failure red; an abort amber. */
+.end-banner {
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+.end-banner-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.end-banner-title {
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  font-weight: var(--weight-title);
+}
+
+.end-banner-when {
+  margin-left: auto;
+  font-size: var(--text-small);
+  color: var(--ink-3);
+}
+
+.end-banner-story {
+  color: var(--ink-2);
+}
+
+.end-banner-error {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.end-banner-message {
+  overflow-wrap: anywhere;
+}
+
+.end-banner-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.end-banner-cancelled {
+  border-left-color: var(--neutral);
+}
+
+.end-banner-failed {
+  border-left-color: var(--critical);
+}
+
+.end-banner-aborted {
+  border-left-color: var(--serious);
+}
+
+.line-link {
+  font-size: var(--text-small);
 }
 
 .tone-critical-banner {
@@ -518,7 +588,7 @@ table.grid.tools-table .latency-cell {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: var(--text-body);
 }
 
 .started-list li {
@@ -596,7 +666,7 @@ table.grid.tools-table .latency-cell {
 }
 
 .inspector-title h3 {
-  font-size: 13px;
+  font-size: var(--text-body);
   overflow-wrap: anywhere;
 }
 
@@ -624,7 +694,7 @@ table.grid.tools-table .latency-cell {
   background: var(--code-bg);
   border: 1px solid var(--line);
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .failure {
@@ -636,7 +706,7 @@ table.grid.tools-table .latency-cell {
 .failure h4 {
   margin: 0;
   padding: 7px 10px;
-  font-size: 12.5px;
+  font-size: var(--text-body);
   background: var(--critical-soft);
   overflow-wrap: anywhere;
 }
@@ -660,7 +730,7 @@ table.grid.tools-table .latency-cell {
   background: transparent;
   cursor: pointer;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .line-item:hover {
@@ -683,7 +753,7 @@ table.grid.tools-table .latency-cell {
   grid-template-columns: auto minmax(0, 1fr);
   background: var(--code-bg);
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-body);
   line-height: var(--code-line);
   max-height: 70vh;
   overflow-y: auto;
@@ -787,23 +857,23 @@ table.grid.tools-table .latency-cell {
   gap: 4px;
   align-items: center;
   vertical-align: top;
-  padding-top: 2px;
+  padding-top: 1px;
 }
 
 .note {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 16px;
+  height: 18px;
   max-width: 300px;
   padding: 0 6px 0 4px;
   border: 1px solid var(--line);
-  border-radius: 3px;
+  border-radius: 4px;
   background: var(--surface);
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  line-height: 14px;
+  font-size: var(--text-small);
+  line-height: 16px;
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
@@ -843,7 +913,7 @@ table.grid.tools-table .latency-cell {
 
 .timeline {
   --tl-label: 260px;
-  font-size: 11.5px;
+  font-size: var(--text-small);
   padding-bottom: 4px;
 }
 
@@ -869,7 +939,7 @@ table.grid.tools-table .latency-cell {
   background: transparent;
   text-align: left;
   cursor: pointer;
-  font-size: 11.5px;
+  font-size: var(--text-small);
   height: 100%;
   color: var(--ink);
 }
@@ -894,7 +964,7 @@ table.grid.tools-table .latency-cell {
   border-left: 1px solid var(--line-strong);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  font-size: 10.5px;
+  font-size: var(--text-micro);
   line-height: 14px;
 }
 
@@ -907,7 +977,7 @@ table.grid.tools-table .latency-cell {
 
 .tl-tick.major {
   color: var(--ink-2);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .tl-break-label {
@@ -917,7 +987,7 @@ table.grid.tools-table .latency-cell {
   background: var(--surface);
   padding: 0 3px;
   color: var(--ink-2);
-  font-size: 10.5px;
+  font-size: var(--text-micro);
   white-space: nowrap;
   border-radius: 2px;
   z-index: 1;
@@ -1053,7 +1123,7 @@ table.grid.tools-table .latency-cell {
   gap: 4px 14px;
   padding: 6px 10px 2px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .tl-legend span {
@@ -1082,7 +1152,7 @@ table.grid.tools-table .latency-cell {
 /* Journal, logs, trace */
 
 .journal {
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .journal-row {
@@ -1107,7 +1177,7 @@ table.grid.tools-table .latency-cell {
 .journal-head {
   cursor: default;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: var(--text-small);
   background: var(--surface-2);
 }
 
@@ -1130,11 +1200,11 @@ table.grid.tools-table .latency-cell {
 }
 
 .ev-type {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .ev-detail {
-  font-size: 11.5px;
+  font-size: var(--text-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1143,7 +1213,7 @@ table.grid.tools-table .latency-cell {
 
 .family-lifecycle .ev-type {
   color: var(--ink);
-  font-weight: 600;
+  font-weight: var(--weight-title);
 }
 
 .family-command .ev-type {
@@ -1186,7 +1256,7 @@ table.grid.tools-table .latency-cell {
   cursor: pointer;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .log-text:hover {
@@ -1195,7 +1265,7 @@ table.grid.tools-table .latency-cell {
 
 .log-level {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-small);
   text-transform: lowercase;
   color: var(--ink-3);
 }
@@ -1210,7 +1280,7 @@ table.grid.tools-table .latency-cell {
 
 .llm-trace {
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.55;
   max-height: 420px;
   overflow: auto;
@@ -1329,7 +1399,7 @@ table.grid.tools-table .latency-cell {
   padding: 0 2px;
   border: 0;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: var(--text-body);
   line-height: 32px;
   letter-spacing: 0;
   white-space: pre;
@@ -1388,7 +1458,7 @@ span.q-bad {
 
 .qbar-fault {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 /* Under the bar, edge to edge with it; its stroke is the menu's shadow, as the bar's is. */
@@ -1421,7 +1491,7 @@ span.q-bad {
 }
 
 .s-detail {
-  font-size: 11.5px;
+  font-size: var(--text-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1429,14 +1499,14 @@ span.q-bad {
 
 .s-count {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .saved-as {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .save-form {
@@ -1489,20 +1559,20 @@ span.q-bad {
 
 .tile-label {
   color: var(--ink-3);
-  font-size: 11.5px;
-  font-weight: 500;
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
 }
 
 .tile-value {
   font-size: 22px;
-  font-weight: 600;
+  font-weight: var(--weight-title);
   letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
 .tile-context {
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .chart {
@@ -1562,7 +1632,7 @@ span.q-bad {
   position: relative;
   height: 16px;
   color: var(--ink-3);
-  font-size: 10.5px;
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1586,7 +1656,7 @@ span.q-bad {
 }
 
 .chart-legend .status {
-  font-size: 12px;
+  font-size: var(--text-small);
   gap: 4px;
 }
 
@@ -1625,7 +1695,7 @@ span.q-bad {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .meter {
@@ -1671,7 +1741,7 @@ span.q-bad {
 
 table.grid tr.group-row td {
   background: var(--surface-2);
-  font-weight: 600;
+  font-weight: var(--weight-title);
   height: 28px;
 }
 
@@ -1688,7 +1758,7 @@ table.grid td.waiting-run {
 
 .waiting-run .headline {
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--text-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1703,7 +1773,7 @@ table.grid td.waiting-run {
   display: inline-block;
   padding: 0 5px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--text-small);
   background: var(--info-soft);
   color: var(--info);
 }
@@ -1736,7 +1806,7 @@ table.grid td.waiting-run {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink-2);
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 /* Failures */
@@ -1750,18 +1820,18 @@ table.grid td.signature-cell {
 
 .signature-cell .row-link {
   display: block;
-  font-size: 12px;
+  font-size: var(--text-small);
   overflow-wrap: anywhere;
 }
 
 .signature-cell .ellipsis {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--text-small);
   max-width: 100%;
 }
 
 .seen-cell {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .seen-cell span {
@@ -1786,38 +1856,80 @@ table.grid td.signature-cell {
   box-shadow: 0 1px 0 var(--line);
 }
 
+/* Where the cursor is: the step (13px, 500) over its time (12px, ink-3), never louder than
+   the buttons around it. */
 .cursor-pos {
   display: flex;
   flex-direction: column;
   min-width: 190px;
   padding: 0 6px;
-  line-height: 1.25;
 }
 
-.cursor-pos .muted {
-  font-size: 11.5px;
+.cursor-step {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  font-weight: var(--weight-medium);
+}
+
+.cursor-when {
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  color: var(--ink-3);
 }
 
 .cursor-bar label.check {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-small);
   cursor: pointer;
 }
 
-.cursor-failed {
-  color: var(--critical);
+/* The step the run ended in: a chip with the mark of its ending, a button to go there. */
+.end-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink-2);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-.cursor-failed.here {
-  font-weight: 600;
+.end-chip:hover {
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+.end-chip[aria-current="step"] {
+  cursor: default;
+  color: var(--ink);
+}
+
+.end-chip-failed,
+.end-chip-aborted {
+  background: var(--critical-soft);
+  box-shadow: none;
+  color: var(--critical-ink);
+}
+
+.end-chip-completed {
+  background: var(--good-soft);
+  box-shadow: none;
+  color: var(--good-ink);
 }
 
 .cursor-hint {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: var(--text-small);
+  color: var(--ink-3);
 }
 
 .kbd {
@@ -1828,7 +1940,7 @@ table.grid td.signature-cell {
   border-bottom-width: 2px;
   border-radius: 3px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-micro);
   line-height: 14px;
   text-align: center;
   color: var(--ink-2);
@@ -1843,7 +1955,7 @@ table.grid td.signature-cell {
   margin-right: 4px;
   text-align: center;
   font-family: var(--font-sans);
-  font-weight: 600;
+  font-weight: var(--weight-title);
 }
 
 .mk.resumed {
@@ -1870,7 +1982,7 @@ table.grid td.signature-cell {
 .mark-legend {
   display: inline-flex;
   gap: 10px;
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .mark-legend .mk {
@@ -1916,7 +2028,7 @@ table.grid td.signature-cell {
   background: var(--surface);
   border: 1px solid var(--line-strong);
   box-shadow: var(--shadow-pop);
-  font-size: 12px;
+  font-size: var(--text-small);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1932,13 +2044,13 @@ table.grid td.signature-cell {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
-  font-size: 12px;
+  font-weight: var(--weight-title);
+  font-size: var(--text-small);
 }
 
 .value-label {
   color: var(--ink-3);
-  font-size: 11px;
+  font-size: var(--text-small);
   margin-top: 3px;
 }
 
@@ -1946,13 +2058,13 @@ table.grid td.signature-cell {
 .step-panel .meta {
   margin: 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .value-pop .value-foot {
   border-top: 1px solid var(--line);
   padding-top: 4px;
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .value-block {
@@ -1962,11 +2074,11 @@ table.grid td.signature-cell {
 
 .value-block pre,
 .value-block .json-tree {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .value-short {
-  font-size: 11.5px;
+  font-size: var(--text-small);
   overflow-wrap: anywhere;
 }
 
@@ -1981,8 +2093,8 @@ table.grid td.signature-cell {
   display: inline-block;
   padding: 0 6px;
   border-radius: 8px;
-  font-size: 10.5px;
-  font-weight: 500;
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
   line-height: 16px;
   font-family: var(--font-sans);
 }
@@ -2009,19 +2121,37 @@ table.grid td.signature-cell {
 
 /* The step panel */
 
+/* A step: labels (12px, 500, ink-2) over what happened (13px). */
 .step-body {
-  padding: 8px 10px 10px;
+  padding: 12px 16px 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 12.5px;
+  gap: 14px;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
 .step-body h4 {
-  margin: 0 0 3px;
-  font-size: 11.5px;
-  font-weight: 500;
-  color: var(--ink-3);
+  margin: 0 0 4px;
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  font-weight: var(--weight-medium);
+  color: var(--ink-2);
+}
+
+.step-end {
+  align-items: flex-start;
+}
+
+.step-end > .glyph {
+  flex: none;
+  width: 14px;
+  margin-right: 4px;
+  height: var(--leading-body);
+}
+
+.step-end .err-name {
+  font-size: var(--text-small);
 }
 
 .step-woke {
@@ -2046,7 +2176,7 @@ table.grid td.signature-cell {
 
 .step-list .ln {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--text-small);
 }
 
 .watches {
@@ -2069,8 +2199,8 @@ table.grid td.signature-cell {
 }
 
 .watch-name {
-  font-weight: 600;
-  font-size: 11.5px;
+  font-weight: var(--weight-title);
+  font-size: var(--text-small);
 }
 
 .watch-value {
@@ -2086,7 +2216,9 @@ table.grid td.signature-cell {
 .watch-empty,
 .limit-note {
   margin: 0;
-  font-size: 11.5px;
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  color: var(--ink-3);
 }
 
 .limit-note {
@@ -2225,11 +2357,11 @@ table.grid tr.dimmed td {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .person-text .muted {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .tag.member-pending,
@@ -2252,7 +2384,7 @@ table.grid tr.dimmed td {
 }
 
 .key-name {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 table.grid td .error-note {
@@ -2287,8 +2419,8 @@ table.grid td .error-note {
 }
 
 .role-name {
-  font-weight: 600;
-  font-size: 12.5px;
+  font-weight: var(--weight-title);
+  font-size: var(--text-body);
 }
 
 .role-desc {
@@ -2296,7 +2428,7 @@ table.grid td .error-note {
 }
 
 .role-date {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .role-head .row-actions {
@@ -2318,7 +2450,7 @@ table.grid td .error-note {
   border: 1px solid var(--line);
   background: var(--surface-2);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-small);
   color: var(--ink-2);
 }
 
@@ -2344,8 +2476,8 @@ table.grid td .error-note {
 }
 
 .perm-group h3 {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-small);
+  font-weight: var(--weight-title);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-3);
@@ -2372,13 +2504,13 @@ table.grid td .error-note {
 }
 
 .perm-name {
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .perm-desc {
   grid-column: 2;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: var(--text-small);
 }
 
 .perm-check.unheld {
@@ -2450,7 +2582,7 @@ table.grid tbody th {
   border-bottom: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: var(--text-body);
   font-weight: 400;
   text-align: left;
   vertical-align: middle;
@@ -2466,7 +2598,7 @@ table.grid tbody tr:last-child th {
 
 .ns-title {
   display: block;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2474,7 +2606,7 @@ table.grid tbody tr:last-child th {
 
 .ns-note {
   display: block;
-  font-size: 11px;
+  font-size: var(--text-small);
   margin-top: 1px;
 }
 
@@ -2517,13 +2649,13 @@ table.grid tr.row-defaults > * {
   display: flex;
   align-items: baseline;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--text-small);
   white-space: nowrap;
 }
 
 .quota-over {
   color: var(--critical);
-  font-weight: 600;
+  font-weight: var(--weight-title);
 }
 
 .meter.tone-warning .meter-bar {
@@ -2558,7 +2690,7 @@ table.grid tr.row-defaults > * {
   gap: 4px 8px;
   padding: 5px 0;
   border-bottom: 1px solid var(--line);
-  font-size: 12.5px;
+  font-size: var(--text-body);
 }
 
 .alert-list li:last-child {
@@ -2575,12 +2707,13 @@ table.grid tr.row-defaults > * {
   display: flex;
   align-items: center;
   gap: 4px;
+  font-size: var(--text-control);
 }
 
 .month-name {
   min-width: 130px;
   text-align: center;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .ns-grid {
@@ -2635,7 +2768,7 @@ table.grid tr.row-defaults > * {
 .cpu-axis {
   fill: var(--ink-3);
   font-family: var(--font-sans);
-  font-size: 10.5px;
+  font-size: var(--text-micro);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2647,8 +2780,8 @@ table.grid tr.row-defaults > * {
 
 .cpu-quota-label {
   fill: var(--critical);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
 }
 
 .cpu-area {
@@ -2713,8 +2846,8 @@ table.grid tr.row-defaults > * {
 }
 
 .cpu-mark-label {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-micro);
+  font-weight: var(--weight-medium);
 }
 
 .cpu-mark-label.level-warning {
@@ -2727,14 +2860,14 @@ table.grid tr.row-defaults > * {
 
 .cpu-label {
   fill: var(--ink);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-small);
+  font-weight: var(--weight-title);
   font-variant-numeric: tabular-nums;
 }
 
 .cpu-label-sub {
   fill: var(--ink-3);
-  font-size: 10.5px;
+  font-size: var(--text-micro);
 }
 
 /* The redesign's parts: the sidebars of Observability, of a run and of the organization; the
@@ -2754,9 +2887,10 @@ table.grid tr.row-defaults > * {
   background: var(--surface);
   box-shadow: var(--shadow-card);
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
+  font-size: var(--text-control);
 }
 
 .view-select:hover,
@@ -2804,7 +2938,7 @@ table.grid tr.row-defaults > * {
   padding: 0 34px 0 10px;
   border-radius: var(--radius-sm);
   color: var(--ink-2);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .saved-item:hover {
@@ -2850,9 +2984,10 @@ table.grid tr.row-defaults > * {
   height: 34px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   cursor: pointer;
   list-style: none;
+  font-size: var(--text-control);
 }
 
 .filter-group > summary::-webkit-details-marker {
@@ -2881,7 +3016,7 @@ table.grid tr.row-defaults > * {
 
 .filter-picked {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--text-small);
   font-weight: 400;
   color: var(--ink-3);
 }
@@ -2911,7 +3046,7 @@ table.grid tr.row-defaults > * {
   border-top: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-body);
   text-align: left;
   cursor: pointer;
 }
@@ -2975,7 +3110,7 @@ table.grid tr.row-defaults > * {
   padding: 0 10px;
   border: 0;
   background: transparent;
-  font-size: 13px;
+  font-size: var(--text-body);
   outline: 0;
 }
 
@@ -3000,7 +3135,7 @@ table.grid tr.row-defaults > * {
 }
 
 .histogram .chart-axis {
-  font-size: 11px;
+  font-size: var(--text-micro);
 }
 
 .view-note {
@@ -3012,7 +3147,8 @@ table.grid tr.row-defaults > * {
 }
 
 .runs-table .run-cell {
-  min-width: 300px;
+  min-width: 320px;
+  max-width: 420px;
 }
 
 .run-cell-id {
@@ -3022,12 +3158,192 @@ table.grid tr.row-defaults > * {
   flex-wrap: wrap;
 }
 
-.run-cell .labels {
-  margin-top: 4px;
+/* A run's labels in its cell: whole chips that never shrink, then "+N" (RunCells.tsx). */
+.run-labels {
+  display: flex;
   flex-wrap: nowrap;
-  max-width: 420px;
+  gap: 4px;
+  margin-top: 4px;
+  min-width: 0;
+}
+
+.run-labels .label {
+  flex: none;
+  max-width: none;
+}
+
+.label.more {
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+}
+
+.label.more[data-popup-open] {
+  background: var(--surface-3);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+/* How a run ended, in its cell: the error's name over its message, never glued. */
+table.grid td.end-td {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.end-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  max-width: 280px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: help;
+}
+
+.end-cell:hover,
+.end-cell[data-popup-open] {
+  background: var(--surface-3);
+}
+
+.end-cell-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  font-weight: var(--weight-medium);
+}
+
+.end-cell-message {
+  max-width: 100%;
   overflow: hidden;
-  mask-image: linear-gradient(to right, #000 85%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  color: var(--ink-3);
+}
+
+/* A cancellation is gray, a failure red. */
+.end-failed,
+.end-aborted {
+  color: var(--critical-ink);
+}
+
+.end-cancelled {
+  color: var(--ink-2);
+}
+
+/* The hover cards of a cell (HoverCard.tsx) */
+
+.hover-card-positioner {
+  z-index: 60;
+  outline: 0;
+}
+
+.hover-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: min(400px, calc(100vw - 24px));
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  color: var(--ink);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  white-space: normal;
+  outline: 0;
+  transform-origin: var(--transform-origin);
+  transition:
+    opacity 0.12s ease,
+    scale 0.12s ease;
+}
+
+.hover-card[data-starting-style],
+.hover-card[data-ending-style] {
+  opacity: 0;
+  scale: 0.97;
+}
+
+.card-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  font-weight: var(--weight-title);
+}
+
+.card-meta {
+  margin: 0;
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  color: var(--ink-3);
+}
+
+.labels-card .labels {
+  max-width: 360px;
+}
+
+.labels-card .label {
+  max-width: none;
+}
+
+.end-card {
+  width: 380px;
+}
+
+.end-card-error {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.err-name {
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font-size: var(--text-small);
+  line-height: 20px;
+  font-weight: var(--weight-medium);
+}
+
+/* Facts: a label (12px) beside its value (13px), as in a card or a banner. */
+.facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.facts dt {
+  font-size: var(--text-small);
+  line-height: var(--leading-small);
+  font-weight: var(--weight-medium);
+  color: var(--ink-2);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.card-link {
+  align-self: flex-start;
+  color: var(--accent);
+  font-size: var(--text-body);
 }
 
 .ns-cell {
@@ -3056,11 +3372,11 @@ table.grid tr.row-defaults > * {
 .run-card-ago {
   margin-left: auto;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .run-card-id .run-id {
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .run-card-tags {
@@ -3079,7 +3395,7 @@ table.grid tr.row-defaults > * {
   flex-direction: column;
   margin: 0;
   padding: 0 10px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .run-details > div {
@@ -3123,7 +3439,7 @@ table.grid tr.row-defaults > * {
 }
 
 .run-page .page-header-title .run-id {
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 /* The organization's sidebar */
@@ -3146,7 +3462,7 @@ table.grid tr.row-defaults > * {
 }
 
 .org-card-text .digest {
-  font-size: 11px;
+  font-size: var(--text-small);
   color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3192,7 +3508,7 @@ table.grid tr.row-defaults > * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-body);
   font-weight: 400;
   color: var(--ink-2);
 }
@@ -3231,7 +3547,7 @@ table.grid tr.row-defaults > * {
 }
 
 .tile-context {
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-3);
 }
 
@@ -3281,7 +3597,7 @@ table.grid tr.row-defaults > * {
 }
 
 .panel-head h2 .mono {
-  font-size: 14px;
+  font-size: var(--text-title);
 }
 
 .schema summary {
@@ -3291,7 +3607,7 @@ table.grid tr.row-defaults > * {
 }
 
 .schema summary code {
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 .schema[open] summary {
@@ -3312,7 +3628,7 @@ table.grid tr.row-defaults > * {
 }
 
 .json-inline {
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-2);
   overflow-wrap: anywhere;
 }
@@ -3327,20 +3643,20 @@ table.grid tr.row-defaults > * {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: var(--text-title);
   letter-spacing: -0.28px;
 }
 
 .suite h4 {
   margin: 6px 0 0;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-body);
+  font-weight: var(--weight-title);
   color: var(--ink-2);
 }
 
 .suite-summary {
   font-weight: 400;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .suite-list {
@@ -3359,7 +3675,7 @@ table.grid tr.row-defaults > * {
   min-height: 40px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--line);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .suite-test:last-child {
@@ -3372,7 +3688,7 @@ table.grid tr.row-defaults > * {
 
 .suite-name {
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   overflow-wrap: anywhere;
 }
 
@@ -3403,7 +3719,7 @@ table.grid tr.row-defaults > * {
 
 .test-part p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .test-list {
@@ -3412,7 +3728,7 @@ table.grid tr.row-defaults > * {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .table-wrap.flat {
@@ -3454,7 +3770,7 @@ table.grid.compact th {
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--line);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .test-unreadable p {
@@ -3469,7 +3785,7 @@ table.grid.compact th {
 
 .version-picker {
   max-width: 300px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .test-nav {
@@ -3481,7 +3797,7 @@ table.grid.compact th {
 
 .test-picker {
   max-width: 320px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .test-place {
@@ -3492,7 +3808,7 @@ table.grid.compact th {
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--line);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .test-place p {
@@ -3509,7 +3825,7 @@ table.grid.compact th {
   border-radius: var(--radius-sm);
   background: var(--code-bg);
   box-shadow: 0 0 0 1px var(--line);
-  font: 12px / 18px var(--font-mono);
+  font: var(--text-small) / 18px var(--font-mono);
   text-align: left;
   cursor: zoom-in;
   overflow: hidden;
@@ -3567,8 +3883,8 @@ table.grid.compact th {
 }
 
 .json-dialog-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--text-title);
+  font-weight: var(--weight-title);
   overflow-wrap: anywhere;
 }
 
@@ -3591,7 +3907,7 @@ table.grid.compact th {
 /* A JSON value as a tree that folds (components/JsonTree.tsx) */
 
 .json-tree {
-  font: 12px / 1.6 var(--font-mono);
+  font: var(--text-small) / 1.6 var(--font-mono);
   color: var(--ink);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3675,7 +3991,7 @@ table.grid.compact th {
 .json-dialog-body pre {
   margin: 0;
   padding: 12px 16px;
-  font-size: 12px;
+  font-size: var(--text-small);
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3688,6 +4004,7 @@ table.grid.compact th {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  font-size: var(--text-control);
 }
 
 .crumb-switch {
@@ -3754,7 +4071,7 @@ table.grid.compact th {
 
 .nav-item[data-open] {
   color: var(--ink);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .nav-item.retired .nav-label {
@@ -3774,13 +4091,13 @@ table.grid.compact th {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 .suite-cell-reason {
   display: block;
   margin-top: 2px;
-  font-size: 12px;
+  font-size: var(--text-small);
   color: var(--ink-2);
 }
 
@@ -3793,8 +4110,8 @@ table.grid.compact th {
 
 .section-subhead {
   margin: 12px 0 6px;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-body);
+  font-weight: var(--weight-title);
   color: var(--ink-2);
 }
 
@@ -3808,7 +4125,7 @@ table.grid.compact th {
 .json-card-empty {
   margin: 0;
   padding: 16px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 /* Claude: Connect Claude, the consent, the connections */
@@ -3911,7 +4228,7 @@ table.grid.compact th {
 }
 
 .step-title {
-  font-size: 16px;
+  font-size: var(--text-heading);
   line-height: 22px;
   font-weight: 600;
   letter-spacing: -0.32px;
@@ -3950,7 +4267,7 @@ table.grid.compact th {
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .toolset-warning {
@@ -3958,7 +4275,7 @@ table.grid.compact th {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--text-small);
   color: var(--warning);
 }
 
@@ -3971,7 +4288,7 @@ table.grid.compact th {
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
   color: var(--ink);
-  font-size: 13px;
+  font-size: var(--text-body);
   max-width: 72ch;
 }
 
@@ -4005,7 +4322,7 @@ table.grid.compact th {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--text-title);
   line-height: 20px;
 }
 
@@ -4029,7 +4346,7 @@ table.grid.compact th {
 }
 
 .connect-tabs .tabs button {
-  font-size: 13px;
+  font-size: var(--text-body);
   height: 28px;
 }
 
@@ -4057,7 +4374,7 @@ table.grid.compact th {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 4px 12px;
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .access-list dt {
@@ -4070,7 +4387,7 @@ table.grid.compact th {
 }
 
 .access-list.small {
-  font-size: 12px;
+  font-size: var(--text-small);
   margin-top: 4px;
 }
 
@@ -4082,7 +4399,7 @@ table.grid.compact th {
   border-radius: var(--radius-sm);
   background: var(--surface);
   box-shadow: var(--shadow-border);
-  font-size: 13px;
+  font-size: var(--text-body);
   max-width: 720px;
 }
 
@@ -4097,7 +4414,7 @@ table.grid.compact th {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-2);
 }
 
@@ -4120,7 +4437,7 @@ table.grid.compact th {
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--text-small);
 }
 
 .client-name {
@@ -4137,7 +4454,7 @@ table.grid.compact th {
 }
 
 .client-name .muted {
-  font-size: 11.5px;
+  font-size: var(--text-micro);
 }
 
 .conn-orgs {
@@ -4154,7 +4471,7 @@ table.grid.compact th {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--text-small);
 }
 
 table.grid .conn-orgs {
@@ -4178,7 +4495,7 @@ table.grid .conn-orgs {
 }
 
 .consent-meta {
-  font-size: 13px;
+  font-size: var(--text-body);
   color: var(--ink-2);
 }
 
@@ -4193,7 +4510,7 @@ table.grid .conn-orgs {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   background: var(--warning-soft);
-  font-size: 13px;
+  font-size: var(--text-body);
 }
 
 .gate-card .consent-warning {
@@ -4281,7 +4598,7 @@ table.grid .conn-orgs {
   align-items: center;
   gap: 4px;
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--text-small);
 }
 
 /* Account › Connections: what a connection opens, in a dialog */

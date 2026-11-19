@@ -141,6 +141,41 @@ describe("Observability: every run", () => {
     await waitFor(() => expect(search(router).get("q")).toBe("status:failed @env:staging"));
   });
 
+  it("shows the labels that fit, the others behind +N, and why a run ended in a card", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/observability?q=%40goal%3A6afc64fdf4d56d8262048836");
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    const row = within(rows()[0] as HTMLElement);
+    // Whole chips, never cut: those that fit, then +4 for the rest.
+    expect(row.getByRole("button", { name: "dax:iteration" })).toBeVisible();
+    expect(row.getByRole("button", { name: "env:development" })).toBeVisible();
+    expect(row.queryByRole("button", { name: /^goal:/ })).toBeNull();
+    await user.click(row.getByRole("button", { name: "4 more labels" }));
+    const labels = await screen.findByRole("dialog", { name: "The run's 6 labels" });
+    expect(labels).toHaveTextContent("routine:notifications_daily");
+    await user.click(within(labels).getByRole("button", { name: /^kind:routine/ }));
+    await waitFor(() =>
+      expect(search(router).get("q")).toBe("@goal:6afc64fdf4d56d8262048836 @kind:routine"),
+    );
+
+    // The error's name apart from its message; the card says it was cancelled, and why.
+    await waitFor(() => expect(rows()).toHaveLength(1));
+    const end = within(rows()[0] as HTMLElement).getByRole("button", {
+      name: "CancelledError: run cancelled: its deadline has passed",
+    });
+    await user.click(end);
+    const card = await screen.findByRole("dialog", { name: /^How the run .* ended$/ });
+    expect(within(card).getByText("Cancelled at its deadline")).toBeVisible();
+    await waitFor(() =>
+      expect(card).toHaveTextContent("Its deadline passed: a TTL of 11h 29m from its start."),
+    );
+    expect(card).toHaveTextContent(/Ended\s*\d{4}-\d{2}-\d{2}/);
+    expect(within(card).getByRole("link", { name: /Open the run/ })).toHaveAttribute(
+      "href",
+      "/runs/01a1e9ea-8258-7525-9241-2f2ec0a9da28",
+    );
+  });
+
   it("sorts the waiting runs by when they wake", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/observability?q=waiting%3A*");
