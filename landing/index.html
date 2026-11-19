@@ -5,17 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0b0a09" />
-    <title>Rewind · infrastructure for the agentic revolution</title>
+    <title>Rewind · serverless durable workflows for the agentic era</title>
     <meta
       name="description"
-      content="Your agents write a workflow for each user and each task. Rewind runs every one of them: durable, isolated on V8, re-testable and observable by default."
+      content="Your agents write a workflow for each user and each task. Rewind runs every one of them: durable, agent-ready and scalable, with no server to manage."
     />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://rewind.codes" />
-    <meta property="og:title" content="Rewind · scale the agentic revolution" />
+    <meta property="og:title" content="Rewind · serverless durable workflows, made for the agentic era" />
     <meta
       property="og:description"
-      content="Your agents write a workflow for each user and each task. Rewind runs every one of them."
+      content="Your agents write a workflow for each user and each task. Rewind runs every one of them, for as long as it takes."
     />
     <meta property="og:image" content="https://rewind.codes/og.jpg" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -48,11 +48,15 @@
           aria-label="A human hand reaches out to an agent's hand drawn as a mesh of nodes, after Michelangelo's Creation of Adam. A spark lights up between their fingertips."
         ></canvas>
         <div class="hero-copy wrap">
-          <h1 id="hero-title">Scale the agentic revolution.</h1>
+          <h1 id="hero-title">
+            <span>Serverless durable workflows,</span>
+            <em>made for the agentic era.</em>
+          </h1>
           <div class="hero-row">
             <p class="hero-lead">
-              Your agent writes the workflow each of its users needs, for each task. Rewind runs
-              every one of them: durable, isolated, observable.
+              Your agents write a workflow for each user and each task. Rewind runs every one of
+              them for as long as it takes, with no server to manage, nothing lost in a crash, and
+              every step on the record.
             </p>
             <div class="actions">
               <a class="button" href="#waitlist">Join the waitlist</a>
@@ -63,32 +67,36 @@
         <span class="scroll-cue" aria-hidden="true"></span>
       </section>
 
-      <!-- The shift -->
+      <!-- The shift, and where Rewind stands among the tools that run code -->
       <section class="shift wrap" aria-labelledby="shift-title">
         <h2 id="shift-title" class="statement" data-reveal>
           Software used to be written once, for everyone.
-          <span>Now an agent writes it for one person, for one task, in the minute they ask.</span>
+          <span>Now it's written every time, for every <em>one</em>.</span>
         </h2>
+        <p class="shift-lead" data-reveal>
+          Agents write that code, and it has to wait for days, survive failures and stay safe. The
+          tools we have each cover a part of it.
+        </p>
         <div class="shift-grid">
           <article data-reveal>
-            <h3>One user, one workflow</h3>
+            <h3>A sandbox runs it, then forgets.</h3>
             <p>
-              An agent no longer picks among the features you shipped. It writes the workflow its
-              user asked for, and no one else will ever run it.
+              Code runs while the box is up. When the box stops, the work stops: nothing waits three
+              days for an answer, nothing resumes after a crash.
             </p>
           </article>
           <article data-reveal>
-            <h3>Real tools, real time</h3>
+            <h3>A workflow engine needs engineers.</h3>
             <p>
-              That workflow books, pays, reminds and follows up. It calls real services, waits days
-              for an answer, and may run for months.
+              It is durable, but built for code a team writes, reviews and deploys. That code must
+              stay deterministic and be versioned by hand, rules an agent can't be trusted to keep.
             </p>
           </article>
-          <article data-reveal>
-            <h3>Millions at once</h3>
+          <article class="shift-rewind" data-reveal>
+            <h3>Rewind is both.</h3>
             <p>
-              Every user of every agent, each with code no human has read. It needs a place to run
-              that is safe, durable and inspectable by construction.
+              Durable workflows for code an agent wrote a second ago. It deploys in one call, runs
+              isolated, and the runtime itself keeps every run deterministic.
             </p>
           </article>
         </div>
@@ -100,8 +108,8 @@
           <div class="section-head">
             <h2 id="why-title" data-reveal>Built for code<br />no human wrote.</h2>
             <p class="section-lead" data-reveal>
-              Everything an agent's workflow needs is there by default, not bolted on later. The
-              agent writes TypeScript; Rewind does the rest.
+              Durable, agent-ready and scalable by default. The agent writes TypeScript; Rewind
+              does the rest.
             </p>
           </div>
 
@@ -128,168 +136,90 @@
             </li>
           </ol>
 
-          <div class="pillars">
-            <article class="pillar" data-reveal>
-              <div class="viz" data-scene="deploy">
-                <span class="viz-hint">Click to deploy another</span>
+          <div class="groups">
+            <div class="group" role="group" aria-labelledby="g-durable">
+              <div class="group-head" data-reveal>
+                <h3 id="g-durable" class="group-title">Durable</h3>
+                <p class="group-tag">Work that outlives the conversation.</p>
+                <p>The chat ends, the user closes the app, a server restarts. The workflow keeps going until its job is done, for days or for months.</p>
               </div>
-              <h3>Deployed in one call</h3>
-              <p>The agent writes the workflow and runs it with a single tool call. No build, no pipeline, no server: the workflow exists the moment the agent writes it.</p>
-            </article>
-            <article class="pillar" data-reveal>
-              <div class="viz" data-scene="tools">
-                <span class="viz-hint">Hover a tool</span>
+              <div class="pillars">
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="durable">
+                    <button type="button" class="viz-action" data-action="crash">Crash the worker</button>
+                  </div>
+                  <h4>Durable by default</h4>
+                  <p>A workflow waits days for a reply, sleeps until March, survives crashes and deploys, and resumes exactly where it stopped. No step is ever done twice.</p>
+                </article>
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="observable">
+                    <span class="viz-hint">Hover a span</span>
+                  </div>
+                  <h4>Every step on the record</h4>
+                  <p>The journal that makes a run durable also makes it observable. Every tool call, wait, answer and log is recorded and tied to the line that caused it, traces go to OpenTelemetry, and the dashboard shows every run of every user.</p>
+                </article>
               </div>
-              <h3>Every tool, from code</h3>
-              <p>One workflow calls your MCP servers and your agent's own functions: a person for an approval, another model, a sub-agent. Dozens of calls, not dozens of turns.</p>
-            </article>
-            <article class="pillar span-2" data-reveal>
-              <div class="viz" data-scene="durable">
-                <button type="button" class="viz-action" data-action="crash">Crash the worker</button>
+            </div>
+            <div class="group" role="group" aria-labelledby="g-agent">
+              <div class="group-head" data-reveal>
+                <h3 id="g-agent" class="group-title">Agent-ready</h3>
+                <p class="group-tag">Your agent is the developer.</p>
+                <p>It writes the workflow, checks it against your tools, tests it, ships it and fixes it, with tools made for it. Nobody builds or deploys anything.</p>
               </div>
-              <h3>Durable by default</h3>
-              <p>A workflow waits days for a reply, sleeps until March, survives crashes and deploys, and resumes exactly where it stopped. No step is ever done twice.</p>
-            </article>
-            <article class="pillar" data-reveal>
-              <div class="viz" data-scene="isolated">
-                <span class="viz-hint">Click an isolate to break out</span>
+              <div class="pillars">
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="deploy">
+                    <span class="viz-hint">Click to deploy another</span>
+                  </div>
+                  <h4>Deployed in one call</h4>
+                  <p>The agent writes the workflow and runs it with a single tool call. No build, no pipeline, no server: the workflow exists the moment the agent writes it.</p>
+                </article>
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="tools">
+                    <span class="viz-hint">Hover a tool</span>
+                  </div>
+                  <h4>Every tool, from code</h4>
+                  <p>One workflow calls your MCP servers and your agent's own functions: a person for an approval, another model, a sub-agent. Dozens of calls, not dozens of turns.</p>
+                </article>
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="retest">
+                    <span class="viz-hint">Drag to rewind</span>
+                  </div>
+                  <h4>Re-testable by default</h4>
+                  <p>When generated code has a bug, the agent fixes it and tests again. Past runs replay as tests, time is virtual so ten days pass in milliseconds, and a fixed run resumes without repeating a single call.</p>
+                </article>
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="harness">
+                    <span class="viz-hint">Pick a format, or unplug Rewind</span>
+                  </div>
+                  <h4>Plugs into your harness</h4>
+                  <p>Ready-made agent tools in the Anthropic and OpenAI formats, and typed declarations of your tools for the prompt. Your agent keeps its model, its loop and its tools.</p>
+                </article>
               </div>
-              <h3>Isolated on V8</h3>
-              <p>Each workflow runs in its own V8 isolate, on workers built with Deno's crates. No file system, no network unless you allow it, no access but the tools you grant.</p>
-            </article>
-            <article class="pillar span-2" data-reveal>
-              <div class="viz" data-scene="retest">
-                <span class="viz-hint">Drag to rewind</span>
+            </div>
+            <div class="group" role="group" aria-labelledby="g-scale">
+              <div class="group-head" data-reveal>
+                <h3 id="g-scale" class="group-title">Scalable</h3>
+                <p class="group-tag">All the code your agents write.</p>
+                <p>One workflow per user and per task adds up fast. Rewind runs every one of them on workers that scale out with the load, and you never run a server.</p>
               </div>
-              <h3>Re-testable by default</h3>
-              <p>When generated code has a bug, the agent fixes it and tests again. Past runs replay as tests, time is virtual so ten days pass in milliseconds, and a fixed run resumes without repeating a single call.</p>
-            </article>
-            <article class="pillar" data-reveal>
-              <div class="viz" data-scene="harness">
-                <span class="viz-hint">Pick a format, or unplug Rewind</span>
+              <div class="pillars">
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="isolated">
+                    <span class="viz-hint">Click an isolate to break out</span>
+                  </div>
+                  <h4>Isolated on V8</h4>
+                  <p>Each workflow runs in its own V8 isolate, on workers built with Deno's crates. No file system, no network unless you allow it, no access but the tools you grant.</p>
+                </article>
+                <article class="pillar" data-reveal>
+                  <div class="viz" data-scene="scale">
+                    <span class="viz-hint">Move across to add load</span>
+                  </div>
+                  <h4>Every user, at scale</h4>
+                  <p>Each of your users gets a namespace: one user's agent never sees another's runs. Quotas per user alert you before one user hurts the rest.</p>
+                </article>
               </div>
-              <h3>Plugs into your harness</h3>
-              <p>Ready-made agent tools in the Anthropic and OpenAI formats, and typed declarations of your tools for the prompt. Your agent keeps its model, its loop and its tools.</p>
-            </article>
-            <article class="pillar span-2" data-reveal>
-              <div class="viz" data-scene="observable">
-                <span class="viz-hint">Hover a span</span>
-              </div>
-              <h3>Observable by default</h3>
-              <p>Every tool call, wait, answer and log is recorded and tied to the line that caused it. Traces go to OpenTelemetry, and the dashboard shows every run of every user.</p>
-            </article>
-            <article class="pillar span-2" data-reveal>
-              <div class="viz" data-scene="scale">
-                <span class="viz-hint">Move across to add load</span>
-              </div>
-              <h3>Every user, at scale</h3>
-              <p>Each of your users gets a namespace: one user's agent never sees another's runs. Stateless workers scale out with the load, and quotas per user alert you before one user hurts the rest.</p>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <!-- Everyday life -->
-      <section id="life" class="life" aria-labelledby="life-title">
-        <div class="wrap">
-          <div class="section-head">
-            <h2 id="life-title" data-reveal>One person, one task,<br />one workflow.</h2>
-            <p class="section-lead" data-reveal>
-              Each of these is written by an agent in the minute someone asks, for that person
-              alone. Rewind runs it for as long as it takes.
-            </p>
-          </div>
-          <ul class="legend" data-reveal aria-label="Legend">
-            <li><i class="m call"></i>calls a tool</li>
-            <li><i class="m wait"></i>waits</li>
-            <li><i class="m human"></i>a person answers</li>
-            <li><i class="m done"></i>done</li>
-          </ul>
-
-          <div class="stories">
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Léa · travel app</span>
-                <span class="span">9 days</span>
-              </header>
-              <blockquote>“Book the train to Lyon for the wedding once it drops under €60. Check with Marc first.”</blockquote>
-              <ol class="steps">
-                <li class="wait"><time>Day 0–9</time>Checks fares every morning</li>
-                <li class="call"><time>Day 9</time>€54 found. Asks Marc</li>
-                <li class="human"><time>+3 h</time>Marc says yes</li>
-                <li class="done"><time>Day 9</time>Two seats booked, added to the shared calendar</li>
-              </ol>
-            </article>
-
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Karim · plumber, invoicing app</span>
-                <span class="span">3 weeks</span>
-              </header>
-              <blockquote>“Chase my unpaid invoices: politely after a week, firmly after two, then hand them back to me.”</blockquote>
-              <ol class="steps">
-                <li class="call"><time>Day 0</time>Finds five unpaid invoices</li>
-                <li class="wait"><time>Day 7</time>A polite reminder to each client</li>
-                <li class="wait"><time>Day 14</time>Three paid. A firm reminder to the other two</li>
-                <li class="human"><time>Day 21</time>Asks Karim to call the last one</li>
-              </ol>
-            </article>
-
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Inès · renting app</span>
-                <span class="span">12 days</span>
-              </header>
-              <blockquote>“Find me a two-bedroom near the canal under €1,400 and book visits on my free evenings.”</blockquote>
-              <ol class="steps">
-                <li class="wait"><time>Every hour</time>Reads the new listings</li>
-                <li class="call"><time>Day 10</time>A match. Checks Inès's calendar, writes to the agency</li>
-                <li class="human"><time>Day 12</time>The agency confirms Thursday, 7 pm</li>
-                <li class="done"><time>Day 12</time>Visit in the calendar, directions sent</li>
-              </ol>
-            </article>
-
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Sophie · family care app</span>
-                <span class="span">Months</span>
-              </header>
-              <blockquote>“Remind Dad to take his evening pills, and tell me if he misses two in a row.”</blockquote>
-              <ol class="steps">
-                <li class="wait"><time>8 pm daily</time>Reminds Dad and waits for his “done”</li>
-                <li class="human"><time>Most nights</time>Dad answers, the day is logged</li>
-                <li class="call"><time>Day 41</time>Two misses in a row: Sophie is alerted</li>
-                <li class="wait"><time>Still running</time>Next reminder tonight</li>
-              </ol>
-            </article>
-
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Tom · personal assistant</span>
-                <span class="span">4 months</span>
-              </header>
-              <blockquote>“Cancel my gym membership when the contract ends in March, and make sure it's done.”</blockquote>
-              <ol class="steps">
-                <li class="wait"><time>Nov → Mar 1</time>Sleeps until the notice date</li>
-                <li class="call"><time>Mar 1</time>Sends the cancellation by registered email</li>
-                <li class="wait"><time>Mar 11</time>No answer yet: follows up</li>
-                <li class="done"><time>Mar 13</time>Cancellation confirmed, Tom is told</li>
-              </ol>
-            </article>
-
-            <article class="story" data-reveal>
-              <header>
-                <span class="who">Amélie · recruiter, hiring tool</span>
-                <span class="span">2 weeks</span>
-              </header>
-              <blockquote>“Follow up with every candidate who hasn't answered in three days, and book the ones who reply.”</blockquote>
-              <ol class="steps">
-                <li class="call"><time>Day 0</time>Writes to twelve candidates</li>
-                <li class="wait"><time>Day 3</time>Follows up with the seven who didn't answer</li>
-                <li class="human"><time>Day 4–9</time>Five reply with their availability</li>
-                <li class="done"><time>Day 9</time>Five interviews in Amélie's calendar</li>
-              </ol>
-            </article>
+            </div>
           </div>
         </div>
       </section>
@@ -356,7 +286,7 @@
         </nav>
       </div>
       <p class="wrap foot-note">
-        Infrastructure for the agentic revolution. Source available under FSL-1.1-ALv2. Hero after
+        Scale the agentic revolution. Source available under FSL-1.1-ALv2. Hero after
         Michelangelo's <i>Creation of Adam</i>, in the public domain.
       </p>
     </footer>
