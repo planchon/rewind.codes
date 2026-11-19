@@ -27,7 +27,8 @@ use crate::wake::{Busy, POLL, wait};
 /// `GET /v1/runs/{id}/events?follow=1&from=…`. A stream opened with a member's access token is
 /// closed at the token's expiry: the dashboard resumes it with a new token and `from`. A stream
 /// opened with an end user's token is closed once the token no longer authenticates: revoked,
-/// expired, its key deleted or its namespace erased.
+/// expired, its key deleted or its namespace erased; one opened by a connection, at its access
+/// token's expiry or once the connection is revoked or no longer opens the organization.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -51,7 +52,7 @@ pub(super) async fn stream(
         tokio::time::Instant::now() + Duration::from_millis(left)
     });
     let tail = Tail {
-        caller: caller.token.is_some().then_some(caller),
+        caller: (caller.token.is_some() || caller.connection.is_some()).then_some(caller),
         changes: app.wake.subscribe(),
         busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),
         app,
@@ -71,7 +72,8 @@ pub(super) async fn stream(
 /// Where a stream stands.
 struct Tail {
     app: Arc<App>,
-    /// The end user's token that opened the stream, checked again at each read.
+    /// The end user's token or the connection that opened the stream, checked again at each
+    /// read.
     caller: Option<Caller>,
     run: RunRef,
     /// The index of the next entry to send.

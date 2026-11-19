@@ -32,6 +32,13 @@
 //! The namespace of a request ([`Caller::namespace`]) is the token's; for a key or a member, the
 //! header `Rewind-Namespace`, which narrows what it reads and names where it creates. A token's
 //! request naming another namespace is refused (403).
+//!
+//! A person's connection (`rewind_ct_…`, `archi/06-storage-and-scale.md`, "Connections") names
+//! no tenant: its request names one with `Rewind-Organization` ([`crate::connections`]), and
+//! without it reaches only `GET /v1/whoami` (400 elsewhere). Every request reads the token, the
+//! connection, its grant and its person's grant again; both roles check it against the access
+//! store alone. Any other caller may repeat its own tenant in `Rewind-Organization`; another is
+//! refused (403).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -43,7 +50,10 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::{OPERATOR, Permission, fixed_permissions};
-use rewind_api::headers::{API_KEY_PREFIX, NAMESPACE, TOKEN_KEY_PREFIX, TOKEN_PREFIX};
+use rewind_api::headers::{
+    API_KEY_PREFIX, CONNECTION_TOKEN_PREFIX, NAMESPACE, ORGANIZATION, TOKEN_KEY_PREFIX,
+    TOKEN_PREFIX,
+};
 use rewind_api::namespaces::{SignedTokenClaims, TOKEN_AUDIENCE, TOKEN_MAX_TTL};
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::adapters::SystemClock;
@@ -53,6 +63,7 @@ use rewind_engine::ports::{
 };
 
 use crate::app::App;
+use crate::connections::{self, SignedConnection};
 use crate::error::ApiError;
 use crate::tokens::PublicKey;
 
@@ -92,6 +103,8 @@ pub(crate) struct Caller {
     pub(crate) namespace: Option<NamespaceName>,
     /// The caller is an end user's token.
     pub(crate) token: Option<EndUserToken>,
+    /// The caller is a person's connection, in the organization its request names.
+    pub(crate) connection: Option<SignedConnection>,
 }
 
 /// An end user's token, as the request presented it.
@@ -129,6 +142,7 @@ impl Caller {
             permissions: Permission::ALL.into_iter().collect(),
             namespace: None,
             token: None,
+            connection: None,
         }
     }
 
@@ -149,6 +163,7 @@ impl Caller {
                 permissions: BTreeSet::new(),
                 namespace: None,
                 token: None,
+                connection: None,
             });
         };
         let permissions = role_permissions(store, &tenant, &grant.role)
@@ -164,6 +179,7 @@ impl Caller {
             permissions,
             namespace: None,
             token: None,
+            connection: None,
         })
     }
 
@@ -180,6 +196,7 @@ impl Caller {
         match self.principal {
             Some(Principal::Key(_)) => "this key",
             Some(Principal::User(_)) => "this member",
+            Some(Principal::Connection(_)) => "this connection",
             Some(Principal::Invitation(_)) | None => "this caller",
         }
     }
@@ -195,6 +212,22 @@ impl Caller {
                     "this request needs the permission `{permission}`, which this end user's \
                      token does not hold: it holds {}, within its namespace. The customer mints \
                      tokens with the permissions they need",
+                    if held.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        listed(&held)
+                    }
+                )));
+            }
+            if self.connection.is_some() {
+                let held: Vec<Permission> = self.permissions.iter().copied().collect();
+                return Err(ApiError::forbidden(format!(
+                    "this request needs the permission `{permission}`, which this connection \
+                     does not use in the organization {}: it uses {} there, the permissions of \
+                     its access (read or run) that its person's own grant gives now. A \
+                     connection never administers; its person changes its access from the \
+                     dashboard",
+                    self.tenant,
                     if held.is_empty() {
                         "none".to_owned()
                     } else {
@@ -369,15 +402,17 @@ pub(crate) struct Member {
 }
 
 /// The onboarding endpoints' caller: a key or the socket's operator (`caller` only), a member of
-/// an organization (both), or a member without organization (`member` only).
+/// an organization (both), a member without organization (`member` only), or a person's
+/// connection (`connection`, with `caller` when its request names an organization).
 #[derive(Debug, Clone)]
 pub(crate) struct Who {
     pub(crate) caller: Option<Caller>,
     pub(crate) member: Option<Member>,
+    pub(crate) connection: Option<SignedConnection>,
 }
 
-/// The expiry of the caller's access token, in the world's time; `None` for a key, an end
-/// user's token and over the socket.
+/// The expiry of the caller's access token, a member's or a connection's, in the world's time;
+/// `None` for a key, an end user's token and over the socket.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TokenExpiry(pub(crate) Option<Timestamp>);
 
@@ -395,7 +430,7 @@ fn unauthenticated() -> ApiError {
     ApiError::new(ProblemType::Unauthorized, "no API key nor access token")
 }
 
-fn unauthorized(detail: impl Into<String>) -> ApiError {
+pub(crate) fn unauthorized(detail: impl Into<String>) -> ApiError {
     ApiError::new(ProblemType::Unauthorized, detail)
 }
 
@@ -405,13 +440,49 @@ impl<S: Send + Sync> FromRequestParts<S> for Caller {
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, ApiError> {
         if let Some(caller) = parts.extensions.get::<Caller>() {
             let mut caller = caller.clone();
+            repeat_organization(&caller, &parts.headers)?;
             caller.bind(namespace_header(&parts.headers)?)?;
             return Ok(caller);
+        }
+        if parts.extensions.get::<SignedConnection>().is_some() {
+            return Err(connections::organization_required());
         }
         if parts.extensions.get::<Member>().is_some() {
             return Err(no_organization());
         }
         Err(unauthenticated())
+    }
+}
+
+/// The organization `Rewind-Organization` names, if any; a header that is not a tenant's id is
+/// refused (400).
+pub(crate) fn organization_header(
+    headers: &axum::http::HeaderMap,
+) -> Result<Option<TenantId>, ApiError> {
+    let Some(value) = headers.get(ORGANIZATION) else {
+        return Ok(None);
+    };
+    let invalid = || {
+        ApiError::invalid(
+            "Rewind-Organization: expected an organization's id, org_… (GET /v1/whoami lists \
+             the organizations a connection opens)",
+        )
+    };
+    let text = value.to_str().map_err(|_| invalid())?.trim();
+    TenantId::new(text).map(Some).map_err(|_| invalid())
+}
+
+/// Refuses (403) a request whose `Rewind-Organization` names another tenant than the caller's:
+/// a key, a member or a token may only repeat their own.
+fn repeat_organization(caller: &Caller, headers: &axum::http::HeaderMap) -> Result<(), ApiError> {
+    match organization_header(headers)? {
+        Some(named) if named != caller.tenant => Err(ApiError::forbidden(format!(
+            "{} acts in the organization {} only: Rewind-Organization may repeat it or be left \
+             out, and names no other",
+            caller.who(),
+            caller.tenant
+        ))),
+        _ => Ok(()),
     }
 }
 
@@ -439,9 +510,13 @@ impl<S: Send + Sync> FromRequestParts<S> for Who {
         let who = Who {
             caller: parts.extensions.get::<Caller>().cloned(),
             member: parts.extensions.get::<Member>().cloned(),
+            connection: parts.extensions.get::<SignedConnection>().cloned(),
         };
-        if who.caller.is_none() && who.member.is_none() {
+        if who.caller.is_none() && who.member.is_none() && who.connection.is_none() {
             return Err(unauthenticated());
+        }
+        if let Some(caller) = &who.caller {
+            repeat_organization(caller, &parts.headers)?;
         }
         Ok(who)
     }
@@ -455,7 +530,13 @@ impl<S: Send + Sync> FromRequestParts<S> for TokenExpiry {
             parts
                 .extensions
                 .get::<Member>()
-                .map(|member| member.expires_at),
+                .map(|member| member.expires_at)
+                .or_else(|| {
+                    parts
+                        .extensions
+                        .get::<SignedConnection>()
+                        .map(|connection| connection.expires_at)
+                }),
         ))
     }
 }
@@ -479,19 +560,23 @@ pub(crate) fn new_key() -> Result<String, ApiError> {
 }
 
 /// The middleware of the TCP listener: reads the Bearer token and puts its [`Caller`] (in a
-/// tenant) and its [`Member`] (an access token) in the request's extensions, or answers 401.
+/// tenant), its [`Member`] (a member's access token) and its [`SignedConnection`] (a
+/// connection's access token) in the request's extensions, or answers 401.
 pub(crate) async fn authenticate(
     State(app): State<Arc<App>>,
     mut request: Request,
     next: Next,
 ) -> Response {
     match credentials(&app, request.headers()).await {
-        Ok((caller, member)) => {
-            if let Some(caller) = caller {
+        Ok(found) => {
+            if let Some(caller) = found.caller {
                 request.extensions_mut().insert(caller);
             }
-            if let Some(member) = member {
+            if let Some(member) = found.member {
                 request.extensions_mut().insert(member);
+            }
+            if let Some(connection) = found.connection {
+                request.extensions_mut().insert(connection);
             }
             next.run(request).await
         }
@@ -499,18 +584,37 @@ pub(crate) async fn authenticate(
     }
 }
 
-async fn credentials(
-    app: &App,
-    headers: &axum::http::HeaderMap,
-) -> Result<(Option<Caller>, Option<Member>), ApiError> {
+/// What a Bearer token says.
+#[derive(Debug, Default)]
+pub(crate) struct Credentials {
+    /// The caller in a tenant.
+    pub(crate) caller: Option<Caller>,
+    /// A member signed in on the dashboard.
+    pub(crate) member: Option<Member>,
+    /// A person's connection.
+    pub(crate) connection: Option<SignedConnection>,
+}
+
+impl Credentials {
+    fn caller(caller: Caller) -> Self {
+        Self {
+            caller: Some(caller),
+            ..Self::default()
+        }
+    }
+}
+
+/// The Bearer token of `Authorization`, refused (401) when absent or not `Bearer <token>`.
+pub(crate) fn bearer(headers: &axum::http::HeaderMap) -> Result<&str, ApiError> {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized(
             "no token: send an API key as `Authorization: Bearer rewind_sk_…`, an end user's \
-             token, or a member's access token from POST /auth/session",
+             token, a connection's access token, or a member's access token from POST \
+             /auth/session",
         ));
     };
     // The scheme is case-insensitive (RFC 9110, section 11.1).
-    let token = value
+    value
         .to_str()
         .ok()
         .and_then(|value| value.split_once(' '))
@@ -522,20 +626,41 @@ async fn credentials(
                 "the Authorization header must be `Bearer <token>`: an API key rewind_sk_… or a \
                  member's access token",
             )
-        })?;
+        })
+}
+
+async fn credentials(app: &App, headers: &axum::http::HeaderMap) -> Result<Credentials, ApiError> {
+    let token = bearer(headers)?;
+    if token.starts_with(CONNECTION_TOKEN_PREFIX) {
+        let connection = connections::authenticate(app, token).await?;
+        let caller = match organization_header(headers)? {
+            Some(tenant) => Some(Caller::of_connection(&app.store, &connection, tenant).await?),
+            None => None,
+        };
+        return Ok(Credentials {
+            caller,
+            member: None,
+            connection: Some(connection),
+        });
+    }
+    tenant_credentials(app, token).await
+}
+
+/// What a Bearer token other than a connection's says: a key, an end user's token, or a
+/// member's access token.
+pub(crate) async fn tenant_credentials(app: &App, token: &str) -> Result<Credentials, ApiError> {
     if token.starts_with(API_KEY_PREFIX) {
         let stored = app.store.find_key(key_hash(token)).await?;
         let Some(stored) = stored.filter(|stored| stored.revoked_at.is_none()) else {
             return Err(unauthorized("this API key is unknown or revoked"));
         };
         let principal = stored.principal();
-        return Ok((
-            Some(Caller::of(&app.store, stored.tenant, principal).await?),
-            None,
+        return Ok(Credentials::caller(
+            Caller::of(&app.store, stored.tenant, principal).await?,
         ));
     }
     if token.starts_with(TOKEN_PREFIX) {
-        return Ok((Some(opaque_token(app, token).await?), None));
+        return Ok(Credentials::caller(opaque_token(app, token).await?));
     }
     if let Some(header) = jsonwebtoken::decode_header(token).ok().filter(|header| {
         header
@@ -543,7 +668,7 @@ async fn credentials(
             .as_deref()
             .is_some_and(|kid| kid.starts_with(TOKEN_KEY_PREFIX))
     }) {
-        return Ok((Some(signed_token(app, token, header).await?), None));
+        return Ok(Credentials::caller(signed_token(app, token, header).await?));
     }
     // A worker, and a server without WorkOS, accept only keys and end users' tokens.
     let Some(sign_in) = &app.sign_in else {
@@ -570,14 +695,21 @@ async fn credentials(
         expires_at: claims.expires_at,
     };
     let Some(organization) = &member.organization else {
-        return Ok((None, Some(member)));
+        return Ok(Credentials {
+            member: Some(member),
+            ..Credentials::default()
+        });
     };
     let tenant = organization.tenant().map_err(|_| {
         unauthorized("the access token's organization is not a valid tenant id: sign in again")
     })?;
     app.ensure_tenant(&tenant).await?;
     let caller = Caller::of(&app.store, tenant, Principal::from(&member.user)).await?;
-    Ok((Some(caller), Some(member)))
+    Ok(Credentials {
+        caller: Some(caller),
+        member: Some(member),
+        connection: None,
+    })
 }
 
 /// The permissions a token holds, as the store or its claims name them: those a token may
@@ -614,6 +746,7 @@ async fn opaque_token(app: &App, token: &str) -> Result<Caller, ApiError> {
             form: TokenForm::Opaque { hash },
             expires_at: stored.expires_at,
         }),
+        connection: None,
     })
 }
 
@@ -761,13 +894,18 @@ async fn signed_token(
             },
             expires_at: Timestamp::from_millis(u64::try_from(claims.exp).unwrap_or(0) * 1000),
         }),
+        connection: None,
     })
 }
 
-/// Whether the caller's end user's token still authenticates, as it did when its request opened
-/// an event stream: a revocation, an expiry, a deleted key or an erasure closes the stream.
-/// Always for any other caller.
+/// Whether the caller's end user's token or connection still authenticates, as it did when its
+/// request opened an event stream: a revocation, an expiry, a deleted key or an erasure closes
+/// the stream; for a connection, its revocation or its grant removed too. Always for any other
+/// caller.
 pub(crate) async fn still_valid(app: &App, caller: &Caller) -> bool {
+    if let Some(connection) = &caller.connection {
+        return connections::still_valid(app, connection, &caller.tenant).await;
+    }
     let (Some(token), Some(name)) = (&caller.token, &caller.namespace) else {
         return true;
     };
@@ -966,6 +1104,7 @@ mod tests {
                 },
                 expires_at: Timestamp(0),
             }),
+            connection: None,
             ..Caller::local()
         };
         let mut repeated = token.clone();

@@ -4,9 +4,10 @@
 #![allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::BTreeMap;
+use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use clap::Parser;
@@ -588,4 +589,109 @@ pub(crate) async fn nul_lookups_match_nothing(server: &TestServer) {
 /// The namespace the tests' clients act for: starting a run names one.
 pub(crate) fn test_namespace() -> rewind_api::namespaces::NamespaceName {
     "tests".parse().unwrap()
+}
+
+/// A Postgres container, removed on drop.
+pub(crate) struct Postgres {
+    name: String,
+    address: String,
+}
+
+impl Postgres {
+    pub(crate) fn start() -> Option<Self> {
+        let docker = Command::new("docker")
+            .args(["version", "--format", "{{.Server.Version}}"])
+            .output();
+        if !matches!(&docker, Ok(output) if output.status.success()) {
+            eprintln!("SKIPPED: the Postgres tests of rewind-server need Docker, which is absent");
+            assert!(
+                std::env::var_os("REWIND_REQUIRE_DOCKER").is_none(),
+                "REWIND_REQUIRE_DOCKER is set: Docker must be running"
+            );
+            return None;
+        }
+        // Tests run in parallel within one process, and the clock may only have microseconds:
+        // a counter keeps two containers of the same process from sharing a name.
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let name = format!(
+            "rewind-server-postgres-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        );
+        run(&[
+            "run",
+            "--detach",
+            "--rm",
+            "--name",
+            &name,
+            "--publish",
+            "127.0.0.1::5432",
+            "--tmpfs",
+            "/var/lib/postgresql/data",
+            "--env",
+            "POSTGRES_USER=rewind",
+            "--env",
+            "POSTGRES_PASSWORD=rewind-secret",
+            "postgres:17",
+        ]);
+        let mut postgres = Postgres {
+            name,
+            address: String::new(),
+        };
+        postgres.address = run(&["port", &postgres.name, "5432/tcp"])
+            .lines()
+            .next()
+            .unwrap()
+            .trim()
+            .to_owned();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !Command::new("docker")
+            .args([
+                "exec",
+                &postgres.name,
+                "psql",
+                "-h",
+                "127.0.0.1",
+                "-U",
+                "rewind",
+                "-d",
+                "postgres",
+                "-tAc",
+                "SELECT 1",
+            ])
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            assert!(Instant::now() < deadline, "Postgres did not start in time");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Some(postgres)
+    }
+
+    pub(crate) fn url(&self) -> String {
+        format!("postgres://rewind:rewind-secret@{}/postgres", self.address)
+    }
+}
+
+impl Drop for Postgres {
+    fn drop(&mut self) {
+        let _ = Command::new("docker")
+            .args(["rm", "--force", &self.name])
+            .output();
+    }
+}
+
+fn run(args: &[&str]) -> String {
+    let output = Command::new("docker").args(args).output().unwrap();
+    assert!(
+        output.status.success(),
+        "docker {}: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }

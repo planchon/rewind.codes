@@ -346,6 +346,16 @@ impl InternalAllowList {
         self.names.is_empty() && self.subdomains.is_empty() && self.networks.is_empty()
     }
 
+    /// Whether the operator lets `host` through: a name on the list or a subdomain of one, or
+    /// an address (`127.0.0.1`, `[::1]`) within one of its networks.
+    pub fn allows_host(&self, host: &str) -> bool {
+        let bare = host.trim_start_matches('[').trim_end_matches(']');
+        match bare.parse::<IpAddr>() {
+            Ok(address) => self.allows_address(address),
+            Err(_) => self.allows_name(bare),
+        }
+    }
+
     fn allows_name(&self, host: &str) -> bool {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         self.names.contains(&host)
@@ -739,6 +749,11 @@ mod tests {
         assert!(list.allows_address(address("fd00::7")));
         assert!(list.allows_address(address("fdff::1")));
         assert!(!list.allows_address(address("169.254.169.254")));
+        assert!(list.allows_host("mcp.internal.example"));
+        assert!(list.allows_host("10.20.0.1"));
+        assert!(list.allows_host("[fd00::7]"));
+        assert!(!list.allows_host("127.0.0.1"));
+        assert!(!list.allows_host("example.com"));
         assert!(InternalAllowList::default().is_empty());
         assert!(!list.is_empty());
 

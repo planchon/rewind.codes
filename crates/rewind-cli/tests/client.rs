@@ -433,6 +433,8 @@ fn app(stub: Shared) -> Router {
                     roles: vec![ServerRole::Api, ServerRole::Worker],
                     embedded: true,
                     virtual_time: false,
+                    mcp_url: None,
+                    oauth: false,
                 })
             }),
         )

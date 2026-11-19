@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+    "/.well-known/oauth-authorization-server": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The authorization server's metadata
+         * @description RFC 8414: its endpoints, PKCE with `S256`, client metadata documents, registration.
+         */
+        get: operations["getAuthorizationServer"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The protected resource's metadata
+         * @description RFC 9728, the same as at `/.well-known/oauth-protected-resource/mcp`.
+         */
+        get: operations["getProtectedResource"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The metadata of `/mcp`
+         * @description RFC 9728: `/mcp` is the resource, this server its authorization server.
+         */
+        get: operations["getProtectedResourceMcp"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/callback": {
         parameters: {
             query?: never;
@@ -233,6 +293,96 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Authorize a client
+         * @description Checks the authorization request, then sends the browser to the dashboard's consent
+         *     page with the request sealed for 10 minutes. An unknown client, or a redirect URI it
+         *     does not list, is answered here and never redirected; any other fault goes back to the
+         *     client's redirect URI with `error` and `state` (`invalid_request`,
+         *     `unsupported_response_type`, `invalid_target`). PKCE with `S256` is required.
+         */
+        get: operations["authorize"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register a client
+         * @description RFC 7591, for the MCP clients without a metadata document. A client that no connection
+         *     uses is deleted after 24 hours. The secret of a confidential client is only in this
+         *     answer.
+         */
+        post: operations["registerClient"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke a token's connection
+         * @description RFC 7009: an access token or a refresh token revokes its whole connection. An unknown
+         *     token is answered as revoked.
+         */
+        post: operations["revokeOAuthToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange a code or a refresh token for tokens
+         * @description `authorization_code` (with its `code_verifier`) creates the connection, its grants and
+         *     its tokens; `refresh_token` replaces both tokens, and removes the organizations the
+         *     person left. A code or refresh token that is unknown, expired, used or another client's
+         *     is `invalid_grant`; one used twice also revokes its connection.
+         */
+        post: operations["exchangeToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/api-keys": {
         parameters: {
             query?: never;
@@ -298,6 +448,54 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's connections
+         * @description The person's connections, in every organization: the client, the organizations each
+         *     opens with its access and labels, when it was made and last used. For a member, even
+         *     without organization.
+         */
+        get: operations["listConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke a connection
+         * @description Its tokens and its grants, at once: the client must connect again. Its person only.
+         */
+        delete: operations["revokeConnection"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a connection
+         * @description The organizations it opens from now on, their access and labels: each one where the
+         *     person holds a grant giving that access. Its person only, without reconnecting the
+         *     client.
+         */
+        patch: operations["updateConnection"];
         trace?: never;
     };
     "/v1/invitations": {
@@ -441,6 +639,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/oauth/consent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What an authorization request asks
+         * @description For the consent page: the client, the host it returns to, and the person's
+         *     organizations with the accesses they may give in each. For a member, even without
+         *     organization.
+         */
+        get: operations["getConsent"];
+        put?: never;
+        /**
+         * Allow or deny an authorization request
+         * @description Allowing it needs at least one organization, each where the person's grant gives the
+         *     access chosen: no one gives more than they hold. Answers where to send the browser: the
+         *     client's redirect URI with a code (5 minutes) and the state, or with
+         *     `error=access_denied`. The connection is made when the client exchanges the code. For a
+         *     member, even without organization.
+         */
+        post: operations["answerConsent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organization": {
         parameters: {
             query?: never;
@@ -459,6 +687,48 @@ export interface paths {
          * @description Its name and its default role. Requires `organization:write`.
          */
         patch: operations["updateOrganization"];
+        trace?: never;
+    };
+    "/v1/organization/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The connections that open the organization
+         * @description Each with its person, its client, its access and labels here (`organizations` holds
+         *     this organization only), and its last use. Requires `members:read`.
+         */
+        get: operations["listOrganizationConnections"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove the organization from a connection
+         * @description The connection no longer opens the organization; it keeps the others. Requires
+         *     `members:manage`, and the permissions of the connection's access here.
+         */
+        delete: operations["removeOrganizationConnection"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/organization/invitations": {
@@ -1778,6 +2048,11 @@ export interface components {
             kind: components["schemas"]["AbortKind"];
             message: string;
         };
+        /**
+         * @description What a connection may do in an organization it opens.
+         * @enum {string}
+         */
+        Access: "read" | "run";
         /** @description An API key, without its secret but in the answer to its creation. */
         ApiKey: {
             /** @description The allowed labels of the key's grant. */
@@ -1847,6 +2122,23 @@ export interface components {
             /** @enum {string} */
             status: "sign_up_closed";
         };
+        /** @description `GET /.well-known/oauth-authorization-server` (RFC 8414). */
+        AuthorizationServerMetadata: {
+            authorization_endpoint: string;
+            /** @description A `client_id` may be the `https` URL of the client's metadata document. */
+            client_id_metadata_document_supported: boolean;
+            code_challenge_methods_supported: string[];
+            grant_types_supported: string[];
+            /** @description `{public-url}`. */
+            issuer: string;
+            registration_endpoint: string;
+            response_types_supported: string[];
+            revocation_endpoint: string;
+            revocation_endpoint_auth_methods_supported: string[];
+            scopes_supported: string[];
+            token_endpoint: string;
+            token_endpoint_auth_methods_supported: string[];
+        };
         /** @description How many times a tool call was sent. */
         CallAttempts: {
             /**
@@ -1896,9 +2188,165 @@ export interface components {
             /** @description No diagnostic of severity `error`. */
             ok: boolean;
         };
+        /**
+         * @description How a client made itself known to Rewind.
+         * @enum {string}
+         */
+        ClientKind: "metadata_document" | "registered";
+        /**
+         * @description A client's metadata: the body of `POST /oauth/register` (RFC 7591), and a client's metadata
+         *     document, whose `client_id` is its own URL. Other fields are ignored.
+         */
+        ClientMetadata: {
+            /** @description A metadata document's own URL; none at registration. */
+            client_id?: string | null;
+            client_name?: string | null;
+            /** @description Never in a metadata document. */
+            client_secret?: string | null;
+            client_uri?: string | null;
+            grant_types?: string[] | null;
+            logo_uri?: string | null;
+            /**
+             * @description Each `https`, `http` on a loopback address, or a private-use scheme holding a dot
+             *     (`cursor://…`).
+             */
+            redirect_uris?: string[];
+            response_types?: string[] | null;
+            scope?: string | null;
+            /**
+             * @description `none`, `client_secret_post` or `client_secret_basic` (RFC 7591's default) at
+             *     registration; `none` in a metadata document.
+             */
+            token_endpoint_auth_method?: string | null;
+        };
         /** @description `POST /v1/tasks/{token}/complete`: the tool's result, delivered to the script. */
         CompleteTask: {
             result: unknown;
+        };
+        /** @description A person's connection. */
+        Connection: {
+            client: components["schemas"]["ConnectionClient"];
+            /** Format: date-time */
+            createdAt: string;
+            /** @description `cn_…`. */
+            id: string;
+            /**
+             * Format: date-time
+             * @description When an access token of it was last used, to the minute.
+             */
+            lastUsedAt?: string | null;
+            /**
+             * @description The organizations it opens, by id. `GET /v1/organization/connections` gives the
+             *     caller's organization only.
+             */
+            organizations: components["schemas"]["ConnectionOrganization"][];
+            person: components["schemas"]["ConnectionPerson"];
+        };
+        /** @description The client a connection was made through. */
+        ConnectionClient: {
+            /** @description The URL of its metadata document, or `rc_…`. */
+            id: string;
+            kind: components["schemas"]["ClientKind"];
+            name: string;
+            /** @description Its site. */
+            uri?: string | null;
+        };
+        /**
+         * @description `GET /v1/connections` (the caller's) and `GET /v1/organization/connections` (those that open
+         *     the organization).
+         */
+        ConnectionList: {
+            connections: components["schemas"]["Connection"][];
+        };
+        /** @description An organization a connection opens. */
+        ConnectionOrganization: {
+            access: components["schemas"]["Access"];
+            /**
+             * @description The labels of the connection's grant there: what it starts carries them, and it sees
+             *     only the runs carrying them.
+             */
+            allowedLabels: components["schemas"]["Labels"];
+            /** @description `org_…`, the tenant. */
+            id: string;
+            /** @description Its name; unknown on a server without the identity provider. */
+            name?: string | null;
+        };
+        /** @description The person of a connection. */
+        ConnectionPerson: {
+            /** @description Unknown on a server without the identity provider. */
+            email?: string | null;
+            /** @description `user_…`. */
+            id: string;
+            name?: string | null;
+        };
+        /** @description `GET /v1/oauth/consent`: what an authorization request asks. */
+        Consent: {
+            /** @description The labels proposed for the connection's grants: what it starts carries them. */
+            allowedLabels: components["schemas"]["Labels"];
+            client: components["schemas"]["ConsentClient"];
+            /**
+             * Format: date-time
+             * @description When the request lapses: the client starts again after.
+             */
+            expiresAt: string;
+            /**
+             * @description The client returns to a loopback address: a program on the person's machine, which the
+             *     page warns about.
+             */
+            loopback: boolean;
+            /** @description The person's organizations. */
+            organizations: components["schemas"]["ConsentOrganization"][];
+            /** @description The host the browser returns to with the code. */
+            redirectHost: string;
+        };
+        /** @description `POST /v1/oauth/consent`. */
+        ConsentAnswer: {
+            /** @description The labels of the connection's grants. */
+            allowedLabels?: components["schemas"]["Labels"];
+            decision: components["schemas"]["ConsentDecision"];
+            /** @description For `allow`: at least one organization, each where the person's grant gives its access. */
+            organizations?: components["schemas"]["ConsentChoice"][];
+            /** @description The request, as `GET /v1/oauth/consent` read it. */
+            request: string;
+        };
+        /** @description An organization ticked at consent, with its access. */
+        ConsentChoice: {
+            access: components["schemas"]["Access"];
+            id: string;
+        };
+        /** @description The client asking for a connection. */
+        ConsentClient: {
+            id: string;
+            kind: components["schemas"]["ClientKind"];
+            logoUri?: string | null;
+            name: string;
+            uri?: string | null;
+        };
+        /**
+         * @description The person's answer.
+         * @enum {string}
+         */
+        ConsentDecision: "allow" | "deny";
+        /** @description One of the person's organizations, as the consent offers it. */
+        ConsentOrganization: {
+            /**
+             * @description The accesses the person may give there: those whose permissions their grant holds.
+             *     Empty: they cannot open it.
+             */
+            accesses: components["schemas"]["Access"][];
+            /** @description The organization of the caller's access token: ticked in advance. */
+            current: boolean;
+            id: string;
+            name?: string | null;
+            /** @description The role of the person's grant there; none without a grant. */
+            role?: string | null;
+        };
+        /**
+         * @description Where the consent page sends the browser: the client's redirect URI, with the code and the
+         *     state, or with `error=access_denied`.
+         */
+        ConsentRedirect: {
+            redirectTo: string;
         };
         /**
          * @description `POST /v1/api-keys`: a key `rewind_sk_…`, with its grant. Keys are stored hashed: the key
@@ -2778,10 +3226,30 @@ export interface components {
          */
         NamespaceName: string;
         /**
+         * @description An OAuth error (RFC 6749, section 5.2; RFC 7591, section 3.2.2), answered as
+         *     `application/json` with `Cache-Control: no-store`.
+         */
+        OAuthError: {
+            /**
+             * @description `invalid_request`, `invalid_client`, `invalid_grant`, `unauthorized_client`,
+             *     `unsupported_grant_type`, `invalid_target`, `invalid_redirect_uri`,
+             *     `invalid_client_metadata`, `temporarily_unavailable`, `unsupported_token_type`.
+             */
+            error: string;
+            error_description?: string | null;
+        };
+        /**
          * @description After an interruption (the dispatcher or the worker died mid-call).
          * @enum {string}
          */
         OnInterruption: "retry" | "at_most_once";
+        /** @description An organization to open, with its access and labels. */
+        OpenOrganization: {
+            access: components["schemas"]["Access"];
+            allowedLabels?: components["schemas"]["Labels"];
+            /** @description `org_…`. */
+            id: string;
+        };
         /** @description An organization: a tenant, with the same id. */
         Organization: {
             /** @description `org_01J…`, also the tenant's id. */
@@ -2871,6 +3339,15 @@ export interface components {
             namespace: components["schemas"]["NamespaceName"];
             /** @description `opaque` (`rewind_nt_…`) or `signed` (a JWT the customer signed). */
             token: components["schemas"]["TokenKind"];
+        } | {
+            client: components["schemas"]["ConnectionClient"];
+            /** @description `cn_…`. */
+            id: string;
+            /** @enum {string} */
+            kind: "connection";
+            /** @description The organizations it opens, with their access and labels. */
+            organizations: components["schemas"]["ConnectionOrganization"][];
+            person: components["schemas"]["ConnectionPerson"];
         };
         /**
          * @description An error answered by the API, as `application/problem+json` (RFC 9457).
@@ -2912,6 +3389,16 @@ export interface components {
             title: string;
             /** @description Identifies the kind of problem: `urn:rewind:problem:<slug>`. */
             type: string;
+        };
+        /** @description `GET /.well-known/oauth-protected-resource/mcp` (RFC 9728): where to get tokens for `/mcp`. */
+        ProtectedResourceMetadata: {
+            /** @description `[{public-url}]`. */
+            authorization_servers: string[];
+            bearer_methods_supported: string[];
+            /** @description `{public-url}/mcp`. */
+            resource: string;
+            resource_name: string;
+            scopes_supported: string[];
         };
         /** @description `PUT /v1/organizations/{tenant}/quotas`: the operator replaces a tenant's ceiling. */
         PutCeiling: {
@@ -3109,6 +3596,32 @@ export interface components {
             skipped: components["schemas"]["SkippedRun"][];
             tests: components["schemas"]["RecordedTest"][];
         };
+        /**
+         * @description `POST /oauth/register`'s answer (RFC 7591): the client, with its secret for a confidential
+         *     one, shown only here.
+         */
+        RegisteredClient: {
+            /** @description `rc_…`. */
+            client_id: string;
+            /**
+             * Format: int64
+             * @description Seconds since the Unix epoch.
+             */
+            client_id_issued_at: number;
+            client_name: string;
+            client_secret?: string | null;
+            /**
+             * Format: int64
+             * @description 0: the secret does not expire.
+             */
+            client_secret_expires_at?: number | null;
+            client_uri?: string | null;
+            grant_types: string[];
+            logo_uri?: string | null;
+            redirect_uris: string[];
+            response_types: string[];
+            token_endpoint_auth_method: string;
+        };
         /** @description `POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message. */
         RejectTask: {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
@@ -3119,6 +3632,14 @@ export interface components {
             digest: string;
             name: string;
             reason: string;
+        };
+        /** @description `POST /oauth/revoke` (RFC 7009), a form. */
+        RevokeRequest: {
+            client_id?: string | null;
+            client_secret?: string | null;
+            token?: string | null;
+            /** @description `access_token` or `refresh_token`; either revokes the connection. */
+            token_type_hint?: string | null;
         };
         /** @description `DELETE /v1/namespaces/{name}/tokens`. */
         RevokedTokens: {
@@ -3453,6 +3974,13 @@ export interface components {
             embedded: boolean;
             /** @description The determinism epochs this server's workers support. New runs start under the last. */
             epochs: number[];
+            /** @description The URL MCP clients add as a connector, `{public-url}/mcp`; null without a public URL. */
+            mcpUrl?: string | null;
+            /**
+             * @description People connect MCP clients with OAuth (`/oauth`): the server has a public URL and a
+             *     sign-in. Without it, `/mcp` takes API keys and end users' tokens only.
+             */
+            oauth?: boolean;
             roles: components["schemas"]["ServerRole"][];
             /** @description The version of the `rewind` binary. A CLI of another version restarts an embedded server. */
             version: string;
@@ -3922,6 +4450,39 @@ export interface components {
          * @enum {string}
          */
         TokenKind: "opaque" | "signed";
+        /**
+         * @description `POST /oauth/token`, a form: `authorization_code` (with `code`, `redirect_uri`,
+         *     `code_verifier`) or `refresh_token` (with `refresh_token`). The client's id and secret come
+         *     in the form or in HTTP Basic authentication.
+         */
+        TokenRequest: {
+            client_id?: string | null;
+            client_secret?: string | null;
+            code?: string | null;
+            code_verifier?: string | null;
+            grant_type?: string | null;
+            redirect_uri?: string | null;
+            refresh_token?: string | null;
+            /** @description `{public-url}/mcp` when given. */
+            resource?: string | null;
+            /** @description Ignored. */
+            scope?: string | null;
+        };
+        /** @description `POST /oauth/token`'s answer. */
+        TokenResponse: {
+            /** @description `rewind_ct_…`: the Bearer of `/mcp` and `/v1`. */
+            access_token: string;
+            /**
+             * Format: int64
+             * @description 3600.
+             */
+            expires_in: number;
+            /** @description `rewind_rt_…`: used once, it lapses after 30 days unused. */
+            refresh_token: string;
+            scope: string;
+            /** @description `Bearer`. */
+            token_type: string;
+        };
         /** @description A pinned tool. */
         Tool: {
             description: string;
@@ -4085,6 +4646,13 @@ export interface components {
         };
         /** @enum {string} */
         TraceFormat: "llm";
+        /**
+         * @description `PATCH /v1/connections/{id}`: the organizations the connection opens from now on, each where
+         *     the person holds a grant giving its access. An organization left out is closed.
+         */
+        UpdateConnection: {
+            organizations: components["schemas"]["OpenOrganization"][];
+        };
         /** @description `PATCH /v1/organization`: what is given changes. */
         UpdateOrganization: {
             /** @description A built-in role or a role of the organization. */
@@ -4312,6 +4880,93 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getAuthorizationServer: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The authorization server. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthorizationServerMetadata"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getProtectedResource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where `/mcp` takes its tokens from. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedResourceMetadata"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getProtectedResourceMcp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where `/mcp` takes its tokens from. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectedResourceMetadata"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     authCallback: {
         parameters: {
             query?: {
@@ -5035,10 +5690,227 @@ export interface operations {
             };
         };
     };
-    listApiKeys: {
+    authorize: {
+        parameters: {
+            query?: {
+                /** @description `code`. */
+                response_type?: string;
+                /** @description The URL of the client's metadata document, or `rc_…`. */
+                client_id?: string;
+                /** @description One of the client's redirect URIs. */
+                redirect_uri?: string;
+                /** @description The PKCE challenge: BASE64URL(SHA-256(code_verifier)). */
+                code_challenge?: string;
+                /** @description `S256`. */
+                code_challenge_method?: string;
+                state?: string;
+                /** @description Ignored: rights come from the consent. */
+                scope?: string;
+                /** @description `{public-url}/mcp` when given. */
+                resource?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description To the consent page, or back to the client with an error. */
+            302: {
+                headers: {
+                    /** @description `{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`. */
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An unknown client, a redirect URI it does not list, or no client or redirect URI at all (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    registerClient: {
         parameters: {
             query?: never;
             header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientMetadata"];
+            };
+        };
+        responses: {
+            /** @description Registered. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisteredClient"];
+                };
+            };
+            /** @description `invalid_redirect_uri` or `invalid_client_metadata`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description Too many clients are registered (`temporarily_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+        };
+    };
+    revokeOAuthToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["RevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Revoked, or unknown. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `invalid_request`, or the token is another client's (`unauthorized_client`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+            /** @description The client is unknown or its secret is wrong (`invalid_client`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    exchangeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/x-www-form-urlencoded": components["schemas"]["TokenRequest"];
+            };
+        };
+        responses: {
+            /** @description The tokens, never cached. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TokenResponse"];
+                };
+            };
+            /** @description `invalid_request`, `invalid_grant`, `unsupported_grant_type` or `invalid_target`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+            /** @description The client is unknown or its secret is wrong (`invalid_client`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider cannot check the person's memberships now (`temporarily_unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+        };
+    };
+    listApiKeys: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5103,7 +5975,10 @@ export interface operations {
     createApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5172,7 +6047,10 @@ export interface operations {
     revokeApiKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The key's id. */
                 id: string;
@@ -5250,6 +6128,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -5307,6 +6187,254 @@ export interface operations {
             };
             /** @description A fault of the platform (`internal`). */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listConnections: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's connections. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server has no sign-in (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    revokeConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id, `cn_…`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No connection of the caller with this id (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's id, `cn_…`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnection"];
+            };
+        };
+        responses: {
+            /** @description The connection as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Connection"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No connection of the caller with this id (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -5503,7 +6631,10 @@ export interface operations {
                 /** @description 50 by default, 500 at most. */
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -5571,7 +6702,10 @@ export interface operations {
                 /** @description The calendar month, `2026-11`; the current one by default. */
                 month?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace. */
                 name: string;
@@ -5648,7 +6782,10 @@ export interface operations {
     putNamespace: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace: 1 to 128 letters, digits, -, _, ., : and @. */
                 name: string;
@@ -5729,7 +6866,10 @@ export interface operations {
     deleteNamespace: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace. */
                 name: string;
@@ -5804,7 +6944,10 @@ export interface operations {
     createToken: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace. */
                 name: string;
@@ -5885,7 +7028,10 @@ export interface operations {
     revokeNamespaceTokens: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace. */
                 name: string;
@@ -5962,7 +7108,10 @@ export interface operations {
     setNamespaceCredentials: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The namespace. */
                 name: string;
@@ -6040,10 +7189,180 @@ export interface operations {
             };
         };
     };
-    updateOrganization: {
+    getConsent: {
+        parameters: {
+            query: {
+                /**
+                 * @description The sealed authorization request, as `GET /oauth/authorize` put it in the consent
+                 *     page's URL.
+                 */
+                request: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The request. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Consent"];
+                };
+            };
+            /** @description The request cannot be read, or it lapsed: the client starts again (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    answerConsent: {
         parameters: {
             query?: never;
             header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsentAnswer"];
+            };
+        };
+        responses: {
+            /** @description Where to send the browser. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsentRedirect"];
+                };
+            };
+            /** @description The request cannot be read or lapsed, or no organization was chosen (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The person's grant in an organization does not give the access chosen (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description This server has no OAuth (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    updateOrganization: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6118,10 +7437,168 @@ export interface operations {
             };
         };
     };
+    listOrganizationConnections: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connections that open the organization. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The identity provider is unavailable (`identity-unavailable`). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    removeOrganizationConnection: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The connection's id, `cn_…`. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No connection opens the organization with this id (`not-found`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     listInvitations: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6195,7 +7672,10 @@ export interface operations {
     createInvitation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6282,7 +7762,10 @@ export interface operations {
     revokeInvitation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The invitation's id. */
                 id: string;
@@ -6366,7 +7849,10 @@ export interface operations {
     resendInvitation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The invitation's id. */
                 id: string;
@@ -6452,7 +7938,10 @@ export interface operations {
     listMembers: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6526,7 +8015,10 @@ export interface operations {
     removeMember: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The member's user id. */
                 user: string;
@@ -6619,7 +8111,10 @@ export interface operations {
     setMemberGrant: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The member's user id. */
                 user: string;
@@ -6712,7 +8207,10 @@ export interface operations {
                 /** @description The calendar month, `2026-11`; the current one by default. */
                 month?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6777,7 +8275,10 @@ export interface operations {
     putNamespaceDefaults: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6851,7 +8352,10 @@ export interface operations {
                 /** @description One namespace's alerts; every alert of the tenant without it. */
                 namespace?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6916,7 +8420,10 @@ export interface operations {
     listTokenKeys: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -6981,7 +8488,10 @@ export interface operations {
     createTokenKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7050,7 +8560,10 @@ export interface operations {
     deleteTokenKey: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The key's `kid`. */
                 kid: string;
@@ -7291,6 +8804,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description SHA-256 of the canonical JSON, lowercase hex. */
@@ -7368,7 +8883,10 @@ export interface operations {
     listPermissions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7433,7 +8951,10 @@ export interface operations {
     listRoles: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -7498,7 +9019,10 @@ export interface operations {
     putRole: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The role's name. */
                 name: string;
@@ -7579,7 +9103,10 @@ export interface operations {
     deleteRole: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The role's name. */
                 name: string;
@@ -7704,6 +9231,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -7774,6 +9303,8 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -7914,6 +9445,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -7996,6 +9529,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -8067,6 +9602,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8147,6 +9684,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8225,6 +9764,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8319,6 +9860,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8410,6 +9953,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8505,6 +10050,8 @@ export interface operations {
                 "Last-Event-ID"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8587,6 +10134,8 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The parent run's id. */
@@ -8698,6 +10247,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8790,6 +10341,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8870,6 +10423,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -8961,6 +10516,8 @@ export interface operations {
                 "Idempotency-Key"?: string | null;
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -9078,6 +10635,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The run id. */
@@ -9169,6 +10728,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -9237,6 +10798,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description SHA-256 of the source, lowercase hex. */
@@ -9314,7 +10877,10 @@ export interface operations {
     getServer: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9379,7 +10945,10 @@ export interface operations {
     stopServer: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9442,7 +11011,10 @@ export interface operations {
     listSubscriptions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9507,7 +11079,10 @@ export interface operations {
     createSubscription: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -9576,7 +11151,10 @@ export interface operations {
     deleteSubscription: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The subscription's id. */
                 id: string;
@@ -9666,6 +11244,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -9734,6 +11314,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The task's id, from the run's state or the webhook. */
@@ -9821,6 +11403,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The task's id. */
@@ -9913,6 +11497,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The claim's token. */
@@ -10004,6 +11590,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The claim's token. */
@@ -10087,6 +11675,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The claim's token. */
@@ -10169,6 +11759,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The claim's token. */
@@ -10249,6 +11841,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) the request acts for. Required with a key or a member's token (400 without it); with an end user's token, its own namespace or nothing. */
                 "Rewind-Namespace"?: string | null;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -10339,6 +11933,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path: {
                 /** @description The test's digest. */
@@ -10416,7 +12012,10 @@ export interface operations {
     revokeToken: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The token's id. */
                 id: string;
@@ -10503,6 +12102,8 @@ export interface operations {
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
                 "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
             };
             path?: never;
             cookie?: never;
@@ -10568,7 +12169,10 @@ export interface operations {
     listToolsets: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10633,7 +12237,10 @@ export interface operations {
     createToolset: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -10729,7 +12336,10 @@ export interface operations {
     setToolsetCredentials: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The toolset's id. */
                 id: string;
@@ -10811,7 +12421,10 @@ export interface operations {
                 /** @description `dts` by default. */
                 format?: "dts" | "prompt";
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The toolset's id. */
                 id: string;
@@ -10893,7 +12506,10 @@ export interface operations {
                 /** @description At most this many tools (10 by default). */
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The toolset's id. */
                 id: string;
@@ -10970,7 +12586,10 @@ export interface operations {
     whoami: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11054,7 +12673,10 @@ export interface operations {
                  */
                 script?: string;
             };
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11119,7 +12741,10 @@ export interface operations {
     createWorkflow: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -11215,7 +12840,10 @@ export interface operations {
     getWorkflowVersions: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The workflow's name. */
                 name: string;
@@ -11292,7 +12920,10 @@ export interface operations {
     recordTests: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
             path: {
                 /** @description The workflow's name. */
                 name: string;

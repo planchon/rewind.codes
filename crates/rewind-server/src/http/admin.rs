@@ -209,6 +209,12 @@ pub(super) async fn server(State(app): State<Arc<App>>, _caller: Caller) -> Json
         roles: app.settings.roles.clone(),
         embedded: app.settings.embedded,
         virtual_time: app.engine.clock().is_virtual(),
+        mcp_url: app
+            .settings
+            .public_url
+            .as_ref()
+            .map(|url| format!("{url}{}", crate::oauth::MCP_PATH)),
+        oauth: app.oauth().is_ok(),
     })
 }
 

@@ -166,6 +166,9 @@ pub(super) async fn whoami(
         organization: None,
         organizations: Vec::new(),
     };
+    if let Some(connection) = &who.connection {
+        identity.principal = Some(super::connections::principal(&app, connection).await?);
+    }
     if let Some(caller) = &who.caller {
         identity.tenant = Some(caller.tenant.as_str().to_owned());
         identity.permissions = caller.effective_permissions();
@@ -176,7 +179,9 @@ pub(super) async fn whoami(
             granted_by: caller.granted_by.as_ref().map(ToString::to_string),
             granted_at: caller.granted_at.map(timestamp),
         });
-        if let Some(Principal::Key(hash)) = &caller.principal {
+        if let Some(Principal::Key(hash)) = &caller.principal
+            && caller.connection.is_none()
+        {
             identity.principal = Some(CallerPrincipal::Key { id: hash.to_hex() });
         }
         if let (Some(token), Some(namespace)) = (&caller.token, &caller.namespace) {
@@ -503,7 +508,8 @@ pub(super) async fn set_member_grant(
 }
 
 /// `DELETE /v1/organization/members/{user}`: deletes the member's grant, which cuts their
-/// access at their next request, then their membership in WorkOS. The caller holds every
+/// access at their next request, and their connections' grants here, then their membership in
+/// WorkOS. The caller holds every
 /// permission of the member's role; the last owner stays (409).
 pub(super) async fn remove_member(
     State(app): State<Arc<App>>,
@@ -526,6 +532,7 @@ pub(super) async fn remove_member(
         GrantDeletion::Deleted | GrantDeletion::NotFound => {}
         GrantDeletion::LastHolder => return Err(last_owner()),
     }
+    super::connections::close_for(&app, &caller.tenant, &membership.user.id).await?;
     sign_in.identity.remove_member(&membership.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

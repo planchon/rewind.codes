@@ -20,6 +20,7 @@ use utoipa::{Modify, OpenApi};
 use crate::auth::SESSION_COOKIE;
 use crate::events::StreamEvent;
 use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
+use crate::oauth::OAuthError;
 use crate::problem::{self, Problem, QuotaReached};
 use crate::webhooks::{
     WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
@@ -35,8 +36,10 @@ use crate::webhooks::{
             the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key \
             (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token \
             (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with \
-            `rk_`), except over the embedded server's unix socket and to the inbound webhook \
-            URL. What the caller may do is its grant's, or its token's: every operation requires \
+            `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's \
+            unix socket and to the inbound webhook URL. A connection names the organization a \
+            request acts in with the header `Rewind-Organization`. What the caller may do is its \
+            grant's, or its token's: every operation requires \
             one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. \
             A key or a member names the namespace (the end user) a request acts for with the \
             header `Rewind-Namespace`: required to start a run, check or test a script, it \
@@ -45,7 +48,9 @@ use crate::webhooks::{
             reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are \
             `application/problem+json`, with a `detail` written for a model. Fields are \
             camelCase, enumerated values snake_case, times RFC 3339, and durations a number and \
-            a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds."
+            a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and \
+            `/.well-known` are the OAuth authorization server of people's connections, in \
+            OAuth's own formats."
     ),
     servers((url = "/", description = "The server that serves this document.")),
     paths(
@@ -126,6 +131,13 @@ use crate::webhooks::{
         operations::create_token_key,
         operations::delete_token_key,
         operations::put_ceiling,
+        operations::list_connections,
+        operations::update_connection,
+        operations::revoke_connection,
+        operations::list_organization_connections,
+        operations::remove_organization_connection,
+        operations::get_consent,
+        operations::answer_consent,
         operations::get_server,
         operations::stop_server,
         operations::get_auth_config,
@@ -138,6 +150,13 @@ use crate::webhooks::{
         operations::get_session,
         operations::join_waitlist,
         operations::sign_out,
+        operations::authorize,
+        operations::register_client,
+        operations::exchange_token,
+        operations::revoke_oauth_token,
+        operations::get_protected_resource,
+        operations::get_protected_resource_mcp,
+        operations::get_authorization_server,
     ),
     components(schemas(
         Problem,
@@ -147,7 +166,8 @@ use crate::webhooks::{
         StreamEvent,
         WebhookEvent,
         WebhookEventType,
-        SignedTokenClaims
+        SignedTokenClaims,
+        OAuthError
     )),
     modifiers(&Conventions),
     security(("bearer" = [])),
@@ -162,8 +182,10 @@ use crate::webhooks::{
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
         (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, their credentials, and their tokens."),
+        (name = "connections", description = "People's connections: the MCP clients, Claude above all, that act for a person in the organizations they opened; and the consent that makes one."),
         (name = "server", description = "The server itself."),
         (name = "auth", description = "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist."),
+        (name = "oauth", description = "The OAuth authorization server of people's connections, for MCP clients: discovery, authorization, registration, tokens and revocation, in OAuth's formats."),
     )
 )]
 pub struct ApiDoc;
@@ -239,9 +261,22 @@ impl Modify for Conventions {
                     .scheme(HttpAuthScheme::Bearer)
                     .description(Some(
                         "An API key of the tenant (`rewind_sk_…`), a member's access token from \
-                         `/auth`, or an end user's token: opaque (`rewind_nt_…`), or a JWT the \
-                         customer signed with a key it registered (`kid` `rk_…`). The embedded \
+                         `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the \
+                         customer signed with a key it registered (`kid` `rk_…`), or a person's \
+                         connection (`rewind_ct_…`, with `Rewind-Organization`). The embedded \
                          server's unix socket takes none.",
+                    ))
+                    .build(),
+            ),
+        );
+        components.add_security_scheme(
+            "client",
+            SecurityScheme::Http(
+                HttpBuilder::new()
+                    .scheme(HttpAuthScheme::Basic)
+                    .description(Some(
+                        "A confidential OAuth client's id and secret (`client_secret_basic`); \
+                         a public client sends its `client_id` in the form instead.",
                     ))
                     .build(),
             ),
@@ -256,10 +291,20 @@ impl Modify for Conventions {
 
         for (path, item) in &mut openapi.paths.paths {
             let sign_in = path.starts_with("/auth/");
+            // OAuth's endpoints declare their own answers, in OAuth's formats.
+            let oauth = path.starts_with("/oauth/") || path.starts_with("/.well-known/");
             let namespaced = NAMESPACED.iter().any(|prefix| path.starts_with(prefix));
+            let organized = path.starts_with("/v1/")
+                && !UNORGANIZED.iter().any(|prefix| path.starts_with(prefix));
             for operation in operations_mut(item) {
                 if namespaced {
                     add_namespace_header(operation);
+                }
+                if organized {
+                    add_organization_header(operation);
+                }
+                if oauth {
+                    continue;
                 }
                 let unauthenticated = operation
                     .security
@@ -297,6 +342,37 @@ const NAMESPACED: [&str; 7] = [
     "/v1/payloads",
     "/v1/tasks",
 ];
+
+/// The paths under `/v1` that act in no tenant: a person's own connections and consents, and
+/// the onboarding of a member without organization. Every other operation takes
+/// `Rewind-Organization`.
+const UNORGANIZED: [&str; 4] = [
+    "/v1/connections",
+    "/v1/oauth/",
+    "/v1/invitations",
+    "/v1/organizations",
+];
+
+/// Declares the optional header `Rewind-Organization`.
+fn add_organization_header(operation: &mut utoipa::openapi::path::Operation) {
+    operation.parameters.get_or_insert_with(Vec::new).push(
+        ParameterBuilder::new()
+            .name(crate::headers::ORGANIZATION)
+            .parameter_in(ParameterIn::Header)
+            .required(Required::False)
+            .description(Some(
+                "The organization (`org_…`) a connection's request acts in: required on \
+                     the tenant's data with a connection's token (`rewind_ct_…`), which names \
+                     no tenant. Another caller may repeat its own tenant; another is \
+                     `forbidden`.",
+            ))
+            .schema(Some(utoipa::openapi::schema::Object::with_type(
+                utoipa::openapi::schema::Type::String,
+            )))
+            .build()
+            .into(),
+    );
+}
 
 /// Declares the optional header `Rewind-Namespace` on an operation that does not declare it
 /// itself (those that require it with a key say so in their own description).
@@ -432,11 +508,19 @@ mod operations {
         AuthConfig, AuthState, Callback, EmailVerification, GithubSignIn, MagicAuthRequest,
         MagicAuthVerification, OrganizationSelection, SessionRequest, WaitlistRequest,
     };
+    use crate::connections::{
+        Connection, ConnectionList, Consent, ConsentAnswer, ConsentQuery, ConsentRedirect,
+        UpdateConnection,
+    };
     use crate::events::{Entry, EventsQuery, StreamEvent};
     use crate::namespaces::{
         CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
         NamespaceListQuery, NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults,
         QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token, TokenKey, TokenKeyList,
+    };
+    use crate::oauth::{
+        AuthorizationServerMetadata, AuthorizeQuery, ClientMetadata, OAuthError,
+        ProtectedResourceMetadata, RegisteredClient, RevokeRequest, TokenRequest, TokenResponse,
     };
     use crate::organization::{
         CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
@@ -1531,6 +1615,117 @@ mod operations {
     pub(super) fn put_ceiling() {}
 
     // ---------------------------------------------------------------------------------------
+    // Connections
+
+    /// The caller's connections
+    ///
+    /// The person's connections, in every organization: the client, the organizations each
+    /// opens with its access and labels, when it was made and last used. For a member, even
+    /// without organization.
+    #[utoipa::path(
+        get, path = "/v1/connections", tag = "connections", operation_id = "listConnections",
+        responses(
+            (status = 200, description = "The caller's connections.", body = ConnectionList),
+            (status = 404, description = "This server has no sign-in (`not-found`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_connections() {}
+
+    /// Change a connection
+    ///
+    /// The organizations it opens from now on, their access and labels: each one where the
+    /// person holds a grant giving that access. Its person only, without reconnecting the
+    /// client.
+    #[utoipa::path(
+        patch, path = "/v1/connections/{id}", tag = "connections", operation_id = "updateConnection",
+        params(("id" = String, Path, description = "The connection's id, `cn_…`.")),
+        request_body = UpdateConnection,
+        responses(
+            (status = 200, description = "The connection as it now is.", body = Connection),
+            (status = 404, description = "No connection of the caller with this id (`not-found`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn update_connection() {}
+
+    /// Revoke a connection
+    ///
+    /// Its tokens and its grants, at once: the client must connect again. Its person only.
+    #[utoipa::path(
+        delete, path = "/v1/connections/{id}", tag = "connections", operation_id = "revokeConnection",
+        params(("id" = String, Path, description = "The connection's id, `cn_…`.")),
+        responses(
+            (status = 204, description = "Revoked."),
+            (status = 404, description = "No connection of the caller with this id (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn revoke_connection() {}
+
+    /// The connections that open the organization
+    ///
+    /// Each with its person, its client, its access and labels here (`organizations` holds
+    /// this organization only), and its last use. Requires `members:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/connections", tag = "connections", operation_id = "listOrganizationConnections",
+        responses(
+            (status = 200, description = "The connections that open the organization.", body = ConnectionList),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn list_organization_connections() {}
+
+    /// Remove the organization from a connection
+    ///
+    /// The connection no longer opens the organization; it keeps the others. Requires
+    /// `members:manage`, and the permissions of the connection's access here.
+    #[utoipa::path(
+        delete, path = "/v1/organization/connections/{id}", tag = "connections", operation_id = "removeOrganizationConnection",
+        params(("id" = String, Path, description = "The connection's id, `cn_…`.")),
+        responses(
+            (status = 204, description = "Removed."),
+            (status = 404, description = "No connection opens the organization with this id (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn remove_organization_connection() {}
+
+    /// What an authorization request asks
+    ///
+    /// For the consent page: the client, the host it returns to, and the person's
+    /// organizations with the accesses they may give in each. For a member, even without
+    /// organization.
+    #[utoipa::path(
+        get, path = "/v1/oauth/consent", tag = "connections", operation_id = "getConsent",
+        params(ConsentQuery),
+        responses(
+            (status = 200, description = "The request.", body = Consent),
+            (status = 400, description = "The request cannot be read, or it lapsed: the client starts again (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "The identity provider is unavailable (`identity-unavailable`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_consent() {}
+
+    /// Allow or deny an authorization request
+    ///
+    /// Allowing it needs at least one organization, each where the person's grant gives the
+    /// access chosen: no one gives more than they hold. Answers where to send the browser: the
+    /// client's redirect URI with a code (5 minutes) and the state, or with
+    /// `error=access_denied`. The connection is made when the client exchanges the code. For a
+    /// member, even without organization.
+    #[utoipa::path(
+        post, path = "/v1/oauth/consent", tag = "connections", operation_id = "answerConsent",
+        request_body = ConsentAnswer,
+        responses(
+            (status = 200, description = "Where to send the browser.", body = ConsentRedirect),
+            (status = 400, description = "The request cannot be read or lapsed, or no organization was chosen (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The person's grant in an organization does not give the access chosen (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn answer_consent() {}
+
+    // ---------------------------------------------------------------------------------------
     // Server
 
     /// What this server is
@@ -1715,6 +1910,124 @@ mod operations {
         )
     )]
     pub(super) fn sign_out() {}
+
+    // ---------------------------------------------------------------------------------------
+    // OAuth
+
+    /// Authorize a client
+    ///
+    /// Checks the authorization request, then sends the browser to the dashboard's consent
+    /// page with the request sealed for 10 minutes. An unknown client, or a redirect URI it
+    /// does not list, is answered here and never redirected; any other fault goes back to the
+    /// client's redirect URI with `error` and `state` (`invalid_request`,
+    /// `unsupported_response_type`, `invalid_target`). PKCE with `S256` is required.
+    #[utoipa::path(
+        get, path = "/oauth/authorize", tag = "oauth", operation_id = "authorize",
+        security(()),
+        params(AuthorizeQuery),
+        responses(
+            (status = 302, description = "To the consent page, or back to the client with an error.", headers(
+                ("Location" = String, description = "`{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`."),
+            )),
+            (status = 400, description = "An unknown client, a redirect URI it does not list, or no client or redirect URI at all (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn authorize() {}
+
+    /// Register a client
+    ///
+    /// RFC 7591, for the MCP clients without a metadata document. A client that no connection
+    /// uses is deleted after 24 hours. The secret of a confidential client is only in this
+    /// answer.
+    #[utoipa::path(
+        post, path = "/oauth/register", tag = "oauth", operation_id = "registerClient",
+        security(()),
+        request_body = ClientMetadata,
+        responses(
+            (status = 201, description = "Registered.", body = RegisteredClient),
+            (status = 400, description = "`invalid_redirect_uri` or `invalid_client_metadata`.", body = OAuthError),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "Too many clients are registered (`temporarily_unavailable`).", body = OAuthError),
+        )
+    )]
+    pub(super) fn register_client() {}
+
+    /// Exchange a code or a refresh token for tokens
+    ///
+    /// `authorization_code` (with its `code_verifier`) creates the connection, its grants and
+    /// its tokens; `refresh_token` replaces both tokens, and removes the organizations the
+    /// person left. A code or refresh token that is unknown, expired, used or another client's
+    /// is `invalid_grant`; one used twice also revokes its connection.
+    #[utoipa::path(
+        post, path = "/oauth/token", tag = "oauth", operation_id = "exchangeToken",
+        security((), ("client" = [])),
+        request_body(content = TokenRequest, content_type = "application/x-www-form-urlencoded"),
+        responses(
+            (status = 200, description = "The tokens, never cached.", body = TokenResponse),
+            (status = 400, description = "`invalid_request`, `invalid_grant`, `unsupported_grant_type` or `invalid_target`.", body = OAuthError),
+            (status = 401, description = "The client is unknown or its secret is wrong (`invalid_client`).", body = OAuthError),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+            (status = 503, description = "The identity provider cannot check the person's memberships now (`temporarily_unavailable`).", body = OAuthError),
+        )
+    )]
+    pub(super) fn exchange_token() {}
+
+    /// Revoke a token's connection
+    ///
+    /// RFC 7009: an access token or a refresh token revokes its whole connection. An unknown
+    /// token is answered as revoked.
+    #[utoipa::path(
+        post, path = "/oauth/revoke", tag = "oauth", operation_id = "revokeOAuthToken",
+        security((), ("client" = [])),
+        request_body(content = RevokeRequest, content_type = "application/x-www-form-urlencoded"),
+        responses(
+            (status = 200, description = "Revoked, or unknown."),
+            (status = 400, description = "`invalid_request`, or the token is another client's (`unauthorized_client`).", body = OAuthError),
+            (status = 401, description = "The client is unknown or its secret is wrong (`invalid_client`).", body = OAuthError),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn revoke_oauth_token() {}
+
+    /// The protected resource's metadata
+    ///
+    /// RFC 9728, the same as at `/.well-known/oauth-protected-resource/mcp`.
+    #[utoipa::path(
+        get, path = "/.well-known/oauth-protected-resource", tag = "oauth", operation_id = "getProtectedResource",
+        security(()),
+        responses(
+            (status = 200, description = "Where `/mcp` takes its tokens from.", body = ProtectedResourceMetadata),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_protected_resource() {}
+
+    /// The metadata of `/mcp`
+    ///
+    /// RFC 9728: `/mcp` is the resource, this server its authorization server.
+    #[utoipa::path(
+        get, path = "/.well-known/oauth-protected-resource/mcp", tag = "oauth", operation_id = "getProtectedResourceMcp",
+        security(()),
+        responses(
+            (status = 200, description = "Where `/mcp` takes its tokens from.", body = ProtectedResourceMetadata),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_protected_resource_mcp() {}
+
+    /// The authorization server's metadata
+    ///
+    /// RFC 8414: its endpoints, PKCE with `S256`, client metadata documents, registration.
+    #[utoipa::path(
+        get, path = "/.well-known/oauth-authorization-server", tag = "oauth", operation_id = "getAuthorizationServer",
+        security(()),
+        responses(
+            (status = 200, description = "The authorization server.", body = AuthorizationServerMetadata),
+            (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_authorization_server() {}
 }
 
 #[cfg(test)]
@@ -1752,15 +2065,22 @@ mod tests {
             for (method, operation) in item.as_object().unwrap() {
                 let id = operation["operationId"].as_str().unwrap();
                 ids.push(id.to_owned());
+                // OAuth's own errors are its JSON, as its RFCs say.
+                let oauth = matches!(
+                    path.as_str(),
+                    "/oauth/register" | "/oauth/token" | "/oauth/revoke"
+                );
                 for (status, response) in operation["responses"].as_object().unwrap() {
                     if status.starts_with('4') || status.starts_with('5') {
                         let content = response["content"].as_object();
-                        assert!(
-                            content.is_some_and(
-                                |content| content.contains_key("application/problem+json")
-                            ),
-                            "{method} {path} {status}"
-                        );
+                        let problem = content.is_some_and(|content| {
+                            content.contains_key("application/problem+json")
+                        });
+                        let oauth_error = oauth
+                            && status != "404"
+                            && response["content"]["application/json"]["schema"]["$ref"]
+                                == "#/components/schemas/OAuthError";
+                        assert!(problem || oauth_error, "{method} {path} {status}");
                     }
                 }
             }

@@ -32,6 +32,7 @@
 
 mod access;
 mod codec;
+mod connections;
 mod journal;
 mod namespaces;
 mod read_model;

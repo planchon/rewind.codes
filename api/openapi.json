@@ -27,6 +27,14 @@
         ],
         "type": "object"
       },
+      "Access": {
+        "description": "What a connection may do in an organization it opens.",
+        "enum": [
+          "read",
+          "run"
+        ],
+        "type": "string"
+      },
       "ApiKey": {
         "description": "An API key, without its secret but in the answer to its creation.",
         "properties": {
@@ -226,6 +234,82 @@
           }
         ]
       },
+      "AuthorizationServerMetadata": {
+        "description": "`GET /.well-known/oauth-authorization-server` (RFC 8414).",
+        "properties": {
+          "authorization_endpoint": {
+            "type": "string"
+          },
+          "client_id_metadata_document_supported": {
+            "description": "A `client_id` may be the `https` URL of the client's metadata document.",
+            "type": "boolean"
+          },
+          "code_challenge_methods_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "grant_types_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "issuer": {
+            "description": "`{public-url}`.",
+            "type": "string"
+          },
+          "registration_endpoint": {
+            "type": "string"
+          },
+          "response_types_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "revocation_endpoint": {
+            "type": "string"
+          },
+          "revocation_endpoint_auth_methods_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scopes_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "token_endpoint": {
+            "type": "string"
+          },
+          "token_endpoint_auth_methods_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "issuer",
+          "authorization_endpoint",
+          "token_endpoint",
+          "registration_endpoint",
+          "revocation_endpoint",
+          "response_types_supported",
+          "grant_types_supported",
+          "code_challenge_methods_supported",
+          "token_endpoint_auth_methods_supported",
+          "revocation_endpoint_auth_methods_supported",
+          "scopes_supported",
+          "client_id_metadata_document_supported"
+        ],
+        "type": "object"
+      },
       "CallAttempts": {
         "description": "How many times a tool call was sent.",
         "properties": {
@@ -348,6 +432,90 @@
         ],
         "type": "object"
       },
+      "ClientKind": {
+        "description": "How a client made itself known to Rewind.",
+        "enum": [
+          "metadata_document",
+          "registered"
+        ],
+        "type": "string"
+      },
+      "ClientMetadata": {
+        "description": "A client's metadata: the body of `POST /oauth/register` (RFC 7591), and a client's metadata\ndocument, whose `client_id` is its own URL. Other fields are ignored.",
+        "properties": {
+          "client_id": {
+            "description": "A metadata document's own URL; none at registration.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_secret": {
+            "description": "Never in a metadata document.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "logo_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redirect_uris": {
+            "description": "Each `https`, `http` on a loopback address, or a private-use scheme holding a dot\n(`cursor://…`).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "response_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_endpoint_auth_method": {
+            "description": "`none`, `client_secret_post` or `client_secret_basic` (RFC 7591's default) at\nregistration; `none` in a metadata document.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
       "CompleteTask": {
         "additionalProperties": false,
         "description": "`POST /v1/tasks/{token}/complete`: the tool's result, delivered to the script.",
@@ -356,6 +524,323 @@
         },
         "required": [
           "result"
+        ],
+        "type": "object"
+      },
+      "Connection": {
+        "description": "A person's connection.",
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/ConnectionClient"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "description": "`cn_…`.",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "description": "When an access token of it was last used, to the minute.",
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "organizations": {
+            "description": "The organizations it opens, by id. `GET /v1/organization/connections` gives the\ncaller's organization only.",
+            "items": {
+              "$ref": "#/components/schemas/ConnectionOrganization"
+            },
+            "type": "array"
+          },
+          "person": {
+            "$ref": "#/components/schemas/ConnectionPerson"
+          }
+        },
+        "required": [
+          "id",
+          "person",
+          "client",
+          "organizations",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ConnectionClient": {
+        "description": "The client a connection was made through.",
+        "properties": {
+          "id": {
+            "description": "The URL of its metadata document, or `rc_…`.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "uri": {
+            "description": "Its site.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ConnectionList": {
+        "description": "`GET /v1/connections` (the caller's) and `GET /v1/organization/connections` (those that open\nthe organization).",
+        "properties": {
+          "connections": {
+            "items": {
+              "$ref": "#/components/schemas/Connection"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "connections"
+        ],
+        "type": "object"
+      },
+      "ConnectionOrganization": {
+        "description": "An organization a connection opens.",
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/Access"
+          },
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The labels of the connection's grant there: what it starts carries them, and it sees\nonly the runs carrying them."
+          },
+          "id": {
+            "description": "`org_…`, the tenant.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Its name; unknown on a server without the identity provider.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "access",
+          "allowedLabels"
+        ],
+        "type": "object"
+      },
+      "ConnectionPerson": {
+        "description": "The person of a connection.",
+        "properties": {
+          "email": {
+            "description": "Unknown on a server without the identity provider.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "description": "`user_…`.",
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "Consent": {
+        "description": "`GET /v1/oauth/consent`: what an authorization request asks.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The labels proposed for the connection's grants: what it starts carries them."
+          },
+          "client": {
+            "$ref": "#/components/schemas/ConsentClient"
+          },
+          "expiresAt": {
+            "description": "When the request lapses: the client starts again after.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "loopback": {
+            "description": "The client returns to a loopback address: a program on the person's machine, which the\npage warns about.",
+            "type": "boolean"
+          },
+          "organizations": {
+            "description": "The person's organizations.",
+            "items": {
+              "$ref": "#/components/schemas/ConsentOrganization"
+            },
+            "type": "array"
+          },
+          "redirectHost": {
+            "description": "The host the browser returns to with the code.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client",
+          "redirectHost",
+          "loopback",
+          "organizations",
+          "allowedLabels",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "ConsentAnswer": {
+        "additionalProperties": false,
+        "description": "`POST /v1/oauth/consent`.",
+        "properties": {
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The labels of the connection's grants."
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ConsentDecision"
+          },
+          "organizations": {
+            "description": "For `allow`: at least one organization, each where the person's grant gives its access.",
+            "items": {
+              "$ref": "#/components/schemas/ConsentChoice"
+            },
+            "type": "array"
+          },
+          "request": {
+            "description": "The request, as `GET /v1/oauth/consent` read it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request",
+          "decision"
+        ],
+        "type": "object"
+      },
+      "ConsentChoice": {
+        "additionalProperties": false,
+        "description": "An organization ticked at consent, with its access.",
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/Access"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "access"
+        ],
+        "type": "object"
+      },
+      "ConsentClient": {
+        "description": "The client asking for a connection.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "logoUri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ConsentDecision": {
+        "description": "The person's answer.",
+        "enum": [
+          "allow",
+          "deny"
+        ],
+        "type": "string"
+      },
+      "ConsentOrganization": {
+        "description": "One of the person's organizations, as the consent offers it.",
+        "properties": {
+          "accesses": {
+            "description": "The accesses the person may give there: those whose permissions their grant holds.\nEmpty: they cannot open it.",
+            "items": {
+              "$ref": "#/components/schemas/Access"
+            },
+            "type": "array"
+          },
+          "current": {
+            "description": "The organization of the caller's access token: ticked in advance.",
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "description": "The role of the person's grant there; none without a grant.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "accesses",
+          "current"
+        ],
+        "type": "object"
+      },
+      "ConsentRedirect": {
+        "description": "Where the consent page sends the browser: the client's redirect URI, with the code and the\nstate, or with `error=access_denied`.",
+        "properties": {
+          "redirectTo": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirectTo"
         ],
         "type": "object"
       },
@@ -2605,6 +3090,25 @@
         "pattern": "^[A-Za-z0-9._:@-]{1,128}$",
         "type": "string"
       },
+      "OAuthError": {
+        "description": "An OAuth error (RFC 6749, section 5.2; RFC 7591, section 3.2.2), answered as\n`application/json` with `Cache-Control: no-store`.",
+        "properties": {
+          "error": {
+            "description": "`invalid_request`, `invalid_client`, `invalid_grant`, `unauthorized_client`,\n`unsupported_grant_type`, `invalid_target`, `invalid_redirect_uri`,\n`invalid_client_metadata`, `temporarily_unavailable`, `unsupported_token_type`.",
+            "type": "string"
+          },
+          "error_description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
       "OnInterruption": {
         "description": "After an interruption (the dispatcher or the worker died mid-call).",
         "enum": [
@@ -2612,6 +3116,27 @@
           "at_most_once"
         ],
         "type": "string"
+      },
+      "OpenOrganization": {
+        "additionalProperties": false,
+        "description": "An organization to open, with its access and labels.",
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/Access"
+          },
+          "allowedLabels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "id": {
+            "description": "`org_…`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "access"
+        ],
+        "type": "object"
       },
       "Organization": {
         "description": "An organization: a tenant, with the same id.",
@@ -2875,6 +3400,42 @@
               "kind"
             ],
             "type": "object"
+          },
+          {
+            "description": "A person's connection (`rewind_ct_…`): an MCP client acting for the person, in the\norganizations it opens. With `Rewind-Organization`, the identity's tenant, grant and\npermissions are the connection's there.",
+            "properties": {
+              "client": {
+                "$ref": "#/components/schemas/ConnectionClient"
+              },
+              "id": {
+                "description": "`cn_…`.",
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "connection"
+                ],
+                "type": "string"
+              },
+              "organizations": {
+                "description": "The organizations it opens, with their access and labels.",
+                "items": {
+                  "$ref": "#/components/schemas/ConnectionOrganization"
+                },
+                "type": "array"
+              },
+              "person": {
+                "$ref": "#/components/schemas/ConnectionPerson"
+              }
+            },
+            "required": [
+              "id",
+              "person",
+              "client",
+              "organizations",
+              "kind"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -2975,6 +3536,45 @@
           "title": "The run has ended",
           "type": "urn:rewind:problem:run-ended"
         }
+      },
+      "ProtectedResourceMetadata": {
+        "description": "`GET /.well-known/oauth-protected-resource/mcp` (RFC 9728): where to get tokens for `/mcp`.",
+        "properties": {
+          "authorization_servers": {
+            "description": "`[{public-url}]`.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "bearer_methods_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "resource": {
+            "description": "`{public-url}/mcp`.",
+            "type": "string"
+          },
+          "resource_name": {
+            "type": "string"
+          },
+          "scopes_supported": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "resource",
+          "authorization_servers",
+          "bearer_methods_supported",
+          "scopes_supported",
+          "resource_name"
+        ],
+        "type": "object"
       },
       "PutCeiling": {
         "additionalProperties": false,
@@ -3399,6 +3999,82 @@
         ],
         "type": "object"
       },
+      "RegisteredClient": {
+        "description": "`POST /oauth/register`'s answer (RFC 7591): the client, with its secret for a confidential\none, shown only here.",
+        "properties": {
+          "client_id": {
+            "description": "`rc_…`.",
+            "type": "string"
+          },
+          "client_id_issued_at": {
+            "description": "Seconds since the Unix epoch.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "client_name": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_secret_expires_at": {
+            "description": "0: the secret does not expire.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "client_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "logo_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "response_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "token_endpoint_auth_method": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "client_id_issued_at",
+          "redirect_uris",
+          "client_name",
+          "token_endpoint_auth_method",
+          "grant_types",
+          "response_types"
+        ],
+        "type": "object"
+      },
       "RejectTask": {
         "additionalProperties": false,
         "description": "`POST /v1/tasks/{id}/reject`: the call fails with a `ToolError` carrying this message.",
@@ -3431,6 +4107,37 @@
           "digest",
           "reason"
         ],
+        "type": "object"
+      },
+      "RevokeRequest": {
+        "description": "`POST /oauth/revoke` (RFC 7009), a form.",
+        "properties": {
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "token_type_hint": {
+            "description": "`access_token` or `refresh_token`; either revokes the connection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "RevokedTokens": {
@@ -4373,6 +5080,17 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "mcpUrl": {
+            "description": "The URL MCP clients add as a connector, `{public-url}/mcp`; null without a public URL.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "oauth": {
+            "description": "People connect MCP clients with OAuth (`/oauth`): the server has a public URL and a\nsign-in. Without it, `/mcp` takes API keys and end users' tokens only.",
+            "type": "boolean"
           },
           "roles": {
             "items": {
@@ -5481,6 +6199,102 @@
         ],
         "type": "string"
       },
+      "TokenRequest": {
+        "description": "`POST /oauth/token`, a form: `authorization_code` (with `code`, `redirect_uri`,\n`code_verifier`) or `refresh_token` (with `refresh_token`). The client's id and secret come\nin the form or in HTTP Basic authentication.",
+        "properties": {
+          "client_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "client_secret": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "code_verifier": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "grant_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redirect_uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "refresh_token": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource": {
+            "description": "`{public-url}/mcp` when given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scope": {
+            "description": "Ignored.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "TokenResponse": {
+        "description": "`POST /oauth/token`'s answer.",
+        "properties": {
+          "access_token": {
+            "description": "`rewind_ct_…`: the Bearer of `/mcp` and `/v1`.",
+            "type": "string"
+          },
+          "expires_in": {
+            "description": "3600.",
+            "format": "int64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refresh_token": {
+            "description": "`rewind_rt_…`: used once, it lapses after 30 days unused.",
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "token_type": {
+            "description": "`Bearer`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "refresh_token",
+          "scope"
+        ],
+        "type": "object"
+      },
       "Tool": {
         "description": "A pinned tool.",
         "properties": {
@@ -5936,6 +6750,22 @@
           "llm"
         ],
         "type": "string"
+      },
+      "UpdateConnection": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/connections/{id}`: the organizations the connection opens from now on, each where\nthe person holds a grant giving its access. An organization left out is closed.",
+        "properties": {
+          "organizations": {
+            "items": {
+              "$ref": "#/components/schemas/OpenOrganization"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "organizations"
+        ],
+        "type": "object"
       },
       "UpdateOrganization": {
         "additionalProperties": false,
@@ -6633,8 +7463,13 @@
     },
     "securitySchemes": {
       "bearer": {
-        "description": "An API key of the tenant (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token: opaque (`rewind_nt_…`), or a JWT the customer signed with a key it registered (`kid` `rk_…`). The embedded server's unix socket takes none.",
+        "description": "An API key of the tenant (`rewind_sk_…`), a member's access token from `/auth`, an end user's token: opaque (`rewind_nt_…`), or a JWT the customer signed with a key it registered (`kid` `rk_…`), or a person's connection (`rewind_ct_…`, with `Rewind-Organization`). The embedded server's unix socket takes none.",
         "scheme": "bearer",
+        "type": "http"
+      },
+      "client": {
+        "description": "A confidential OAuth client's id and secret (`client_secret_basic`); a public client sends its `client_id` in the form instead.",
+        "scheme": "basic",
         "type": "http"
       },
       "session": {
@@ -6646,12 +7481,117 @@
     }
   },
   "info": {
-    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), except over the embedded server's unix socket and to the inbound webhook URL. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds.",
+    "description": "The HTTP API /v1 of Rewind: toolsets, scripts, runs, host-tool tasks, webhooks, reading, the organization, access, namespaces and the server; and `/auth`, the dashboard's sign-in. Every request to /v1 carries a Bearer token, an API key (`rewind_sk_…`), a member's access token from `/auth`, or an end user's token (`rewind_nt_…`, or a JWT the customer signed with a key whose `kid` starts with `rk_`), or a person's connection (`rewind_ct_…`), except over the embedded server's unix socket and to the inbound webhook URL. A connection names the organization a request acts in with the header `Rewind-Organization`. What the caller may do is its grant's, or its token's: every operation requires one permission of the catalog (`GET /v1/permissions`), and answers 403 without it. A key or a member names the namespace (the end user) a request acts for with the header `Rewind-Namespace`: required to start a run, check or test a script, it narrows a read to that namespace. An end user's token reaches its own namespace only. `/auth` is for a browser: it reads and writes the cookie `rewind_session`, which /v1 never reads. Errors are `application/problem+json`, with a `detail` written for a model. Fields are camelCase, enumerated values snake_case, times RFC 3339, and durations a number and a unit (`\"30s\"`, `\"1h30m\"`) or a number of milliseconds. `/oauth` and `/.well-known` are the OAuth authorization server of people's connections, in OAuth's own formats.",
     "title": "Rewind API",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "description": "RFC 8414: its endpoints, PKCE with `S256`, client metadata documents, registration.",
+        "operationId": "getAuthorizationServer",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationServerMetadata"
+                }
+              }
+            },
+            "description": "The authorization server."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "The authorization server's metadata",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/.well-known/oauth-protected-resource": {
+      "get": {
+        "description": "RFC 9728, the same as at `/.well-known/oauth-protected-resource/mcp`.",
+        "operationId": "getProtectedResource",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedResourceMetadata"
+                }
+              }
+            },
+            "description": "Where `/mcp` takes its tokens from."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "The protected resource's metadata",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/.well-known/oauth-protected-resource/mcp": {
+      "get": {
+        "description": "RFC 9728: `/mcp` is the resource, this server its authorization server.",
+        "operationId": "getProtectedResourceMcp",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectedResourceMetadata"
+                }
+              }
+            },
+            "description": "Where `/mcp` takes its tokens from."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "The metadata of `/mcp`",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
     "/auth/callback": {
       "get": {
         "description": "Checks `state`, exchanges the code, keeps the outcome in the session cookie, and\nredirects to the dashboard, which asks `POST /auth/session` where the sign-in stands.\nWhen the sign-in did not go through, the redirect names why with a code\n(`state_mismatch`, `provider_error`, `sign_in_failed`), and the session cookie is left\nas it was.",
@@ -7580,10 +8520,344 @@
         ]
       }
     },
+    "/oauth/authorize": {
+      "get": {
+        "description": "Checks the authorization request, then sends the browser to the dashboard's consent\npage with the request sealed for 10 minutes. An unknown client, or a redirect URI it\ndoes not list, is answered here and never redirected; any other fault goes back to the\nclient's redirect URI with `error` and `state` (`invalid_request`,\n`unsupported_response_type`, `invalid_target`). PKCE with `S256` is required.",
+        "operationId": "authorize",
+        "parameters": [
+          {
+            "description": "`code`.",
+            "in": "query",
+            "name": "response_type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The URL of the client's metadata document, or `rc_…`.",
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of the client's redirect URIs.",
+            "in": "query",
+            "name": "redirect_uri",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The PKCE challenge: BASE64URL(SHA-256(code_verifier)).",
+            "in": "query",
+            "name": "code_challenge",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`S256`.",
+            "in": "query",
+            "name": "code_challenge_method",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Ignored: rights come from the consent.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "`{public-url}/mcp` when given.",
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "To the consent page, or back to the client with an error.",
+            "headers": {
+              "Location": {
+                "description": "`{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "An unknown client, a redirect URI it does not list, or no client or redirect URI at all (`invalid-request`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Authorize a client",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "description": "RFC 7591, for the MCP clients without a metadata document. A client that no connection\nuses is deleted after 24 hours. The secret of a confidential client is only in this\nanswer.",
+        "operationId": "registerClient",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientMetadata"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredClient"
+                }
+              }
+            },
+            "description": "Registered."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "`invalid_redirect_uri` or `invalid_client_metadata`."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "Too many clients are registered (`temporarily_unavailable`)."
+          }
+        },
+        "security": [
+          {}
+        ],
+        "summary": "Register a client",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/oauth/revoke": {
+      "post": {
+        "description": "RFC 7009: an access token or a refresh token revokes its whole connection. An unknown\ntoken is answered as revoked.",
+        "operationId": "revokeOAuthToken",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked, or unknown."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "`invalid_request`, or the token is another client's (`unauthorized_client`)."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "The client is unknown or its secret is wrong (`invalid_client`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          }
+        },
+        "security": [
+          {},
+          {
+            "client": []
+          }
+        ],
+        "summary": "Revoke a token's connection",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "description": "`authorization_code` (with its `code_verifier`) creates the connection, its grants and\nits tokens; `refresh_token` replaces both tokens, and removes the organizations the\nperson left. A code or refresh token that is unknown, expired, used or another client's\nis `invalid_grant`; one used twice also revokes its connection.",
+        "operationId": "exchangeToken",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "The tokens, never cached."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "`invalid_request`, `invalid_grant`, `unsupported_grant_type` or `invalid_target`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "The client is unknown or its secret is wrong (`invalid_client`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthError"
+                }
+              }
+            },
+            "description": "The identity provider cannot check the person's memberships now (`temporarily_unavailable`)."
+          }
+        },
+        "security": [
+          {},
+          {
+            "client": []
+          }
+        ],
+        "summary": "Exchange a code or a refresh token for tokens",
+        "tags": [
+          "oauth"
+        ]
+      }
+    },
     "/v1/api-keys": {
       "get": {
         "description": "The tenant's keys, without their secret, each with its role and allowed labels.\nRequires `api_keys:read`.",
         "operationId": "listApiKeys",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -7654,6 +8928,17 @@
       "post": {
         "description": "With a name, a role and allowed labels. The operator may name another tenant. Requires\n`api_keys:write`, and every permission of the role given.",
         "operationId": "createApiKey",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -7742,6 +9027,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -7834,6 +9128,15 @@
                 "null"
               ]
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -7921,6 +9224,295 @@
         "summary": "Type-check a script (`check_script`)",
         "tags": [
           "scripts"
+        ]
+      }
+    },
+    "/v1/connections": {
+      "get": {
+        "description": "The person's connections, in every organization: the client, the organizations each\nopens with its access and labels, when it was made and last used. For a member, even\nwithout organization.",
+        "operationId": "listConnections",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            },
+            "description": "The caller's connections."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no sign-in (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "The caller's connections",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/connections/{id}": {
+      "delete": {
+        "description": "Its tokens and its grants, at once: the client must connect again. Its person only.",
+        "operationId": "revokeConnection",
+        "parameters": [
+          {
+            "description": "The connection's id, `cn_…`.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No connection of the caller with this id (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Revoke a connection",
+        "tags": [
+          "connections"
+        ]
+      },
+      "patch": {
+        "description": "The organizations it opens from now on, their access and labels: each one where the\nperson holds a grant giving that access. Its person only, without reconnecting the\nclient.",
+        "operationId": "updateConnection",
+        "parameters": [
+          {
+            "description": "The connection's id, `cn_…`.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateConnection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            },
+            "description": "The connection as it now is."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No connection of the caller with this id (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Change a connection",
+        "tags": [
+          "connections"
         ]
       }
     },
@@ -8176,6 +9768,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8256,6 +9857,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -8352,6 +9962,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8440,6 +10059,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -8546,6 +10174,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -8634,6 +10271,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -8749,6 +10395,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -8832,10 +10487,214 @@
         ]
       }
     },
+    "/v1/oauth/consent": {
+      "get": {
+        "description": "For the consent page: the client, the host it returns to, and the person's\norganizations with the accesses they may give in each. For a member, even without\norganization.",
+        "operationId": "getConsent",
+        "parameters": [
+          {
+            "description": "The sealed authorization request, as `GET /oauth/authorize` put it in the consent\npage's URL.",
+            "in": "query",
+            "name": "request",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Consent"
+                }
+              }
+            },
+            "description": "The request."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request cannot be read, or it lapsed: the client starts again (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "What an authorization request asks",
+        "tags": [
+          "connections"
+        ]
+      },
+      "post": {
+        "description": "Allowing it needs at least one organization, each where the person's grant gives the\naccess chosen: no one gives more than they hold. Answers where to send the browser: the\nclient's redirect URI with a code (5 minutes) and the state, or with\n`error=access_denied`. The connection is made when the client exchanges the code. For a\nmember, even without organization.",
+        "operationId": "answerConsent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentAnswer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsentRedirect"
+                }
+              }
+            },
+            "description": "Where to send the browser."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request cannot be read or lapsed, or no organization was chosen (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The person's grant in an organization does not give the access chosen (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This server has no OAuth (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Allow or deny an authorization request",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
     "/v1/organization": {
       "patch": {
         "description": "Its name and its default role. Requires `organization:write`.",
         "operationId": "updateOrganization",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -8924,10 +10783,209 @@
         ]
       }
     },
+    "/v1/organization/connections": {
+      "get": {
+        "description": "Each with its person, its client, its access and labels here (`organizations` holds\nthis organization only), and its last use. Requires `members:read`.",
+        "operationId": "listOrganizationConnections",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionList"
+                }
+              }
+            },
+            "description": "The connections that open the organization."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "502": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The identity provider is unavailable (`identity-unavailable`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "The connections that open the organization",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
+    "/v1/organization/connections/{id}": {
+      "delete": {
+        "description": "The connection no longer opens the organization; it keeps the others. Requires\n`members:manage`, and the permissions of the connection's access here.",
+        "operationId": "removeOrganizationConnection",
+        "parameters": [
+          {
+            "description": "The connection's id, `cn_…`.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Removed."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No connection opens the organization with this id (`not-found`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Remove the organization from a connection",
+        "tags": [
+          "connections"
+        ]
+      }
+    },
     "/v1/organization/invitations": {
       "get": {
         "description": "Each with its pending grant. Requires `members:read`.",
         "operationId": "listInvitations",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -9008,6 +11066,17 @@
       "post": {
         "description": "The invitation by email, and its pending grant, which the invitee gets on accepting it.\nRequires `members:invite`, and every permission of the role given.",
         "operationId": "createInvitation",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -9119,6 +11188,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9212,6 +11290,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -9309,6 +11396,17 @@
       "get": {
         "description": "The organization's memberships, each with its grant. Requires `members:read`.",
         "operationId": "listMembers",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -9397,6 +11495,15 @@
             "in": "path",
             "name": "user",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -9503,6 +11610,15 @@
             "in": "path",
             "name": "user",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -9619,6 +11735,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9691,6 +11816,17 @@
       "put": {
         "description": "Requires `namespaces:write`.",
         "operationId": "putNamespaceDefaults",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -9791,6 +11927,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -9865,6 +12010,17 @@
       "get": {
         "description": "The public keys the organization signs its end users' tokens with. Requires\n`tokens:write`.",
         "operationId": "listTokenKeys",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -9935,6 +12091,17 @@
       "post": {
         "description": "A public key (a JWK: Ed25519, P-256 or RSA) and the permissions its tokens may carry,\namong those a token may hold and the caller holds. Answers its `kid`. Requires\n`tokens:write`.",
         "operationId": "createTokenKey",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -10023,6 +12190,15 @@
             "in": "path",
             "name": "kid",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -10317,6 +12493,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10399,6 +12584,17 @@
       "get": {
         "description": "Every permission, with what it lets the caller do. Any caller.",
         "operationId": "listPermissions",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10471,6 +12667,17 @@
       "get": {
         "description": "The built-in roles, then the organization's own, with their permissions. Requires\n`roles:read`.",
         "operationId": "listRoles",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10549,6 +12756,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -10643,6 +12859,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -10904,6 +13129,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10999,6 +13233,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -11202,6 +13445,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11334,6 +13586,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11422,6 +13683,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -11527,6 +13797,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11624,6 +13903,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -11756,6 +14044,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -11878,6 +14175,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -12016,6 +14322,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12125,6 +14440,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -12271,6 +14595,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12397,6 +14730,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12495,6 +14837,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -12628,6 +14979,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -12783,6 +15143,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -12925,6 +15294,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -13016,6 +15394,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -13100,6 +15487,17 @@
       "get": {
         "description": "Any caller.",
         "operationId": "getServer",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -13172,6 +15570,17 @@
       "post": {
         "description": "Only the embedded server stops this way, once its calls in flight are committed: the\nCLI uses it to replace a server of another version. Other servers answer 403. Only the\noperator.",
         "operationId": "stopServer",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "202": {
             "description": "Stopping."
@@ -13236,6 +15645,17 @@
     "/v1/subscriptions": {
       "get": {
         "operationId": "listSubscriptions",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -13306,6 +15726,17 @@
       "post": {
         "description": "The answer holds the signing secret, once.",
         "operationId": "createSubscription",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -13393,6 +15824,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -13523,6 +15963,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -13611,6 +16060,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -13716,6 +16174,15 @@
             "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
             "in": "header",
             "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
             "required": false,
             "schema": {
               "type": "string"
@@ -13841,6 +16308,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -13956,6 +16432,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -14067,6 +16552,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -14171,6 +16665,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14266,6 +16769,15 @@
                 "string",
                 "null"
               ]
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -14389,6 +16901,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14479,6 +17000,15 @@
             "in": "path",
             "name": "id",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -14605,6 +17135,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14679,6 +17218,17 @@
       "get": {
         "description": "The toolsets the tenant registered, by id, with their servers and tool names.",
         "operationId": "listToolsets",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -14749,6 +17299,17 @@
       "post": {
         "description": "Connects to the MCP servers, lists their tools, pins their schemas and policies, and\nreturns the toolset with its declarations, for the model's prompt. Content-addressed:\nregistering the same toolset again returns it (200).",
         "operationId": "createToolset",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -14869,6 +17430,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -14975,6 +17545,15 @@
                 "dts",
                 "prompt"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }
@@ -15090,6 +17669,15 @@
               "minimum": 0,
               "type": "integer"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -15174,6 +17762,17 @@
       "get": {
         "description": "The tenant, the principal (an API key, or a member with their email, name and picture),\nthe grant, and the permissions it holds; for a member, the organization of the session\nand every organization of the user. Over the embedded server's socket: the operator of\nthe tenant `local`. Any caller, even a member without organization.",
         "operationId": "whoami",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -15285,6 +17884,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -15357,6 +17965,17 @@
       "post": {
         "description": "Checks the workflow's script against its toolset and its own schemas, then runs its\nsuite: its parent's tests, minus those it retires and with those it updates, each with a\nreason, plus its new ones. It is saved as a new version, the workflow's latest, only if\nevery test passes. Saving the same workflow again returns the version saved first (200).\nA key limited to labels saves a version of its own, carrying its labels, even when the\nsame workflow was saved under other labels or tenant-wide. Runs the script's tests:\nserved by a server with the worker role (503 on the api role when there is a test to run).",
         "operationId": "createWorkflow",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -15477,6 +18096,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -15567,6 +18195,15 @@
             "in": "path",
             "name": "name",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -15714,12 +18351,20 @@
       "name": "namespaces"
     },
     {
+      "description": "People's connections: the MCP clients, Claude above all, that act for a person in the organizations they opened; and the consent that makes one.",
+      "name": "connections"
+    },
+    {
       "description": "The server itself.",
       "name": "server"
     },
     {
       "description": "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist.",
       "name": "auth"
+    },
+    {
+      "description": "The OAuth authorization server of people's connections, for MCP clients: discovery, authorization, registration, tokens and revocation, in OAuth's formats.",
+      "name": "oauth"
     }
   ],
   "webhooks": {
