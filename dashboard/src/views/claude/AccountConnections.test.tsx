@@ -85,15 +85,28 @@ describe("Account › Connections", () => {
     expect(within(dialog).getByText(/or revoke the connection/i)).toBeInTheDocument();
   });
 
-  it("revokes a connection after asking once more", async () => {
+  it("revokes a connection after asking once more, in a dialog", async () => {
     const user = userEvent.setup();
     const world = signedIn("ada@example.net", "org_01ACME");
     const { callsTo } = renderApp("/account/connections", { world });
     const table = await screen.findByRole("table");
     const code = row(table, "Claude Code");
     await user.click(within(code).getByRole("button", { name: "Revoke" }));
-    await user.click(within(code).getByRole("button", { name: "Yes" }));
+    const dialog = await screen.findByRole("dialog", { name: "Revoke Claude Code?" });
+    // Cancelling revokes nothing.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const id = world.connections.connections.find((c) => c.client.name === "Claude Code")?.id;
+    expect(callsTo(`/v1/connections/${id}`, "DELETE")).toHaveLength(0);
 
+    await user.click(within(code).getByRole("button", { name: "Revoke" }));
+    const again = await screen.findByRole("dialog", { name: "Revoke Claude Code?" });
+    const confirm = within(again).getByRole("button", { name: "Revoke" });
+    expect(confirm).toHaveClass("danger");
+    await user.click(confirm);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(callsTo(`/v1/connections/${id}`, "DELETE")).toHaveLength(1);
     await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(2));
     expect(callsTo("/v1/connections", "GET").length).toBeGreaterThanOrEqual(2);
     const revoked = world.connections.connections.find((c) => c.client.name === "Claude Code");

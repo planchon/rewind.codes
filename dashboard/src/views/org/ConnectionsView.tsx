@@ -1,7 +1,8 @@
 // Organization › Connections: the connections of people that open the organization (MCP clients
 // acting for a member, Claude above all), shown with `members:read`. Each has the access its
 // person chose there, never more than their own role. Whoever holds `members:manage` removes the
-// organization from a connection; the person's other organizations stay open to it.
+// organization from a connection, in a dialog that asks once more; the person's other
+// organizations stay open to it.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import {
@@ -15,9 +16,10 @@ import { useMembers } from "../../api/organization";
 import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
 import { AccessTag, ClientName, connectionName } from "../claude/bits";
-import { ConfirmButton, Person } from "./bits";
+import { Person } from "./bits";
 import { SectionGate } from "./OrganizationView";
 
 export function ConnectionsView() {
@@ -52,15 +54,14 @@ function OrganizationConnections() {
   const queryClient = useQueryClient();
   const connections = useOrganizationConnections();
   const manage = access.can("members:manage");
-  const [failed, setFailed] = useState<{ id: string; error: unknown } | null>(null);
+  const [removing, setRemoving] = useState<Connection | null>(null);
   const remove = useMutation({
     mutationFn: (id: string) => removeOrganizationConnection(api, id),
-    onMutate: () => setFailed(null),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ORG_CONNECTIONS });
       await queryClient.invalidateQueries({ queryKey: CONNECTIONS });
+      setRemoving(null);
     },
-    onError: (error, id) => setFailed({ id, error }),
   });
   const org = access.organization?.name ?? "the organization";
 
@@ -73,6 +74,26 @@ function OrganizationConnections() {
           ? " Removing the organization from a connection leaves its person's other organizations to it."
           : ""}
       </p>
+      <ConfirmDialog
+        open={removing !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoving(null);
+        }}
+        title={`Remove ${org} from ${removing ? connectionName(removing, true) : "this connection"}?`}
+        description={
+          <>
+            This connection stops reaching {org} at its next call. The other organizations its
+            person opened to it stay open; they may open {org} to it again from their account.
+          </>
+        }
+        confirm="Remove"
+        pendingLabel="Removing…"
+        pending={remove.isPending}
+        error={remove.error}
+        onConfirm={() => {
+          if (removing) remove.mutate(removing.id);
+        }}
+      />
       {connections.isPending ? (
         <Loading />
       ) : connections.error ? (
@@ -99,7 +120,6 @@ function OrganizationConnections() {
                   <tr key={c.id}>
                     <td>
                       <Who connection={c} you={c.person.id === access.user?.id} />
-                      {failed?.id === c.id && <ErrorNote error={failed.error} />}
                     </td>
                     <td>
                       <ClientName client={c.client} />
@@ -113,13 +133,16 @@ function OrganizationConnections() {
                     </td>
                     {manage && (
                       <td className="right">
-                        <ConfirmButton
-                          confirm={`Remove ${org} from ${connectionName(c, true)}?`}
-                          pending={remove.isPending}
-                          onConfirm={() => remove.mutate(c.id)}
+                        <button
+                          type="button"
+                          className="btn small"
+                          onClick={() => {
+                            remove.reset();
+                            setRemoving(c);
+                          }}
                         >
                           Remove from organization
-                        </ConfirmButton>
+                        </button>
                       </td>
                     )}
                   </tr>

@@ -694,7 +694,9 @@ h3 {
   color: var(--ink-3);
 }
 
-.select {
+/* Every drop-down draws its own chevron, 12px from its right edge: a native one hugs the edge. */
+.select,
+select.input {
   appearance: none;
   padding-right: 32px;
   background-image:

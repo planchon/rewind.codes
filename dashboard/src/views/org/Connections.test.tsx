@@ -39,8 +39,12 @@ describe("Organization › Connections", () => {
     const grace = row(table, "Grace Hopper");
     const id = world.connections.connections.find((c) => c.userId === "user_01GRACE")?.id;
     await user.click(within(grace).getByRole("button", { name: "Remove from organization" }));
-    expect(within(grace).getByText("Remove Acme from Grace Hopper's Claude?")).toBeVisible();
-    await user.click(within(grace).getByRole("button", { name: "Yes" }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Remove Acme from Grace Hopper's Claude?",
+    });
+    const confirm = within(dialog).getByRole("button", { name: "Remove" });
+    expect(confirm).toHaveClass("danger");
+    await user.click(confirm);
 
     await waitFor(() =>
       expect(callsTo(`/v1/organization/connections/${id}`, "DELETE")).toHaveLength(1),

@@ -11,11 +11,14 @@ function step(n: number): Promise<HTMLElement> {
 }
 
 describe("Connect Claude", () => {
-  it("is in the sidebar, and lists the toolsets, warning of host tools", async () => {
+  it("is in the account menu, not among the views, and lists the toolsets, warning of host tools", async () => {
+    const user = userEvent.setup();
     const world = signedIn("grace@example.net");
     renderApp("/", { world });
     const views = await screen.findByRole("navigation", { name: "Views" });
-    await userEvent.setup().click(within(views).getByRole("link", { name: "Connect Claude" }));
+    expect(within(views).queryByRole("link", { name: "Connect Claude" })).toBeNull();
+    await user.click(screen.getByLabelText("Account: Grace Hopper"));
+    await user.click(await screen.findByRole("menuitem", { name: "Connect Claude" }));
     expect(await screen.findByRole("heading", { name: "Connect Claude" })).toBeInTheDocument();
 
     const toolsets = await step(1);

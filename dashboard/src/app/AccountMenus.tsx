@@ -1,7 +1,7 @@
 // The menus of the frame (archi/05, "One sidebar"): at the top of the sidebar, the organization
 // picker (the member's organizations, the invitations waiting, a new organization); at its
-// bottom, the account (the organization's parts, the theme, the time zone, the server, the
-// sign-out). Menus and dialogs are Base UI's, styled with the tokens.
+// bottom, the account (the organization's parts, Connect Claude and the connections, the theme,
+// the time zone, the server, the sign-out). Menus and dialogs are Base UI's, styled with the tokens.
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -15,6 +15,7 @@ import {
   Monitor,
   Moon,
   Plug,
+  PlugZap,
   Plus,
   SlidersHorizontal,
   Sun,
@@ -320,12 +321,15 @@ export function AccountMenu({
   user,
   server,
   onOrganization,
+  onConnect,
   onConnections,
 }: {
   user: User | null;
   server?: string | null;
   /** Opens the organization's parts; the onboarding has none. */
   onOrganization?: () => void;
+  /** Opens Connect Claude. */
+  onConnect?: () => void;
   /** Opens the member's connections (Account › Connections); a key has none. */
   onConnections?: () => void;
 }) {
@@ -383,13 +387,20 @@ export function AccountMenu({
                   </span>
                 )}
               </div>
-              {(organization || (user && onConnections)) && (
+              {(organization || onConnect || (user && onConnections)) && (
                 <Menu.Separator className="menu-separator" />
               )}
               {organization && (
                 <Menu.Item className="menu-item" onClick={organization}>
                   <SlidersHorizontal size={14} aria-hidden="true" />
                   <span className="menu-item-text">Organization</span>
+                  <ChevronRight size={14} className="menu-item-end" aria-hidden="true" />
+                </Menu.Item>
+              )}
+              {onConnect && (
+                <Menu.Item className="menu-item" onClick={onConnect}>
+                  <PlugZap size={14} aria-hidden="true" />
+                  <span className="menu-item-text">Connect Claude</span>
                   <ChevronRight size={14} className="menu-item-end" aria-hidden="true" />
                 </Menu.Item>
               )}

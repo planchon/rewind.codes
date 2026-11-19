@@ -1,7 +1,7 @@
 // Account › Connections: the MCP clients the person let act for them, Claude above all. Each
 // opens the organizations they ticked, with an access and labels; the person changes them in a
 // dialog (`PATCH /v1/connections/{id}`), without reconnecting the client, or revokes the
-// connection (`DELETE`), which the client loses at once.
+// connection (`DELETE`) in a dialog that asks once more, which the client loses at once.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plug } from "lucide-react";
 import { useState } from "react";
@@ -20,12 +20,12 @@ import type { Labels } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { useApi, useSession } from "../../app/session";
 import { Ago, Empty, Loading } from "../../components/bits";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { PageHeader } from "../../components/PageHeader";
 import { formatLabels, parseLabels } from "../../model/access";
 import { ACCESS_INFO } from "../../model/connections";
-import { ConfirmButton } from "../org/bits";
 import { ClientName, OrganizationList } from "./bits";
 
 export function AccountConnectionsView() {
@@ -56,15 +56,14 @@ function Connections() {
   const connections = useConnections();
   const [editing, setEditing] = useState(false);
   const [target, setTarget] = useState<Connection | null>(null);
-  const [failed, setFailed] = useState<{ id: string; error: unknown } | null>(null);
+  const [revoking, setRevoking] = useState<Connection | null>(null);
   const revoke = useMutation({
     mutationFn: (id: string) => revokeConnection(api, id),
-    onMutate: () => setFailed(null),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: CONNECTIONS });
       await queryClient.invalidateQueries({ queryKey: ORG_CONNECTIONS });
+      setRevoking(null);
     },
-    onError: (error, id) => setFailed({ id, error }),
   });
 
   return (
@@ -82,6 +81,27 @@ function Connections() {
       <FormDialog open={editing} onOpenChange={setEditing}>
         {target && <EditConnection connection={target} onDone={() => setEditing(false)} />}
       </FormDialog>
+      <ConfirmDialog
+        open={revoking !== null}
+        onOpenChange={(open) => {
+          if (!open) setRevoking(null);
+        }}
+        title={`Revoke ${revoking?.client.name ?? "this connection"}?`}
+        description={
+          <>
+            {revoking?.client.name ?? "The client"} stops reaching Rewind at its next call, in every
+            organization this connection opens. To use Rewind from it again, connect it again from
+            the client.
+          </>
+        }
+        confirm="Revoke"
+        pendingLabel="Revoking…"
+        pending={revoke.isPending}
+        error={revoke.error}
+        onConfirm={() => {
+          if (revoking) revoke.mutate(revoking.id);
+        }}
+      />
       {connections.isPending ? (
         <Loading />
       ) : connections.error ? (
@@ -107,7 +127,6 @@ function Connections() {
                 <tr key={c.id}>
                   <td>
                     <ClientName client={c.client} />
-                    {failed?.id === c.id && <ErrorNote error={failed.error} />}
                   </td>
                   <td className="wrap">
                     <OrganizationList organizations={c.organizations} />
@@ -131,13 +150,16 @@ function Connections() {
                       >
                         Edit
                       </button>
-                      <ConfirmButton
-                        confirm={`Revoke ${c.client.name}?`}
-                        pending={revoke.isPending}
-                        onConfirm={() => revoke.mutate(c.id)}
+                      <button
+                        type="button"
+                        className="btn small"
+                        onClick={() => {
+                          revoke.reset();
+                          setRevoking(c);
+                        }}
                       >
                         Revoke
-                      </ConfirmButton>
+                      </button>
                     </span>
                   </td>
                 </tr>
