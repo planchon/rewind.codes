@@ -12,6 +12,7 @@ build = "build.rs"
 # (archi/07-code-architecture.md, "Dependency rules"). Each adapter is wired in its own module of
 # `src/wiring/`.
 [dependencies]
+rewind-agent-tools.workspace = true
 rewind-api.workspace = true
 rewind-blob.workspace = true
 rewind-check.workspace = true
@@ -20,6 +21,7 @@ rewind-core.workspace = true
 rewind-engine.workspace = true
 rewind-format.workspace = true
 rewind-mcp.workspace = true
+rewind-mcp-server.workspace = true
 rewind-otel.workspace = true
 rewind-runtime.workspace = true
 rewind-store-postgres.workspace = true

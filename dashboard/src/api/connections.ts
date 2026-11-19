@@ -1,103 +1,38 @@
 // A person's connections (archi/06, "Connections"), the consent of an MCP client, and what
-// `GET /v1/server` says of `/mcp`: their types, calls and data hooks.
-//
-// HAND-WRITTEN TYPES. `api/openapi.json` does not describe `/v1/connections`,
-// `/v1/organization/connections`, `/v1/oauth/consent`, nor the fields `mcpUrl` and `oauth` of
-// `GET /v1/server` yet. Once it does, run `pnpm generate:api`, replace every type below with its
-// generated schema (`components["schemas"][…]` through `./types`), and move the calls onto the
-// typed client of `./client` (`api.client.GET("/v1/connections")`…). Until then the calls go
-// through `Api.raw`, which sends the same Bearer token, renews it once on a 401, and reads a
-// problem from any answer that is not a success.
+// `GET /v1/server` says of `/mcp`: their types, generated from api/openapi.json, their calls and
+// data hooks.
 import { useQuery } from "@tanstack/react-query";
 import { useApi } from "../app/session";
+import type { components } from "../generated/api";
 import type { Api } from "./client";
 import type { ServerInfo } from "./types";
 
+type Schemas = components["schemas"];
+
 /** What a connection may do in an organization: `read`, or `run` (start, signal, cancel too). */
-export type ConnectionAccess = "read" | "run";
+export type ConnectionAccess = Schemas["Access"];
 
 export const ACCESSES: readonly ConnectionAccess[] = ["read", "run"];
 
 /** The person a connection acts for. */
-export interface ConnectionPerson {
-  id: string;
-  email: string | null;
-  name: string | null;
-}
-
+export type ConnectionPerson = Schemas["ConnectionPerson"];
 /** The MCP client: a metadata document's URL (CIMD), or `rc_…` when it registered itself. */
-export interface ConnectionClient {
-  id: string;
-  name: string;
-  uri: string | null;
-  kind: "metadata_document" | "registered";
-}
-
+export type ConnectionClient = Schemas["ConnectionClient"];
 /** An organization a connection opens, with its access and the labels of its grant there. */
-export interface ConnectionOrganization {
-  id: string;
-  name: string | null;
-  access: ConnectionAccess;
-  allowedLabels: Record<string, string>;
-}
-
-export interface Connection {
-  /** `cn_…` */
-  id: string;
-  person: ConnectionPerson;
-  client: ConnectionClient;
-  /** For `/v1/organization/connections`, this organization only. */
-  organizations: ConnectionOrganization[];
-  createdAt: string;
-  lastUsedAt: string | null;
-}
-
-export interface ConnectionList {
-  connections: Connection[];
-}
-
+export type ConnectionOrganization = Schemas["ConnectionOrganization"];
+/** For `/v1/organization/connections`, `organizations` holds this organization only. */
+export type Connection = Schemas["Connection"];
+export type ConnectionList = Schemas["ConnectionList"];
 /** `PATCH /v1/connections/{id}`: the organizations it opens, replaced whole. */
-export interface UpdateConnection {
-  organizations: { id: string; access: ConnectionAccess; allowedLabels: Record<string, string> }[];
-}
-
+export type UpdateConnection = Schemas["UpdateConnection"];
 /** An organization of the person, as the consent offers it. */
-export interface ConsentOrganization {
-  id: string;
-  name: string | null;
-  /** The person's role there. */
-  role: string | null;
-  /** The accesses the person may give there; none means it cannot be opened. */
-  accesses: ConnectionAccess[];
-  /** The organization open in the dashboard: ticked in advance. */
-  current: boolean;
-}
-
+export type ConsentOrganization = Schemas["ConsentOrganization"];
 /** `GET /v1/oauth/consent?request=…`: what an authorization request asks. */
-export interface ConsentRequest {
-  client: ConnectionClient & { logoUri: string | null };
-  /** The host the browser returns to. */
-  redirectHost: string;
-  /** It returns to a program on this computer (`http://127.0.0.1:…`, Claude Code's). */
-  loopback: boolean;
-  organizations: ConsentOrganization[];
-  /** The labels of what the client starts (`via: claude`), which the person may untick. */
-  allowedLabels: Record<string, string>;
-  expiresAt: string;
-}
-
+export type ConsentRequest = Schemas["Consent"];
 /** `POST /v1/oauth/consent`. */
-export interface ConsentDecision {
-  request: string;
-  decision: "allow" | "deny";
-  organizations: { id: string; access: ConnectionAccess }[];
-  allowedLabels: Record<string, string>;
-}
-
-export interface ConsentAnswer {
-  /** Where to send the browser: the client's redirect URI with a code, or with an error. */
-  redirectTo: string;
-}
+export type ConsentDecision = Schemas["ConsentAnswer"];
+/** Where to send the browser: the client's redirect URI with a code, or with an error. */
+export type ConsentAnswer = Schemas["ConsentRedirect"];
 
 /** What `GET /v1/server` says of `/mcp`. */
 export interface McpInfo {
@@ -107,10 +42,9 @@ export interface McpInfo {
   oauth: boolean;
 }
 
-/** The fields of `GET /v1/server` the generated `ServerInfo` does not have yet. */
+/** What `GET /v1/server` says of `/mcp`. */
 export function mcpOf(server: ServerInfo): McpInfo {
-  const more = server as ServerInfo & Partial<McpInfo>;
-  return { mcpUrl: more.mcpUrl ?? null, oauth: more.oauth ?? false };
+  return { mcpUrl: server.mcpUrl ?? null, oauth: server.oauth ?? false };
 }
 
 // Calls

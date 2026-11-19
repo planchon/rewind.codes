@@ -87,6 +87,12 @@ describe("arrivedSince", () => {
     expect(arrivedSince(snapshotOf(before), next)?.id).toBe("cn_2");
   });
 
+  it("does not take a connection never used for one used since", () => {
+    const unused = connection("cn_3", "2026-11-19T10:00:00Z", null);
+    const { lastUsedAt: _, ...withoutLastUse } = unused;
+    expect(arrivedSince(snapshotOf([unused]), [withoutLastUse])).toBeNull();
+  });
+
   it("sees a connection used since", () => {
     const next = [connection("cn_1", "2026-11-10T10:00:00Z", "2026-11-19T10:00:05Z")];
     expect(arrivedSince(snapshotOf(before), next)?.id).toBe("cn_1");

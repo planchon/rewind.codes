@@ -125,6 +125,18 @@ impl Client {
         })
     }
 
+    /// The same client, sharing its connections, authenticated with another Bearer: what
+    /// `rewind-server` does to call `/v1` as each caller of `/mcp`.
+    pub fn with_bearer(&self, bearer: &str) -> Result<Self, Error> {
+        let mut value = HeaderValue::from_str(&format!("Bearer {bearer}"))
+            .map_err(|_| Error::invalid("Bearer", "it holds characters a header cannot"))?;
+        value.set_sensitive(true);
+        Ok(Self {
+            api_key: Some(value),
+            ..self.clone()
+        })
+    }
+
     /// The same client, acting for the end user of `namespace`: every request carries
     /// `Rewind-Namespace`. A key needs it to start a run; on a read, it narrows the answer to
     /// that namespace.

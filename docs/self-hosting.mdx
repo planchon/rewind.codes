@@ -59,7 +59,7 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | `--blobs` | `REWIND_BLOBS` | Large payloads and archives: a directory, or `s3://<bucket>` (with `--s3-endpoint` and credentials for MinIO or R2) |
 | `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
 | `--admin-key` | `REWIND_ADMIN_KEY` | The first API key, registered at start |
-| `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL |
+| `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL, and `/mcp` has no OAuth sign-in |
 | `--role` | | `api`, `worker`, or both (the default) |
 | `--virtual-time` | | Timers fire as soon as nothing else can advance: for tests and demos |
 | `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Deliver lifecycle webhooks to private addresses and `http://`, for local development |
@@ -95,6 +95,30 @@ docker compose up -d --build    # builds the image from the repository
 Workers are stateless: add more to scale. The workers can run under gVisor (the `gvisor` Compose profile). The
 [deployment's README](https://github.com/planchon/rewind.codes/blob/main/deploy/README.md) covers configuration,
 upgrades across determinism epochs, backups and load tests.
+
+## Connect Claude to your server
+
+Your server is an MCP server at `{public-url}/mcp`, as the hosted one is at `https://api.rewind.codes/mcp`: add it to
+Claude as [Use Rewind from Claude](/claude) explains, with your URL.
+
+- **With a key, at once.** `/mcp` takes an API key as `Authorization: Bearer`. On the development server above:
+
+  ```bash
+  claude mcp add --transport http rewind http://127.0.0.1:8080/mcp \
+    --header "Authorization: Bearer $REWIND_ADMIN_KEY"
+  ```
+
+  Then ask Claude Code to list your organizations, check a script or run one. A key acts with its role in its
+  organization; give a key of its own to each client, with the least role that works.
+- **With each person's own sign-in.** Claude's connectors and Claude Code sign in through Rewind's OAuth, which needs
+  `--public-url` and [WorkOS](https://workos.com) for the dashboard's sign-in and the consent page: `WORKOS_API_KEY`,
+  `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD` and `WORKOS_REDIRECT_URI`, all four or none. The consent page is the
+  dashboard's, at the origin of `WORKOS_REDIRECT_URI`. claude.ai reaches your server from Anthropic's network: its
+  public URL must be `https://` and reachable from the internet. Claude Code reaches it from your machine, so
+  `http://127.0.0.1:8080` works for it.
+- **With the API and the workers apart.** `/mcp`, `/oauth/*` and `/.well-known/*` are served by the `api` role. What
+  runs a script's tests (`test_script`, a fork of a workflow's run) goes back to the workers through the public URL,
+  so the edge routes `POST /v1/test`, `POST /v1/workflows` and `POST /v1/runs/{id}/fork` to them, as `deploy/`'s does.
 
 ## The embedded server
 

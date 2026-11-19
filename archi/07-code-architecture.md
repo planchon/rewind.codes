@@ -779,20 +779,24 @@ The flow:
   with `isError`. `wait` is at most 200 s, 30 s by default (Claude gives a call 240 s), and a
   result at most 80 000 characters (Claude Code takes 25 000 tokens by default), the rest paged
   with `offset` as in the SDK.
-- **How a tool runs.** The tool calls `/v1` in process, with the caller's Bearer,
-  `Rewind-Organization` and `Rewind-Namespace`: one authorization, the code every client goes
-  through. What runs model-written code (`POST /v1/test`, a fork's suite) goes to the workers
-  through `{public-url}` when this server has no worker role.
+- **How a tool runs.** The tool calls `/v1` on this server over the loopback address, with the
+  caller's Bearer, `Rewind-Organization` and `Rewind-Namespace`: one authorization, the code and
+  the limits every client goes through. What runs model-written code (`POST /v1/test`,
+  `POST /v1/workflows`, a fork's suite) goes to the workers through `{public-url}` when this
+  server has no worker role, as the edge routes it.
+- **No `Host` check.** Every request carries a Bearer and none reads a cookie, so a page that
+  rebinds a name to the server gains nothing.
 
 | Tool | Permission | Arguments beyond the SDK's | Annotations |
 | --- | --- | --- | --- |
 | `list_orgs` | none | none | read-only |
 | `list_namespaces` | `namespaces:read` | `org`, `prefix` | read-only |
 | `list_toolsets` | `toolsets:read` | `org` | read-only |
-| `search_tools`, `get_workflow` | `toolsets:read` | `org`, `toolset` | read-only |
+| `search_tools` | `toolsets:read` | `org`, `toolset` | read-only |
+| `get_workflow` | `toolsets:read` | `org` | read-only |
 | `check_script`, `test_script` | `runs:start` | `org`, `namespace`, `toolset` | read-only |
 | `get_run`, `list_runs` | `runs:read` | `org`, `namespace` (optional) | read-only |
-| `record_tests` | `runs:read` | `org`, `toolset` | |
+| `record_tests` | `runs:read` | `org` | |
 | `run_script` | `runs:start` | `org`, `namespace`, `toolset` | open world |
 | `retry_run` | `runs:start` | `org` | open world |
 | `signal_run` | `runs:control` | `org` | |

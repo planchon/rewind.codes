@@ -40,12 +40,12 @@ use crate::error::{ApiError, FreesAt};
 
 /// The largest request body: payloads are bounded at 8 MiB of canonical JSON, and JSON as sent
 /// may be larger.
-const BODY_LIMIT: usize = 16 * 1024 * 1024;
+pub(crate) const BODY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// The routes of one listener. Over the embedded server's socket, no key is read: the caller is
 /// the operator of the tenant `local`. Over TCP, every request to `/v1` carries a key or, with
 /// WorkOS on the api role, a member's access token.
-pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
+pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router {
     let api = Router::new()
         .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))
         .route(routes::TOOLSET_DECLARATIONS, get(toolsets::declarations))
@@ -218,7 +218,8 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .fallback(dashboard::serve)
         .with_state(app.clone())
         .merge(sign_in)
-        .merge(oauth);
+        .merge(oauth)
+        .merge(mcp.unwrap_or_default());
     api.merge(public)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(from_fn(refuse_oversized))

@@ -140,7 +140,7 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
   const ticked = consent.organizations.filter((o) => choices.get(o.id)?.checked).length;
   const busy = answer.isPending || leaving !== null;
   const client = consent.client;
-  const site = hostOf(client.uri);
+  const site = hostOf(client.uri ?? null);
   const user = phase.kind === "member" ? phase.state.user : null;
 
   if (leaving) {

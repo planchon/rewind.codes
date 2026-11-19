@@ -30,6 +30,7 @@ mod error;
 mod extract;
 mod grants;
 mod http;
+mod mcp;
 mod oauth;
 mod serve;
 mod tokens;

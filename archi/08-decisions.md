@@ -1111,6 +1111,9 @@ scope saved first, and could not run a host-tool worker.
 | The connection is created when its code is exchanged, from the choices kept with the code | At the consent | A consent whose code is never exchanged leaves nothing behind. |
 | A result holds at most 80 000 characters, and `wait` is at most 200 s | The SDK's bounds | Claude Code takes 25 000 tokens per result by default, and claude.ai gives a call 240 s. |
 | `org` takes an organization's id or its name | Its id only | People say names in a conversation; a name two of the caller's organizations share is refused, with both ids. |
+| The MCP tools call `/v1` on their own server over the loopback address, with `rewind_api::Client` and the caller's Bearer; through the public URL for what runs on the workers | A second implementation of the tools' port over the router in process | One client of `/v1`, its authorization and its limits for every caller; a local hop costs well under a millisecond against tool calls of seconds, and the workers are reached the way the edge routes every client. |
+| `get_workflow` and `record_tests` take no `toolset` over MCP | The optional `toolset` of the first table | `/v1` finds a workflow by its name in the organization; the argument changed nothing. |
+| `/mcp` reads its body up to `/v1`'s limit before `rmcp` does | `rmcp`'s own reading | `rmcp` reads a body whole, without a bound. |
 
 ### Taken while building the agent tools and the MCP server (November 2026)
 
@@ -1135,7 +1138,7 @@ scope saved first, and could not run a host-tool worker.
 
 | Decision | Alternative rejected | Why |
 | --- | --- | --- |
-| The types of the connections, the consent and `GET /v1/server`'s `mcpUrl` and `oauth` are hand-written in `dashboard/src/api/connections.ts`, and called through `Api.raw`, until `api/openapi.json` describes them | Adding the paths to the generated file by hand; waiting for the API | The API is built in parallel. One module to replace by the generated types, and `src/generated/api.ts` stays what the generator wrote. |
+| The types of the connections, the consent and `GET /v1/server`'s `mcpUrl` and `oauth` were hand-written in `dashboard/src/api/connections.ts` while the API was built in parallel; they are now the generated ones, named there, and the calls go through `Api.raw` | Adding the paths to the generated file by hand; waiting for the API | `src/generated/api.ts` stays what the generator wrote. A field the API may leave out (`lastUsedAt`, `uri`) is read with `?? null`. |
 | The consent is a page of its own, outside the frame, as the sign-in is | A view inside the sidebar's frame | It is reached from Claude, often in a window of its own, and asks one question: the person sees whom they answer, not the dashboard's views. |
 | The route a sign-in starts from is kept in the tab's `sessionStorage` before leaving for GitHub, and put back at the next load when the address is `/#/`, once, within 15 minutes; any route, not the consent's only. A code by email signs in on the same page, the route untouched | Carrying the fragment through `/auth/github`'s state | The fragment never reaches the server, and `/auth/callback` lands on `/#/`; GitHub's round trip happens in the same tab. A deep link to a run is worth keeping the same way. |
 | A member without organization who opens the consent meets the onboarding first, told that Claude waits; the consent shows once they are in one, the address kept | The consent with nothing to tick | Nothing can be allowed without an organization; the request lasts 10 minutes, the onboarding takes one. |

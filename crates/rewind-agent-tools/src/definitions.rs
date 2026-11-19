@@ -567,15 +567,6 @@ fn toolset_of_script() -> Value {
     })
 }
 
-/// The toolset of `get_workflow` and `record_tests`, as 07's table gives it: the SDK offers
-/// them only with a toolset; `/v1` finds a workflow by its name alone.
-fn toolset_of_workflow() -> Value {
-    json!({
-        "type": "string",
-        "description": "The toolset whose scripts start the workflow, as list_toolsets gives it. Optional: the workflow is found by its name in the organization."
-    })
-}
-
 /// The wait of the MCP set: 30 s when absent, 200 s at most (Claude gives a call 240 s).
 fn mcp_wait(schema: &Value) -> Value {
     let described = schema["description"].as_str().unwrap_or_default();
@@ -736,17 +727,13 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             annotations(false, false, true),
             "Give the organization of the run as `org`: the new run takes its namespace and its toolset.",
         ),
-        "get_workflow" => {
-            extra.push(("toolset", toolset_of_workflow()));
-            (
-                "Read a workflow",
-                Permission::ToolsetsRead,
-                Annotations::READ,
-                "Give the organization as `org`.",
-            )
-        }
+        "get_workflow" => (
+            "Read a workflow",
+            Permission::ToolsetsRead,
+            Annotations::READ,
+            "Give the organization as `org`.",
+        ),
         "record_tests" => {
-            extra.push(("toolset", toolset_of_workflow()));
             description = description.replace(
                 "pass their digests in save_workflow's `tests`, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
                 "pass their digests in test_script's `tests` to run them against a script, or { from: <digest>, expect } to give a failed run the expectation it should have met.",
@@ -837,9 +824,10 @@ mod tests {
         assert!(tool("get_run").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_runs").input_schema["properties"]["namespace"].is_object());
         assert!(tool("list_namespaces").input_schema["properties"]["prefix"].is_object());
+        // `/v1` finds a workflow by its name alone: no toolset to give.
         for name in ["get_workflow", "record_tests"] {
             assert!(
-                tool(name).input_schema["properties"]["toolset"].is_object(),
+                tool(name).input_schema["properties"].get("toolset").is_none(),
                 "{name}"
             );
         }

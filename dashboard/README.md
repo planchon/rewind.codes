@@ -161,9 +161,8 @@ named by their content hash). `dist/` is not committed; `rewind-server` embeds i
 - The Claude pages read `GET /v1/connections`, `GET /v1/organization/connections`,
   `GET /v1/oauth/consent?request=…` and `GET /v1/toolsets`, and write `PATCH` and `DELETE
   /v1/connections/{id}`, `DELETE /v1/organization/connections/{id}` and `POST /v1/oauth/consent`.
-  `api/openapi.json` does not describe the connections, the consent, nor `mcpUrl` and `oauth` of
-  `GET /v1/server` yet: their types are hand-written in `src/api/connections.ts`, called through
-  `Api.raw`, to be replaced by the generated ones (`pnpm generate:api`) once it does.
+  Their types are the generated ones, named in `src/api/connections.ts`, where the calls go
+  through `Api.raw`.
 
 ## Layout
 

@@ -1522,3 +1522,240 @@ async fn without_a_public_url_there_is_no_oauth() {
     let info = server.admin.server_info().await.unwrap();
     assert_eq!((info.mcp_url, info.oauth), (None, false));
 }
+
+// -------------------------------------------------------------------------------------------
+// `/mcp` (`archi/07-code-architecture.md`, "MCP and OAuth")
+
+/// One exchange with `/mcp`, as an MCP client without session sends it: the status, the
+/// `WWW-Authenticate` header, and the JSON-RPC answer.
+async fn mcp(
+    world: &World,
+    bearer: Option<&str>,
+    method: &str,
+    params: Value,
+) -> (u16, String, Value) {
+    let mut request = world
+        .http
+        .post(world.url("/mcp"))
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2025-06-18")
+        .json(&json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }));
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
+    let response = request.send().await.unwrap();
+    let status = response.status().as_u16();
+    let challenge = response
+        .headers()
+        .get("www-authenticate")
+        .map(|value| value.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    let body = response.json().await.unwrap_or(Value::Null);
+    (status, challenge, body)
+}
+
+/// `tools/call`: the text of its result, and whether it is an error.
+async fn call(world: &World, bearer: &str, tool: &str, arguments: Value) -> (String, bool) {
+    let (status, _, body) = mcp(
+        world,
+        Some(bearer),
+        "tools/call",
+        json!({ "name": tool, "arguments": arguments }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let result = &body["result"];
+    assert!(result.is_object(), "{tool}: {body}");
+    let text = result["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|content| content["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (text, result["isError"].as_bool().unwrap_or(false))
+}
+
+async fn tool_names(world: &World, bearer: &str) -> Vec<String> {
+    let (status, _, body) = mcp(world, Some(bearer), "tools/list", json!({})).await;
+    assert_eq!(status, 200, "{body}");
+    body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_answers_401_with_the_resource_metadata() {
+    let world = World::new(None).await;
+    let metadata =
+        "resource_metadata=\"https://api.rewind.test/.well-known/oauth-protected-resource/mcp\"";
+
+    let (status, challenge, _) = mcp(&world, None, "tools/list", json!({})).await;
+    assert_eq!(status, 401);
+    assert_eq!(challenge, format!("Bearer {metadata}"));
+
+    let (status, challenge, _) =
+        mcp(&world, Some("rewind_ct_unknown"), "tools/list", json!({})).await;
+    assert_eq!(status, 401);
+    assert_eq!(
+        challenge,
+        format!("Bearer {metadata}, error=\"invalid_token\"")
+    );
+
+    // A member's access token is the dashboard's, never an MCP client's.
+    let (status, challenge, _) = mcp(&world, Some(&world.ada.token), "tools/list", json!({})).await;
+    assert_eq!(status, 401);
+    assert!(challenge.contains("error=\"invalid_token\""), "{challenge}");
+
+    // A revoked connection is refused at its next request.
+    let tokens = world
+        .connect(&world.ada, json!([{ "id": world.acme, "access": "read" }]))
+        .await;
+    assert!(!tool_names(&world, &tokens.access).await.is_empty());
+    let (status, _) = world
+        .status(world.form(
+            "/oauth/revoke",
+            &[
+                ("token", &tokens.refresh),
+                ("client_id", &world.document.url),
+            ],
+        ))
+        .await;
+    assert_eq!(status, 200);
+    let (status, _, _) = mcp(&world, Some(&tokens.access), "tools/list", json!({})).await;
+    assert_eq!(status, 401);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_runs_a_script_over_mcp() {
+    let world = World::new(None).await;
+    let tokens = world
+        .connect(&world.ada, json!([{ "id": world.acme, "access": "run" }]))
+        .await;
+
+    let (status, _, body) = mcp(
+        &world,
+        Some(&tokens.access),
+        "initialize",
+        json!({
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "claude-test", "version": "1" }
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["result"]["serverInfo"]["name"], "Rewind");
+    assert!(
+        body["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("list_orgs")
+    );
+
+    let names = tool_names(&world, &tokens.access).await;
+    for name in [
+        "list_orgs",
+        "list_namespaces",
+        "list_toolsets",
+        "run_script",
+        "cancel_run",
+    ] {
+        assert!(names.iter().any(|tool| tool == name), "{name} in {names:?}");
+    }
+    assert!(
+        !names.iter().any(|tool| tool == "save_workflow"),
+        "{names:?}"
+    );
+
+    let (text, error) = call(&world, &tokens.access, "list_orgs", json!({})).await;
+    assert!(!error, "{text}");
+    assert!(text.contains(&world.acme), "{text}");
+
+    // The namespace is named per call; without it, the model is told to give one.
+    let script = "export default async function main() {\n  return 41 + 1;\n}\n";
+    let (text, error) = call(
+        &world,
+        &tokens.access,
+        "run_script",
+        json!({ "code": script }),
+    )
+    .await;
+    assert!(error, "{text}");
+    assert!(text.contains("namespace"), "{text}");
+
+    let (text, error) = call(
+        &world,
+        &tokens.access,
+        "run_script",
+        json!({ "code": script, "namespace": "demo", "wait": "30s" }),
+    )
+    .await;
+    assert!(!error, "{text}");
+    assert!(text.contains("42"), "{text}");
+
+    // The run is in the namespace named, with the connection's label, once the read model has
+    // it.
+    let mut page = Value::Null;
+    for _ in 0..50 {
+        let (status, answer) = world
+            .status(world.v1(
+                reqwest::Method::GET,
+                "/v1/runs?q=%40via%3Aclaude",
+                &world.ada.token,
+                None,
+            ))
+            .await;
+        assert_eq!(status, 200, "{answer}");
+        page = answer;
+        if !page["runs"].as_array().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let runs = page["runs"].as_array().unwrap();
+    assert_eq!(runs.len(), 1, "{page}");
+    assert_eq!(runs[0]["namespace"], "demo");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mcp_tools_follow_the_access_given() {
+    let world = World::new(None).await;
+    // Bob holds `harness` in Acme, and opens it to Claude for reading only.
+    let tokens = world
+        .connect(&world.bob, json!([{ "id": world.acme, "access": "read" }]))
+        .await;
+    let names = tool_names(&world, &tokens.access).await;
+    assert!(names.iter().any(|tool| tool == "get_run"), "{names:?}");
+    assert!(!names.iter().any(|tool| tool == "run_script"), "{names:?}");
+    let (text, error) = call(
+        &world,
+        &tokens.access,
+        "run_script",
+        json!({ "code": "export default () => 1;\n", "namespace": "demo" }),
+    )
+    .await;
+    assert!(error, "{text}");
+
+    // An API key reaches its own tenant, with its role's permissions.
+    let key = world
+        .owner
+        .create_api_key(&rewind_api::access::CreateApiKey {
+            tenant: None,
+            name: "ci".into(),
+            role: "reader".into(),
+            allowed_labels: Labels::new(),
+        })
+        .await
+        .unwrap()
+        .key
+        .unwrap();
+    let (text, error) = call(&world, &key, "list_orgs", json!({})).await;
+    assert!(!error, "{text}");
+    assert!(text.contains(&world.acme), "{text}");
+    let names = tool_names(&world, &key).await;
+    assert!(!names.iter().any(|tool| tool == "run_script"), "{names:?}");
+}

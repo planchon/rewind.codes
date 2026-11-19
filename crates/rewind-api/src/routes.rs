@@ -107,6 +107,10 @@ pub const PROTECTED_RESOURCE: &str = "/.well-known/oauth-protected-resource";
 pub const PROTECTED_RESOURCE_MCP: &str = "/.well-known/oauth-protected-resource/mcp";
 pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server";
 
+/// Rewind's MCP server (`rewind-mcp-server`), over Streamable HTTP: outside the OpenAPI document,
+/// since its body is MCP's JSON-RPC.
+pub const MCP: &str = "/mcp";
+
 /// Every operation of the API: its method and its path.
 pub const OPERATIONS: [(&str, &str); 103] = [
     ("POST", TOOLSETS),

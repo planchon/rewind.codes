@@ -13,7 +13,7 @@ import { ACCESS_INFO, hostOf } from "../../model/connections";
 
 /** A client's name, with its site; one that registered itself is said to be unverified. */
 export function ClientName({ client }: { client: ConnectionClient }) {
-  const host = hostOf(client.uri);
+  const host = hostOf(client.uri ?? null);
   const verified = client.kind === "metadata_document";
   return (
     <span className="client-name">

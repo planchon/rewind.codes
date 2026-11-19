@@ -421,7 +421,7 @@ async fn listen(
             })?;
             std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
                 .map_err(|error| StartupError::Io(format!("{}: {error}", socket.display())))?;
-            let router = http::router(app.clone(), true);
+            let router = http::router(app.clone(), true, None);
             let handle = tokio::spawn(async move {
                 if let Err(error) = axum::serve(listener, router)
                     .with_graceful_shutdown(shutdown)
@@ -439,7 +439,9 @@ async fn listen(
             let addr = listener
                 .local_addr()
                 .map_err(|error| StartupError::Io(error.to_string()))?;
-            let router = http::router(app.clone(), false);
+            // `/mcp` calls `/v1` on this listener.
+            let mcp = crate::mcp::router(app.clone(), addr).map_err(StartupError::Setup)?;
+            let router = http::router(app.clone(), false, Some(mcp));
             let handle = tokio::spawn(async move {
                 // The peer's address: the sign-in passes a browser's to the identity provider.
                 let service = router.into_make_service_with_connect_info::<SocketAddr>();

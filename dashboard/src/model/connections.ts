@@ -75,7 +75,7 @@ export function namespaceProblem(name: string): string | null {
 export type Snapshot = ReadonlyMap<string, string | null>;
 
 export function snapshotOf(connections: readonly Connection[]): Snapshot {
-  return new Map(connections.map((c) => [c.id, c.lastUsedAt]));
+  return new Map(connections.map((c) => [c.id, c.lastUsedAt ?? null]));
 }
 
 /**
@@ -90,7 +90,8 @@ export function arrivedSince(
   const moved = connections.filter((c) => {
     if (!snapshot.has(c.id)) return true;
     const before = snapshot.get(c.id) ?? null;
-    return c.lastUsedAt !== null && c.lastUsedAt !== before;
+    const used = c.lastUsedAt ?? null;
+    return used !== null && used !== before;
   });
   if (moved.length === 0) return null;
   const at = (c: Connection) => Date.parse(c.lastUsedAt ?? c.createdAt);
