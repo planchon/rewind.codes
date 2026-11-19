@@ -745,7 +745,9 @@ table.grid.tools-table .latency-cell {
   white-space: nowrap;
 }
 
-/* Source with notes */
+/* Source with notes: one grid, a row per line, in three columns (number, code, notes). The
+   stacks of each column are only DOM: `display: contents` puts their rows in the grid, so a
+   wrapped line grows its whole row. No scroll of its own: the page scrolls. */
 
 .code-view {
   --code-line: 20px;
@@ -755,26 +757,28 @@ table.grid.tools-table .latency-cell {
   font-family: var(--font-mono);
   font-size: var(--text-body);
   line-height: var(--code-line);
-  max-height: 70vh;
-  overflow-y: auto;
 }
 
 .code-view.with-notes {
   grid-template-columns: auto minmax(0, 1fr) minmax(220px, 34%);
 }
 
-.code-gutter {
+.code-gutter,
+.code-text,
+.code-text pre,
+.code-notes {
+  display: contents;
+}
+
+.code-gutter .code-row {
+  grid-column: 1;
+  position: relative;
+  padding: 0 10px 0 14px;
   background: var(--code-gutter);
   border-right: 1px solid var(--line);
   color: var(--ink-3);
   text-align: right;
   user-select: none;
-  padding: 6px 0;
-}
-
-.code-gutter .code-row {
-  padding: 0 10px 0 14px;
-  position: relative;
   font-variant-numeric: tabular-nums;
 }
 
@@ -783,7 +787,7 @@ table.grid.tools-table .latency-cell {
   position: absolute;
   left: 0;
   top: 3px;
-  bottom: 3px;
+  height: 14px;
   width: 3px;
   border-radius: 0 2px 2px 0;
 }
@@ -801,39 +805,44 @@ table.grid.tools-table .latency-cell {
   background: var(--critical);
 }
 
-.code-text {
-  overflow-x: auto;
-  padding: 6px 0;
-}
-
-.code-text pre {
-  font-size: inherit;
-  line-height: inherit;
-  min-width: max-content;
-}
-
+/* A wrapped line goes on 4 columns further in than its own indent (`--indent`, in spaces), so
+   it reads as one line. */
 .code-text .code-row {
-  padding: 0 14px 0 12px;
-  white-space: pre;
-}
-
-.code-notes {
-  border-left: 1px solid var(--line);
-  padding: 6px 0;
+  --hang: calc((var(--indent, 0) + 4) * 1ch);
+  grid-column: 2;
   min-width: 0;
-  font-family: var(--font-sans);
+  padding: 0 14px 0 calc(12px + var(--hang));
+  text-indent: calc(-1 * var(--hang));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .code-notes .code-row {
+  grid-column: 3;
+  min-width: 0;
   padding: 0 8px;
+  border-left: 1px solid var(--line);
+  font-family: var(--font-sans);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: var(--code-line);
+}
+
+/* The space above the first line and below the last, in every column. */
+.code-view .code-row:first-child {
+  padding-top: 6px;
+}
+
+.code-view .code-row:last-child {
+  padding-bottom: 6px;
+}
+
+.code-gutter .code-row:first-child::before {
+  top: 9px;
 }
 
 .code-row {
-  height: var(--code-line);
+  min-height: var(--code-line);
 }
 
 .code-row.clickable {
@@ -994,8 +1003,8 @@ table.grid.tools-table .latency-cell {
 }
 
 .tl-rows {
-  overflow-y: auto;
   position: relative;
+  overflow: clip;
 }
 
 .tl-row {
@@ -1842,27 +1851,29 @@ table.grid td.signature-cell {
 /* The time cursor */
 
 .cursor-bar {
-  position: sticky;
-  top: 40px;
-  z-index: 15;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 8px;
-  padding: 6px 10px;
+  gap: 6px 16px;
+  padding: 6px 8px 6px 16px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 6px;
-  box-shadow: 0 1px 0 var(--line);
 }
 
 /* Where the cursor is: the step (13px, 500) over its time (12px, ink-3), never louder than
-   the buttons around it. */
+   the buttons around it. It takes the width the controls leave. */
 .cursor-pos {
+  flex: 1 1 220px;
   display: flex;
   flex-direction: column;
-  min-width: 190px;
-  padding: 0 6px;
+  min-width: 0;
+}
+
+.cursor-pos > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cursor-step {
@@ -1875,6 +1886,25 @@ table.grid td.signature-cell {
   font-size: var(--text-small);
   line-height: var(--leading-small);
   color: var(--ink-3);
+}
+
+.cursor-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 12px;
+  margin-left: auto;
+}
+
+.cursor-live {
+  font-size: var(--text-small);
+}
+
+.cursor-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .cursor-bar label.check {
@@ -1924,12 +1954,6 @@ table.grid td.signature-cell {
   background: var(--good-soft);
   box-shadow: none;
   color: var(--good-ink);
-}
-
-.cursor-hint {
-  margin-left: auto;
-  font-size: var(--text-small);
-  color: var(--ink-3);
 }
 
 .kbd {
@@ -3367,41 +3391,35 @@ table.grid td.end-td {
 
 /* A run's sidebar */
 
-.run-card {
+/* The run at the head of its sidebar: status and id on one line, no card around them. */
+.run-ident {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 12px;
-  margin-bottom: 4px;
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: var(--shadow-card);
+  gap: 6px;
+  padding: 6px 10px 10px;
 }
 
-.run-card-status {
+.run-ident-line {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
-.run-card-ago {
-  margin-left: auto;
-  color: var(--ink-3);
+.run-ident-line .run-id {
   font-size: var(--text-small);
+  color: var(--ink-2);
 }
 
-.run-card-id .run-id {
-  font-size: var(--text-body);
-}
-
-.run-card-tags {
+.run-ident-tags {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-.run-card .live-state {
+.run-ident .live-state {
   margin: 0;
 }
 

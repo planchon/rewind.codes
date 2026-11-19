@@ -18,6 +18,7 @@ import { queryLink } from "../model/query";
 import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
 import { useAccess } from "./access";
 import { FindDialog, useFindShortcut } from "./Find";
+import { SidebarResizer } from "./SidebarResizer";
 import { useSession } from "./session";
 import { SidebarProvider, useSidebar } from "./sidebar";
 
@@ -192,6 +193,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
           onOrganization={() => void navigate("/organization")}
         />
       </div>
+      <SidebarResizer />
     </aside>
   );
 }

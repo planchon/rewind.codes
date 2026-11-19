@@ -84,7 +84,7 @@ describe("RunView", () => {
     expect(within(banner).queryByText("Stack")).toBeNull();
 
     const bar = screen.getByRole("region", { name: "Time cursor" });
-    expect(within(bar).getByRole("button", { name: /Cancelled in this step/ })).toBeVisible();
+    expect(within(bar).getByRole("button", { name: /Cancelled in step \d+/ })).toBeVisible();
     expect(bar).not.toHaveTextContent(/failed/i);
 
     const step = screen.getByRole("region", { name: "Step" });
@@ -153,7 +153,6 @@ describe("RunView", () => {
       () => expect(within(notesOf(11)).getByRole("button")).toHaveTextContent("llm.complete"),
       { timeout: 4_000 },
     );
-    await waitFor(() => expect(screen.getByText("complete journal")).toBeInTheDocument());
     await waitFor(() => expect(screen.getAllByText("completed").length).toBeGreaterThan(0), {
       timeout: 4_000,
     });
