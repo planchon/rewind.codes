@@ -23,12 +23,14 @@
 mod app;
 mod auth;
 mod config;
+mod connections;
 mod deliveries;
 mod embedded;
 mod error;
 mod extract;
 mod grants;
 mod http;
+mod oauth;
 mod serve;
 mod tokens;
 mod views;
@@ -42,6 +44,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 pub use config::{ConfigError, OtlpArg, RoleArg, ServerArgs};
+pub use connections::{McpCaller, McpOrganization, McpPrincipal};
 pub use serve::{Running, StartupError, VERSION, start, start_in_memory, start_with_identity};
 
 /// Exit codes of `rewind server`.

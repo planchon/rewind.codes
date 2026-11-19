@@ -35,8 +35,8 @@ oauth_clients (id PK, kind, name, uri, logo_uri, redirect_uris, auth_method, sec
                                                 -- id: a client's metadata URL, or rc_… (registered)
 oauth_codes (hash PK, client_id, user_id, redirect_uri, code_challenge, resource, organizations,
              labels, expires_at, used_at, connection_id)
-connections (id PK, user_id, client_id, client_name, created_at, last_used_at, revoked_at)
-                                                           index (user_id)
+connections (id PK, user_id, client_id, client_name, created_at, last_used_at, revoked_at,
+             expires_at)                                   index (user_id)
 connection_tokens (hash PK, connection_id, kind, expires_at, created_at, used_at)
                                                            index (connection_id)
 access_settings (tenant PK, default_role)

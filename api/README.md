@@ -1,8 +1,9 @@
 # The HTTP API `/v1`
 
 `openapi.json` is the OpenAPI 3.1 document of the API that `rewind-server` serves
-([07](../archi/07-code-architecture.md#http-api-v1)), and of the dashboard's sign-in, `/auth`
-([07](../archi/07-code-architecture.md#sign-in-auth)). It is generated from the DTOs of
+([07](../archi/07-code-architecture.md#http-api-v1)), of the dashboard's sign-in, `/auth`
+([07](../archi/07-code-architecture.md#sign-in-auth)), and of the OAuth authorization server of
+people's connections, `/oauth` and `/.well-known` ([07](../archi/07-code-architecture.md#mcp-and-oauth)). It is generated from the DTOs of
 `crates/rewind-api` with `utoipa`. Do not edit it by hand.
 
 ## Regenerate it
@@ -40,7 +41,9 @@ change of the API shows in its diff.
 
 | Topic | Rule |
 | --- | --- |
-| Authentication | `Authorization: Bearer <token>` on every request to `/v1`: an API key `rewind_sk_…`, a member's access token from `/auth`, or an end user's token: opaque `rewind_nt_…`, or a JWT the customer signed with a key it registered (`kid` `rk_…`); none over the embedded server's socket (`.rewind/server.sock`) or to `POST /hooks/{token}` |
+| Authentication | `Authorization: Bearer <token>` on every request to `/v1`: an API key `rewind_sk_…`, a member's access token from `/auth`, an end user's token: opaque `rewind_nt_…`, or a JWT the customer signed with a key it registered (`kid` `rk_…`), or a person's connection `rewind_ct_…`; none over the embedded server's socket (`.rewind/server.sock`) or to `POST /hooks/{token}` |
+| Organization | `Rewind-Organization: org_…` names the organization a connection's request acts in: required on the tenant's data (`invalid-request` without it; only `GET /v1/whoami` answers), `forbidden` for an organization the connection does not open. Any other caller may repeat its own tenant; another is `forbidden` |
+| OAuth | `/oauth` and `/.well-known` speak OAuth's formats, not the API's: snake_case fields, forms (`application/x-www-form-urlencoded`) at `/oauth/token` and `/oauth/revoke`, errors `{ "error", "error_description" }` in `application/json`, never cached; 404 (a problem) on a server without a public URL and WorkOS |
 | Access | Every operation requires one permission of the catalog (`GET /v1/permissions`), held through the caller's grant and role, or given to a token; a missing one is `forbidden`, with a message that names it |
 | Namespace | `Rewind-Namespace: <name>` names the end user a key's or a member's request acts for: required by `POST /v1/runs`, `/v1/check` and `/v1/test`, it narrows the reads to that namespace. A token's namespace is its own; a header naming another is `forbidden` |
 | Sign-in | `/auth` is the dashboard's, for a browser: it reads and writes the cookie `rewind_session`, which `/v1` never reads; a `POST` takes a JSON body only (`Content-Type: application/json`, else `unsupported-media-type`); the steps answer an `AuthState` tagged by `status`; `GET /auth/callback` redirects to `/#/`, or to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`). A member's access token without organization reaches only `GET /v1/whoami`, `POST /v1/organizations`, `GET /v1/invitations` and `POST /v1/invitations/{id}/accept` (`forbidden` elsewhere) |

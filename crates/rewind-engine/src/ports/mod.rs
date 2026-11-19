@@ -32,6 +32,7 @@ pub mod access;
 mod blob;
 mod checker;
 mod clock;
+pub mod connections;
 mod dispatcher;
 mod executor;
 pub mod identity;
@@ -53,6 +54,11 @@ pub use checker::{
     WorkflowDeclarations,
 };
 pub use clock::{Clock, Entropy, VirtualTime};
+pub use connections::{
+    Access, ClientAuthMethod, ClientKind, CodeRedemption, Connection, ConnectionToken,
+    ConnectionTokenKind, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization,
+    Rotation,
+};
 pub use dispatcher::{Dispatched, ToolCall, ToolDispatcher};
 pub use executor::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,

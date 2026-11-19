@@ -18,6 +18,13 @@ pub struct ServerInfo {
     pub embedded: bool,
     /// Time is virtual: timers fire as soon as nothing else can advance.
     pub virtual_time: bool,
+    /// The URL MCP clients add as a connector, `{public-url}/mcp`; null without a public URL.
+    #[serde(default)]
+    pub mcp_url: Option<String>,
+    /// People connect MCP clients with OAuth (`/oauth`): the server has a public URL and a
+    /// sign-in. Without it, `/mcp` takes API keys and end users' tokens only.
+    #[serde(default)]
+    pub oauth: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]

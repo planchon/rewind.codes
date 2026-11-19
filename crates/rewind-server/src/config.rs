@@ -433,6 +433,9 @@ pub(crate) struct Config {
     /// Where MCP servers may be: anywhere for the embedded server; public addresses and the
     /// internal hosts of `--allow-internal-mcp` for a deployed one.
     pub(crate) mcp_egress: McpEgress,
+    /// The internal hosts and networks of `--allow-internal-mcp`: MCP servers, and the
+    /// metadata documents of OAuth clients, may be there.
+    pub(crate) internal_hosts: InternalAllowList,
     /// Lifecycle webhooks may go to the private network, over `http://` too.
     pub(crate) allow_private_webhooks: bool,
     /// `Some(true)`: switch to virtual time; `Some(false)`: to real time; `None`: as the store
@@ -580,6 +583,7 @@ impl ServerArgs {
                 ceiling: Quotas::default(),
                 allow_stdio: true,
                 mcp_egress: McpEgress::open(),
+                internal_hosts: InternalAllowList::default(),
                 allow_private_webhooks: true,
                 virtual_time,
                 idle_timeout: self.idle_timeout,
@@ -685,7 +689,8 @@ impl ServerArgs {
                 max_script_lines: self.quota_max_script_lines,
             },
             allow_stdio: self.allow_stdio,
-            mcp_egress: McpEgress::checked(internal_mcp),
+            mcp_egress: McpEgress::checked(internal_mcp.clone()),
+            internal_hosts: internal_mcp,
             allow_private_webhooks: self.allow_private_webhooks,
             virtual_time,
             idle_timeout: self.idle_timeout,

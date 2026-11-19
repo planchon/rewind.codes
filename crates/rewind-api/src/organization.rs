@@ -10,6 +10,7 @@ use utoipa::ToSchema;
 
 use crate::access::{Grant, Permission};
 use crate::common::{Labels, Timestamp};
+use crate::connections::{ConnectionClient, ConnectionOrganization, ConnectionPerson};
 use crate::namespaces::NamespaceName;
 
 /// A person, as the identity provider knows them.
@@ -73,6 +74,17 @@ pub enum Principal {
         #[serde(default, skip_serializing_if = "Labels::is_empty")]
         labels: Labels,
         expires_at: Timestamp,
+    },
+    /// A person's connection (`rewind_ct_…`): an MCP client acting for the person, in the
+    /// organizations it opens. With `Rewind-Organization`, the identity's tenant, grant and
+    /// permissions are the connection's there.
+    Connection {
+        /// `cn_…`.
+        id: String,
+        person: ConnectionPerson,
+        client: ConnectionClient,
+        /// The organizations it opens, with their access and labels.
+        organizations: Vec<ConnectionOrganization>,
     },
 }
 

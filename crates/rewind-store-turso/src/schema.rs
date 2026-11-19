@@ -5,7 +5,7 @@
 //! migration (version 2 moved access to grants and roles; version 3 added the workflows, the
 //! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
 //! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
-//! workflow versions).
+//! workflow versions; version 7 people's connections and the OAuth clients and codes).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -32,7 +32,10 @@
 //!   per quota (`*_ms` for the durations; the ceiling's `active_runs` is `active_run_quota`);
 //!   `usage` and `quota_alerts` hold the tenant's own rows under the namespace `*`, a day as days
 //!   since the Unix epoch, a period as `2026-11` and a threshold as its percent; the permissions
-//!   of `tokens` and `token_keys` are JSON arrays, as a role's.
+//!   of `tokens` and `token_keys` are JSON arrays, as a role's;
+//! - an OAuth client's `redirect_uris` is a JSON array of strings, a code's `organizations` a
+//!   JSON object from tenant to access (`read`, `run`) and its `labels` a JSON object; a
+//!   connection's `expires_at` is when its latest refresh token lapses, which its purge reads.
 //!
 //! The read model's tables, written only through `ReadModel`:
 //!
@@ -57,13 +60,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -658,6 +661,69 @@ CREATE TABLE workflow_tests (
     PRIMARY KEY (tenant, version, digest)
 ) STRICT;
 CREATE INDEX workflow_tests_by_test ON workflow_tests (tenant, digest);
+"#;
+
+/// People's connections (`archi/06-storage-and-scale.md`, "Connections"), outside every tenant:
+/// the OAuth clients (metadata documents cached under their URL, registered clients `rc_…`),
+/// the authorization codes, the connections and their tokens, all hashed. A connection's grants
+/// are rows of `grants` (principal `connection:cn_…`), found by principal across tenants.
+const V7: &str = r#"
+CREATE INDEX grants_by_principal ON grants (principal);
+
+CREATE TABLE oauth_clients (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    uri TEXT,
+    logo_uri TEXT,
+    redirect_uris TEXT NOT NULL,
+    auth_method TEXT NOT NULL,
+    secret_hash TEXT,
+    fetched_at INTEGER,
+    expires_at INTEGER,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+) STRICT;
+CREATE INDEX oauth_clients_by_kind ON oauth_clients (kind);
+
+CREATE TABLE oauth_codes (
+    hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    code_challenge TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    organizations TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    connection_id TEXT
+) STRICT;
+CREATE INDEX oauth_codes_by_expiry ON oauth_codes (expires_at);
+
+CREATE TABLE connections (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER,
+    expires_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX connections_by_user ON connections (user_id, client_id);
+CREATE INDEX connections_by_client ON connections (client_id);
+
+CREATE TABLE connection_tokens (
+    hash TEXT PRIMARY KEY,
+    connection_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    used_at INTEGER
+) STRICT;
+CREATE INDEX connection_tokens_by_connection ON connection_tokens (connection_id);
+CREATE INDEX connection_tokens_by_expiry ON connection_tokens (expires_at);
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

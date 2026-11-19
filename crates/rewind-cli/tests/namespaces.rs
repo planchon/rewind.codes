@@ -237,6 +237,8 @@ impl Embedded {
                         roles: vec![ServerRole::Api, ServerRole::Worker],
                         embedded: true,
                         virtual_time: false,
+                        mcp_url: None,
+                        oauth: false,
                     })
                 }),
             )

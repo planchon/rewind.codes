@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use rewind_api::Problem;
 use rewind_api::access::OPERATOR;
 use rewind_api::admin::ServerRole;
 use rewind_engine::adapters::{MemoryIdentity, SystemClock, SystemEntropy, VirtualClock};
@@ -18,8 +19,10 @@ use tokio::task::JoinHandle;
 use crate::app::{App, Settings, SignIn};
 use crate::auth::key_hash;
 use crate::config::{Config, Listen, ServerArgs};
+use crate::connections::{self, McpCaller};
 use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
 use crate::embedded::Directory;
+use crate::oauth::OAuthServer;
 use crate::wiring::blobs::Blobs;
 use crate::wiring::checker;
 use crate::wiring::clock::ServerClock;
@@ -89,6 +92,14 @@ impl Running {
     }
 
     /// Waits until something stops the server: `POST /v1/server/stop`, or the idle timeout.
+    /// Who calls `/mcp` with `bearer`, and the organizations it reaches with the permissions it
+    /// may use in each (`archi/07-code-architecture.md`, "MCP and OAuth"): a connection's access
+    /// token, an API key or an end user's token. A member's access token, or anything else, is
+    /// refused (`unauthorized`).
+    pub async fn authenticate_mcp(&self, bearer: &str) -> Result<McpCaller, Box<Problem>> {
+        connections::mcp_caller_or_problem(&self.app, bearer).await
+    }
+
     pub async fn stopped(&self) {
         let mut stop = self.app.stop.subscribe();
         let _ = stop.wait_for(|stop| *stop).await;
@@ -253,11 +264,23 @@ async fn start_wired(
         ceiling: config.ceiling.clone(),
         retention: config.retention,
         allow_stdio: config.allow_stdio,
+        public_url: config.public_url.clone(),
         webhook_egress,
         projector: ProjectorConfig {
             owner: config.worker_name.clone(),
             ..ProjectorConfig::default()
         },
+    };
+    let oauth = match (&config.public_url, &sign_in) {
+        (Some(public_url), Some(sign_in)) => Some(
+            OAuthServer::new(
+                public_url,
+                &sign_in.redirect_uri,
+                config.internal_hosts.clone(),
+            )
+            .map_err(StartupError::Config)?,
+        ),
+        _ => None,
     };
     let app = Arc::new(App::new(
         engine,
@@ -269,6 +292,7 @@ async fn start_wired(
         deliveries,
         settings,
         sign_in,
+        oauth,
     ));
     register_admin_key(&app, &config).await?;
 

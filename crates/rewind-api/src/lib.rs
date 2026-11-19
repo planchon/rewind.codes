@@ -9,12 +9,13 @@
 //!   table: [`toolsets`], [`workflows`], [`scripts`], [`runs`] (with [`events`], the journal
 //!   entries and the event stream), [`tasks`], [`webhooks`], [`reading`], [`organization`],
 //!   [`access`] (with the catalog of permissions and the built-in roles), [`namespaces`] (the
-//!   end users, their quotas and their tokens) and [`admin`] (the server); and the dashboard's
-//!   sign-in, [`auth`];
+//!   end users, their quotas and their tokens), [`connections`] (a person's connections and the
+//!   consent) and [`admin`] (the server); the dashboard's sign-in, [`auth`]; and the OAuth
+//!   authorization server of the connections, [`oauth`];
 //! - errors as `application/problem+json` ([`Problem`]), with a detail written for a model;
 //! - the query language of the run lists ([`query`]);
-//! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, `Rewind-Namespace`, the
-//!   webhook signature;
+//! - the headers ([`headers`]): the Bearer token, `Idempotency-Key`, `Rewind-Namespace`,
+//!   `Rewind-Organization`, the webhook signature;
 //! - the paths ([`routes`]);
 //! - the OpenAPI 3.1 document generated from the DTOs ([`openapi`]), committed at
 //!   `api/openapi.json`, from which the TypeScript SDK and the dashboard generate their types;
@@ -36,10 +37,12 @@ pub mod admin;
 pub mod auth;
 mod client;
 pub mod common;
+pub mod connections;
 mod error;
 pub mod events;
 pub mod headers;
 pub mod namespaces;
+pub mod oauth;
 pub mod openapi;
 pub mod organization;
 pub mod problem;

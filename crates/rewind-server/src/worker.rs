@@ -32,6 +32,12 @@ const HOUSEKEEPING: Duration = Duration::from_secs(300);
 const TOKENS_KEPT: Duration = Duration::from_secs(24 * 3_600);
 /// How many tokens one statement of the purge deletes.
 const TOKEN_PURGE_BATCH: usize = 1_000;
+/// How long what ends of people's connections is kept: codes and tokens after they expired,
+/// connections after they were revoked, registered clients no connection uses after their
+/// last use (`archi/07-code-architecture.md`, "MCP and OAuth").
+const CONNECTIONS_KEPT: Duration = Duration::from_secs(24 * 3_600);
+/// How long a connection is kept after its last refresh token lapsed.
+const LAPSED_CONNECTIONS_KEPT: Duration = Duration::from_secs(30 * 86_400);
 /// How long a loop waits after a failure of the store before it tries again.
 const BACKOFF: Duration = Duration::from_secs(1);
 
@@ -313,6 +319,14 @@ async fn housekeeping(app: Arc<App>) {
             Ok(purged) => tracing::info!(purged, "ended tokens deleted"),
             Err(error) => tracing::error!(%error, "the ended tokens were not deleted"),
         }
+        match purge_connections(&app).await {
+            Ok(0) => {}
+            Ok(purged) => tracing::info!(
+                purged,
+                "ended connections, codes, tokens and clients deleted"
+            ),
+            Err(error) => tracing::error!(%error, "the ended connections were not deleted"),
+        }
         let _ = tokio::time::timeout(HOUSEKEEPING, stop.changed()).await;
     }
 }
@@ -330,6 +344,47 @@ async fn purge_tokens(app: &App) -> Result<u64, StoreError> {
             return Ok(purged);
         }
     }
+}
+
+/// Deletes what ended of people's connections, in the world's time, batch after batch: the
+/// connections revoked more than a day ago or whose last refresh token lapsed more than 30 days
+/// ago (with their grants and tokens), the tokens and codes expired more than a day ago, and
+/// the clients no connection uses, last used more than a day ago.
+async fn purge_connections(app: &App) -> Result<u64, StoreError> {
+    let now = crate::connections::world_now();
+    let ago = |kept: Duration| {
+        let kept = u64::try_from(kept.as_millis()).unwrap_or(u64::MAX);
+        Timestamp::from_millis(now.as_millis().saturating_sub(kept))
+    };
+    let (day, month) = (ago(CONNECTIONS_KEPT), ago(LAPSED_CONNECTIONS_KEPT));
+    let mut purged = 0;
+    for step in 0..4 {
+        loop {
+            let batch = match step {
+                0 => {
+                    app.store
+                        .purge_connections(month, day, TOKEN_PURGE_BATCH)
+                        .await?
+                }
+                1 => {
+                    app.store
+                        .purge_connection_tokens(day, TOKEN_PURGE_BATCH)
+                        .await?
+                }
+                2 => app.store.purge_oauth_codes(day, TOKEN_PURGE_BATCH).await?,
+                _ => {
+                    app.store
+                        .purge_oauth_clients(day, TOKEN_PURGE_BATCH)
+                        .await?
+                }
+            };
+            purged += batch;
+            if batch < TOKEN_PURGE_BATCH as u64 || app.stopping() {
+                break;
+            }
+        }
+    }
+    Ok(purged)
 }
 
 /// Writes the CPU time this worker counted per namespace to the store, every lease renewal

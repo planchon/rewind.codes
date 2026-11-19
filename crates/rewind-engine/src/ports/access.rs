@@ -9,7 +9,9 @@
 //!
 //! It also keeps end users' tokens: opaque tokens, each bound to one namespace with its own
 //! permissions, and the public keys a tenant signs its end users' tokens with
-//! (`archi/06-storage-and-scale.md`, "Who calls").
+//! (`archi/06-storage-and-scale.md`, "Who calls"); and, outside every tenant, people's
+//! connections, their tokens, and the OAuth clients and codes they are made through
+//! (`archi/06-storage-and-scale.md`, "Connections"; [`super::connections`]).
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,12 +21,18 @@ use std::str::FromStr;
 
 use rewind_core::{Digest, Timestamp};
 
+use super::connections::{
+    ClientKind, CodeRedemption, Connection, ConnectionToken, NewConnection, NewToken, OAuthClient,
+    OAuthCode, OpenedOrganization, Rotation,
+};
+use super::identity::UserId;
 use super::journal::StoreError;
 use super::namespaces::NamespaceName;
 use super::tenancy::TenantId;
 
-/// Who holds a grant: a member, an API key, or an invitation not yet accepted. Written
-/// `user:<id>`, `key:<sha256 hex>` and `invitation:<id>`, the form the store keys grants by.
+/// Who holds a grant: a member, an API key, an invitation not yet accepted, or a person's
+/// connection. Written `user:<id>`, `key:<sha256 hex>`, `invitation:<id>` and
+/// `connection:<id>`, the form the store keys grants by.
 ///
 /// Principals sort as their text form does.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -36,26 +44,29 @@ pub enum Principal {
     /// An invitation not yet accepted (`invitation_01J…`): its grant goes to the user who
     /// accepts it.
     Invitation(String),
+    /// A person's connection (`cn_…`): a grant in each organization it opens.
+    Connection(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "invalid principal {0:?}: expected user:<id> or invitation:<id> (1 to 128 ASCII letters, \
-     digits, - and _), or key:<64 hex digits>"
+    "invalid principal {0:?}: expected user:<id>, invitation:<id> or connection:<id> (1 to 128 \
+     ASCII letters, digits, - and _), or key:<64 hex digits>"
 )]
 pub struct InvalidPrincipal(pub String);
 
 impl Principal {
-    /// The prefix of the text form: `user`, `key` or `invitation`.
+    /// The prefix of the text form: `user`, `key`, `invitation` or `connection`.
     pub fn kind(&self) -> &'static str {
         match self {
             Principal::User(_) => "user",
             Principal::Key(_) => "key",
             Principal::Invitation(_) => "invitation",
+            Principal::Connection(_) => "connection",
         }
     }
 
-    /// Reads `user:<id>`, `key:<hex>` or `invitation:<id>`.
+    /// Reads `user:<id>`, `key:<hex>`, `invitation:<id>` or `connection:<id>`.
     pub fn parse(text: &str) -> Result<Self, InvalidPrincipal> {
         let invalid = || InvalidPrincipal(text.to_owned());
         let (kind, id) = text.split_once(':').ok_or_else(invalid)?;
@@ -66,6 +77,7 @@ impl Principal {
         match kind {
             "user" if valid_id => Ok(Principal::User(id.to_owned())),
             "invitation" if valid_id => Ok(Principal::Invitation(id.to_owned())),
+            "connection" if valid_id => Ok(Principal::Connection(id.to_owned())),
             "key" => Digest::from_hex(id)
                 .map(Principal::Key)
                 .map_err(|_| invalid()),
@@ -73,12 +85,13 @@ impl Principal {
         }
     }
 
-    /// The order of the text forms' prefixes: `invitation` < `key` < `user`.
+    /// The order of the text forms' prefixes: `connection` < `invitation` < `key` < `user`.
     fn rank(&self) -> u8 {
         match self {
-            Principal::Invitation(_) => 0,
-            Principal::Key(_) => 1,
-            Principal::User(_) => 2,
+            Principal::Connection(_) => 0,
+            Principal::Invitation(_) => 1,
+            Principal::Key(_) => 2,
+            Principal::User(_) => 3,
         }
     }
 }
@@ -86,7 +99,9 @@ impl Principal {
 impl fmt::Display for Principal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Principal::User(id) | Principal::Invitation(id) => write!(f, "{}:{id}", self.kind()),
+            Principal::User(id) | Principal::Invitation(id) | Principal::Connection(id) => {
+                write!(f, "{}:{id}", self.kind())
+            }
             Principal::Key(hash) => write!(f, "key:{}", hash.to_hex()),
         }
     }
@@ -106,7 +121,8 @@ impl Ord for Principal {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Principal::User(a), Principal::User(b))
-            | (Principal::Invitation(a), Principal::Invitation(b)) => a.cmp(b),
+            | (Principal::Invitation(a), Principal::Invitation(b))
+            | (Principal::Connection(a), Principal::Connection(b)) => a.cmp(b),
             (Principal::Key(a), Principal::Key(b)) => a.cmp(b),
             _ => self.rank().cmp(&other.rank()),
         }
@@ -276,10 +292,19 @@ pub enum GrantClaim {
 ///   token of one namespace of one tenant, and `count_tokens` counts the live ones;
 ///   `purge_tokens` deletes, in every tenant, the tokens expired or revoked before a time. Token
 ///   keys are found by their `kid`, unique across tenants; deleting one is scoped by its tenant.
+/// - **Connections.** Clients, codes, connections and their tokens belong to no tenant; a
+///   connection's grants are ordinary grants of the principal `connection:<id>`, one per
+///   organization. Exchanging a code is atomic: it marks the code used and writes the
+///   connection (created, or the person's live connection of the same client kept), its grants
+///   and its tokens, or nothing; a code exchanged twice revokes the connection it made.
+///   Rotating a refresh token is atomic too: it marks the token used and writes the new ones, or
+///   nothing; a refresh token used twice revokes its connection. Revoking a connection deletes
+///   its grants and its tokens at once; it stays, revoked, until purged.
 /// - **Time.** Stores never read a clock: every method that depends on time takes it.
 ///
 /// Lists are ordered: keys by creation time then hash, roles by name, grants by principal
-/// (as their text forms sort).
+/// (as their text forms sort), a connection's grants by tenant, connections by creation time
+/// then id.
 pub trait AccessStore: Send + Sync {
     // ---------------------------------------------------------------------------------------
     // API keys
@@ -458,6 +483,155 @@ pub trait AccessStore: Send + Sync {
         &self,
         tenant: &TenantId,
     ) -> impl Future<Output = Result<Option<String>, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // OAuth clients
+
+    /// Stores a client, or replaces the client of the same id (a metadata document fetched
+    /// again); a replaced client keeps its first `created_at` and its `last_used_at`.
+    fn put_oauth_client(
+        &self,
+        client: &OAuthClient,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    fn oauth_client(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<OAuthClient>, StoreError>> + Send;
+
+    /// How many clients of this kind are stored.
+    fn count_oauth_clients(
+        &self,
+        kind: ClientKind,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    /// Deletes at most `limit` clients that no connection uses, revoked or not, and that were
+    /// last used, else fetched, else created, before `before`. Returns how many.
+    fn purge_oauth_clients(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // Authorization codes
+
+    /// Stores a code. A hash already stored is a `Conflict`.
+    fn put_oauth_code(
+        &self,
+        code: &OAuthCode,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// The code with this hash, used or expired or not: the caller refuses those.
+    fn oauth_code(
+        &self,
+        hash: Digest,
+    ) -> impl Future<Output = Result<Option<OAuthCode>, StoreError>> + Send;
+
+    /// Exchanges the code, in one transaction: unless it was used, marks it used at `now`, and
+    /// writes the connection, its grants (given by its person, at `now`) and its two tokens; the
+    /// client's `last_used_at` becomes `now`. When its person has a live connection of the same
+    /// client, that connection is kept: its organizations are replaced, its tokens added, its
+    /// `expires_at` renewed. A code used before writes nothing and revokes the connection it
+    /// made (`Used`).
+    fn redeem_oauth_code(
+        &self,
+        hash: Digest,
+        new: &NewConnection,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<CodeRedemption, StoreError>> + Send;
+
+    /// Deletes at most `limit` codes that expired before `before`. Returns how many.
+    fn purge_oauth_codes(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // Connections
+
+    /// The connection with this id, revoked or not.
+    fn connection(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Option<Connection>, StoreError>> + Send;
+
+    /// The person's connections not revoked, by creation time then id.
+    fn connections_of(
+        &self,
+        user: &UserId,
+    ) -> impl Future<Output = Result<Vec<Connection>, StoreError>> + Send;
+
+    /// The grants of the connection, one per organization it opens, by tenant.
+    fn connection_grants(
+        &self,
+        id: &str,
+    ) -> impl Future<Output = Result<Vec<Grant>, StoreError>> + Send;
+
+    /// Replaces the organizations a live connection opens, atomically: its grants become
+    /// exactly these, given by its person at `now`. Returns `false` for an unknown or revoked
+    /// connection, and changes nothing.
+    fn set_connection_organizations(
+        &self,
+        id: &str,
+        organizations: &[OpenedOrganization],
+        now: Timestamp,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Records that the connection was used at `now`.
+    fn touch_connection(
+        &self,
+        id: &str,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<(), StoreError>> + Send;
+
+    /// Revokes the connection at `now`, and deletes its grants and its tokens, atomically.
+    /// Returns `false` for an unknown or already revoked connection.
+    fn revoke_connection(
+        &self,
+        id: &str,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<bool, StoreError>> + Send;
+
+    /// Deletes at most `limit` connections, with their grants and tokens: those whose latest
+    /// refresh token lapsed before `lapsed_before`, and those revoked before `revoked_before`.
+    /// Returns how many.
+    fn purge_connections(
+        &self,
+        lapsed_before: Timestamp,
+        revoked_before: Timestamp,
+        limit: usize,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
+
+    // ---------------------------------------------------------------------------------------
+    // Connections' tokens
+
+    /// The token with this hash, used or expired or not.
+    fn connection_token(
+        &self,
+        hash: Digest,
+    ) -> impl Future<Output = Result<Option<ConnectionToken>, StoreError>> + Send;
+
+    /// Exchanges a refresh token, in one transaction: unless it was used, it lapsed or its
+    /// connection was revoked, marks it used at `now` and writes the new access and refresh
+    /// tokens of its connection, whose `expires_at` becomes the new refresh token's. A refresh
+    /// token used before writes nothing and revokes its connection (`Used`).
+    fn rotate_refresh_token(
+        &self,
+        hash: Digest,
+        access: &NewToken,
+        refresh: &NewToken,
+        now: Timestamp,
+    ) -> impl Future<Output = Result<Rotation, StoreError>> + Send;
+
+    /// Deletes at most `limit` tokens of connections that expired before `before`. Returns how
+    /// many.
+    fn purge_connection_tokens(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> impl Future<Output = Result<u64, StoreError>> + Send;
 }
 
 #[cfg(test)]
@@ -471,6 +645,7 @@ mod tests {
             Principal::User("user_01JABC".into()),
             key.clone(),
             Principal::Invitation("invitation_01JABC".into()),
+            Principal::Connection("cn_01JABC".into()),
         ] {
             assert_eq!(Principal::parse(&principal.to_string()), Ok(principal));
         }
@@ -483,6 +658,8 @@ mod tests {
             "key:abc",
             "user:a b",
             "invitation:é",
+            "connection:",
+            "connection:cn 1",
             &format!("user:{}", "x".repeat(129)),
         ] {
             assert_eq!(
@@ -501,6 +678,8 @@ mod tests {
             Principal::User("user_a".into()),
             Principal::Invitation("invitation_z".into()),
             Principal::Key(Digest::of(b"two")),
+            Principal::Connection("cn_b".into()),
+            Principal::Connection("cn_a".into()),
         ];
         let mut texts: Vec<String> = principals.iter().map(ToString::to_string).collect();
         principals.sort();

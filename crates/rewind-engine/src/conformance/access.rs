@@ -1,6 +1,8 @@
 //! The conformance suite of `AccessStore`: API keys, roles and the role in use, one grant per
 //! principal, the kept role's last holder, claims of an invitation's grant, default roles,
-//! end users' tokens and token keys, and tenant isolation.
+//! end users' tokens and token keys, tenant isolation, and people's connections: OAuth clients,
+//! codes exchanged once, one connection per person and client, refresh tokens rotated once,
+//! revocations and purges.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,8 +10,10 @@ use rewind_core::{Digest, Timestamp};
 
 use super::{T0, check, tenant};
 use crate::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
-    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
+    Access, AccessStore, ApiKey, ClientAuthMethod, ClientKind, CodeRedemption, Connection,
+    ConnectionToken, ConnectionTokenKind, Grant, GrantClaim, GrantDeletion, GrantWrite,
+    NamespaceName, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal,
+    Role, RoleDeletion, Rotation, StoreError, TenantId, Token, TokenKey, UserId,
 };
 
 /// The role every kept-role check keeps, as the server does.
@@ -67,6 +71,36 @@ pub async fn run_all<S: AccessStore>(new_store: impl Fn() -> S) {
         "access",
         new_store(),
         token_keys_are_found_by_kid_and_deleted_per_tenant
+    );
+    check!(
+        "access",
+        new_store(),
+        oauth_clients_are_replaced_counted_and_purged_unless_used
+    );
+    check!(
+        "access",
+        new_store(),
+        a_code_is_redeemed_once_and_its_replay_revokes_the_connection
+    );
+    check!(
+        "access",
+        new_store(),
+        a_person_has_one_connection_per_client
+    );
+    check!(
+        "access",
+        new_store(),
+        a_refresh_token_rotates_once_and_its_replay_revokes_the_connection
+    );
+    check!(
+        "access",
+        new_store(),
+        connections_are_listed_changed_touched_and_revoked
+    );
+    check!(
+        "access",
+        new_store(),
+        codes_tokens_and_connections_are_purged
     );
 }
 
@@ -948,4 +982,795 @@ pub async fn token_keys_are_found_by_kid_and_deleted_per_tenant<S: AccessStore>(
             .expect("list_token_keys"),
         [others]
     );
+}
+
+// -------------------------------------------------------------------------------------------
+// Connections
+
+const CLAUDE: &str = "https://claude.ai/oauth/claude-code-client-metadata";
+
+fn client(id: &str, kind: ClientKind, created_at: Timestamp) -> OAuthClient {
+    OAuthClient {
+        id: id.to_owned(),
+        kind,
+        name: format!("client {id}"),
+        uri: Some("https://example.net".into()),
+        logo_uri: None,
+        redirect_uris: vec![
+            "https://claude.ai/api/mcp/auth_callback".into(),
+            "http://localhost/callback".into(),
+        ],
+        auth_method: match kind {
+            ClientKind::MetadataDocument => ClientAuthMethod::None,
+            ClientKind::Registered => ClientAuthMethod::ClientSecretBasic,
+        },
+        secret_hash: match kind {
+            ClientKind::MetadataDocument => None,
+            ClientKind::Registered => Some(Digest::of(b"rewind_cs_secret")),
+        },
+        fetched_at: (kind == ClientKind::MetadataDocument).then_some(created_at),
+        expires_at: (kind == ClientKind::MetadataDocument).then_some(at(3_600)),
+        created_at,
+        last_used_at: None,
+    }
+}
+
+fn person(id: &str) -> UserId {
+    UserId::new(format!("user_{id}"))
+}
+
+fn opened(tenant: TenantId, access: Access, labels: &[(&str, &str)]) -> OpenedOrganization {
+    OpenedOrganization {
+        tenant,
+        access,
+        allowed_labels: labels
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect(),
+    }
+}
+
+fn code(secret: &str, user: &UserId, client: &str, expires_at: Timestamp) -> OAuthCode {
+    OAuthCode {
+        hash: Digest::of(secret.as_bytes()),
+        client_id: client.to_owned(),
+        user: user.clone(),
+        redirect_uri: "https://claude.ai/api/mcp/auth_callback".into(),
+        code_challenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM".into(),
+        resource: "https://api.rewind.test/mcp".into(),
+        organizations: BTreeMap::from([(acme(), Access::Run), (tenant("beta"), Access::Read)]),
+        labels: BTreeMap::from([("via".to_owned(), "claude".to_owned())]),
+        expires_at,
+        used_at: None,
+        connection: None,
+    }
+}
+
+fn issued(secret: &str, expires_at: Timestamp) -> NewToken {
+    NewToken {
+        hash: Digest::of(secret.as_bytes()),
+        expires_at,
+    }
+}
+
+/// A connection `id` of `user` through `client`, opening acme (`run`) and beta (`read`), with
+/// the tokens `{id}-access` and `{id}-refresh`.
+fn new_connection(id: &str, user: &UserId, client: &str, created_at: Timestamp) -> NewConnection {
+    NewConnection {
+        connection: Connection {
+            id: id.to_owned(),
+            user: user.clone(),
+            client_id: client.to_owned(),
+            client_name: "Claude".into(),
+            created_at,
+            last_used_at: None,
+            revoked_at: None,
+            expires_at: Timestamp(created_at.0 + 30 * 86_400_000),
+        },
+        organizations: vec![
+            opened(acme(), Access::Run, &[("via", "claude")]),
+            opened(tenant("beta"), Access::Read, &[]),
+        ],
+        access: issued(&format!("{id}-access"), Timestamp(created_at.0 + 3_600_000)),
+        refresh: issued(
+            &format!("{id}-refresh"),
+            Timestamp(created_at.0 + 30 * 86_400_000),
+        ),
+    }
+}
+
+/// Puts a code and exchanges it for `new`.
+async fn redeemed<S: AccessStore>(store: &S, secret: &str, new: &NewConnection) -> Connection {
+    let code = code(
+        secret,
+        &new.connection.user,
+        &new.connection.client_id,
+        at(300),
+    );
+    store.put_oauth_code(&code).await.expect("put_oauth_code");
+    match store
+        .redeem_oauth_code(code.hash, new, new.connection.created_at)
+        .await
+        .expect("redeem_oauth_code")
+    {
+        CodeRedemption::Redeemed(connection) => connection,
+        other => panic!("not redeemed: {other:?}"),
+    }
+}
+
+async fn token_of<S: AccessStore>(store: &S, secret: &str) -> Option<ConnectionToken> {
+    store
+        .connection_token(Digest::of(secret.as_bytes()))
+        .await
+        .expect("connection_token")
+}
+
+async fn tenants_opened<S: AccessStore>(store: &S, id: &str) -> Vec<(String, String)> {
+    store
+        .connection_grants(id)
+        .await
+        .expect("connection_grants")
+        .into_iter()
+        .map(|grant| (grant.tenant.to_string(), grant.role))
+        .collect()
+}
+
+pub async fn oauth_clients_are_replaced_counted_and_purged_unless_used<S: AccessStore>(store: &S) {
+    let claude = client(CLAUDE, ClientKind::MetadataDocument, T0);
+    let registered = client("rc_one", ClientKind::Registered, T0);
+    let fresh = client("rc_fresh", ClientKind::Registered, at(100));
+    for written in [&claude, &registered, &fresh] {
+        store
+            .put_oauth_client(written)
+            .await
+            .expect("put_oauth_client");
+    }
+    assert_eq!(
+        store.oauth_client(CLAUDE).await.expect("oauth_client"),
+        Some(claude.clone())
+    );
+    assert_eq!(
+        store.oauth_client("rc_none").await.expect("oauth_client"),
+        None
+    );
+    assert_eq!(
+        store
+            .count_oauth_clients(ClientKind::Registered)
+            .await
+            .expect("count_oauth_clients"),
+        2
+    );
+    assert_eq!(
+        store
+            .count_oauth_clients(ClientKind::MetadataDocument)
+            .await
+            .expect("count_oauth_clients"),
+        1
+    );
+
+    // Fetched again: the new copy, under the first creation.
+    let refetched = OAuthClient {
+        name: "Claude Code".into(),
+        redirect_uris: vec!["http://localhost/callback".into()],
+        fetched_at: Some(at(50)),
+        expires_at: Some(at(3_650)),
+        created_at: at(50),
+        ..claude.clone()
+    };
+    store
+        .put_oauth_client(&refetched)
+        .await
+        .expect("put_oauth_client replaces");
+    assert_eq!(
+        store.oauth_client(CLAUDE).await.expect("oauth_client"),
+        Some(OAuthClient {
+            created_at: T0,
+            ..refetched
+        }),
+        "a replaced client keeps its first created_at"
+    );
+
+    // A connection through `rc_one` keeps it; Claude's copy was fetched at 50.
+    redeemed(
+        store,
+        "code",
+        &new_connection("cn_1", &person("ada"), "rc_one", at(10)),
+    )
+    .await;
+    assert_eq!(
+        store
+            .oauth_client("rc_one")
+            .await
+            .expect("oauth_client")
+            .and_then(|client| client.last_used_at),
+        Some(at(10)),
+        "its last use is the exchange"
+    );
+    assert_eq!(
+        store
+            .purge_oauth_clients(at(60), 10)
+            .await
+            .expect("purge_oauth_clients"),
+        1,
+        "only Claude's copy, fetched at 50 and used by no connection"
+    );
+    assert_eq!(
+        store.oauth_client(CLAUDE).await.expect("oauth_client"),
+        None
+    );
+    assert!(
+        store
+            .oauth_client("rc_one")
+            .await
+            .expect("oauth_client")
+            .is_some()
+    );
+    assert!(
+        store
+            .oauth_client("rc_fresh")
+            .await
+            .expect("oauth_client")
+            .is_some(),
+        "created after the bound"
+    );
+    store
+        .revoke_connection("cn_1", at(20))
+        .await
+        .expect("revoke_connection");
+    assert_eq!(
+        store
+            .purge_oauth_clients(at(200), 10)
+            .await
+            .expect("purge_oauth_clients"),
+        1,
+        "a revoked connection still uses its client, until it is purged"
+    );
+    assert!(
+        store
+            .oauth_client("rc_one")
+            .await
+            .expect("oauth_client")
+            .is_some()
+    );
+    assert_eq!(
+        store.oauth_client("rc_fresh").await.expect("oauth_client"),
+        None
+    );
+}
+
+pub async fn a_code_is_redeemed_once_and_its_replay_revokes_the_connection<S: AccessStore>(
+    store: &S,
+) {
+    store
+        .put_oauth_client(&client(CLAUDE, ClientKind::MetadataDocument, T0))
+        .await
+        .expect("put_oauth_client");
+    let ada = person("ada");
+    let issued = code("the-code", &ada, CLAUDE, at(300));
+    store.put_oauth_code(&issued).await.expect("put_oauth_code");
+    assert!(
+        matches!(
+            store.put_oauth_code(&issued).await,
+            Err(StoreError::Conflict(_))
+        ),
+        "a hash is stored once"
+    );
+    assert_eq!(
+        store.oauth_code(issued.hash).await.expect("oauth_code"),
+        Some(issued.clone())
+    );
+    assert_eq!(
+        store
+            .redeem_oauth_code(
+                Digest::of(b"unknown"),
+                &new_connection("cn_x", &ada, CLAUDE, at(1)),
+                at(1)
+            )
+            .await
+            .expect("redeem_oauth_code"),
+        CodeRedemption::Unknown
+    );
+    assert_eq!(
+        store.connection("cn_x").await.expect("connection"),
+        None,
+        "nothing written"
+    );
+
+    let new = new_connection("cn_1", &ada, CLAUDE, at(1));
+    let connection = match store
+        .redeem_oauth_code(issued.hash, &new, at(1))
+        .await
+        .expect("redeem_oauth_code")
+    {
+        CodeRedemption::Redeemed(connection) => connection,
+        other => panic!("not redeemed: {other:?}"),
+    };
+    assert_eq!(connection, new.connection);
+    assert_eq!(
+        store.connection("cn_1").await.expect("connection"),
+        Some(new.connection.clone())
+    );
+    let used = store
+        .oauth_code(issued.hash)
+        .await
+        .expect("oauth_code")
+        .expect("kept");
+    assert_eq!(
+        (used.used_at, used.connection.as_deref()),
+        (Some(at(1)), Some("cn_1"))
+    );
+    let grants = store
+        .connection_grants("cn_1")
+        .await
+        .expect("connection_grants");
+    assert_eq!(
+        grants,
+        [
+            Grant {
+                tenant: acme(),
+                principal: Principal::Connection("cn_1".into()),
+                role: "harness".into(),
+                allowed_labels: BTreeMap::from([("via".to_owned(), "claude".to_owned())]),
+                granted_by: Some(Principal::User("user_ada".into())),
+                granted_at: at(1),
+            },
+            Grant {
+                tenant: tenant("beta"),
+                principal: Principal::Connection("cn_1".into()),
+                role: "reader".into(),
+                allowed_labels: BTreeMap::new(),
+                granted_by: Some(Principal::User("user_ada".into())),
+                granted_at: at(1),
+            },
+        ],
+        "a grant per organization, by tenant"
+    );
+    assert_eq!(
+        grant_of(store, &acme(), &Principal::Connection("cn_1".into())).await,
+        Some(grants[0].clone()),
+        "an ordinary grant of the tenant"
+    );
+    assert_eq!(
+        token_of(store, "cn_1-access").await,
+        Some(ConnectionToken {
+            hash: Digest::of(b"cn_1-access"),
+            connection: "cn_1".into(),
+            kind: ConnectionTokenKind::Access,
+            expires_at: at(3_601),
+            created_at: at(1),
+            used_at: None,
+        })
+    );
+    assert_eq!(
+        token_of(store, "cn_1-refresh")
+            .await
+            .map(|token| token.kind),
+        Some(ConnectionTokenKind::Refresh)
+    );
+
+    // Exchanged again: nothing new, and the connection is revoked.
+    assert_eq!(
+        store
+            .redeem_oauth_code(
+                issued.hash,
+                &new_connection("cn_2", &person("ada"), CLAUDE, at(2)),
+                at(2)
+            )
+            .await
+            .expect("redeem_oauth_code"),
+        CodeRedemption::Used
+    );
+    assert_eq!(store.connection("cn_2").await.expect("connection"), None);
+    let revoked = store
+        .connection("cn_1")
+        .await
+        .expect("connection")
+        .expect("a revoked connection is kept");
+    assert_eq!(revoked.revoked_at, Some(at(2)));
+    assert_eq!(tenants_opened(store, "cn_1").await, []);
+    assert_eq!(grant_of(store, &acme(), &revoked.principal()).await, None);
+    assert_eq!(token_of(store, "cn_1-access").await, None);
+    assert_eq!(token_of(store, "cn_1-refresh").await, None);
+    assert_eq!(
+        store.connections_of(&ada).await.expect("connections_of"),
+        []
+    );
+}
+
+pub async fn a_person_has_one_connection_per_client<S: AccessStore>(store: &S) {
+    let ada = person("ada");
+    let first = redeemed(store, "first", &new_connection("cn_1", &ada, CLAUDE, at(1))).await;
+    // Ada consents again, on another device: the same connection, its organizations replaced.
+    let mut again = new_connection("cn_2", &ada, CLAUDE, at(5));
+    again.organizations = vec![opened(tenant("gamma"), Access::Read, &[])];
+    let kept = redeemed(store, "second", &again).await;
+    assert_eq!(
+        kept,
+        Connection {
+            expires_at: again.connection.expires_at,
+            ..first.clone()
+        },
+        "the live connection is kept, its lapse renewed"
+    );
+    assert_eq!(store.connection("cn_2").await.expect("connection"), None);
+    assert_eq!(
+        tenants_opened(store, "cn_1").await,
+        [("gamma".to_owned(), "reader".to_owned())]
+    );
+    for secret in ["cn_1-access", "cn_1-refresh", "cn_2-access", "cn_2-refresh"] {
+        assert_eq!(
+            token_of(store, secret).await.map(|token| token.connection),
+            Some("cn_1".to_owned()),
+            "{secret}: the tokens of both devices are the connection's"
+        );
+    }
+    // Another client, and another person: other connections.
+    let other_client = redeemed(
+        store,
+        "third",
+        &new_connection("cn_3", &ada, "rc_cursor", at(6)),
+    )
+    .await;
+    assert_eq!(other_client.id, "cn_3");
+    let grace = redeemed(
+        store,
+        "fourth",
+        &new_connection("cn_4", &person("grace"), CLAUDE, at(7)),
+    )
+    .await;
+    assert_eq!(grace.id, "cn_4");
+    assert_eq!(
+        store
+            .connections_of(&ada)
+            .await
+            .expect("connections_of")
+            .iter()
+            .map(|connection| connection.id.clone())
+            .collect::<Vec<_>>(),
+        ["cn_1", "cn_3"]
+    );
+    // Once revoked, a new consent makes a new connection.
+    assert!(
+        store
+            .revoke_connection("cn_1", at(8))
+            .await
+            .expect("revoke_connection")
+    );
+    let renewed = redeemed(store, "fifth", &new_connection("cn_5", &ada, CLAUDE, at(9))).await;
+    assert_eq!(renewed.id, "cn_5");
+}
+
+pub async fn a_refresh_token_rotates_once_and_its_replay_revokes_the_connection<S: AccessStore>(
+    store: &S,
+) {
+    let ada = person("ada");
+    redeemed(store, "code", &new_connection("cn_1", &ada, CLAUDE, at(1))).await;
+    let refresh = Digest::of(b"cn_1-refresh");
+    let lapse = at(40 * 86_400);
+    assert_eq!(
+        store
+            .rotate_refresh_token(
+                Digest::of(b"cn_1-access"),
+                &issued("a2", at(3_700)),
+                &issued("r2", lapse),
+                at(100)
+            )
+            .await
+            .expect("rotate_refresh_token"),
+        Rotation::Unknown,
+        "an access token is not a refresh token"
+    );
+    let rotated = store
+        .rotate_refresh_token(
+            refresh,
+            &issued("a2", at(3_700)),
+            &issued("r2", lapse),
+            at(100),
+        )
+        .await
+        .expect("rotate_refresh_token");
+    let Rotation::Rotated(connection) = rotated else {
+        panic!("not rotated: {rotated:?}");
+    };
+    assert_eq!(
+        (connection.id.as_str(), connection.expires_at),
+        ("cn_1", lapse),
+        "the connection lapses with its new refresh token"
+    );
+    assert_eq!(
+        store
+            .connection("cn_1")
+            .await
+            .expect("connection")
+            .map(|connection| connection.expires_at),
+        Some(lapse)
+    );
+    assert_eq!(
+        token_of(store, "cn_1-refresh")
+            .await
+            .and_then(|token| token.used_at),
+        Some(at(100))
+    );
+    assert_eq!(
+        token_of(store, "r2")
+            .await
+            .map(|token| (token.kind, token.connection)),
+        Some((ConnectionTokenKind::Refresh, "cn_1".to_owned()))
+    );
+    assert_eq!(
+        token_of(store, "a2")
+            .await
+            .map(|token| (token.kind, token.expires_at)),
+        Some((ConnectionTokenKind::Access, at(3_700)))
+    );
+
+    // A refresh token past its lapse is refused, and nothing changes.
+    assert_eq!(
+        store
+            .rotate_refresh_token(
+                Digest::of(b"r2"),
+                &issued("a3", at(1)),
+                &issued("r3", at(2)),
+                lapse
+            )
+            .await
+            .expect("rotate_refresh_token"),
+        Rotation::Expired
+    );
+    assert_eq!(token_of(store, "a3").await, None);
+
+    // The first refresh token, used again: the connection is revoked.
+    assert_eq!(
+        store
+            .rotate_refresh_token(
+                refresh,
+                &issued("a4", at(3_800)),
+                &issued("r4", lapse),
+                at(200)
+            )
+            .await
+            .expect("rotate_refresh_token"),
+        Rotation::Used
+    );
+    assert_eq!(token_of(store, "a4").await, None);
+    assert_eq!(
+        store
+            .connection("cn_1")
+            .await
+            .expect("connection")
+            .and_then(|connection| connection.revoked_at),
+        Some(at(200))
+    );
+    assert_eq!(token_of(store, "r2").await, None, "its tokens are gone");
+    assert_eq!(tenants_opened(store, "cn_1").await, []);
+    assert_eq!(
+        store
+            .rotate_refresh_token(refresh, &issued("a5", at(1)), &issued("r5", at(2)), at(300))
+            .await
+            .expect("rotate_refresh_token"),
+        Rotation::Unknown,
+        "a revoked connection's token is unknown"
+    );
+}
+
+pub async fn connections_are_listed_changed_touched_and_revoked<S: AccessStore>(store: &S) {
+    let ada = person("ada");
+    redeemed(store, "one", &new_connection("cn_b", &ada, CLAUDE, at(1))).await;
+    redeemed(
+        store,
+        "two",
+        &new_connection("cn_a", &ada, "rc_cursor", at(1)),
+    )
+    .await;
+    redeemed(
+        store,
+        "three",
+        &new_connection("cn_c", &person("grace"), CLAUDE, at(1)),
+    )
+    .await;
+    assert_eq!(
+        store
+            .connections_of(&ada)
+            .await
+            .expect("connections_of")
+            .iter()
+            .map(|connection| connection.id.as_str())
+            .collect::<Vec<_>>()
+            .join(","),
+        "cn_a,cn_b",
+        "by creation, then id"
+    );
+
+    // The person changes what it opens.
+    assert!(
+        store
+            .set_connection_organizations(
+                "cn_b",
+                &[opened(tenant("gamma"), Access::Run, &[("team", "a")])],
+                at(5)
+            )
+            .await
+            .expect("set_connection_organizations")
+    );
+    let grants = store
+        .connection_grants("cn_b")
+        .await
+        .expect("connection_grants");
+    assert_eq!(
+        grants,
+        [Grant {
+            tenant: tenant("gamma"),
+            principal: Principal::Connection("cn_b".into()),
+            role: "harness".into(),
+            allowed_labels: BTreeMap::from([("team".to_owned(), "a".to_owned())]),
+            granted_by: Some(Principal::User("user_ada".into())),
+            granted_at: at(5),
+        }]
+    );
+    assert_eq!(
+        grant_of(store, &acme(), &Principal::Connection("cn_b".into())).await,
+        None,
+        "acme is no longer opened"
+    );
+    assert_eq!(
+        tenants_opened(store, "cn_a").await.len(),
+        2,
+        "another connection keeps its own"
+    );
+    assert!(
+        store
+            .set_connection_organizations("cn_b", &[], at(6))
+            .await
+            .expect("set_connection_organizations"),
+        "a connection may open nothing"
+    );
+    assert_eq!(tenants_opened(store, "cn_b").await, []);
+    assert!(
+        !store
+            .set_connection_organizations("cn_none", &[], at(6))
+            .await
+            .expect("set_connection_organizations")
+    );
+
+    store
+        .touch_connection("cn_b", at(7))
+        .await
+        .expect("touch_connection");
+    assert_eq!(
+        store
+            .connection("cn_b")
+            .await
+            .expect("connection")
+            .and_then(|connection| connection.last_used_at),
+        Some(at(7))
+    );
+
+    assert!(
+        store
+            .revoke_connection("cn_a", at(8))
+            .await
+            .expect("revoke_connection")
+    );
+    assert!(
+        !store
+            .revoke_connection("cn_a", at(9))
+            .await
+            .expect("revoke_connection"),
+        "already revoked"
+    );
+    assert!(
+        !store
+            .revoke_connection("cn_none", at(9))
+            .await
+            .expect("revoke_connection")
+    );
+    assert_eq!(
+        store
+            .connection("cn_a")
+            .await
+            .expect("connection")
+            .and_then(|connection| connection.revoked_at),
+        Some(at(8)),
+        "the first revocation stays"
+    );
+    assert!(
+        !store
+            .set_connection_organizations("cn_a", &[opened(acme(), Access::Read, &[])], at(9))
+            .await
+            .expect("set_connection_organizations"),
+        "a revoked connection opens nothing again"
+    );
+    assert_eq!(tenants_opened(store, "cn_a").await, []);
+    assert_eq!(
+        store
+            .connections_of(&ada)
+            .await
+            .expect("connections_of")
+            .iter()
+            .map(|connection| connection.id.as_str())
+            .collect::<Vec<_>>(),
+        ["cn_b"]
+    );
+    assert_eq!(
+        tenants_opened(store, "cn_c").await.len(),
+        2,
+        "Grace's connection is untouched"
+    );
+}
+
+pub async fn codes_tokens_and_connections_are_purged<S: AccessStore>(store: &S) {
+    let ada = person("ada");
+    // cn_1 lapses at 30 days + 1 s, cn_2 is revoked at 10 s.
+    redeemed(store, "one", &new_connection("cn_1", &ada, CLAUDE, at(1))).await;
+    redeemed(
+        store,
+        "two",
+        &new_connection("cn_2", &ada, "rc_cursor", at(2)),
+    )
+    .await;
+    store
+        .put_oauth_code(&code("late", &ada, CLAUDE, at(1_000)))
+        .await
+        .expect("put_oauth_code");
+    store
+        .revoke_connection("cn_2", at(10))
+        .await
+        .expect("revoke_connection");
+
+    assert_eq!(
+        store
+            .purge_oauth_codes(at(500), 10)
+            .await
+            .expect("purge_oauth_codes"),
+        2,
+        "the codes that expired at 300 s"
+    );
+    assert!(
+        store
+            .oauth_code(Digest::of(b"late"))
+            .await
+            .expect("oauth_code")
+            .is_some()
+    );
+
+    assert_eq!(
+        store
+            .purge_connection_tokens(at(3_602), 10)
+            .await
+            .expect("purge_connection_tokens"),
+        1,
+        "cn_1's access token, which expired at 3 601 s"
+    );
+    assert_eq!(token_of(store, "cn_1-access").await, None);
+    assert!(token_of(store, "cn_1-refresh").await.is_some());
+
+    assert_eq!(
+        store
+            .purge_connections(at(100), at(5), 10)
+            .await
+            .expect("purge_connections"),
+        0,
+        "neither lapsed nor revoked before the bounds"
+    );
+    assert_eq!(
+        store
+            .purge_connections(at(100), at(11), 10)
+            .await
+            .expect("purge_connections"),
+        1,
+        "the revoked one"
+    );
+    assert_eq!(store.connection("cn_2").await.expect("connection"), None);
+    assert_eq!(
+        store
+            .purge_connections(at(30 * 86_400 + 2), at(11), 10)
+            .await
+            .expect("purge_connections"),
+        1,
+        "the lapsed one, with its grants and tokens"
+    );
+    assert_eq!(store.connection("cn_1").await.expect("connection"), None);
+    assert_eq!(tenants_opened(store, "cn_1").await, []);
+    assert_eq!(token_of(store, "cn_1-refresh").await, None);
+    assert_eq!(store.list_grants(&acme()).await.expect("list_grants"), []);
 }

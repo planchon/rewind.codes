@@ -23,6 +23,7 @@ use tokio::sync::watch;
 use crate::auth::Caller;
 use crate::deliveries::{Background, Deliveries};
 use crate::error::ApiError;
+use crate::oauth::OAuthServer;
 use crate::views::Views;
 use crate::wake::{Activity, POLL, Wake, wait};
 use crate::wiring::blobs::Blobs;
@@ -55,6 +56,8 @@ pub(crate) struct Settings {
     /// The retention of the tenants this server creates.
     pub(crate) retention: Retention,
     pub(crate) allow_stdio: bool,
+    /// The URL clients reach this server at, without a trailing `/`.
+    pub(crate) public_url: Option<String>,
     /// Where lifecycle webhooks may go.
     pub(crate) webhook_egress: WebhookEgress,
     pub(crate) projector: ProjectorConfig,
@@ -82,6 +85,9 @@ pub(crate) struct App {
     pub(crate) stop: watch::Sender<bool>,
     /// The dashboard's sign-in: `None` without WorkOS, and on a worker alone.
     pub(crate) sign_in: Option<SignIn>,
+    /// The OAuth authorization server of people's connections: with a public URL and a
+    /// sign-in only.
+    pub(crate) oauth: Option<OAuthServer>,
     /// Script headlines, by tenant and digest: a script never changes.
     headlines: Mutex<HashMap<(TenantId, Digest), String>>,
     /// Tenants known to have their record: a tenant is never deleted.
@@ -117,6 +123,7 @@ impl App {
         deliveries: Arc<Deliveries<ServerRender>>,
         settings: Settings,
         sign_in: Option<SignIn>,
+        oauth: Option<OAuthServer>,
     ) -> Self {
         Self {
             engine,
@@ -131,6 +138,7 @@ impl App {
             activity: Activity::new(),
             stop: watch::Sender::new(false),
             sign_in,
+            oauth,
             headlines: Mutex::new(HashMap::new()),
             tenants: Mutex::new(HashSet::new()),
         }
@@ -146,6 +154,18 @@ impl App {
                  their grants",
             )
         })
+    }
+
+    /// The OAuth authorization server and the sign-in it needs, or 404: OAuth exists only with
+    /// a public URL and WorkOS (`archi/07-code-architecture.md`, "MCP and OAuth").
+    pub(crate) fn oauth(&self) -> Result<(&OAuthServer, &SignIn), ApiError> {
+        match (&self.oauth, &self.sign_in) {
+            (Some(oauth), Some(sign_in)) => Ok((oauth, sign_in)),
+            _ => Err(ApiError::not_found(
+                "this server has no OAuth: it needs a public URL (--public-url) and a sign-in \
+                 (WorkOS). /mcp takes API keys and end users' tokens only",
+            )),
+        }
     }
 
     /// Creates the tenant's record, with the deployment's ceiling and retention, when it has

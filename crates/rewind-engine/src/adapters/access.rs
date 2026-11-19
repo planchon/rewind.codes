@@ -4,8 +4,10 @@ use std::sync::{Mutex, MutexGuard};
 use rewind_core::{Digest, Timestamp};
 
 use crate::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
-    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
+    AccessStore, ApiKey, ClientKind, CodeRedemption, Connection, ConnectionToken,
+    ConnectionTokenKind, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName,
+    NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization, Principal, Role,
+    RoleDeletion, Rotation, StoreError, TenantId, Token, TokenKey, UserId,
 };
 
 /// `AccessStore` in memory, for engine and server tests. It passes the conformance suite: the
@@ -23,6 +25,10 @@ struct State {
     roles: BTreeMap<(TenantId, String), Role>,
     grants: BTreeMap<(TenantId, Principal), Grant>,
     default_roles: BTreeMap<TenantId, String>,
+    clients: BTreeMap<String, OAuthClient>,
+    codes: BTreeMap<Digest, OAuthCode>,
+    connections: BTreeMap<String, Connection>,
+    connection_tokens: BTreeMap<Digest, ConnectionToken>,
 }
 
 impl State {
@@ -46,6 +52,85 @@ impl State {
             .iter()
             .filter(move |((of, _), _)| of == tenant)
             .map(|(_, grant)| grant)
+    }
+
+    /// Replaces the grants of `connection` with one per organization, given by its person.
+    fn open(
+        &mut self,
+        connection: &Connection,
+        organizations: &[OpenedOrganization],
+        now: Timestamp,
+    ) {
+        let principal = connection.principal();
+        self.grants.retain(|(_, of), _| *of != principal);
+        for opened in organizations {
+            self.grants.insert(
+                (opened.tenant.clone(), principal.clone()),
+                Grant {
+                    tenant: opened.tenant.clone(),
+                    principal: principal.clone(),
+                    role: opened.access.role().to_owned(),
+                    allowed_labels: opened.allowed_labels.clone(),
+                    granted_by: Some(Principal::from(&connection.user)),
+                    granted_at: now,
+                },
+            );
+        }
+    }
+
+    /// Revokes a live connection: its grants and its tokens go.
+    fn revoke(&mut self, id: &str, now: Timestamp) -> bool {
+        let Some(connection) = self
+            .connections
+            .get_mut(id)
+            .filter(|connection| connection.revoked_at.is_none())
+        else {
+            return false;
+        };
+        connection.revoked_at = Some(now);
+        self.forget(id);
+        true
+    }
+
+    /// Deletes the grants and the tokens of a connection.
+    fn forget(&mut self, id: &str) {
+        let principal = Principal::Connection(id.to_owned());
+        self.grants.retain(|(_, of), _| *of != principal);
+        self.connection_tokens
+            .retain(|_, token| token.connection != id);
+    }
+
+    /// Stores new tokens of a connection; a hash already stored is a `Conflict`, and nothing is
+    /// stored.
+    fn issue(
+        &mut self,
+        connection: &str,
+        tokens: [(&NewToken, ConnectionTokenKind); 2],
+        now: Timestamp,
+    ) -> Result<(), StoreError> {
+        if tokens
+            .iter()
+            .any(|(token, _)| self.connection_tokens.contains_key(&token.hash))
+            || tokens[0].0.hash == tokens[1].0.hash
+        {
+            return Err(StoreError::Conflict(
+                "a connection's token with this hash already exists".into(),
+            ));
+        }
+        for (token, kind) in tokens {
+            self.connection_tokens.insert(
+                token.hash,
+                ConnectionToken {
+                    hash: token.hash,
+                    connection: connection.to_owned(),
+                    kind,
+                    expires_at: token.expires_at,
+                    created_at: now,
+                    used_at: None,
+                },
+            );
+        }
+        Ok(())
     }
 }
 
@@ -347,5 +432,309 @@ impl AccessStore for MemoryAccess {
 
     async fn default_role(&self, tenant: &TenantId) -> Result<Option<String>, StoreError> {
         Ok(self.lock()?.default_roles.get(tenant).cloned())
+    }
+
+    async fn put_oauth_client(&self, client: &OAuthClient) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        let mut client = client.clone();
+        if let Some(existing) = state.clients.get(&client.id) {
+            client.created_at = existing.created_at;
+            client.last_used_at = existing.last_used_at;
+        }
+        state.clients.insert(client.id.clone(), client);
+        Ok(())
+    }
+
+    async fn oauth_client(&self, id: &str) -> Result<Option<OAuthClient>, StoreError> {
+        Ok(self.lock()?.clients.get(id).cloned())
+    }
+
+    async fn count_oauth_clients(&self, kind: ClientKind) -> Result<u64, StoreError> {
+        Ok(self
+            .lock()?
+            .clients
+            .values()
+            .filter(|client| client.kind == kind)
+            .count() as u64)
+    }
+
+    async fn purge_oauth_clients(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let unused: Vec<String> = state
+            .clients
+            .values()
+            .filter(|client| {
+                client
+                    .last_used_at
+                    .or(client.fetched_at)
+                    .unwrap_or(client.created_at)
+                    < before
+            })
+            .filter(|client| {
+                !state
+                    .connections
+                    .values()
+                    .any(|connection| connection.client_id == client.id)
+            })
+            .map(|client| client.id.clone())
+            .take(limit)
+            .collect();
+        for id in &unused {
+            state.clients.remove(id);
+        }
+        Ok(unused.len() as u64)
+    }
+
+    async fn put_oauth_code(&self, code: &OAuthCode) -> Result<(), StoreError> {
+        let mut state = self.lock()?;
+        if state.codes.contains_key(&code.hash) {
+            return Err(StoreError::Conflict(format!(
+                "an authorization code with hash {} already exists",
+                code.hash.short()
+            )));
+        }
+        state.codes.insert(code.hash, code.clone());
+        Ok(())
+    }
+
+    async fn oauth_code(&self, hash: Digest) -> Result<Option<OAuthCode>, StoreError> {
+        Ok(self.lock()?.codes.get(&hash).cloned())
+    }
+
+    async fn redeem_oauth_code(
+        &self,
+        hash: Digest,
+        new: &NewConnection,
+        now: Timestamp,
+    ) -> Result<CodeRedemption, StoreError> {
+        let mut state = self.lock()?;
+        let Some(code) = state.codes.get(&hash).cloned() else {
+            return Ok(CodeRedemption::Unknown);
+        };
+        if code.used_at.is_some() {
+            if let Some(id) = &code.connection {
+                state.revoke(id, now);
+            }
+            return Ok(CodeRedemption::Used);
+        }
+        let kept = state
+            .connections
+            .values()
+            .find(|connection| {
+                connection.user == new.connection.user
+                    && connection.client_id == new.connection.client_id
+                    && connection.revoked_at.is_none()
+            })
+            .cloned();
+        let connection = match kept {
+            Some(kept) => Connection {
+                expires_at: new.connection.expires_at,
+                ..kept
+            },
+            None => {
+                if state.connections.contains_key(&new.connection.id) {
+                    return Err(StoreError::Conflict(format!(
+                        "a connection {} already exists",
+                        new.connection.id
+                    )));
+                }
+                new.connection.clone()
+            }
+        };
+        state.issue(
+            &connection.id,
+            [
+                (&new.access, ConnectionTokenKind::Access),
+                (&new.refresh, ConnectionTokenKind::Refresh),
+            ],
+            now,
+        )?;
+        state
+            .connections
+            .insert(connection.id.clone(), connection.clone());
+        state.open(&connection, &new.organizations, now);
+        if let Some(code) = state.codes.get_mut(&hash) {
+            code.used_at = Some(now);
+            code.connection = Some(connection.id.clone());
+        }
+        if let Some(client) = state.clients.get_mut(&connection.client_id) {
+            client.last_used_at = Some(now);
+        }
+        Ok(CodeRedemption::Redeemed(connection))
+    }
+
+    async fn purge_oauth_codes(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let expired: Vec<Digest> = state
+            .codes
+            .values()
+            .filter(|code| code.expires_at < before)
+            .map(|code| code.hash)
+            .take(limit)
+            .collect();
+        for hash in &expired {
+            state.codes.remove(hash);
+        }
+        Ok(expired.len() as u64)
+    }
+
+    async fn connection(&self, id: &str) -> Result<Option<Connection>, StoreError> {
+        Ok(self.lock()?.connections.get(id).cloned())
+    }
+
+    async fn connections_of(&self, user: &UserId) -> Result<Vec<Connection>, StoreError> {
+        let mut connections: Vec<Connection> = self
+            .lock()?
+            .connections
+            .values()
+            .filter(|connection| connection.user == *user && connection.revoked_at.is_none())
+            .cloned()
+            .collect();
+        connections.sort_by(|a, b| (a.created_at, &a.id).cmp(&(b.created_at, &b.id)));
+        Ok(connections)
+    }
+
+    async fn connection_grants(&self, id: &str) -> Result<Vec<Grant>, StoreError> {
+        let principal = Principal::Connection(id.to_owned());
+        Ok(self
+            .lock()?
+            .grants
+            .values()
+            .filter(|grant| grant.principal == principal)
+            .cloned()
+            .collect())
+    }
+
+    async fn set_connection_organizations(
+        &self,
+        id: &str,
+        organizations: &[OpenedOrganization],
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        let mut state = self.lock()?;
+        let Some(connection) = state
+            .connections
+            .get(id)
+            .filter(|connection| connection.revoked_at.is_none())
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        state.open(&connection, organizations, now);
+        Ok(true)
+    }
+
+    async fn touch_connection(&self, id: &str, now: Timestamp) -> Result<(), StoreError> {
+        if let Some(connection) = self.lock()?.connections.get_mut(id) {
+            connection.last_used_at = Some(now);
+        }
+        Ok(())
+    }
+
+    async fn revoke_connection(&self, id: &str, now: Timestamp) -> Result<bool, StoreError> {
+        Ok(self.lock()?.revoke(id, now))
+    }
+
+    async fn purge_connections(
+        &self,
+        lapsed_before: Timestamp,
+        revoked_before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let ended: Vec<String> = state
+            .connections
+            .values()
+            .filter(|connection| {
+                connection.expires_at < lapsed_before
+                    || connection.revoked_at.is_some_and(|at| at < revoked_before)
+            })
+            .map(|connection| connection.id.clone())
+            .take(limit)
+            .collect();
+        for id in &ended {
+            state.connections.remove(id);
+            state.forget(id);
+        }
+        Ok(ended.len() as u64)
+    }
+
+    async fn connection_token(&self, hash: Digest) -> Result<Option<ConnectionToken>, StoreError> {
+        Ok(self.lock()?.connection_tokens.get(&hash).cloned())
+    }
+
+    async fn rotate_refresh_token(
+        &self,
+        hash: Digest,
+        access: &NewToken,
+        refresh: &NewToken,
+        now: Timestamp,
+    ) -> Result<Rotation, StoreError> {
+        let mut state = self.lock()?;
+        let Some(token) = state
+            .connection_tokens
+            .get(&hash)
+            .filter(|token| token.kind == ConnectionTokenKind::Refresh)
+            .cloned()
+        else {
+            return Ok(Rotation::Unknown);
+        };
+        let Some(connection) = state
+            .connections
+            .get(&token.connection)
+            .filter(|connection| connection.revoked_at.is_none())
+            .cloned()
+        else {
+            return Ok(Rotation::Unknown);
+        };
+        if token.used_at.is_some() {
+            state.revoke(&connection.id, now);
+            return Ok(Rotation::Used);
+        }
+        if token.expires_at <= now {
+            return Ok(Rotation::Expired);
+        }
+        state.issue(
+            &connection.id,
+            [
+                (access, ConnectionTokenKind::Access),
+                (refresh, ConnectionTokenKind::Refresh),
+            ],
+            now,
+        )?;
+        if let Some(used) = state.connection_tokens.get_mut(&hash) {
+            used.used_at = Some(now);
+        }
+        let connection = Connection {
+            expires_at: refresh.expires_at,
+            ..connection
+        };
+        state
+            .connections
+            .insert(connection.id.clone(), connection.clone());
+        Ok(Rotation::Rotated(connection))
+    }
+
+    async fn purge_connection_tokens(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        let mut state = self.lock()?;
+        let ended: Vec<Digest> = state
+            .connection_tokens
+            .values()
+            .filter(|token| token.expires_at < before)
+            .map(|token| token.hash)
+            .take(limit)
+            .collect();
+        for hash in &ended {
+            state.connection_tokens.remove(hash);
+        }
+        Ok(ended.len() as u64)
     }
 }

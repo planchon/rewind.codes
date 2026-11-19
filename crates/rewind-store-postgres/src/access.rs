@@ -1,4 +1,5 @@
-//! `AccessStore` on Postgres: API keys, the tenants' own roles, grants and default roles. The
+//! `AccessStore` on Postgres: API keys, the tenants' own roles, grants and default roles, end
+//! users' tokens and token keys; people's connections (`crate::connections`). The
 //! in-memory `MemoryAccess` of `rewind-engine` is the reference of every behavior here; both pass
 //! the same conformance suite.
 //!
@@ -11,8 +12,10 @@
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
-    AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, NamespaceName, Principal,
-    Role, RoleDeletion, StoreError, TenantId, Token, TokenKey,
+    AccessStore, ApiKey, ClientKind, CodeRedemption, Connection, ConnectionToken, Grant,
+    GrantClaim, GrantDeletion, GrantWrite, NamespaceName, NewConnection, NewToken, OAuthClient,
+    OAuthCode, OpenedOrganization, Principal, Role, RoleDeletion, Rotation, StoreError, TenantId,
+    Token, TokenKey, UserId,
 };
 
 use sqlx::PgConnection;
@@ -650,5 +653,108 @@ impl AccessStore for PostgresStore {
                 .await
                 .map_err(Error::from)?;
         Ok(role)
+    }
+    async fn put_oauth_client(&self, client: &OAuthClient) -> Result<(), StoreError> {
+        Ok(self.put_oauth_client_row(client).await?)
+    }
+
+    async fn oauth_client(&self, id: &str) -> Result<Option<OAuthClient>, StoreError> {
+        Ok(self.oauth_client_row(id).await?)
+    }
+
+    async fn count_oauth_clients(&self, kind: ClientKind) -> Result<u64, StoreError> {
+        Ok(self.count_oauth_client_rows(kind).await?)
+    }
+
+    async fn purge_oauth_clients(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        Ok(self.purge_oauth_client_rows(before, limit).await?)
+    }
+
+    async fn put_oauth_code(&self, code: &OAuthCode) -> Result<(), StoreError> {
+        self.put_oauth_code_row(code).await
+    }
+
+    async fn oauth_code(&self, hash: Digest) -> Result<Option<OAuthCode>, StoreError> {
+        Ok(self.oauth_code_row(hash).await?)
+    }
+
+    async fn redeem_oauth_code(
+        &self,
+        hash: Digest,
+        new: &NewConnection,
+        now: Timestamp,
+    ) -> Result<CodeRedemption, StoreError> {
+        self.redeem_oauth_code_rows(hash, new, now).await
+    }
+
+    async fn purge_oauth_codes(&self, before: Timestamp, limit: usize) -> Result<u64, StoreError> {
+        Ok(self.purge_oauth_code_rows(before, limit).await?)
+    }
+
+    async fn connection(&self, id: &str) -> Result<Option<Connection>, StoreError> {
+        Ok(self.connection_row(id).await?)
+    }
+
+    async fn connections_of(&self, user: &UserId) -> Result<Vec<Connection>, StoreError> {
+        Ok(self.connections_of_user(user).await?)
+    }
+
+    async fn connection_grants(&self, id: &str) -> Result<Vec<Grant>, StoreError> {
+        Ok(self.connection_grant_rows(id).await?)
+    }
+
+    async fn set_connection_organizations(
+        &self,
+        id: &str,
+        organizations: &[OpenedOrganization],
+        now: Timestamp,
+    ) -> Result<bool, StoreError> {
+        self.set_connection_organization_rows(id, organizations, now)
+            .await
+    }
+
+    async fn touch_connection(&self, id: &str, now: Timestamp) -> Result<(), StoreError> {
+        Ok(self.touch_connection_row(id, now).await?)
+    }
+
+    async fn revoke_connection(&self, id: &str, now: Timestamp) -> Result<bool, StoreError> {
+        self.revoke_connection_row(id, now).await
+    }
+
+    async fn purge_connections(
+        &self,
+        lapsed_before: Timestamp,
+        revoked_before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        self.purge_connection_rows(lapsed_before, revoked_before, limit)
+            .await
+    }
+
+    async fn connection_token(&self, hash: Digest) -> Result<Option<ConnectionToken>, StoreError> {
+        Ok(self.connection_token_row(hash).await?)
+    }
+
+    async fn rotate_refresh_token(
+        &self,
+        hash: Digest,
+        access: &NewToken,
+        refresh: &NewToken,
+        now: Timestamp,
+    ) -> Result<Rotation, StoreError> {
+        self.rotate_refresh_token_rows(hash, access, refresh, now)
+            .await
+    }
+
+    async fn purge_connection_tokens(
+        &self,
+        before: Timestamp,
+        limit: usize,
+    ) -> Result<u64, StoreError> {
+        Ok(self.purge_connection_token_rows(before, limit).await?)
     }
 }

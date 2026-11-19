@@ -78,6 +78,11 @@ pub const TOKEN_KEYS: &str = "/v1/organization/token-keys";
 pub const TOKEN_KEY: &str = "/v1/organization/token-keys/{kid}";
 pub const ORGANIZATION_QUOTAS: &str = "/v1/organizations/{tenant}/quotas";
 
+pub const CONNECTIONS: &str = "/v1/connections";
+pub const CONNECTION: &str = "/v1/connections/{id}";
+pub const ORGANIZATION_CONNECTIONS: &str = "/v1/organization/connections";
+pub const ORGANIZATION_CONNECTION: &str = "/v1/organization/connections/{id}";
+pub const OAUTH_CONSENT: &str = "/v1/oauth/consent";
 pub const SERVER: &str = "/v1/server";
 pub const SERVER_STOP: &str = "/v1/server/stop";
 
@@ -93,8 +98,17 @@ pub const AUTH_SESSION: &str = "/auth/session";
 pub const AUTH_WAITLIST: &str = "/auth/waitlist";
 pub const AUTH_LOGOUT: &str = "/auth/logout";
 
+/// The OAuth authorization server of people's connections (`crate::oauth`), outside `/v1`.
+pub const OAUTH_AUTHORIZE: &str = "/oauth/authorize";
+pub const OAUTH_REGISTER: &str = "/oauth/register";
+pub const OAUTH_TOKEN: &str = "/oauth/token";
+pub const OAUTH_REVOKE: &str = "/oauth/revoke";
+pub const PROTECTED_RESOURCE: &str = "/.well-known/oauth-protected-resource";
+pub const PROTECTED_RESOURCE_MCP: &str = "/.well-known/oauth-protected-resource/mcp";
+pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server";
+
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 89] = [
+pub const OPERATIONS: [(&str, &str); 103] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -172,6 +186,13 @@ pub const OPERATIONS: [(&str, &str); 89] = [
     ("POST", TOKEN_KEYS),
     ("DELETE", TOKEN_KEY),
     ("PUT", ORGANIZATION_QUOTAS),
+    ("GET", CONNECTIONS),
+    ("PATCH", CONNECTION),
+    ("DELETE", CONNECTION),
+    ("GET", ORGANIZATION_CONNECTIONS),
+    ("DELETE", ORGANIZATION_CONNECTION),
+    ("GET", OAUTH_CONSENT),
+    ("POST", OAUTH_CONSENT),
     ("GET", SERVER),
     ("POST", SERVER_STOP),
     ("GET", AUTH_CONFIG),
@@ -184,6 +205,13 @@ pub const OPERATIONS: [(&str, &str); 89] = [
     ("POST", AUTH_SESSION),
     ("POST", AUTH_WAITLIST),
     ("POST", AUTH_LOGOUT),
+    ("GET", OAUTH_AUTHORIZE),
+    ("POST", OAUTH_REGISTER),
+    ("POST", OAUTH_TOKEN),
+    ("POST", OAUTH_REVOKE),
+    ("GET", PROTECTED_RESOURCE),
+    ("GET", PROTECTED_RESOURCE_MCP),
+    ("GET", AUTHORIZATION_SERVER),
 ];
 
 /// Fills a path's parameters in order, each percent-encoded as one segment:

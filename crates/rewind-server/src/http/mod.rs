@@ -3,10 +3,12 @@
 //! the DTOs are `rewind-api`'s.
 
 mod admin;
+mod connections;
 mod dashboard;
 mod events;
 mod hooks;
 mod namespaces;
+mod oauth;
 mod organization;
 mod reading;
 mod roles;
@@ -146,6 +148,23 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
             get(tokens::list_keys).post(tokens::create_key),
         )
         .route(routes::TOKEN_KEY, delete(tokens::delete_key))
+        .route(routes::CONNECTIONS, get(connections::list))
+        .route(
+            routes::CONNECTION,
+            patch(connections::update).delete(connections::revoke),
+        )
+        .route(
+            routes::ORGANIZATION_CONNECTIONS,
+            get(connections::organization_list),
+        )
+        .route(
+            routes::ORGANIZATION_CONNECTION,
+            delete(connections::organization_remove),
+        )
+        .route(
+            routes::OAUTH_CONSENT,
+            get(connections::consent).post(connections::answer),
+        )
         .route(routes::ROLES, get(roles::list))
         .route(routes::ROLE, put(roles::put).delete(roles::delete))
         .route(routes::PERMISSIONS, get(admin::permissions))
@@ -178,11 +197,28 @@ pub(crate) fn router(app: Arc<App>, socket: bool) -> Router {
         .route(routes::AUTH_LOGOUT, post(sign_in::logout))
         .route_layer(from_fn_with_state(app.clone(), with_sign_in))
         .with_state(app.clone());
+    // The OAuth authorization server of people's connections: no Bearer, 404 without OAuth.
+    let oauth = Router::new()
+        .route(routes::OAUTH_AUTHORIZE, get(oauth::authorize))
+        .route(routes::OAUTH_REGISTER, post(oauth::register))
+        .route(routes::OAUTH_TOKEN, post(oauth::token))
+        .route(routes::OAUTH_REVOKE, post(oauth::revoke))
+        .route(routes::PROTECTED_RESOURCE, get(oauth::protected_resource))
+        .route(
+            routes::PROTECTED_RESOURCE_MCP,
+            get(oauth::protected_resource),
+        )
+        .route(
+            routes::AUTHORIZATION_SERVER,
+            get(oauth::authorization_server),
+        )
+        .with_state(app.clone());
     let public = Router::new()
         .route(routes::HOOK, post(hooks::post))
         .fallback(dashboard::serve)
         .with_state(app.clone())
-        .merge(sign_in);
+        .merge(sign_in)
+        .merge(oauth);
     api.merge(public)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(from_fn(refuse_oversized))
