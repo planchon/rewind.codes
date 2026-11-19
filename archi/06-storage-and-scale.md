@@ -29,7 +29,16 @@ tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created
 token_keys (kid PK, tenant, name, jwk, permissions, created_by, created_at)
 roles      (tenant, name, description, permissions, created_at, updated_at)   PK (tenant, name)
 grants     (tenant, principal, role, allowed_labels, granted_by, granted_at)   PK (tenant, principal)
-                                                           -- principal: user:…, key:…, invitation:…
+                                                -- principal: user:…, key:…, invitation:…, connection:…
+oauth_clients (id PK, kind, name, uri, logo_uri, redirect_uris, auth_method, secret_hash,
+               fetched_at, expires_at, created_at, last_used_at)
+                                                -- id: a client's metadata URL, or rc_… (registered)
+oauth_codes (hash PK, client_id, user_id, redirect_uri, code_challenge, resource, organizations,
+             labels, expires_at, used_at, connection_id)
+connections (id PK, user_id, client_id, client_name, created_at, last_used_at, revoked_at)
+                                                           index (user_id)
+connection_tokens (hash PK, connection_id, kind, expires_at, created_at, used_at)
+                                                           index (connection_id)
 access_settings (tenant PK, default_role)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
 namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, namespace, digest)
@@ -85,6 +94,9 @@ receive a run's end ([workflows](03-execution.md#workflows-across-runs)): the ru
 it (`attached` unless it was started detached), and the forks that copied that start.
 `namespaces`, `namespace_scripts`, `usage` and `quota_alerts` belong to the `JournalStore`, which
 checks quotas when it creates a run; `tokens` and `token_keys` to the `AccessStore`.
+`oauth_clients`, `oauth_codes`, `connections` and `connection_tokens` belong to the
+`AccessStore` too, and to no tenant: a [connection](#connections) is a person's, and only its
+grants, one per organization it opens, are a tenant's.
 
 `epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
 workers pick runs by epoch, and the scheduler picks the runs past their deadline.
@@ -190,9 +202,9 @@ Four questions are kept apart:
 
 | Question | Answered by |
 | --- | --- |
-| Who calls? | An API key, a member's session with WorkOS, or an end user's token |
-| Which tenant? | The key's tenant, the member's organization, or the token's |
-| Which namespace? | The token's; for the customer's keys and members, the `Rewind-Namespace` header |
+| Who calls? | An API key, a member's session with WorkOS, an end user's token, or a person's connection |
+| Which tenant? | The key's tenant, the member's organization, the token's, or the one a connection's request names (`Rewind-Organization`) |
+| Which namespace? | The token's; for the customer's keys, members and connections, the `Rewind-Namespace` header |
 | What may the caller do? | Rewind alone: the caller's grant, its role and the role's permissions; for a token, the permissions it was given |
 
 WorkOS holds identity and nothing else: users, organizations, memberships, invitations and
@@ -330,8 +342,14 @@ Every request to `/v1` carries a Bearer token, and nothing else authenticates it
     `permissions`, `labels` and `jti`. The customer mints them without calling Rewind; a key
     records the permissions its tokens may carry.
 
-  A Bearer starting with `rewind_nt_` is an opaque token; a JWT whose `kid` starts with `rk_` is
-  a customer's token; any other JWT is a WorkOS access token. `DELETE
+- **A person's connection**, for an MCP client acting for a person, Claude above all
+  ([connections](#connections)): an access token `rewind_ct_…`, valid one hour, that the client
+  renews with its refresh token. It names no tenant: each request names one with
+  `Rewind-Organization`.
+
+  A Bearer starting with `rewind_nt_` is an opaque token, one starting with `rewind_ct_` a
+  connection's; a JWT whose `kid` starts with `rk_` is a customer's token; any other JWT is a
+  WorkOS access token. `DELETE
   /v1/namespaces/{name}/tokens` revokes the namespace's opaque tokens and refuses its signed
   tokens issued before that moment (`tokens_revoked_before`); `DELETE /v1/tokens/{id}` revokes
   one; deleting a token key invalidates every token it signed. Every request reads the token's
@@ -347,10 +365,48 @@ member of an organization invites others by email.
 The embedded server is the exception: its socket takes no token, and its one caller is the
 operator of the tenant `local` ([embedded server](07-code-architecture.md#embedded-server-and-cli)).
 
+### Connections
+
+A person lets an MCP client act for them: Claude above all, on claude.ai, Desktop, mobile and
+in Claude Code ([01](01-product.md#claude-as-the-harness)). Rewind is the OAuth authorization
+server of its own MCP endpoint ([07](07-code-architecture.md#mcp-and-oauth)), and a
+**connection** is what the person's consent creates: the person's key, outside every
+organization, opening the organizations they tick.
+
+- **One per person and client.** claude.ai is one client (Desktop and mobile share its
+  connectors), Claude Code another. Each connection has its own tokens and is revoked alone.
+- **The organizations it opens.** At consent, the person ticks organizations where they hold a
+  grant, the one open in the dashboard ticked in advance, and gives each an access: `read`
+  (`runs:read`, `toolsets:read`, `namespaces:read`) or `run` (`runs:start` and `runs:control`
+  too). The connection gets a grant in each one, for the principal `connection:cn_…`: the
+  built-in role `reader` for `read`, `harness` for `run`, with the labels chosen (`via: claude`
+  by default). An organization the person joins later is not added by itself.
+- **Never more than the person.** In the organization a request names, the connection may use
+  the permissions of its grant's role that are among the five above and that the person's own
+  grant there gives now; it sees only the runs carrying the labels of both grants. Without a
+  grant of the connection or of the person there, it has no access (403). Nothing else is
+  pinned: the namespace is named per request, as a key names it, and the toolset per call.
+- **Never administers.** Whatever the person's role, a connection holds no other permission than
+  those five: no members, roles, keys, tokens, credentials, toolsets nor workflows.
+- **Tokens.** An access token `rewind_ct_…` lives one hour. A refresh token `rewind_rt_…` is
+  replaced at each use, and lapses after 30 days unused. Both are stored hashed. A refresh token
+  used twice revokes the connection, and so does an authorization code exchanged twice.
+- **Changed and revoked at once.** The person changes the organizations, accesses and labels of
+  a connection without reconnecting the client, or revokes it (`/v1/connections`). Whoever holds
+  `members:manage` in an organization removes it from a connection
+  (`/v1/organization/connections`); removing a member removes their connections' grants there.
+  At each refresh, the server checks the person's memberships in WorkOS and removes the
+  organizations they left. The workers delete a connection 30 days after its last refresh token
+  lapsed. Every request reads the connection, its grants and the person's again.
+- **The organization of a request.** A connection's request names its tenant with the header
+  `Rewind-Organization` (400 without it on the tenant's data; 403 for an organization the
+  connection does not open). `/mcp` takes it as the tools' `org` argument. Other callers may
+  repeat their own tenant there; naming another is 403.
+
 ### What the caller may do
 
 ```
-principal (a member, a key, an invitation) ──► grant (role, labels) ──► role ──► permissions
+principal (a member, a key, an invitation, a connection) ──► grant (role, labels) ──► role ──► permissions
                                                                                │
 endpoint: require(permission), then the grant's labels on what it touches ◄────┘
 ```
@@ -361,8 +417,9 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
   creates its own from the catalog. A role's name is 1 to 64 lowercase letters, digits, `-`
   and `_`, and never a built-in name or `operator`.
 - **A grant** gives one role, and optionally allowed labels, to one principal in one tenant: a
-  member (`user_…`), an API key, or an invitation not yet accepted. A principal has at most one
-  grant per tenant. A grant whose role no longer exists gives no permission.
+  member (`user_…`), an API key, an invitation not yet accepted, or a person's connection
+  (`cn_…`). A principal has at most one grant per tenant. A grant whose role no longer exists
+  gives no permission.
 
 | Permission | Lets the caller | owner | harness | worker | reader |
 | --- | --- | --- | --- | --- | --- |
@@ -411,7 +468,8 @@ Rules, enforced by the server:
   a run it starts takes them as its **scope**: the scripts of that run and of the runs it starts
   only reach runs carrying them ([workflows](03-execution.md#workflows-across-runs)).
 - **No one gives more than they hold.** Creating a key, inviting someone, setting a grant or
-  writing a role requires holding every permission of the role given. Changing or removing a
+  writing a role requires holding every permission of the role given. Opening an organization to
+  a connection requires holding the permissions of the access given. Changing or removing a
   principal's grant also requires holding every permission of its current role.
 - **An organization keeps an owner.** A write that would leave a tenant without a grant of the
   role `owner` is refused, atomically in the store.
@@ -424,6 +482,9 @@ Rules, enforced by the server:
 - **Every request reads the grant.** A grant removed or narrowed applies from the next request,
   without waiting for the access token to expire. An event stream opened with an access token
   is closed at the token's expiry, and the dashboard resumes it with `from`.
+- **Connections.** A connection's grant gives `reader` or `harness`, bounded by the five
+  permissions of its accesses and by the person's own grant at each request
+  ([connections](#connections)). Only its person changes it; an administrator removes it.
 - **The operator.** The key given with `--admin-key` has the role `operator`: every permission
   in its own tenant, the keys of every tenant (`POST /v1/api-keys` with a `tenant`), the ceiling
   of every tenant (`PUT /v1/organizations/{tenant}/quotas`), and the stop of the embedded server.

@@ -125,6 +125,29 @@ const asUser = new Rewind({ url: process.env.REWIND_URL, token });
 const agentTools = asUser.agentTools({ toolset: toolset.id });
 ```
 
+### Claude as the harness
+
+A person can also use Rewind straight from Claude: claude.ai, Claude Desktop, the mobile apps or
+Claude Code. Rewind is an MCP server at `https://api.rewind.codes/mcp`, which the person adds as
+a custom connector; Claude is then the harness. It writes the scripts, checks and tests them,
+starts them, follows their runs and answers their signals, through the same agent tools as a
+harness's model ([below](#agent-tools)), served as MCP tools.
+
+1. The dashboard's **Connect Claude** page gives the URL, the steps for each client (claude.ai,
+   Team and Enterprise, Claude Code, other MCP clients) and the good practices, and sees the
+   connection arrive.
+2. Claude opens Rewind's **consent page**. The person, signed in, ticks the organizations Claude
+   may open and gives each an access, "Read" or "Run"; Claude never gets more than the person
+   holds, and never administers anything
+   ([connections](06-storage-and-scale.md#connections)). Runs started from Claude carry the label
+   `via: claude`, unless the person unticks it.
+3. In the conversation, the person names the organization, the namespace and the toolset, or
+   lets Claude find them (`list_orgs`, `list_namespaces`, `list_toolsets`). Nothing is pinned
+   at connection.
+
+The person revokes the connection, or changes what it opens, from the dashboard, without
+reconnecting Claude.
+
 ## Agent tools
 
 The model needs more than `run_script`: it must be able to check, test, follow and steer
@@ -151,6 +174,11 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 | `save_workflow({ name, description, code, input, output, signals, tests?, update?, retire?, parent? })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. Its suite runs first (the parent's tests, updated and retired with reasons, plus the new ones), and it is saved only if every test passes. The agent's later scripts can start it and signal its runs. |
 | `get_workflow({ name })` | A workflow's source, schemas, suite and lineage, with the reasons its tests were updated or retired: what the model reads to repair or extend a workflow it did not write. |
 | `record_tests({ workflow, query?, runs?, limit? })` | Records tests from past runs of a workflow, one per path, and returns their digests for `save_workflow` ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)). |
+
+Over MCP ([Claude](#claude-as-the-harness)), the same tools but `save_workflow`, with three more
+to find what the connection reaches (`list_orgs`, `list_namespaces`, `list_toolsets`), and the
+organization, the namespace and the toolset as arguments of each call
+([07](07-code-architecture.md#mcp-and-oauth)).
 
 `labels` are set by the harness on every run the agent starts. They scope `list_runs` and
 the lifecycle webhooks. A token or an API key limited to these labels makes the scope hold for

@@ -298,6 +298,34 @@ Taken while building the engine, the runtime and the stores:
 | The migration puts each tenant's runs in `migrated`, created with its script counts and the runs started per day, its own and its tenant's, from the runs' `created_at`; CPU time before it is unknown, and counts 0. Turso rebuilds `runs` for its new unique key, Postgres replaces the constraint | Starting `migrated` from zero | Its quotas start from what it really holds. SQLite cannot drop a table's constraint. |
 | The conformance suite of `AccessStore` checks tokens and token keys: a hash or a `kid` stored once, found revoked or expired, revoked per tenant, per namespace, counted live before their expiry, keys listed by creation then `kid` and deleted per tenant | Leaving them to the server's tests | Every adapter of the port keeps them; the in-memory adapter is the reference. |
 
+### Taken for Claude as a harness (November 2026)
+
+Decided by the owner on 19 November 2026, with the design reviewed the same day
+([01](01-product.md#claude-as-the-harness), [06](06-storage-and-scale.md#connections),
+[07](07-code-architecture.md#mcp-and-oauth)).
+
+| Decision | Notes |
+| --- | --- |
+| **Rewind is an MCP server that Claude adds as a connector** | `https://api.rewind.codes/mcp`, for claude.ai, Desktop, mobile and Claude Code: Claude is the harness. The dashboard guides the installation, up to the first call. |
+| **Rewind issues its own tokens** | Its own OAuth authorization server, not WorkOS AuthKit's: rights stay in Rewind, and a token is a connection, which a WorkOS token naming only the user could not tell apart from the same person's other connections. WorkOS signs the person in on the consent page, nothing more. |
+| **One key per person, for the organizations they tick** | A connection is a person's, not an organization's: it opens the organizations they choose, each with its access, never beyond their own rights there. |
+| **Nothing else is pinned** | The organization, the namespace and the toolset are arguments of the tools, which Claude finds with `list_orgs`, `list_namespaces` and `list_toolsets`. |
+| **No `save_workflow` over MCP** | Nor `toolsets:write` for a connection. |
+| **What Claude starts carries `via: claude`** | Unticked at consent to debug other runs. |
+| **No stdio bridge to a deployed server** | claude.ai and Desktop reach only remote servers, and Claude Code signs in with OAuth on the same URL; a bridge would keep a long-lived key in a configuration file, without consent nor revocation per person. |
+| **`/mcp` also takes an API key or an end user's token** | For what has no browser: CI, headless agents, the Claude API's MCP connector. |
+| **`rewind mcp`, over stdio, for debugging only** | Against the embedded server; not in the onboarding. |
+
+Approved with the design:
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| Streamable HTTP without session, answered in JSON | Sessions, event streams | Claude asks nothing a session would hold (no sampling, no subscriptions); any api replica answers any request, and MCP's next version drops sessions. |
+| The client's metadata document (CIMD) first, registration (DCR) for the other clients | Registration only | Claude's recommended setting; nothing to keep per client but a cache. |
+| An authorization server of our own in `rewind-server`, on `sha2` and the seal of `/auth` | `oxide-auth` | Unmaintained since June 2024, and it knows neither metadata documents nor RFC 9728; the surface is small: codes with PKCE, refresh, registration, metadata documents. |
+| A connection is a principal with grants (`connection:cn_…`), one per organization, of the built-in role `reader` or `harness` | A table of its own for its rights | Every rule of access applies as is: labels, no one giving more than they hold, the grant read at each request. |
+| The agent tools move from `evals` to `rewind-agent-tools`, behind a port `Api`; `rewind-mcp-server` serves them | A third copy of the tools in the server | One Rust implementation of the SDK's tools, which the evals measure and Claude uses. |
+
 ## Architecture (approved for 0.1)
 
 | Decision | Why |
@@ -1074,3 +1102,14 @@ scope saved first, and could not run a host-tool worker.
 | A workflow version saved under a grant limited to labels has them in its document (`"labels":{…}`, omitted when empty), so they are part of its digest: the same workflow saved under other labels or tenant-wide is another version, carrying its own labels, and `POST /v1/workflows` answers 201 for it; saving it again under the same labels answers 200 with it. A tenant-wide save writes the document it always wrote, so its version is unchanged. `JournalStore::put_workflow` takes the labels from the version. A version stored before keeps the labels its row was stored with | Recording visibility per scope: one version, a row per scope that saved it | A scoped save answered the version saved first, which its caller could not see, list, pin nor start (404). A version keeps exactly one set of labels, which the API shows; the `workflows` table keeps its key, without a migration; and the toolset a scope pins differs from another scope's, as their runs do |
 | A grant limited to labels claims, with `tasks:work`, the host-tool tasks of the runs carrying them (`TaskFilter::Host { labels }`): Postgres checks the run by its key for each due task (`EXISTS`, `labels @>`), Turso reads the run's labels with the task and filters them in the claim's loop. The token endpoints answer 410 `task-gone` for a task of a run the caller does not see, as for a token bound to another namespace. It still reads no tool statistics | 403 for such a grant, with a worker key of the tenant | Toolsets are content-addressed, so two environments that register the same host tools share one toolset, and the toolset filter cannot tell them apart: a tenant-wide worker answered both environments' calls, the dev server's against prod runs. The scope is the one the grant already has on runs, `list_runs`, signals and cancellations |
 | A version's labels and its suite are both in its document. Without a parent named, a save derives its suite from the latest version of the same name saved under the same labels, its lineage, and answers that version when the save made it already. A parent named may be any version its caller sees | The latest version its caller sees, whatever its labels | A tenant-wide key sees every environment's versions: its save would derive from the latest of them, `env=prod`'s, and the same save sent again would make a new version each time instead of answering the one it made. |
+
+### Taken while designing the MCP server (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A connection's access token is accepted on `/v1` too, naming its organization with `Rewind-Organization` | Handing the caller to the handlers in process | The MCP tools are a client of `/v1`, as the SDK's are, and what runs model-written code reaches the workers over HTTP with the same Bearer. |
+| The consent's endpoints are `/v1/oauth/consent` | Under `/oauth` | The dashboard reaches `/v1` on its own origin (the Vercel rewrite) with the person's access token, as every view does. |
+| The request travels sealed from `/oauth/authorize` to the consent, for 10 minutes | A row per pending request | Nothing to keep or clean for requests no one answers. |
+| The connection is created when its code is exchanged, from the choices kept with the code | At the consent | A consent whose code is never exchanged leaves nothing behind. |
+| A result holds at most 80 000 characters, and `wait` is at most 200 s | The SDK's bounds | Claude Code takes 25 000 tokens per result by default, and claude.ai gives a call 240 s. |
+| `org` takes an organization's id or its name | Its id only | People say names in a conversation; a name two of the caller's organizations share is refused, with both ids. |

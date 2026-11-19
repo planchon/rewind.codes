@@ -414,15 +414,17 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
 | `rewind-blob` | adapter | `BlobStore` on local files and S3 |
 | `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
+| `rewind-agent-tools` | adapter support | the agent tools in Rust, as the SDK defines them: their definitions (the SDK's set, and MCP's: `save_workflow` out, `list_orgs`, `list_namespaces` and `list_toolsets` in, `org`, `namespace` and `toolset` as arguments), their handlers over a port `Api` (one method per operation of `/v1` they call, with `rewind-api`'s DTOs), and their bounded plain-text results; golden fixtures shared with the SDK's |
+| `rewind-mcp-server` | adapter support | Rewind's MCP server ([MCP and OAuth](#mcp-and-oauth)): an `rmcp` `ServerHandler` over `rewind-agent-tools`, with the tools' titles, annotations and `instructions`, served over Streamable HTTP without session (by `rewind-server`) or stdio (by `rewind-cli`) |
 | `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts` (with `rewind:workflows`), prompt rendering; a workflow's own declarations |
 | `rewind-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `rewind` binary; the checker's own rules on the swc syntax tree |
 | `rewind-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
-| `rewind-cli` | composition root | the client commands of the `rewind` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal |
-| `rewind-server` | composition root | `rewind server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard |
+| `rewind-cli` | composition root | the client commands of the `rewind` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal; `rewind mcp` over stdio |
+| `rewind-server` | composition root | `rewind server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard; `/mcp`, and the OAuth authorization server of its connections |
 | `rewind` | entry point | the `rewind` binary: hands `rewind server …` to `rewind-server` and every other command to `rewind-cli`, nothing else |
 | `rewind-architecture-tests` | tooling | dependency rules |
 | `rewind-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `rewind-e2e replay <case>` |
-| `evals` | tooling | eval suite: tasks, deterministic fake MCP servers, the engine wired in process with the agent tools of the SDK, clients of the model APIs, reports ([08](08-decisions.md#taken-while-building-the-evals-november-2026)) |
+| `evals` | tooling | eval suite: tasks, deterministic fake MCP servers, the engine wired in process behind `rewind-agent-tools`' port `Api`, clients of the model APIs, reports ([08](08-decisions.md#taken-while-building-the-evals-november-2026)) |
 | `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools |
 | `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
@@ -448,9 +450,12 @@ Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sou
   `uuid` (without features).
 - `rewind-engine` depends only on `rewind-core`.
 - `rewind-format` depends only on `rewind-core`.
-- `rewind-api` depends only on `rewind-core`. Only the composition roots and the tooling crates
-  depend on it: the CLI is an API client, and cannot depend on a composition root to reach
-  the DTOs.
+- `rewind-api` depends only on `rewind-core`. Only the composition roots, the tooling crates,
+  `rewind-agent-tools` and `rewind-mcp-server` depend on it: the CLI is an API client, and
+  cannot depend on a composition root to reach the DTOs.
+- `rewind-agent-tools` depends only on `rewind-core` and `rewind-api`; `rewind-mcp-server` only
+  on those and `rewind-agent-tools`. Only the composition roots and the tooling crates depend on
+  them. Neither knows the engine: the agent tools reach Rewind through `/v1`'s operations.
 - Adapters depend on `rewind-core` and `rewind-engine` (stores also on `rewind-format`), and never
   on each other.
 - Only `rewind-cli` and `rewind-server` may depend on adapters, and the tooling crates
@@ -534,9 +539,10 @@ clients. The evals use its DTOs, with the engine in process
 
 Conventions:
 
-- Authentication by a Bearer token: an API key, a WorkOS access token for the dashboard, or an
-  end user's token (opaque `rewind_nt_…`, or a JWT the customer signed with a registered key). It
-  designates the tenant; the caller's grant, or a token's own permissions, say what it may do,
+- Authentication by a Bearer token: an API key, a WorkOS access token for the dashboard, an
+  end user's token (opaque `rewind_nt_…`, or a JWT the customer signed with a registered key), or
+  a person's connection (`rewind_ct_…`, [connections](06-storage-and-scale.md#connections)). It
+  designates the tenant, or for a connection the header `Rewind-Organization` does; the caller's grant, or a token's own permissions, say what it may do,
   and every endpoint requires one permission of the catalog
   ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)). A missing permission
   is 403, with a message that names it.
@@ -600,7 +606,7 @@ Conventions:
 |  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
 |  | `GET /v1/tools/stats` | `runs:read` | Latency, errors, retries |
 |  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a token, a header, or a grant limited to labels) |
-| Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user |
+| Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user; for a connection, its id, person and client, and the organizations it opens with their access |
 | | `POST /v1/organizations` | a member, even without organization | Creates an organization: in WorkOS with the caller's membership, then the tenant and the caller's `owner` grant; if the second step fails, the organization is deleted in WorkOS |
 | | `PATCH /v1/organization` | `organization:write` | The organization's name and default role |
 | | `GET /v1/invitations` | a member, even without organization | The pending invitations sent to the caller's email |
@@ -612,6 +618,13 @@ Conventions:
 | | `POST /v1/organization/invitations` | `members:invite` | Invites an email with a role and allowed labels: the invitation in WorkOS, the pending grant in Rewind |
 | | `POST /v1/organization/invitations/{id}/resend` | `members:invite` | Sends the invitation again |
 | | `DELETE /v1/organization/invitations/{id}` | `members:invite` | Revokes the invitation and deletes its pending grant |
+| Connections | `GET /v1/connections` | a member, even without organization | The caller's [connections](06-storage-and-scale.md#connections): the client, the organizations each opens with its access and labels, when it was made and last used |
+| | `PATCH /v1/connections/{id}` | its person | Sets the organizations it opens, their access and labels: each an organization where the person holds a grant giving that access |
+| | `DELETE /v1/connections/{id}` | its person | Revokes it: its tokens and its grants |
+| | `GET /v1/organization/connections` | `members:read` | The connections that open the organization: the person, the client, the access, the labels, the last use |
+| | `DELETE /v1/organization/connections/{id}` | `members:manage` | Removes the organization from the connection |
+| | `GET /v1/oauth/consent?request=…` | a member, even without organization | What an authorization request asks ([MCP and OAuth](#mcp-and-oauth)): the client, where it returns, the person's organizations and the accesses they may give |
+| | `POST /v1/oauth/consent` | a member, even without organization | Allows it (organizations, accesses, labels) or denies it; answers where to send the browser |
 | Access | `GET /v1/permissions` | any caller | The catalog: every permission with its description |
 | | `GET /v1/roles` | `roles:read` | The built-in roles and the tenant's own, with their permissions |
 | | `PUT /v1/roles/{name}` | `roles:write` | Creates or changes a role of the tenant |
@@ -679,6 +692,116 @@ described in the OpenAPI document like `/v1`.
 The four are given together or not at all (exit code 64 otherwise). Without them the server has
 no `/auth` and accepts only API keys; keys still get their rights from grants and roles. A worker
 accepts only API keys: the dashboard never calls the routes the edge sends to workers.
+
+## MCP and OAuth
+
+The api role serves Rewind's MCP server, for Claude and any MCP client
+([01](01-product.md#claude-as-the-harness)), and the OAuth authorization server its people
+connect through ([connections](06-storage-and-scale.md#connections)). OAuth needs the public URL
+(`--public-url`, the issuer and the resource's base) and WorkOS (the consent needs a person
+signed in). Without them, `/mcp` takes API keys and end users' tokens only, and serves no
+discovery.
+
+| Endpoint | Caller | Does |
+| --- | --- | --- |
+| `POST /mcp` | A connection's access token, an API key or an end user's token | MCP over Streamable HTTP, without session |
+| `GET /.well-known/oauth-protected-resource/mcp` | none | The resource's metadata (RFC 9728); the same at `/.well-known/oauth-protected-resource` |
+| `GET /.well-known/oauth-authorization-server` | none | The authorization server's metadata (RFC 8414) |
+| `GET /oauth/authorize` | a browser | Checks the request, then sends the browser to the consent page |
+| `POST /oauth/register` | none | Registers a client (RFC 7591) |
+| `POST /oauth/token` | a client | Exchanges a code (with PKCE) or a refresh token for tokens |
+| `POST /oauth/revoke` | a client | Revokes the connection of a token (RFC 7009) |
+
+Discovery:
+
+- **The resource**: `resource` is `{public-url}/mcp`, `authorization_servers` `[{public-url}]`
+  alone (Claude uses the first), `bearer_methods_supported` `["header"]`, `scopes_supported`
+  `["offline_access"]`, `resource_name` `Rewind`.
+- **The authorization server**: `issuer` `{public-url}` and the endpoints above,
+  `response_types_supported` `["code"]`, `grant_types_supported`
+  `["authorization_code", "refresh_token"]`, `code_challenge_methods_supported` `["S256"]`,
+  `token_endpoint_auth_methods_supported` `["none", "client_secret_post", "client_secret_basic"]`,
+  `client_id_metadata_document_supported` `true` (with `none`, Claude then prefers its metadata
+  document to registering), `scopes_supported` `["offline_access"]`. Rights come from the
+  consent, not from scopes: an unknown scope is ignored.
+
+The flow:
+
+1. A request to `/mcp` without a valid Bearer is 401, with
+   `WWW-Authenticate: Bearer resource_metadata="{public-url}/.well-known/oauth-protected-resource/mcp"`,
+   and `error="invalid_token"` when a token was sent.
+2. **Clients.** A `client_id` that is an `https` URL with a path is a client's metadata document
+   (CIMD): the api role fetches it with the egress rules of MCP servers
+   ([04](04-tools.md#where-mcp-servers-may-be)), no redirect, at most 5 KiB within 5 s, and
+   keeps it as its HTTP caching says, 24 hours at most. It names itself as `client_id`, lists
+   its `redirect_uris`, and authenticates with `none`. Other clients register
+   (`POST /oauth/register`) and get a `client_id` `rc_…`, and a secret only for
+   `client_secret_post` or `client_secret_basic`, stored hashed and shown once. A redirect URI is
+   `https`, `http` on a loopback address, or a private-use scheme holding a dot
+   (`cursor://…`); never `javascript:`, `data:` nor `file:`. A registered client that no
+   connection uses is deleted after 24 hours; past 10 000 of them, registering answers 503.
+3. **`GET /oauth/authorize`** takes `response_type=code`, `client_id`, `redirect_uri`,
+   `code_challenge` with `code_challenge_method=S256`, `state`, and optionally `scope` and
+   `resource`. An unknown client, or a redirect URI it does not list, is answered there (400) and
+   never redirected; a redirect URI matches exactly, but a loopback one, compared without its
+   port (Claude Code's). Any other fault goes back to the client with `error` and `state`
+   (`invalid_request`, `unsupported_response_type`, `invalid_target` for a `resource` other
+   than `{public-url}/mcp`). A valid request is sealed, as `/auth`'s cookies are, for 10
+   minutes, and the browser sent to `{dashboard}/#/connect/authorize?request=…`, the dashboard
+   being the origin of `WORKOS_REDIRECT_URI`.
+4. **The consent.** The page reads the request (`GET /v1/oauth/consent`): the client's name and
+   site, the host it returns to, with a warning for a loopback one, and the person's
+   organizations, each with their role and the accesses they may give. `POST /v1/oauth/consent`
+   allows it (organizations, accesses, labels) or denies it, and answers the URL to send the
+   browser to: the redirect URI with `code` and `state`, or with `error=access_denied`.
+5. **`POST /oauth/token`** (`application/x-www-form-urlencoded`). `grant_type=authorization_code`
+   takes the code (5 minutes, stored hashed with the request and the choices), the same
+   `redirect_uri`, the `client_id` (with its secret, for a confidential client) and the
+   `code_verifier`; it creates the connection, its grants and its tokens in one transaction.
+   `grant_type=refresh_token` replaces both tokens. The answer: `access_token`, `token_type`
+   `Bearer`, `expires_in` 3600, `refresh_token`, `scope`. A code or refresh token that is unknown,
+   expired, used or another client's is 400 `invalid_grant`; one used twice also revokes its
+   connection.
+6. Claude gives discovery, registration and tokens 10 s each, and a refresh 30 s.
+
+`/mcp`:
+
+- **Without session.** Each `POST /mcp` carries a whole exchange and is answered in JSON
+  (`application/json`), without `Mcp-Session-Id`; `GET` and `DELETE /mcp` are 405.
+- **Its Bearers.** A connection's access token, an API key, or an end user's token; a WorkOS
+  access token is 401. A key and a token fix their tenant, and a token its namespace: `org` and
+  `namespace` may repeat them, not name others.
+- **`initialize`** answers `instructions`: from an organization to a run, through `list_orgs`,
+  `list_namespaces`, `list_toolsets`, `search_tools`, then checking, testing and running.
+- **`tools/list`** lists the tools that some organization of the caller allows, each with a
+  `title`, its input schema and its annotations. **`tools/call`** runs the agent tool as the
+  SDK's handler does, with the same plain-text results; a mistake the model can fix is a result
+  with `isError`. `wait` is at most 200 s, 30 s by default (Claude gives a call 240 s), and a
+  result at most 80 000 characters (Claude Code takes 25 000 tokens by default), the rest paged
+  with `offset` as in the SDK.
+- **How a tool runs.** The tool calls `/v1` in process, with the caller's Bearer,
+  `Rewind-Organization` and `Rewind-Namespace`: one authorization, the code every client goes
+  through. What runs model-written code (`POST /v1/test`, a fork's suite) goes to the workers
+  through `{public-url}` when this server has no worker role.
+
+| Tool | Permission | Arguments beyond the SDK's | Annotations |
+| --- | --- | --- | --- |
+| `list_orgs` | none | none | read-only |
+| `list_namespaces` | `namespaces:read` | `org`, `prefix` | read-only |
+| `list_toolsets` | `toolsets:read` | `org` | read-only |
+| `search_tools`, `get_workflow` | `toolsets:read` | `org`, `toolset` | read-only |
+| `check_script`, `test_script` | `runs:start` | `org`, `namespace`, `toolset` | read-only |
+| `get_run`, `list_runs` | `runs:read` | `org`, `namespace` (optional) | read-only |
+| `record_tests` | `runs:read` | `org`, `toolset` | |
+| `run_script` | `runs:start` | `org`, `namespace`, `toolset` | open world |
+| `retry_run` | `runs:start` | `org` | open world |
+| `signal_run` | `runs:control` | `org` | |
+| `cancel_run` | `runs:control` | `org` | destructive |
+
+`org` is an organization's id or name, as `list_orgs` gives them; it may be left out when the
+caller reaches one organization only, and leaving it out with several answers their list.
+`toolset` is a toolset's id, as `list_toolsets` gives it. A new namespace's name creates it at
+the first run, as on `/v1`.
 
 ## Embedded server and CLI
 
@@ -750,6 +873,7 @@ Commands:
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
 | `rewind namespaces list\|show\|quotas\|delete` | The namespaces and their use; one namespace; sets its exceptions, or the defaults with `--defaults`; erases one |
 | `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
+| `rewind mcp` | Serves the agent tools over MCP on stdin and stdout, against the embedded server: to debug them with an MCP client (the MCP Inspector, Claude Code on this machine). Never a remote server |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a
 second one exits at once.
@@ -785,6 +909,7 @@ Its build is what `rewind-server` serves:
 | Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist, which someone new also opens from the first page. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read` |
+| Claude | Connect Claude (`#/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`#/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |

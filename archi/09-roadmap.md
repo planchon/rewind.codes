@@ -126,9 +126,11 @@ acceptance suite and the release gate run against the binary, and a run of CI.
 | Sandbox lib (`rewind.d.ts` and the checker's `lib`) | [04](04-tools.md#type-checking) | `rewind-runtime` (the globals that exist) | `rewind-check`, the prompt |
 | Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
 | Namespaces: their quotas, usage and alerts, end users' tokens and token keys, credentials per namespace, `Rewind-Namespace` | [06](06-storage-and-scale.md#namespaces), [07](07-code-architecture.md#ports) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, conformance) | The stores, `rewind-runtime`, `rewind-server`, the CLI, the SDK, the dashboard |
+| Connections and MCP: the connection's tables, grants and tokens, `Rewind-Organization`, `/mcp`, `/oauth`, the tools' definitions | [06](06-storage-and-scale.md#connections), [07](07-code-architecture.md#mcp-and-oauth) | `rewind-api`, `rewind-engine` (`AccessStore`), `rewind-agent-tools` | The stores, `rewind-server`, `rewind-mcp-server`, the CLI, the evals, the dashboard |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
-The six were approved in November 2026, access and identity and namespaces on the 14th.
+The seven were approved in November 2026, access and identity and namespaces on the 14th,
+connections and MCP on the 19th.
 
 ## Workstreams
 
@@ -148,6 +150,7 @@ The six were approved in November 2026, access and identity and namespaces on th
 | TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset, namespaces |
 | Dashboard | `dashboard` | Nothing | HTTP API `/v1`, access and identity, namespaces |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
+| Claude as a harness | `rewind-agent-tools`, `rewind-mcp-server`, `rewind-server`, the stores, `rewind-cli`, `dashboard` | Everything: designed on 19 November 2026 | Connections and MCP, HTTP API `/v1`, access and identity, namespaces |
 | Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Setting WorkOS's variables on Railway's api service, and deploying the dashboard with its `/auth` rewrite | Engine ports, HTTP API `/v1`, access and identity |
 
 ## Designs settled (November 2026)
@@ -188,6 +191,10 @@ specified.
 - **Workflow test suites**: end-to-end tests that give a run its world and check what leaves it,
   suites inherited along a workflow's versions, the gate on save, tests recorded from past runs
   ([05](05-testing-and-observability.md#testing-and-mocks)).
+- **Claude as a harness**: Rewind's MCP server, its OAuth authorization server, and a person's
+  connection opening the organizations they tick; the dashboard's Connect Claude and consent
+  ([01](01-product.md#claude-as-the-harness), [06](06-storage-and-scale.md#connections),
+  [07](07-code-architecture.md#mcp-and-oauth)).
 
 ## Out of 0.1
 
