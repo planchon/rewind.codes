@@ -172,7 +172,7 @@ async fn claude_solves_a_task_through_the_messages_api() {
     assert_eq!(body["cache_control"]["type"], "ephemeral");
     assert_eq!(
         body["tools"].as_array().unwrap().len(),
-        evals::agent::definitions::AGENT_TOOLS.len()
+        rewind_agent_tools::definitions::AGENT_TOOLS.len()
     );
     assert!(
         body["system"][0]["text"]

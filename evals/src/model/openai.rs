@@ -218,8 +218,8 @@ pub fn parse(response: &Value) -> Result<Reply, ModelError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::definitions;
     use crate::model::ToolResult;
+    use rewind_agent_tools::definitions;
 
     #[test]
     fn output_items_go_back_as_input() {

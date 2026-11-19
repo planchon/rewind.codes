@@ -200,8 +200,8 @@ fn truncated(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::definitions;
     use crate::model::ToolResult;
+    use rewind_agent_tools::definitions;
 
     #[test]
     fn a_tool_loop_is_written_as_the_api_takes_it() {

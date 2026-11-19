@@ -9,7 +9,8 @@
 //!
 //! - [`fake`]: the fake MCP servers and their fixtures.
 //! - [`world`]: the engine wired in process, and the outside world in virtual time.
-//! - [`agent`]: the agent tools, as the SDK handles them, rendering the same text.
+//! - [`api`]: the world as the API `/v1` answers the agent tools of `rewind-agent-tools`, which
+//!   the model calls as a harness's model calls the SDK's.
 //! - [`model`]: Claude (Anthropic API), an OpenAI model (Responses API), a scripted model.
 //! - [`tasks`]: the tasks; [`task`]: what a task and its outcome are.
 //! - [`episode`]: the loop generate → check → run → fix; [`report`]: the numbers.
@@ -19,7 +20,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod agent;
+pub mod api;
 pub mod clock;
 pub mod episode;
 pub mod fake;

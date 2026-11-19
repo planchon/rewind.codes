@@ -27,6 +27,12 @@ pub const TOKEN_KEY_PREFIX: &str = "rk_";
 /// repeat it, and naming another is `forbidden`.
 pub const NAMESPACE: &str = "Rewind-Namespace";
 
+/// The organization a person's connection (`rewind_ct_…`) acts in
+/// (`archi/06-storage-and-scale.md`, "Connections"): required on the tenant's data with a
+/// connection's token, `forbidden` for an organization the connection does not open. Other
+/// callers may repeat their own tenant there; naming another is `forbidden`.
+pub const ORGANIZATION: &str = "Rewind-Organization";
+
 /// On `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}`
 /// (`archi/06-storage-and-scale.md`, "Idempotency of the API").
 pub const IDEMPOTENCY_KEY: &str = "Idempotency-Key";

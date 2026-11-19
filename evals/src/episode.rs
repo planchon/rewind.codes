@@ -15,7 +15,11 @@ use rewind_runtime::TsMockLoader;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::agent::{self, AgentError, AgentOptions, AgentTools, ScriptVerdict, definitions};
+use rewind_agent_tools::{
+    AgentError, AgentOptions, AgentToolResult, AgentTools, HandleOptions, ScriptVerdict,
+    definitions,
+};
+
 use crate::clock::rfc3339;
 use crate::fake;
 use crate::model::{AssistantTurn, Conversation, Model, Stop, ToolResult, Turn, Usage};
@@ -28,6 +32,8 @@ use crate::world::{Delivered, World};
 pub struct EpisodeConfig {
     /// Model turns at most.
     pub max_turns: usize,
+    /// How the agent tools behave: the SDK's defaults, a wait of 30 s and 2 minutes at most, in
+    /// virtual time. Each episode gives them its toolset and its labels.
     pub agent: AgentOptions,
 }
 
@@ -37,6 +43,31 @@ impl Default for EpisodeConfig {
             max_turns: 30,
             agent: AgentOptions::default(),
         }
+    }
+}
+
+/// Labels of an episode's runs.
+pub fn labels(episode: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([("eval".to_owned(), episode.to_owned())])
+}
+
+/// The tests a tool call gives: `test_script`'s and `save_workflow`'s `tests`, and the tests
+/// `save_workflow` updates.
+fn tests_given(name: &str, input: &serde_json::Value) -> usize {
+    let input = match input {
+        serde_json::Value::String(text) => serde_json::from_str(text).unwrap_or_default(),
+        other => other.clone(),
+    };
+    let count = |key: &str| {
+        input
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, Vec::len)
+    };
+    match name {
+        "test_script" => count("tests"),
+        "save_workflow" => count("tests") + count("update"),
+        _ => 0,
     }
 }
 
@@ -139,7 +170,7 @@ pub async fn run(
         delivered: Vec::new(),
     };
     let episode_id = format!("{}-{}-{rendering}-{repetition}", task.id, model.name());
-    let world = match World::new(&(task.world)(), checker, agent::labels(&episode_id)).await {
+    let world = match World::new(&(task.world)(), checker, labels(&episode_id)).await {
         Ok(world) => world,
         Err(error) => {
             record.error = Some(format!("the world could not start: {error}"));
@@ -181,7 +212,13 @@ async fn converse(
         text: (task.prompt)(&setup),
     });
 
-    let tools = AgentTools::new(world, config.agent.clone());
+    let options = AgentOptions {
+        toolset: Some(world.toolset.digest().to_hex()),
+        labels: world.labels.clone(),
+        ..config.agent.clone()
+    };
+    let tools =
+        AgentTools::new(world, options).map_err(|err| format!("the harness failed: {err}"))?;
     let mut answer = String::new();
     let mut ended = false;
     for _ in 0..config.max_turns {
@@ -204,14 +241,20 @@ async fn converse(
         let mut results = Vec::new();
         for call in &calls {
             *record.tool_calls.entry(call.name.clone()).or_default() += 1;
-            let handled = match tools.handle(&call.name, &call.input, &call.id).await {
+            let call_options = HandleOptions {
+                tool_call_id: Some(call.id.clone()),
+                ..HandleOptions::default()
+            };
+            let handled = match tools.handle(&call.name, &call.input, &call_options).await {
                 Ok(handled) => handled,
-                Err(AgentError::UnknownTool(name)) => agent::AgentToolResult {
+                Err(AgentError::UnknownTool(name)) => AgentToolResult {
                     content: format!("{name:?} is not one of the tools."),
                     is_error: true,
+                    run: None,
+                    workflow: None,
+                    toolset: None,
+                    tests: None,
                     script: None,
-                    tests_given: 0,
-                    gate_refused: false,
                 },
                 Err(error) => return Err(format!("the harness failed: {error}")),
             };
@@ -223,8 +266,11 @@ async fn converse(
                 }
                 record.first_check.get_or_insert(passed);
             }
-            record.tests_written += handled.tests_given;
-            if handled.gate_refused {
+            record.tests_written += tests_given(&call.name, &call.input);
+            // The gate refused a fix: a test of a workflow's suite did not pass, so
+            // `save_workflow` saved nothing, or `retry_run` started no fork.
+            let gated = matches!(call.name.as_str(), "save_workflow" | "retry_run");
+            if gated && handled.is_error && handled.tests.is_some() {
                 record.gate_refusals += 1;
             }
             results.push(ToolResult {
@@ -312,7 +358,9 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
     for test in &workflow.tests {
         let test: rewind_api::testing::Test =
             serde_json::from_value(test.clone()).map_err(|err| refused(err.to_string()))?;
-        let test = test.into_core(agent::decode_cassette).map_err(refused)?;
+        let test = test
+            .into_core(crate::api::decode_cassette)
+            .map_err(refused)?;
         tests.push(TestInput::Inline(Box::new(test)));
     }
     let schemas = WorkflowSchemas {

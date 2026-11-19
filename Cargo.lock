@@ -1579,6 +1579,7 @@ dependencies = [
  "axum",
  "clap",
  "reqwest 0.13.5",
+ "rewind-agent-tools",
  "rewind-api",
  "rewind-check",
  "rewind-codegen",
@@ -4120,6 +4121,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rewind-agent-tools"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "rewind-api",
+ "rewind-core",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "rewind-api"
 version = "0.1.0"
 dependencies = [
@@ -4190,6 +4205,7 @@ dependencies = [
  "axum",
  "clap",
  "libtest-mimic",
+ "rewind-agent-tools",
  "rewind-api",
  "rewind-check",
  "rewind-codegen",
@@ -4197,8 +4213,10 @@ dependencies = [
  "rewind-engine",
  "rewind-format",
  "rewind-mcp",
+ "rewind-mcp-server",
  "rewind-otel",
  "rewind-runtime",
+ "rmcp",
  "rustix 1.1.6",
  "serde",
  "serde_json",
@@ -4309,6 +4327,23 @@ dependencies = [
  "tokio-util",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "rewind-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "reqwest 0.13.5",
+ "rewind-agent-tools",
+ "rewind-api",
+ "rewind-core",
+ "rmcp",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

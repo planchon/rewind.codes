@@ -6,14 +6,23 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
+use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::error::CliError;
+
+/// Where `rewind mcp` reads and writes its MCP messages.
+pub(crate) type McpStreams = (
+    Box<dyn AsyncRead + Send + Unpin>,
+    Box<dyn AsyncWrite + Send + Unpin>,
+);
 
 /// The output streams of a command.
 pub struct Console {
     out: Box<dyn Write + Send>,
     err: Box<dyn Write + Send>,
     json: bool,
+    /// `rewind mcp`'s, when they are not stdin and stdout.
+    mcp: Option<McpStreams>,
 }
 
 impl std::fmt::Debug for Console {
@@ -35,7 +44,27 @@ impl Console {
             out: Box::new(out),
             err: Box::new(err),
             json: false,
+            mcp: None,
         }
+    }
+
+    /// `rewind mcp` reads its MCP messages from `input` and writes them to `output` instead of
+    /// stdin and stdout: for tests.
+    pub fn with_mcp_streams(
+        mut self,
+        input: impl AsyncRead + Send + Unpin + 'static,
+        output: impl AsyncWrite + Send + Unpin + 'static,
+    ) -> Self {
+        self.mcp = Some((Box::new(input), Box::new(output)));
+        self
+    }
+
+    /// The streams of `rewind mcp`: stdin and stdout, unless a test gave others.
+    pub(crate) fn take_mcp_streams(&mut self) -> McpStreams {
+        self.mcp.take().unwrap_or_else(|| {
+            let (input, output) = (tokio::io::stdin(), tokio::io::stdout());
+            (Box::new(input), Box::new(output))
+        })
     }
 
     /// Two in-memory buffers, for tests: what the command printed on stdout and stderr.

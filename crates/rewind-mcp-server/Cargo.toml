@@ -1,0 +1,42 @@
+[package]
+name = "rewind-mcp-server"
+description = "Rewind's MCP server: the agent tools of the MCP set as an rmcp ServerHandler, served over Streamable HTTP without session or over stdio, for a caller its host gives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Adapter support (archi/07-code-architecture.md, "Dependency rules"): among internal crates,
+# rewind-core, rewind-api and rewind-agent-tools only. Its hosts, rewind-server and rewind-cli,
+# give it the caller and the API.
+[dependencies]
+rewind-agent-tools.workspace = true
+rewind-api.workspace = true
+rewind-core.workspace = true
+http.workspace = true
+rmcp = { workspace = true, features = [
+    "server",
+    "transport-io",
+    "transport-streamable-http-server",
+] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std", "rt"] }
+
+[dev-dependencies]
+axum.workspace = true
+rmcp = { workspace = true, features = [
+    "client",
+    "server",
+    "transport-io",
+    "transport-streamable-http-client-reqwest",
+    "transport-streamable-http-server",
+    "reqwest",
+] }
+reqwest.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "net"] }
+tokio-util.workspace = true
+
+[lints]
+workspace = true

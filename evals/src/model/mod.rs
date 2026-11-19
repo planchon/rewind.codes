@@ -11,7 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::definitions::ToolDefinition;
+use rewind_agent_tools::definitions::ToolDefinition;
 
 /// A conversation with a model: the system prompt, the agent tools, and the turns so far.
 #[derive(Debug, Clone)]

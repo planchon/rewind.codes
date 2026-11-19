@@ -30,6 +30,8 @@ struct Seen {
     query: Option<String>,
     authorization: Option<String>,
     idempotency_key: Option<String>,
+    namespace: Option<String>,
+    organization: Option<String>,
     body: Value,
 }
 
@@ -50,6 +52,8 @@ async fn record(State(log): State<Log>, request: Request) -> Seen {
         query: parts.uri.query().map(str::to_owned),
         authorization: header("authorization"),
         idempotency_key: header("idempotency-key"),
+        namespace: header("rewind-namespace"),
+        organization: header("rewind-organization"),
         body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
     };
     *log.lock().unwrap() = seen.clone();
@@ -200,6 +204,37 @@ async fn a_remote_client_sends_its_key_and_idempotency_keys() {
     assert_eq!(seen.idempotency_key.as_deref(), Some("toolu_01"));
     assert_eq!(seen.body["wait"], "30s");
     assert_eq!(seen.body["input"], json!({}));
+}
+
+#[tokio::test]
+async fn a_connection_names_its_organization_and_namespace_on_every_request() {
+    let (client, log) = serve_tcp().await;
+    client.list_runs(&RunFilter::default()).await.unwrap();
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen.organization, None);
+    assert_eq!(seen.namespace, None);
+
+    let connection = Client::remote(client.base_url().as_str(), Some("rewind_ct_abc"))
+        .unwrap()
+        .with_organization("org_01JBX")
+        .unwrap()
+        .with_namespace("alice".parse().unwrap());
+    assert_eq!(connection.organization(), Some("org_01JBX"));
+    connection.list_runs(&RunFilter::default()).await.unwrap();
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(seen.authorization.as_deref(), Some("Bearer rewind_ct_abc"));
+    assert_eq!(seen.organization.as_deref(), Some("org_01JBX"));
+    assert_eq!(seen.namespace.as_deref(), Some("alice"));
+    connection
+        .start_run(&StartRun::new("x"), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        log.lock().unwrap().organization.as_deref(),
+        Some("org_01JBX")
+    );
+
+    assert!(client.with_organization("org\nX").is_err());
 }
 
 #[tokio::test]

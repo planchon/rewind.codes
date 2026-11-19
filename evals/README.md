@@ -13,10 +13,10 @@ model ──► system prompt (introduction, the rewind module, the toolset in o
   │          signal_run, cancel_run, retry_run, search_tools, save_workflow, get_workflow,
   │          record_tests
   ▼
-agent tools (the SDK's, ported) ──► engine in process: tsgo check, V8 sandbox, journal,
-                                       │   workflows and their suites (the gate), tests
-                                       │   McpDispatcher (the real MCP client)
-                                       ▼
+agent tools (rewind-agent-tools) ──► Api: the world, as /v1 answers ──► engine in process:
+                                       │   tsgo check, V8 sandbox, journal, workflows and their
+                                       │   suites (the gate), tests, McpDispatcher (the real MCP
+                                       ▼   client)
                          fake MCP servers (rmcp, streamable HTTP on 127.0.0.1)
                          tracker · chat · crm · shop · ops · office · shipping
 ```
@@ -27,10 +27,12 @@ agent tools (the SDK's, ported) ──► engine in process: tsgo check, V8 sand
    the agent's labels: runs of scripts, workflows saved through the gate with their suite (on
    the toolset as it was then, for a server that changed since), runs of those workflows.
 2. The model gets the task and loops: generate a script, check it, run it, fix it. Each tool
-   call is handled as the SDK handles it, with the same text back: 256 KiB pages, diagnostics
-   with code frames, the trace up to a failure, the tests that did not pass. A `wait` elapses
-   in virtual time. The agent is a caller limited to its labels: the workflows it saves carry
-   them, and `save_workflow` derives the toolset its later scripts use, as the SDK does.
+   call is handled by `rewind-agent-tools`, the SDK's agent tools in Rust, with the same text
+   back: 256 KiB pages, diagnostics with code frames, the trace up to a failure, the tests that
+   did not pass. They reach the world through their port `Api`, which the world implements as
+   the server answers (`src/api.rs`). A `wait` elapses in virtual time. The agent is a caller
+   limited to its labels: the runs and workflows it creates carry them, a run without them is
+   not found, and `save_workflow` derives the toolset its later scripts use, as the SDK does.
 3. When the model answers (or after 30 turns), the world goes on in virtual time, up to 60
    days: sleeping runs wake up, the world answers signal waits as the task says, servers call
    their webhooks. Then production runs the workflows the task names: the latest version the

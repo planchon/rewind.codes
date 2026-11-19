@@ -1,6 +1,7 @@
 //! The commands. Each returns its exit code, or the error that stopped it.
 
 mod check;
+mod mcp;
 mod namespaces;
 mod replay;
 mod runs;
@@ -39,6 +40,7 @@ pub(crate) async fn execute(
         Command::Toolsets(command) => toolsets::toolsets(&server, command, console).await,
         Command::Namespaces(command) => namespaces::namespaces(&server, command, console).await,
         Command::Workflows(command) => workflows::workflows(&server, command, console).await,
+        Command::Mcp => mcp::mcp(&server, console).await,
     }
 }
 

@@ -1,0 +1,29 @@
+[package]
+name = "rewind-agent-tools"
+description = "The agent tools of Rewind in Rust, as the SDK defines them: their definitions (the SDK's set and MCP's), their handlers over a port Api of /v1, and their bounded plain-text results."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Adapter support (archi/07-code-architecture.md, "Dependency rules"): among internal crates,
+# rewind-core and rewind-api only. The tools reach Rewind through the operations of /v1, never
+# through the engine.
+[dependencies]
+rewind-api.workspace = true
+rewind-core.workspace = true
+# `get_workflow` reads the tests of a suite eight at a time, as the SDK does.
+futures-util = { workspace = true, features = ["alloc"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+# One derivation of the toolset at a time (`save_workflow`), held across its requests.
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

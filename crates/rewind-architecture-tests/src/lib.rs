@@ -19,7 +19,8 @@ pub enum Layer {
     /// `rewind-engine`: use cases and ports.
     Application,
     /// Representations shared at the edges: the stored format (`rewind-format`), code generation
-    /// (`rewind-codegen`), the HTTP API (`rewind-api`).
+    /// (`rewind-codegen`), the HTTP API (`rewind-api`); and what is built on the API alone: the
+    /// agent tools (`rewind-agent-tools`) and Rewind's MCP server (`rewind-mcp-server`).
     AdapterSupport,
     /// Implementations of the ports.
     Adapter,
@@ -36,7 +37,8 @@ pub fn layer(name: &str) -> Option<Layer> {
     Some(match name {
         "rewind-core" => Layer::Domain,
         "rewind-engine" => Layer::Application,
-        "rewind-format" | "rewind-codegen" | "rewind-api" => Layer::AdapterSupport,
+        "rewind-format" | "rewind-codegen" | "rewind-api" | "rewind-agent-tools"
+        | "rewind-mcp-server" => Layer::AdapterSupport,
         "rewind-runtime"
         | "rewind-store-turso"
         | "rewind-store-postgres"
@@ -186,7 +188,18 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
             (to != "rewind-core").then_some("rewind-engine depends only on rewind-core")
         }
         Layer::AdapterSupport => {
-            (to != "rewind-core").then_some("adapter support crates depend only on rewind-core")
+            let allowed = match from {
+                // The agent tools reach Rewind through the operations of `/v1`.
+                "rewind-agent-tools" => matches!(to, "rewind-core" | "rewind-api"),
+                "rewind-mcp-server" => {
+                    matches!(to, "rewind-core" | "rewind-api" | "rewind-agent-tools")
+                }
+                _ => to == "rewind-core",
+            };
+            (!allowed).then_some(
+                "adapter support crates depend only on rewind-core (the agent tools also on \
+                 rewind-api, the MCP server also on them)",
+            )
         }
         Layer::Adapter => {
             let allowed = match to_layer {
@@ -303,12 +316,29 @@ mod tests {
             ),
             ("rewind-api", vec![dependency("rewind-core", None)]),
             (
+                "rewind-agent-tools",
+                vec![
+                    dependency("rewind-core", None),
+                    dependency("rewind-api", None),
+                ],
+            ),
+            (
+                "rewind-mcp-server",
+                vec![
+                    dependency("rewind-core", None),
+                    dependency("rewind-api", None),
+                    dependency("rewind-agent-tools", None),
+                ],
+            ),
+            (
                 "rewind-cli",
                 vec![
                     dependency("rewind-api", None),
                     dependency("rewind-runtime", None),
+                    dependency("rewind-mcp-server", None),
                 ],
             ),
+            ("evals", vec![dependency("rewind-agent-tools", None)]),
             (
                 "rewind-server",
                 vec![
@@ -362,7 +392,7 @@ mod tests {
             (
                 "rewind-format",
                 vec![dependency("rewind-engine", None)],
-                "adapter support crates depend only on rewind-core",
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
             ),
             (
                 "rewind-runtime",
@@ -398,7 +428,32 @@ mod tests {
             (
                 "rewind-api",
                 vec![dependency("rewind-engine", None)],
-                "adapter support crates depend only on rewind-core",
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-agent-tools",
+                vec![dependency("rewind-engine", None)],
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-agent-tools",
+                vec![dependency("rewind-mcp-server", None)],
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-mcp-server",
+                vec![dependency("rewind-engine", None)],
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-api",
+                vec![dependency("rewind-agent-tools", None)],
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-mcp",
+                vec![dependency("rewind-agent-tools", None)],
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
             ),
             (
                 "rewind-runtime",
