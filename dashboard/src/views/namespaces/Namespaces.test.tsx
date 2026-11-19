@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { Permission } from "../../api/types";
-import { renderApp, search, signedIn } from "../../test/app";
+import { confirmInDialog, renderApp, search, signedIn } from "../../test/app";
 
 /** Gives Grace, in Acme, a role made of these permissions. */
 function graceWith(permissions: Permission[]) {
@@ -274,7 +274,7 @@ describe("a namespace's page", () => {
     expect(await screen.findByText("CPU per month:", { exact: false })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Revoke its tokens" }));
-    await user.click(screen.getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     expect(await screen.findByRole("status")).toHaveTextContent(
       /3 tokens revoked; the signed tokens issued before .* are refused/,
     );

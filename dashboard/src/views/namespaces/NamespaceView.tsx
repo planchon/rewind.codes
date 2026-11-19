@@ -245,6 +245,7 @@ function NamespacePage() {
             {canRevoke && (
               <ConfirmButton
                 confirm={`Revoke every token of ${ns.name}?`}
+                description="Its opaque tokens, and the signed tokens issued before now, are refused from their next request. The end user's agents need new tokens."
                 onConfirm={() => revoke.mutate()}
                 pending={revoke.isPending}
                 title="Its opaque tokens, and its signed tokens issued before now"

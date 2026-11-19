@@ -248,6 +248,7 @@ function ApiKeys() {
                       {!k.revokedAt && (
                         <ConfirmButton
                           confirm={`Revoke ${k.name}?`}
+                          description="Every client sending this key is refused from its next request. A revoked key cannot be restored: create another."
                           pending={revoke.isPending}
                           onConfirm={() => revoke.mutate(k.id)}
                         >

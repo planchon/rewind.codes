@@ -197,6 +197,11 @@ function Members() {
                               }
                               disabled={locked !== undefined}
                               title={locked}
+                              description={
+                                you
+                                  ? "You lose access to the organization at once, with your connections' access to it. An invitation brings you back."
+                                  : "They lose access to the organization at once, with their connections' access to it. An invitation brings them back."
+                              }
                               pending={remove.isPending}
                               onConfirm={() => remove.mutate(m.user.id)}
                             >

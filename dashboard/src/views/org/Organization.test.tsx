@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { createWorld } from "../../mocks/fixtures";
-import { NOW, renderApp, signedIn } from "../../test/app";
+import { confirmInDialog, NOW, renderApp, signedIn } from "../../test/app";
 
 /** Gives Grace a role of Acme's own, made of these permissions. */
 function graceWithRole(name: string, permissions: string[]) {
@@ -125,7 +125,7 @@ describe("the Organization view", () => {
     renderApp("/organization/roles", { world });
     const auditor = await screen.findByRole("listitem", { name: "Role auditor" });
     await user.click(within(auditor).getByRole("button", { name: "Delete" }));
-    await user.click(within(auditor).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     const alert = await within(auditor).findByRole("alert");
     expect(alert).toHaveTextContent("auditor is still given");
     expect(alert).toHaveTextContent(/give them another role, then delete it/i);
@@ -134,7 +134,7 @@ describe("the Organization view", () => {
     // A role no one holds goes.
     const onCall = screen.getByRole("listitem", { name: "Role on-call" });
     await user.click(within(onCall).getByRole("button", { name: "Delete" }));
-    await user.click(within(onCall).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     await waitFor(() =>
       expect(screen.queryByRole("listitem", { name: "Role on-call" })).toBeNull(),
     );
@@ -174,7 +174,7 @@ describe("the Organization view", () => {
     expect(within(added).getByText("Ada Lovelace")).toBeInTheDocument();
 
     await user.click(within(added).getByRole("button", { name: "Revoke" }));
-    await user.click(within(added).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     await waitFor(() =>
       expect(
         within(row(screen.getByRole("table"), "deploy-bot")).getByText(/revoked/),
@@ -246,7 +246,7 @@ describe("the Organization view", () => {
 
     const linus = row(table, "Linus Torvalds");
     await user.click(within(linus).getByRole("button", { name: "Remove" }));
-    await user.click(within(linus).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     await waitFor(() => expect(within(table).queryByText("Linus Torvalds")).toBeNull());
   });
 
@@ -279,7 +279,7 @@ describe("the Organization view", () => {
 
     const fresh = await waitFor(() => row(table, "new@example.net"));
     await user.click(within(fresh).getByRole("button", { name: "Revoke" }));
-    await user.click(within(fresh).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     await waitFor(() =>
       expect(within(row(table, "new@example.net")).getByText("revoked")).toBeInTheDocument(),
     );

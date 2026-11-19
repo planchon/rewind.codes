@@ -209,6 +209,7 @@ function Roles() {
               </button>
               <ConfirmButton
                 confirm={`Delete the role ${r.name}?`}
+                description="No one can be given this role any more. A role a grant still points to cannot be deleted."
                 pending={remove.isPending}
                 onConfirm={() => remove.mutate(r.name)}
               >

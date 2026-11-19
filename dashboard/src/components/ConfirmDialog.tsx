@@ -20,7 +20,7 @@ export function ConfirmDialog({
   /** The question, such as `Revoke Claude?`. */
   title: string;
   /** What happens, and what remains. */
-  description: ReactNode;
+  description?: ReactNode;
   /** The red button's label: the action, such as `Revoke`. */
   confirm: string;
   pendingLabel: string;

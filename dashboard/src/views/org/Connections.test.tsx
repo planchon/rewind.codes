@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { renderApp, signedIn } from "../../test/app";
+import { confirmInDialog, renderApp, signedIn } from "../../test/app";
 
 function row(table: HTMLElement, person: string): HTMLElement {
   const found = within(table)
@@ -62,7 +62,7 @@ describe("Organization › Connections", () => {
     const members = await screen.findByRole("table");
     const grace = row(members, "Grace Hopper");
     await user.click(within(grace).getByRole("button", { name: "Remove" }));
-    await user.click(within(grace).getByRole("button", { name: "Yes" }));
+    await confirmInDialog(user);
     await waitFor(() =>
       expect(within(screen.getByRole("table")).queryByText("Grace Hopper")).toBeNull(),
     );

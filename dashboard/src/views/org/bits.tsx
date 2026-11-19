@@ -1,12 +1,13 @@
 // Pieces the organization views share: the role picker that offers only what the caller may
 // give, the allowed labels field, inline confirmations, people and principals.
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useId, useState } from "react";
+import { type ReactNode, useEffect, useId, useState } from "react";
 import { MEMBERS } from "../../api/organization";
 import type { ApiKey, Labels, Member, Permission, Role } from "../../api/types";
 import { useAccess } from "../../app/access";
 import { Avatar } from "../../app/Brand";
 import { useApi } from "../../app/session";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
   canGive,
   displayName,
@@ -177,55 +178,65 @@ export function useLabels(initial?: Labels) {
   };
 }
 
-/** A button that asks once more before doing something that cannot be undone. */
+/**
+ * A button that asks once more, in a dialog, before doing something that cannot be undone: the
+ * question, what happens, and a red button named like this one. The dialog closes once the change
+ * is done; its error shows where the page shows it.
+ */
 export function ConfirmButton({
   children,
   confirm,
+  description,
   onConfirm,
   disabled = false,
   pending = false,
   title,
 }: {
-  children: ReactNode;
+  /** The button's label, and the dialog's red button's: `Revoke`, `Delete`. */
+  children: string;
   /** The question, such as `Revoke the key ci?`. */
   confirm: string;
+  /** What happens, and what remains. */
+  description?: ReactNode;
   onConfirm: () => void;
   disabled?: boolean;
   pending?: boolean;
   title?: string;
 }) {
   const [asking, setAsking] = useState(false);
-  if (asking) {
-    return (
-      <fieldset className="confirm" aria-label={confirm}>
-        <span className="confirm-q">{confirm}</span>
-        <button
-          type="button"
-          className="btn small danger"
-          disabled={pending}
-          onClick={() => {
-            onConfirm();
-            setAsking(false);
-          }}
-        >
-          Yes
-        </button>
-        <button type="button" className="btn small ghost" onClick={() => setAsking(false)}>
-          Cancel
-        </button>
-      </fieldset>
-    );
-  }
+  const [sent, setSent] = useState(false);
+  // Closes once the change sent from the dialog is done, whatever its outcome.
+  useEffect(() => {
+    if (sent && !pending) {
+      setSent(false);
+      setAsking(false);
+    }
+  }, [sent, pending]);
   return (
-    <button
-      type="button"
-      className="btn small"
-      disabled={disabled || pending}
-      title={title}
-      onClick={() => setAsking(true)}
-    >
-      {children}
-    </button>
+    <>
+      <button
+        type="button"
+        className="btn small"
+        disabled={disabled || pending}
+        title={title}
+        onClick={() => setAsking(true)}
+      >
+        {children}
+      </button>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title={confirm}
+        description={description}
+        confirm={children}
+        pendingLabel={`${children}…`}
+        pending={pending}
+        onConfirm={() => {
+          setSent(true);
+          onConfirm();
+        }}
+      />
+    </>
   );
 }
 

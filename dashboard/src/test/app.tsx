@@ -1,5 +1,6 @@
 // Renders the whole app on a route, against the mocked API, and records the requests it makes.
-import { render } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import type { UserEvent } from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { Providers, routes } from "../app/App";
 import { authenticated, signIn, userByEmail } from "../mocks/access";
@@ -80,4 +81,14 @@ export function signedIn(
     authenticated(world.access, user, organizationId ?? null);
   }
   return world;
+}
+
+/** Confirms what a `ConfirmButton` asks: the red button of its dialog. */
+export async function confirmInDialog(user: UserEvent): Promise<void> {
+  const dialog = await screen.findByRole("dialog");
+  const red = within(dialog)
+    .getAllByRole("button")
+    .find((button) => button.classList.contains("danger"));
+  if (!red) throw new Error("the dialog has no red button");
+  await user.click(red);
 }

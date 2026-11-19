@@ -1154,6 +1154,8 @@ scope saved first, and could not run a host-tool worker.
 | Organization › Connections is a member's part (`members:read` in a WorkOS organization), between API keys and Settings | Showing it to a key holding `members:read` | Connections are people's, and open the organizations of their members. |
 | The mock makes the connection at the consent, as if Claude exchanged its code at once; `pnpm dev:mock` keeps a request of claude.ai waiting at a fixed address (`request=claude-demo`), and "Claude" uses a new connection 3 s after it is made | Mocking `/oauth/token` | The dashboard never sees the exchange; a developer and the documentation's screenshots need a consent to open, and a connection to see arrive. |
 | The documentation's "Use Rewind from Claude" is in Introduction › Get started, after the quickstart | Under the SDK | It needs no harness: it is a way to use Rewind, not to build on it. |
+| Connect Claude is in the account menu (…), beside Connections, not among the sidebar's views (the owner, 19 November 2026) | A view of the sidebar | It is set up once per person, as the connections are managed. |
+| Every change that cannot be undone is confirmed in a dialog that says what happens, with a red button named like the action: revoking a connection, a key or an invitation, removing a member or an organization from a connection, deleting a role, revoking a namespace's tokens (the owner, 19 November 2026) | A "Yes" inside the row | The question and its consequence read before the click; the row keeps its layout. |
 
 ### Taken while building connections and OAuth (November 2026)
 

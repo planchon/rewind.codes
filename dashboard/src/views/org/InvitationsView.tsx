@@ -223,6 +223,7 @@ function Invitations() {
                           {inv.state === "pending" && (
                             <ConfirmButton
                               confirm={`Revoke the invitation to ${inv.email}?`}
+                              description="The link in the email stops working. Invite them again to send a new one."
                               pending={revoke.isPending}
                               onConfirm={() => revoke.mutate(inv.id)}
                             >
