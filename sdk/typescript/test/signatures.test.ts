@@ -1,6 +1,7 @@
 // `verifyRewindCall` against JWTs signed as Rewind signs them, with real Ed25519 keys, and the public keys served by
 // a mocked server (`{issuer}/jwks.json`).
 import { createHash, generateKeyPairSync, type KeyObject } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 import { SignJWT, base64url, type JWK } from "jose";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -329,5 +330,86 @@ describe("verifyRewindCall", () => {
     await expect(verifyRewindCall(received(token, { url: "/v1/measures?model=sales" }), options())).rejects.toThrow(
       /absolute URL/,
     );
+  });
+});
+
+// The calls Rewind's Rust signer makes (`crates/rewind-outbound/tests/sdk_fixture.rs` writes the fixture, and checks
+// that it is still what Rewind signs): the two sides must agree on every claim, not only on what this file signs.
+describe("verifyRewindCall on calls signed by Rewind", () => {
+  interface SignedCall {
+    method: string;
+    url: string;
+    body: string | null;
+    authorization: string;
+  }
+  const fixture = JSON.parse(readFileSync(new URL("./fixtures/rewind-signed-calls.json", import.meta.url), "utf8")) as {
+    issuer: string;
+    audience: string;
+    now: number;
+    jwks: { keys: JWK[] };
+    calls: Record<"post" | "get", SignedCall>;
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date((fixture.now + 1) * 1000));
+    vi.stubGlobal("fetch", (input: Request | string | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      expect(url).toBe(`${fixture.issuer}/jwks.json`);
+      return Promise.resolve(Response.json(fixture.jwks, { headers: { "Cache-Control": "max-age=300" } }));
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function receivedOf(call: SignedCall, overrides: Partial<ReceivedRequest> = {}): ReceivedRequest {
+    return {
+      method: call.method.toUpperCase(),
+      url: call.url,
+      headers: { authorization: call.authorization },
+      body: Buffer.from(call.body ?? ""),
+      ...overrides,
+    };
+  }
+
+  const expected = {
+    namespace: "user:42",
+    labels: { env: "prod", goal: "q3-report" },
+    run: "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10",
+    tool: "dax.createMeasure",
+  };
+
+  it("accepts a POST with its body and query, the fragment left out", async () => {
+    const call = await verifyRewindCall(receivedOf(fixture.calls.post), {
+      issuer: fixture.issuer,
+      audience: fixture.audience,
+      labels: { env: "prod" },
+    });
+    expect(call).toEqual({ ...expected, idempotencyKey: `${expected.run}/7` });
+  });
+
+  it("accepts a GET without a body, its path percent-encoded", async () => {
+    const call = await verifyRewindCall(receivedOf(fixture.calls.get), {
+      issuer: fixture.issuer,
+      audience: fixture.audience,
+    });
+    expect(call).toEqual({ ...expected, idempotencyKey: `${expected.run}/8` });
+  });
+
+  it("refuses Rewind's JWT for another body, URL or environment", async () => {
+    const options = { issuer: fixture.issuer, audience: fixture.audience };
+    expect(
+      await refusedCheck(verifyRewindCall(receivedOf(fixture.calls.post, { body: Buffer.from("{}") }), options)),
+    ).toBe("body");
+    expect(
+      await refusedCheck(
+        verifyRewindCall(receivedOf(fixture.calls.get, { url: "https://api.example.com/v1/measures/m%201" }), options),
+      ),
+    ).toBe("htu");
+    expect(
+      await refusedCheck(verifyRewindCall(receivedOf(fixture.calls.post), { ...options, labels: { env: "dev" } })),
+    ).toBe("labels");
   });
 });

@@ -1,0 +1,32 @@
+{
+  "audience": "https://api.example.com",
+  "calls": {
+    "get": {
+      "authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSIsImtpZCI6ImZlODEyYzEyZjNhYjRjZTYifQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbSIsImV4cCI6MTgwMDAwMDA2MCwiaHRtIjoiR0VUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvbWVhc3VyZXMvbSUyMDE_dmlldz1mdWxsIiwiaWF0IjoxODAwMDAwMDAwLCJpZGVtcG90ZW5jeV9rZXkiOiIwMTkzYTVjNC03ZDJlLTdjMWEtOWIxZS0zZjZhMmQ5YzhlMTAvOCIsImlzcyI6Imh0dHBzOi8vYXBpLnJld2luZC5jb2Rlcy9vcmdhbml6YXRpb25zL29yZ18wMUFDTUUiLCJqdGkiOiIwMTkzYTVjNC03ZDJlLTdjMWEtOWIxZS0zZjZhMmQ5YzhlMTAvOC8xIiwibGFiZWxzIjp7ImVudiI6InByb2QiLCJnb2FsIjoicTMtcmVwb3J0In0sInJ1biI6IjAxOTNhNWM0LTdkMmUtN2MxYS05YjFlLTNmNmEyZDljOGUxMCIsInN1YiI6InVzZXI6NDIiLCJ0b29sIjoiZGF4LmNyZWF0ZU1lYXN1cmUifQ.e4IPO4g42u_GtnhxsbM7vwhbhETD9IIdQBHRah-9oBNXWdAuypIuRj9ZRWIablriPawP4x_Yu2OiX_0ll1xZAA",
+      "body": null,
+      "method": "GET",
+      "url": "https://api.example.com/v1/measures/m%201?view=full"
+    },
+    "post": {
+      "authorization": "Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJFZERTQSIsImtpZCI6ImZlODEyYzEyZjNhYjRjZTYifQ.eyJhdWQiOiJodHRwczovL2FwaS5leGFtcGxlLmNvbSIsImJvZHkiOiJISGNqUU1QMGJpdHc5YXpjcGdJS1dkcG9LSXl4NmNucGp5U25sSkFvQmdnIiwiZXhwIjoxODAwMDAwMDYwLCJodG0iOiJQT1NUIiwiaHR1IjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vdjEvbWVhc3VyZXM_bW9kZWw9c2FsZXMiLCJpYXQiOjE4MDAwMDAwMDAsImlkZW1wb3RlbmN5X2tleSI6IjAxOTNhNWM0LTdkMmUtN2MxYS05YjFlLTNmNmEyZDljOGUxMC83IiwiaXNzIjoiaHR0cHM6Ly9hcGkucmV3aW5kLmNvZGVzL29yZ2FuaXphdGlvbnMvb3JnXzAxQUNNRSIsImp0aSI6IjAxOTNhNWM0LTdkMmUtN2MxYS05YjFlLTNmNmEyZDljOGUxMC83LzEiLCJsYWJlbHMiOnsiZW52IjoicHJvZCIsImdvYWwiOiJxMy1yZXBvcnQifSwicnVuIjoiMDE5M2E1YzQtN2QyZS03YzFhLTliMWUtM2Y2YTJkOWM4ZTEwIiwic3ViIjoidXNlcjo0MiIsInRvb2wiOiJkYXguY3JlYXRlTWVhc3VyZSJ9.ituk_t8A2eUOErleQ_097crN7F0cVGWztGuVVawZtE6dN_dKtwpX_P7Xo40XMiN9wlyxOSfV5uLZ_xO-ZIB-CA",
+      "body": "{\"name\":\"Revenue\",\"expression\":\"SUM(Sales[Amount])\"}",
+      "method": "post",
+      "url": "https://api.example.com/v1/measures?model=sales#ignored"
+    }
+  },
+  "comment": "Written by crates/rewind-outbound/tests/sdk_fixture.rs (REWIND_OUTBOUND_BLESS=1): JWTs signed by Rewind's Rust signer, checked by verifyRewindCall.",
+  "issuer": "https://api.rewind.codes/organizations/org_01ACME",
+  "jwks": {
+    "keys": [
+      {
+        "alg": "EdDSA",
+        "crv": "Ed25519",
+        "kid": "fe812c12f3ab4ce6",
+        "kty": "OKP",
+        "use": "sig",
+        "x": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw"
+      }
+    ]
+  },
+  "now": 1800000000
+}
