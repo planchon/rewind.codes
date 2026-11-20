@@ -29,8 +29,10 @@ export interface GateStacks {
   /** B: strict, a deployed server's defaults. */
   b: StackInfo;
   /**
-   * A secret only this run of the gate knows. Specs set it as credentials; it must never come
-   * back in an answer of Rewind, a journal, a trace or a log.
+   * A value only this run of the gate knows. Specs put it as secrets (`PUT /v1/secrets/{name}`,
+   * `PUT /v1/namespaces/{name}/secrets/{secret}`) that their runs attach, and an MCP server or an
+   * API receives it; it must never come back in an answer of Rewind (a run, a journal, a problem),
+   * a trace, a log, the database in clear, or the dashboard.
    */
   canary: string;
 }

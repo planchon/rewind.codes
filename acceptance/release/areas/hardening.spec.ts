@@ -377,6 +377,29 @@ for (const setup of SETUPS) {
       evidence("Basic, no scheme, truncated, suffixed, empty, 64 kB keys → 401; 128 kB header, 100 kB query → 4xx");
     });
 
+    test("malformed and oversized secrets are refused, never a 5xx", { tag: "@attack" }, async () => {
+      const list = async () => (await tenant.api.get("/v1/secrets")).json?.secrets?.length ?? -1;
+      const cases: [string, () => Promise<Reply>, number, string][] = [
+        ["an uppercase name", () => tenant.api.put("/v1/secrets/GitHub", { value: "x" }), 400, "invalid-request"],
+        ["a name of 65 characters", () => tenant.api.put(`/v1/secrets/${"a".repeat(65)}`, { value: "x" }), 400, "invalid-request"],
+        ["a name starting with a digit", () => tenant.api.put("/v1/secrets/1github", { value: "x" }), 400, "invalid-request"],
+        ["a NUL in the name", () => tenant.api.put("/v1/secrets/git%00hub", { value: "x" }), 400, "invalid-request"],
+        ["a value above 16 KiB", () => tenant.api.put("/v1/secrets/big", { value: "x".repeat(16 * 1024 + 1) }), 413, "payload-too-large"],
+        ["a value that is not a string", () => tenant.api.put("/v1/secrets/typed", { value: 42 }), 400, "invalid-request"],
+        ["an unknown field", () => tenant.api.put("/v1/secrets/extra", { value: "x", plaintext: true }), 400, "invalid-request"],
+        ["a label on a namespace's secret", () => tenant.api.put("/v1/namespaces/alice/secrets/github", { value: "x", labels: { env: "prod" } }), 400, "invalid-request"],
+        ["an attachment that names no scope", () => tenant.api.ns("alice").post("/v1/runs", { script: short(unique("attach")), secrets: { github: "github" } }), 400, "invalid-request"],
+        ["an attachment of another scope", () => tenant.api.ns("alice").post("/v1/runs", { script: short(unique("attach")), secrets: { github: "tenant/github" } }), 400, "invalid-request"],
+      ];
+      const seen: string[] = [];
+      for (const [what, attempt, status, slug] of cases) {
+        const reply = await expectRefused({ attempt, status, slug, probe: list });
+        expectNo5xx(reply, what);
+        seen.push(`${what} → ${status} ${slug}`);
+      }
+      evidence(seen.join("; "));
+    });
+
     // -----------------------------------------------------------------------------------------
     // Routes
 

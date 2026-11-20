@@ -1,8 +1,9 @@
 /**
- * The outside world of the release gate, run in the spec's process on 127.0.0.1: an MCP server,
- * a receiver of lifecycle webhooks, a sink that counts whatever reaches it, a redirector, and the
- * keys that sign (or forge) end users' tokens. Each records what it received, so a check can prove
- * that an attack had no effect.
+ * The outside world of the release gate, run in the spec's process on 127.0.0.1: an MCP server
+ * (which may check each request, as a server of signed calls does), an API with its OpenAPI
+ * document, a receiver of lifecycle webhooks, a sink that counts whatever reaches it, a
+ * redirector, and the keys that sign (or forge) end users' tokens. Each records what it received,
+ * so a check can prove that an attack had no effect.
  */
 import { createServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -55,9 +56,27 @@ export interface McpCall {
   at: number;
 }
 
+/** An HTTP request as a fixture received it, whole: what a server checks a signature against. */
+export interface ReceivedRequest {
+  method: string;
+  /** The URL the client called: `http://127.0.0.1:<port><path and query>`. */
+  url: string;
+  headers: Record<string, string>;
+  /** The raw body, as received. */
+  body: string;
+}
+
+/**
+ * Checks a request before the fixture answers it: `undefined` lets it through, a reason refuses it
+ * with 401 (and `WWW-Authenticate: Bearer`), as a server refuses a secret or a signature.
+ */
+export type RequestCheck = (request: ReceivedRequest) => Promise<string | undefined> | string | undefined;
+
 export interface McpFixture {
   /** The streamable HTTP endpoint, `http://127.0.0.1:<port>/mcp`. */
   url: string;
+  /** Every HTTP request with the check's verdict (`undefined` when let through). */
+  requests: (ReceivedRequest & { refused?: string })[];
   /** Every `tools/call`, in order. */
   calls: McpCall[];
   /** Every JSON-RPC method received (`initialize`, `tools/list`, `tools/call`…). */
@@ -108,21 +127,33 @@ export function defaultTools(): FixtureTool[] {
   ];
 }
 
-/** An MCP server over streamable HTTP (stateless, JSON answers), on 127.0.0.1. */
-export async function startMcpFixture(tools: FixtureTool[] = defaultTools()): Promise<McpFixture> {
+/**
+ * An MCP server over streamable HTTP (stateless, JSON answers), on 127.0.0.1. With `check`, each
+ * request is checked first, whatever its method, and refused with 401 when the check says why.
+ */
+export async function startMcpFixture(tools: FixtureTool[] = defaultTools(), options: { check?: RequestCheck } = {}): Promise<McpFixture> {
   let current = tools;
   const calls: McpCall[] = [];
   const methods: string[] = [];
-  const { server, port } = await listen(async (req, res) => {
+  const requests: McpFixture["requests"] = [];
+  let port = 0;
+  const { server, port: bound } = await listen(async (req, res) => {
     if (!req.url?.startsWith("/mcp")) {
       res.writeHead(404).end("not here");
+      return;
+    }
+    const text = await readBody(req);
+    const received: ReceivedRequest = { method: req.method ?? "", url: `http://127.0.0.1:${port}${req.url}`, headers: headersOf(req), body: text };
+    const refused = options.check ? await options.check(received) : undefined;
+    requests.push({ ...received, refused });
+    if (refused !== undefined) {
+      res.writeHead(401, { "content-type": "text/plain", "www-authenticate": "Bearer" }).end(refused);
       return;
     }
     if (req.method !== "POST") {
       res.writeHead(405, { allow: "POST" }).end();
       return;
     }
-    const text = await readBody(req);
     let body: any;
     try {
       body = JSON.parse(text);
@@ -164,12 +195,118 @@ export async function startMcpFixture(tools: FixtureTool[] = defaultTools()): Pr
     await mcp.connect(transport);
     await transport.handleRequest(req, res, body);
   });
+  port = bound;
   return {
     url: `http://127.0.0.1:${port}/mcp`,
+    requests,
     calls,
     methods,
     setTools(tools) {
       current = tools;
+    },
+    close: () => close(server),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// An API and its OpenAPI document
+
+export interface ApiFixture {
+  /** Its base URL, `http://127.0.0.1:<port>/v1`. */
+  base: string;
+  /** Its OpenAPI document, served at `http://127.0.0.1:<port>/openapi.json`. */
+  documentUrl: string;
+  /** Every request to the API (the document's reads aside). */
+  requests: ReceivedRequest[];
+  /** How many times the document was read. */
+  documentReads: number;
+  close(): Promise<void>;
+}
+
+/**
+ * The gate's API: `GET /v1/measures/{id}` (`getMeasure`), `POST /v1/measures` (`createMeasure`,
+ * with `Idempotency-Key`), and `PUT /v1/measures/{id}` taking `text/csv` (`importMeasure`, which
+ * Rewind leaves out). Its document names `servers` (its own base URL unless `server` is given) and
+ * an `apiKey` in the header `X-Api-Key`. It answers what it received, never the key.
+ */
+export async function startApiFixture(options: { server?: string } = {}): Promise<ApiFixture> {
+  const requests: ReceivedRequest[] = [];
+  const state = { documentReads: 0 };
+  let base = "";
+  const document = () => ({
+    openapi: "3.1.0",
+    info: { title: "measures", version: "1" },
+    servers: [{ url: options.server ?? base }],
+    components: { securitySchemes: { key: { type: "apiKey", in: "header", name: "X-Api-Key" } } },
+    security: [{ key: [] }],
+    paths: {
+      "/measures": {
+        post: {
+          operationId: "createMeasure",
+          summary: "Creates a measure.",
+          parameters: [{ name: "Idempotency-Key", in: "header", schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] } } },
+          },
+          responses: {
+            "201": {
+              description: "created",
+              content: { "application/json": { schema: { type: "object", properties: { created: { type: "string" }, key: { type: "string" } } } } },
+            },
+          },
+        },
+      },
+      "/measures/{id}": {
+        get: {
+          operationId: "getMeasure",
+          summary: "Gets a measure.",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": {
+              description: "it",
+              content: { "application/json": { schema: { type: "object", properties: { id: { type: "string" }, value: { type: "number" } } } } },
+            },
+          },
+        },
+        put: {
+          operationId: "importMeasure",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { content: { "text/csv": {} } },
+          responses: { "204": { description: "imported" } },
+        },
+      },
+    },
+  });
+  let port = 0;
+  const { server, port: bound } = await listen(async (req, res) => {
+    const body = await readBody(req);
+    const path = (req.url ?? "").split("?")[0] ?? "";
+    if (path === "/openapi.json") {
+      state.documentReads += 1;
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(document()));
+      return;
+    }
+    const received: ReceivedRequest = { method: req.method ?? "", url: `http://127.0.0.1:${port}${req.url}`, headers: headersOf(req), body };
+    requests.push(received);
+    const measure = /^\/v1\/measures\/([^/]+)$/.exec(path);
+    if (req.method === "GET" && measure) {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: decodeURIComponent(measure[1]!), value: 3.5 }));
+    } else if (req.method === "POST" && path === "/v1/measures") {
+      const name = (JSON.parse(body || "{}") as { name?: string }).name;
+      res.writeHead(201, { "content-type": "application/json" }).end(JSON.stringify({ created: name, key: received.headers["idempotency-key"] ?? null }));
+    } else {
+      res.writeHead(404, { "content-type": "application/problem+json" }).end(JSON.stringify({ title: "not found", detail: `no ${req.method} ${path}` }));
+    }
+  });
+  port = bound;
+  base = `http://127.0.0.1:${port}/v1`;
+  return {
+    base,
+    documentUrl: `http://127.0.0.1:${port}/openapi.json`,
+    requests,
+    get documentReads() {
+      return state.documentReads;
     },
     close: () => close(server),
   };

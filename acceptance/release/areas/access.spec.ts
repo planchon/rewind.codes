@@ -50,10 +50,12 @@ const NO_TOKEN = "rewind_tt_unknown";
 
 /**
  * Who may call an operation: a permission of the catalog, any caller, the operator only, a member
- * signed in on the dashboard only, no one (WorkOS's sign-in, absent from a server without it),
- * or nobody needs to (an inbound webhook).
+ * signed in on the dashboard only, no one (WorkOS's sign-in and the OAuth of MCP clients, absent
+ * from a server without it),
+ * nobody needs to (an inbound webhook, whose unknown token is not found), or anyone, answered
+ * without credentials (the public keys of signed calls).
  */
-type Need = { permission: string } | "any" | "operator" | "member" | "auth" | "public";
+type Need = { permission: string } | "any" | "operator" | "member" | "auth" | "public" | "open";
 
 /** Why a principal holding the permission is still refused (06: a grant limited to labels, a token). */
 type Scope = "labels" | "token";
@@ -62,6 +64,8 @@ interface Probe {
   /** `METHOD /path` as `api/openapi.json` writes it. */
   op: string;
   need: Need;
+  /** A second permission the request needs, checked after `need`'s (attaching a secret). */
+  also?: string;
   /** The request sent: a path with ids filled in, and a body valid for the operation. */
   path: string;
   body?: unknown;
@@ -97,6 +101,20 @@ const PROBES: Probe[] = [
   { op: "POST /auth/organization", need: "auth", path: "/auth/organization", body: { organizationId: "org_unknown" } },
   { op: "POST /auth/session", need: "auth", path: "/auth/session", body: {} },
   { op: "POST /auth/waitlist", need: "auth", path: "/auth/waitlist", body: { email: "gate@example.net" } },
+  // OAuth for MCP clients: none without WorkOS (a person's sign-in), whoever asks.
+  { op: "GET /.well-known/oauth-authorization-server", need: "auth", path: "/.well-known/oauth-authorization-server" },
+  { op: "GET /.well-known/oauth-protected-resource", need: "auth", path: "/.well-known/oauth-protected-resource" },
+  { op: "GET /.well-known/oauth-protected-resource/mcp", need: "auth", path: "/.well-known/oauth-protected-resource/mcp" },
+  { op: "GET /oauth/authorize", need: "auth", path: "/oauth/authorize", query: { client_id: "rc_unknown", response_type: "code" } },
+  { op: "POST /oauth/register", need: "auth", path: "/oauth/register", body: { redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] } },
+  { op: "POST /oauth/revoke", need: "auth", path: "/oauth/revoke", body: { token: "rewind_rt_unknown" } },
+  { op: "POST /oauth/token", need: "auth", path: "/oauth/token", body: { grant_type: "refresh_token", refresh_token: "rewind_rt_unknown" } },
+  // A person's connections and the consent: the person, signed in on the dashboard, only.
+  { op: "GET /v1/connections", need: "member", path: "/v1/connections" },
+  { op: "PATCH /v1/connections/{id}", need: "member", path: "/v1/connections/cn_unknown", body: { organizations: [] } },
+  { op: "DELETE /v1/connections/{id}", need: "member", path: "/v1/connections/cn_unknown" },
+  { op: "GET /v1/oauth/consent", need: "member", path: "/v1/oauth/consent", query: { request: "unknown" } },
+  { op: "POST /v1/oauth/consent", need: "member", path: "/v1/oauth/consent", body: { request: "unknown", decision: "deny" } },
   // Inbound webhooks: no token, an unguessable URL.
   { op: "POST /hooks/{token}", need: "public", path: `/hooks/whk_${"0".repeat(40)}`, body: { hello: "world" } },
   // Keys.
@@ -119,13 +137,23 @@ const PROBES: Probe[] = [
   { op: "PUT /v1/namespaces/{name}", need: p("namespaces:write"), path: "/v1/namespaces/matrix-other", body: {} },
   { op: "DELETE /v1/namespaces/{name}/tokens", need: p("tokens:write"), path: "/v1/namespaces/matrix-other/tokens" },
   { op: "POST /v1/namespaces/{name}/tokens", need: p("tokens:write"), path: "/v1/namespaces/matrix-other/tokens", body: { ttl: "5m" } },
+  { op: "PATCH /v1/namespaces/{name}", need: p("namespaces:write"), path: "/v1/namespaces/matrix-never-used", body: {} },
+  // A namespace's secrets: a grant limited to labels reads them and never writes one (06).
+  { op: "GET /v1/namespaces/{name}/secrets", need: p("secrets:read"), path: "/v1/namespaces/matrix-other/secrets" },
   {
-    op: "PUT /v1/namespaces/{name}/toolsets/{id}/credentials",
-    need: p("credentials:write"),
-    path: `/v1/namespaces/matrix-other/toolsets/${NO_DIGEST}/credentials`,
-    body: { servers: {} },
+    op: "PUT /v1/namespaces/{name}/secrets/{secret}",
+    need: p("secrets:write"),
+    path: "/v1/namespaces/matrix-other/secrets/matrix",
+    body: { value: "the matrix's" },
     refusedTo: ["labels"],
   },
+  {
+    op: "DELETE /v1/namespaces/{name}/secrets/{secret}",
+    need: p("secrets:write"),
+    path: "/v1/namespaces/matrix-other/secrets/matrix-never-put",
+    refusedTo: ["labels"],
+  },
+  { op: "GET /v1/namespaces/{name}/secrets/{secret}/usage", need: p("secrets:read"), path: "/v1/namespaces/matrix-other/secrets/matrix-never-put/usage" },
   // The organization: its endpoints exist, and answer 404 without WorkOS once the permission holds.
   { op: "PATCH /v1/organization", need: p("organization:write"), path: "/v1/organization", body: {} },
   { op: "GET /v1/organization/invitations", need: p("members:read"), path: "/v1/organization/invitations" },
@@ -138,11 +166,17 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/organization/invitations/{id}", need: p("members:invite"), path: "/v1/organization/invitations/invitation_unknown" },
   { op: "POST /v1/organization/invitations/{id}/resend", need: p("members:invite"), path: "/v1/organization/invitations/invitation_unknown/resend" },
   { op: "GET /v1/organization/members", need: p("members:read"), path: "/v1/organization/members" },
+  { op: "GET /v1/organization/connections", need: p("members:read"), path: "/v1/organization/connections" },
+  { op: "DELETE /v1/organization/connections/{id}", need: p("members:manage"), path: "/v1/organization/connections/cn_unknown" },
   { op: "DELETE /v1/organization/members/{user}", need: p("members:manage"), path: "/v1/organization/members/user_unknown" },
   { op: "PUT /v1/organization/members/{user}/grant", need: p("members:manage"), path: "/v1/organization/members/user_unknown/grant", body: { role: "reader" } },
   { op: "GET /v1/organization/namespace-defaults", need: p("namespaces:read"), path: "/v1/organization/namespace-defaults" },
+  { op: "GET /v1/organization/namespace-names", need: p("namespaces:read"), path: "/v1/organization/namespace-names" },
   { op: "PUT /v1/organization/namespace-defaults", need: p("namespaces:write"), path: "/v1/organization/namespace-defaults", body: { defaults: {} } },
   { op: "GET /v1/organization/quota-alerts", need: p("namespaces:read"), path: "/v1/organization/quota-alerts" },
+  // The signing keys: read with secrets:read, replaced by organization:write (the matrix's tenant's own key).
+  { op: "GET /v1/organization/signing-keys", need: p("secrets:read"), path: "/v1/organization/signing-keys", refusedTo: ["token"] },
+  { op: "POST /v1/organization/signing-keys", need: p("organization:write"), path: "/v1/organization/signing-keys" },
   { op: "GET /v1/organization/token-keys", need: p("tokens:write"), path: "/v1/organization/token-keys" },
   { op: "POST /v1/organization/token-keys", need: p("tokens:write"), path: "/v1/organization/token-keys", body: { name: "matrix", jwk: {} } },
   { op: "DELETE /v1/organization/token-keys/{kid}", need: p("tokens:write"), path: "/v1/organization/token-keys/rk_unknown" },
@@ -170,7 +204,6 @@ const PROBES: Probe[] = [
   { op: "DELETE /v1/runs/{id}", need: p("runs:delete"), path: `/v1/runs/${NO_RUN}` },
   { op: "GET /v1/runs/{id}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}` },
   { op: "POST /v1/runs/{id}/cancel", need: p("runs:control"), path: `/v1/runs/${NO_RUN}/cancel`, body: {} },
-  { op: "PUT /v1/runs/{id}/credentials", need: p("credentials:write"), path: `/v1/runs/${NO_RUN}/credentials`, body: { servers: {} } },
   { op: "GET /v1/runs/{id}/entries/{idx}", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/entries/0` },
   { op: "GET /v1/runs/{id}/events", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/events` },
   { op: "POST /v1/runs/{id}/fork", need: p("runs:start"), path: `/v1/runs/${NO_RUN}/fork`, body: { script: "export default async function main() { return 1; }" } },
@@ -181,6 +214,14 @@ const PROBES: Probe[] = [
   { op: "GET /v1/runs/{id}/trace", need: p("runs:read"), path: `/v1/runs/${NO_RUN}/trace` },
   // The server.
   { op: "GET /v1/server", need: "any", path: "/v1/server" },
+  // The organization's secrets: never an end user's token's (06: "Tokens"). A name that is no
+  // secret's name is refused after the permission (400): nothing is written.
+  { op: "GET /v1/secrets", need: p("secrets:read"), path: "/v1/secrets", refusedTo: ["token"] },
+  { op: "PUT /v1/secrets/{name}", need: p("secrets:write"), path: "/v1/secrets/Not-A-Secret-Name", body: { value: "the matrix's" }, refusedTo: ["token"] },
+  { op: "DELETE /v1/secrets/{name}", need: p("secrets:write"), path: "/v1/secrets/matrix-never-put", refusedTo: ["token"] },
+  { op: "GET /v1/secrets/{name}/usage", need: p("secrets:read"), path: "/v1/secrets/matrix-never-put/usage", refusedTo: ["token"] },
+  // The public keys of signed calls: no credentials, whoever asks.
+  { op: "GET /organizations/{tenant}/jwks.json", need: "open", path: "/organizations/{tenant}/jwks.json" },
   // Lifecycle webhooks.
   { op: "GET /v1/subscriptions", need: p("subscriptions:read"), path: "/v1/subscriptions" },
   { op: "POST /v1/subscriptions", need: p("subscriptions:write"), path: "/v1/subscriptions", body: { url: "not a url" } },
@@ -199,13 +240,14 @@ const PROBES: Probe[] = [
   { op: "GET /v1/tools/stats", need: p("runs:read"), path: "/v1/tools/stats", refusedTo: ["labels"] },
   // Toolsets.
   { op: "GET /v1/toolsets", need: p("toolsets:read"), path: "/v1/toolsets" },
-  { op: "POST /v1/toolsets", need: p("toolsets:write"), path: "/v1/toolsets", body: {} },
+  // Attaching an organization's secret to list a server needs secrets:use as well; no server of
+  // the request takes it, so a holder is answered 422 secret-required and nothing is registered.
   {
-    op: "PUT /v1/toolsets/{id}/credentials",
-    need: p("credentials:write"),
-    path: `/v1/toolsets/${NO_DIGEST}/credentials`,
-    body: { servers: {} },
-    refusedTo: ["labels", "token"],
+    op: "POST /v1/toolsets",
+    need: p("toolsets:write"),
+    also: "secrets:use",
+    path: "/v1/toolsets",
+    body: { secrets: { matrix: "org/matrix-never-put" } },
   },
   { op: "GET /v1/toolsets/{id}/declarations", need: p("toolsets:read"), path: `/v1/toolsets/${NO_DIGEST}/declarations` },
   { op: "GET /v1/toolsets/{id}/search", need: p("toolsets:read"), path: `/v1/toolsets/${NO_DIGEST}/search`, query: { query: "x" } },
@@ -282,7 +324,7 @@ async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
     if (probe.need === "auth") {
       expected = "not found";
       ok = reply.status === 404;
-      why = "a server without WorkOS has no /auth";
+      why = "a server without WorkOS has no /auth, nor OAuth";
     } else if (probe.need === "public") {
       expected = "not found";
       ok = reply.status === 404 && reply.slug === "not-found";
@@ -290,6 +332,10 @@ async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
     } else if (probe.need === "any") {
       expected = "answered";
       ok = reply.status === 200;
+    } else if (probe.need === "open") {
+      expected = "answered";
+      ok = reply.status === 200 && reply.headers.get("cache-control") === "max-age=300";
+      why = "public, cacheable 5 minutes";
     } else if (probe.need === "operator") {
       expected = "refused";
       ok = reply.status === 403 && reply.slug === "forbidden" && detail.includes("operator");
@@ -299,8 +345,9 @@ async function matrix(tenant: Tenant, principal: Principal): Promise<Cell[]> {
       ok = reply.status === 403 && reply.slug === "forbidden";
       why = "a member signed in on the dashboard only";
     } else {
-      const permission = probe.need.permission;
-      const held = principal.holds.includes(permission);
+      const needed = [probe.need.permission, ...(probe.also ? [probe.also] : [])];
+      const permission = needed.find((p) => !principal.holds.includes(p)) ?? probe.need.permission;
+      const held = needed.every((p) => principal.holds.includes(p));
       const scoped = principal.scope !== undefined && (probe.refusedTo ?? []).includes(principal.scope);
       if (held && !scoped) {
         expected = "answered";
@@ -354,7 +401,7 @@ test.describe("the permission matrix", () => {
       expect([...builtIn[role]!].sort(), role).toEqual([...permissions].sort());
     }
     expect(builtIn.operator, "operator is no role of an organization").toBeUndefined();
-    evidence("GET /v1/permissions lists the 23 permissions of 06 in order; GET /v1/roles gives owner, harness, worker and reader exactly 06's table");
+    evidence("GET /v1/permissions lists the 25 permissions of 06 in order (secrets:read, secrets:write and secrets:use where credentials:write was); GET /v1/roles gives owner, harness, worker and reader exactly 06's table");
   });
 
   test("every operation of api/openapi.json has a probe in the matrix", { tag: "@success" }, () => {
@@ -373,7 +420,7 @@ test.describe("the permission matrix", () => {
       "owner limited to labels": PERMISSIONS.filter((p) => !ADMINISTRATION.includes(p)),
       "end user's token": TOKEN_DEFAULT,
     };
-    const needed = new Set(PROBES.flatMap((probe) => (typeof probe.need === "object" ? [probe.need.permission] : [])));
+    const needed = new Set(PROBES.flatMap((probe) => (typeof probe.need === "object" ? [probe.need.permission, ...(probe.also ? [probe.also] : [])] : [])));
     expect([...needed].sort(), "every permission is needed by an operation").toEqual([...PERMISSIONS].sort());
     for (const permission of PERMISSIONS) {
       const holding = Object.entries(holders).filter(([, held]) => held.includes(permission)).map(([name]) => name);
@@ -381,7 +428,7 @@ test.describe("the permission matrix", () => {
       expect(holding.length, `${permission} is held by someone`).toBeGreaterThan(0);
       expect(lacking.length, `${permission} is refused to someone`).toBeGreaterThan(0);
     }
-    evidence("each of the 23 permissions is held by at least one principal of the matrix and lacked by another");
+    evidence("each of the 25 permissions is held by at least one principal of the matrix and lacked by another");
   });
 
   test("an owner key reaches every operation of its tenant but the operator's and the members'", { tag: "@success" }, async () => {
@@ -592,6 +639,34 @@ test.describe("roles and grants", () => {
 // ---------------------------------------------------------------------------------------------
 // Keys limited to labels
 
+/**
+ * An API whose key is a secret the run attaches: its document inline, its base URL public and
+ * never called (a start refused for its attachments sends nothing).
+ */
+const CRM_API = {
+  apis: [
+    {
+      name: "crm",
+      openapi: {
+        openapi: "3.1.0",
+        info: { title: "crm", version: "1" },
+        servers: [{ url: "https://crm.example.com/v1" }],
+        paths: {
+          "/customers/{id}": {
+            get: {
+              operationId: "find",
+              parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+              responses: { "200": { description: "it", content: { "application/json": { schema: { type: "object" } } } } },
+            },
+          },
+        },
+      },
+      auth: { type: "secret", header: "X-Api-Key" },
+    },
+  ],
+};
+const CRM_SCRIPT = `import { crm } from "rewind:tools";\nexport default async function main() { return await crm.find({ id: "1" }); }\n`;
+
 test.describe("keys limited to labels", () => {
   let tenant: Tenant;
   let red: Api;
@@ -649,6 +724,62 @@ test.describe("keys limited to labels", () => {
     const fork = await red.post(`/v1/runs/${started.json.id}/fork`, { script: "export default async function main() { return 0; }", labels: { team: "blue" } });
     expectProblem(fork, 403, "forbidden");
     evidence("a run started by the red key gets team:red; asking team:blue for a run or a fork → 403 forbidden, no blue run created");
+  });
+
+  test("a key limited to labels sees, lists for and attaches only the organization's secrets carrying them, and never writes a namespace's", { tag: "@attack" }, async () => {
+    expectOk(await tenant.api.put("/v1/secrets/blue-crm", { value: "blue's", labels: { team: "blue" } }), 201);
+    const written = await red.put("/v1/secrets/red-crm", { value: "red's" });
+    expectOk(written, 201);
+    expect(written.json.labels, "the secrets it writes take its labels").toEqual({ team: "red" });
+    const listed = await red.get("/v1/secrets");
+    expect(listed.json.secrets.map((s: { reference: string }) => s.reference)).toEqual(["org/red-crm"]);
+    const secrets = async () => (await tenant.api.get("/v1/secrets")).json.secrets.map((s: { reference: string; labels?: object }) => [s.reference, s.labels]);
+    await expectRefused({ attempt: () => red.get("/v1/secrets/blue-crm/usage"), status: 404, slug: "not-found" });
+    await expectRefused({ attempt: () => red.delete("/v1/secrets/blue-crm"), status: 404, slug: "not-found", probe: secrets });
+    await expectRefused({ attempt: () => red.put("/v1/secrets/blue-crm", { value: "red's now" }), status: 403, slug: "forbidden", probe: secrets });
+    await expectRefused({ attempt: () => red.put("/v1/secrets/other", { value: "x", labels: { team: "blue" } }), status: 403, slug: "forbidden", probe: secrets });
+    // A namespace's secret serves the end user's runs whatever their labels: it reads them, never writes one.
+    expectOk(await tenant.api.put("/v1/namespaces/labels/secrets/crm", { value: "the end user's" }), 201);
+    expectOk(await red.get("/v1/namespaces/labels/secrets"), 200);
+    await expectRefused({ attempt: () => red.put("/v1/namespaces/labels/secrets/crm", { value: "red's" }), status: 403, slug: "forbidden", probe: secrets });
+    await expectRefused({ attempt: () => red.delete("/v1/namespaces/labels/secrets/crm"), status: 403, slug: "forbidden", probe: secrets });
+    // Attaching: blue's is unknown to it, for a listing as for a run.
+    const toolset = { mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }] };
+    const listing = await red.post("/v1/toolsets", { ...toolset, secrets: { crm: "org/blue-crm" } });
+    expectProblem(listing, 422, "secret-required");
+    expect(listing.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
+    expect(listing.json.attachments[0].attachable).toEqual(["org/red-crm"]);
+    const api = await tenant.api.post("/v1/toolsets", CRM_API);
+    expectOk(api);
+    const run = await red.ns("labels").post("/v1/runs", { script: CRM_SCRIPT, toolset: api.json.id, secrets: { crm: "org/blue-crm" } });
+    expectProblem(run, 422, "secret-required");
+    expect(run.json.attachments[0]).toMatchObject({ server: "crm", problem: "unknown", secret: "org/blue-crm" });
+    evidence("the red key lists org/red-crm only (written with team:red); blue's usage and deletion → 404, replacing it or labelling one blue → 403; a namespace's secret read, never written (403); org/blue-crm attached for a listing or a run → 422 secret-required (unknown), attachable org/red-crm");
+  });
+
+  test("attaching an organization's secret takes secrets:use", { tag: "@attack" }, async () => {
+    const role = `starter-${unique()}`;
+    expectOk(await tenant.api.put(`/v1/roles/${role}`, { description: "starts runs, registers toolsets", permissions: ["runs:start", "runs:read", "toolsets:write", "toolsets:read"] }));
+    const starter = tenant.api.as((await createKey(tenant.api, role)).key);
+    expectOk(await tenant.api.put("/v1/secrets/shared-crm", { value: "the organization's" }), 201);
+    const listing = await starter.post("/v1/toolsets", {
+      mcp: [{ name: "crm", url: "http://127.0.0.1:9/mcp", auth: { type: "secret", header: "authorization" } }],
+      secrets: { crm: "org/shared-crm" },
+    });
+    expectProblem(listing, 403, "forbidden");
+    expect(listing.json.detail).toContain("`secrets:use`");
+    const toolset = await tenant.api.post("/v1/toolsets", CRM_API);
+    expectOk(toolset);
+    const started = async () => (await tenant.api.get("/v1/namespaces/use")).json?.namespace?.usage?.runsStarted ?? 0;
+    const run = await expectRefused({
+      attempt: () =>
+        starter.ns("use").post("/v1/runs", { script: CRM_SCRIPT, toolset: toolset.json.id, secrets: { crm: "org/shared-crm" } }),
+      status: 422,
+      slug: "secret-required",
+      probe: started,
+    });
+    expect(run.json.attachments[0]).toMatchObject({ server: "crm", problem: "forbidden", secret: "org/shared-crm" });
+    evidence("a role without secrets:use: org/shared-crm for a listing → 403 naming secrets:use; for a run → 422 secret-required (forbidden), no run");
   });
 
   test("a key limited to labels reads no tool statistics, and no payload without its run", { tag: "@attack" }, async () => {

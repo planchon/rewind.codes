@@ -38,7 +38,9 @@ const PROBES: { permission: string; method: string; path: string; body?: unknown
   { permission: "runs:delete", method: "DELETE", path: `/v1/runs/${UNKNOWN_RUN}` },
   { permission: "toolsets:read", method: "GET", path: "/v1/toolsets" },
   { permission: "toolsets:write", method: "POST", path: "/v1/toolsets", body: {} },
-  { permission: "credentials:write", method: "PUT", path: "/v1/toolsets/unknown/credentials", body: { servers: {} } },
+  { permission: "secrets:read", method: "GET", path: "/v1/secrets" },
+  { permission: "secrets:write", method: "DELETE", path: "/v1/secrets/never-put" },
+  { permission: "secrets:use", method: "POST", path: "/v1/toolsets", body: { secrets: { unknown: "org/never-put" } } },
   { permission: "tasks:work", method: "POST", path: "/v1/tasks/unknown/heartbeat" },
   { permission: "tasks:approve", method: "POST", path: "/v1/tasks/unknown/approve" },
   { permission: "subscriptions:read", method: "GET", path: "/v1/subscriptions" },
@@ -239,7 +241,9 @@ test.describe("criterion 8: accounts, organizations and access", () => {
           "runs:delete",
           "toolsets:read",
           "toolsets:write",
-          "credentials:write",
+          "secrets:read",
+          "secrets:write",
+          "secrets:use",
           "tasks:work",
           "tasks:approve",
           "subscriptions:read",
@@ -285,14 +289,14 @@ test.describe("criterion 8: accounts, organizations and access", () => {
         created.users.push(user);
         await enter.getByLabel("Code", { exact: true }).fill(code);
         // In the organization at once, as a reader: the runs, and of the organization what reading
-        // members and roles shows.
+        // members, roles and secrets shows (the signing keys, the connections that open it).
         await expect(other).toHaveURL(/^[^#]*\/overview$/);
         expect(other.url()).not.toContain("invitation_token");
         expect(await workos.invitationState(invitation.id)).toBe("accepted");
         await openOrganization(other);
         await expect(other.getByRole("region", { name: "Organization" })).toContainText(organizationName);
         const sections = other.getByRole("navigation", { name: "Organization" }).getByRole("link");
-        await expect(sections).toHaveText(["Members", "Invitations", "Roles"]);
+        await expect(sections).toHaveText(["Members", "Invitations", "Roles", "Signing keys", "Connections"]);
         await expect(other.locator("table.grid tbody tr", { hasText: invitee }).locator(".tag", { hasText: /^reader$/ })).toBeVisible();
         await expect.poll(() => inviteeToken).not.toBe("");
       } finally {
@@ -303,7 +307,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       expect(whoami.tenant).toBe(organization);
       expect(whoami.grant?.role).toBe("reader");
       expect(whoami.permissions.sort()).toEqual(
-        ["runs:read", "toolsets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"].sort(),
+        ["runs:read", "toolsets:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"].sort(),
       );
       await expectPermissions(server, inviteeToken, "the invitee, a reader", whoami.permissions);
       // It reads the organization's runs, the key's among them.

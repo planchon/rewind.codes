@@ -7,7 +7,7 @@
  * - Escape: the globals are exactly the sandbox lib's; no module but `rewind`, `rewind:tools` and
  *   `rewind:workflows`, statically, dynamically or through `eval`; no tool outside the toolset;
  *   no `fetch` without the `http` tool; nothing a run leaves in its isolate reaches another run;
- *   stack traces name no host path; credentials never enter the isolate.
+ *   stack traces name no host path; a secret the run attaches never enters the isolate.
  * - Exhaustion (`archi/03-execution.md`, "Resource limits"): CPU per call, heap, array buffers
  *   (a catchable `RangeError`), commands per activation, commands and logs per trigger, payloads;
  *   each attack is followed by a canary run, and at the end both workers still activate runs.
@@ -336,13 +336,13 @@ export default async function main() {
   evidence("stacks name script.ts and rewind:bootstrap frames; prepareStackTrace never hands the script a CallSite");
 });
 
-test("credentials never enter the isolate, a journal, a trace or an answer", { tag: "@attack" }, async () => {
+test("a secret the run attaches never enters the isolate, a journal, a trace or an answer", { tag: "@attack" }, async () => {
   const mcp: McpFixture = await startMcpFixture();
   const secret = canary();
   try {
+    expectOk(await tenant.api.put("/v1/secrets/sandbox-fx", { value: secret }));
     const created = await tenant.api.post("/v1/toolsets", {
-      mcp: [{ name: "fx", url: mcp.url }],
-      credentials: { servers: { fx: { headers: { authorization: `Bearer ${secret}`, "x-api-key": secret } } } },
+      mcp: [{ name: "fx", url: mcp.url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } }],
     });
     expectOk(created);
     const run = await runScript(
@@ -374,14 +374,15 @@ export default async function main() {
   return { reached: dump.length, text: text.slice(0, 1_000_000), echoed: JSON.stringify(result) };
 }
 `,
-      { toolset: created.json.id },
+      { toolset: created.json.id, extra: { secrets: { fx: "org/sandbox-fx" } } },
     );
     expect(run.status, JSON.stringify(run.error)).toBe("completed");
     expect(run.output.value.reached).toBeGreaterThan(100);
-    // The call carried the credentials to the MCP server, in its transport.
+    expect(run.secrets).toEqual({ fx: "org/sandbox-fx" });
+    // The call carried the attached secret to the MCP server, in its transport.
     expect(mcp.calls.length).toBeGreaterThan(0);
     expect(mcp.calls[0]!.headers.authorization).toBe(`Bearer ${secret}`);
-    // Nothing the script reached, logged or returned holds them; nor its journal or trace.
+    // Nothing the script reached, logged or returned holds it; nor its journal or trace.
     expect(JSON.stringify(run)).not.toContain(secret);
     const exported = await journal(tenant.api, run.id);
     expect(exported.text).not.toContain(secret);
@@ -393,7 +394,10 @@ export default async function main() {
     expect(cassette.text).not.toContain(secret);
     const toolsets = await tenant.api.get("/v1/toolsets");
     expect(toolsets.text).not.toContain(secret);
-    evidence(`the script walked ${run.output.value.reached} names it can reach; the canary credential reached the MCP server only`);
+    const events = await tenant.api.get(`/v1/runs/${run.id}/events`);
+    expectOk(events);
+    expect(events.text).not.toContain(secret);
+    evidence(`the script walked ${run.output.value.reached} names it can reach; the canary secret, attached as org/sandbox-fx, reached the MCP server only`);
   } finally {
     await mcp.close();
   }
