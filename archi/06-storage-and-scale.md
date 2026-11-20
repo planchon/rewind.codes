@@ -20,7 +20,8 @@ Every key starts with the tenant, and what belongs to an end user names its name
 ([tenancy](#tenancy-namespaces-identity-and-access)).
 
 ```
-tenants    (id PK, data_key, quotas, namespace_defaults, retention)   -- data_key encrypted by the master key
+tenants    (id PK, data_key, master_key, quotas, namespace_defaults, retention)
+                                     -- data_key encrypted by the master key whose id is master_key
 namespaces (tenant, name, display_name, quotas, tokens_revoked_before, created_at, last_active_at,
             deleting_since)                                PK (tenant, name)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
@@ -53,7 +54,8 @@ runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, 
             runnable_at, expires_at, quarantine, failures, attempts, lease_owner, lease_until,
             fence, sticky_worker,
             parent, workflow, workflow_version, started_by, started_seq, detached, scope,
-            labels, trace_context, idempotency_key, created_at, updated_at, ended_at, archive)
+            secrets, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
+            archive)
             PK (tenant, id), UNIQUE (tenant, namespace, idempotency_key), index (tenant, namespace, status)
 run_watchers (run_id, watcher, seq, attached)               PK (run_id, watcher)
 history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
@@ -66,8 +68,12 @@ webhook_tokens (token PK, run_id, name)
 payloads   (tenant, digest, bytes, preview, value, unreferenced_since, deletion_started_at)
                                                            PK (tenant, digest)  -- value up to 64 KiB
 payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
-secrets    (tenant, owner, ciphertext)                     PK (tenant, owner)
-                                                 -- owner: a toolset, a run, or a namespace's toolset
+secrets    (tenant, namespace, name, ciphertext, labels, created_by, created_at, updated_by,
+            updated_at, last_read_at, last_read_run)       PK (tenant, namespace, name)
+                                                 -- namespace *: the organization's secrets
+secret_reads (tenant, namespace, name, day, reads)         PK (tenant, namespace, name, day)
+signing_keys (tenant, kid, public_jwk, private_ciphertext, created_at, retired_at)
+                                                           PK (tenant, kid)
 subscriptions (tenant, id, url, secret, events)
 usage      (tenant, namespace, day, cpu_ms, runs_started)  PK (tenant, namespace, day)  -- namespace *: the tenant
 quota_alerts (tenant, namespace, quota, period, threshold, used, quota_limit, raised_at,
@@ -84,8 +90,11 @@ tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, comple
 
 `event` columns hold the `rewind-format` v1 JSON of the event. `namespace`, `labels`,
 `trace_context`, `idempotency_key`, `parent`, `workflow`, `workflow_version`, `started_by`,
-`started_seq`, `detached` and `scope` are run metadata: stored with the run, never in its events
-([05](05-testing-and-observability.md#run-metadata)). A `workflows` row holds a
+`started_seq`, `detached`, `scope` and `secrets` are run metadata: stored with the run, never in
+its events ([05](05-testing-and-observability.md#run-metadata)). `secrets` holds the run's
+[attachments](04-tools.md#secrets), a secret's scope and name per server, never a value.
+`secrets`, `secret_reads` and `signing_keys` belong to the `SecretStore`: a value and a private key
+are encrypted with the tenant's data key, the names, labels and dates are not. A `workflows` row holds a
 [workflow version](02-journal.md#stored-format-v1) document. A `tests` row indexes a
 [test](05-testing-and-observability.md#testing-and-mocks) whose document is a blob of the
 `BlobStore`; `namespace` is the one a recorded test came from, none for a test written by hand.
@@ -244,8 +253,8 @@ An agent acting for Alice holds a token of Alice's namespace and cannot see or r
 Bob's, whatever script its model writes.
 
 - **Name.** The customer's own id for the end user: 1 to 128 letters, digits, `-`, `_`, `.`, `:`
-  and `@`, case-sensitive. `*` is not a name: it stands for the tenant in `usage` and
-  `quota_alerts`. A namespace's name appears in webhooks, the dashboard and the service's logs,
+  and `@`, case-sensitive. `*` is not a name: it stands for the tenant in `usage`,
+  `quota_alerts` and `secrets`. A namespace's name appears in webhooks, the dashboard and the service's logs,
   so an opaque id is better than an email.
 - **Display name.** The customer's label for the end user (`Acme Corp`), optional, set and
   removed with `PATCH /v1/namespaces/{name}`. Trimmed; at most 128 characters, none of them a
@@ -257,10 +266,11 @@ Bob's, whatever script its model writes.
   used, or when a run is created in it, with the tenant's default limits. `PUT
   /v1/namespaces/{name}` creates it ahead, or sets its exceptions.
 - **What belongs to a namespace**: its runs, with their journals, signals, idempotency keys,
-  tool tasks, webhook tokens, read model rows and payload references; the end user's credentials
-  per toolset; its usage and alerts; its tokens. A fork stays in its parent's namespace, and
+  tool tasks, webhook tokens, read model rows and payload references; the end user's
+  [secrets](04-tools.md#secrets); its usage and alerts; its tokens. A fork stays in its parent's namespace, and
   nothing a run does reaches another namespace.
-- **What stays the tenant's**: toolsets; subscriptions, since lifecycle webhooks go to the
+- **What stays the tenant's**: toolsets; the organization's secrets; its signing key;
+  subscriptions, since lifecycle webhooks go to the
   customer, each event naming its namespace; members, roles, keys and token keys; the storage of
   scripts and payloads, deduplicated per tenant, which a token reads only through its namespace
   (the scripts its runs ran, the payloads its runs hold).
@@ -383,17 +393,18 @@ organization, opening the organizations they tick.
   connectors), Claude Code another. Each connection has its own tokens and is revoked alone.
 - **The organizations it opens.** At consent, the person ticks organizations where they hold a
   grant, the one open in the dashboard ticked in advance, and gives each an access: `read`
-  (`runs:read`, `toolsets:read`, `namespaces:read`) or `run` (`runs:start` and `runs:control`
-  too). The connection gets a grant in each one, for the principal `connection:cn_…`: the
+  (`runs:read`, `toolsets:read`, `namespaces:read`, `secrets:read`) or `run` (`runs:start`,
+  `runs:control` and `secrets:use` too). The connection gets a grant in each one, for the principal `connection:cn_…`: the
   built-in role `reader` for `read`, `harness` for `run`, with the labels chosen (`via: claude`
   by default). An organization the person joins later is not added by itself.
 - **Never more than the person.** In the organization a request names, the connection may use
-  the permissions of its grant's role that are among the five above and that the person's own
+  the permissions of its grant's role that are among the seven above and that the person's own
   grant there gives now; it sees only the runs carrying the labels of both grants. Without a
   grant of the connection or of the person there, it has no access (403). Nothing else is
   pinned: the namespace is named per request, as a key names it, and the toolset per call.
 - **Never administers.** Whatever the person's role, a connection holds no other permission than
-  those five: no members, roles, keys, tokens, credentials, toolsets nor workflows.
+  those seven: no members, roles, keys, tokens, toolsets nor workflows, and it writes no secret.
+  It reads secrets' names and attaches them, never a value.
 - **Tokens.** An access token `rewind_ct_…` lives one hour. A refresh token `rewind_rt_…` is
   replaced at each use, and lapses after 30 days unused. Both are stored hashed. A refresh token
   used twice revokes the connection, and so does an authorization code exchanged twice.
@@ -436,7 +447,9 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `runs:delete` | Erase a run | yes | yes | | |
 | `toolsets:read` | List toolsets and workflows, read their declarations, search their tools | yes | yes | | yes |
 | `toolsets:write` | Register a toolset, save a workflow | yes | yes | | |
-| `credentials:write` | Set the credentials of a toolset, a namespace or a run | yes | yes | | |
+| `secrets:read` | List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids | yes | yes | | yes |
+| `secrets:write` | Put and delete secrets | yes | yes | | |
+| `secrets:use` | Attach an organization's secret to a run or a workflow ([attaching](04-tools.md#secrets)) | yes | yes | | |
 | `tasks:work` | Claim host-tool tasks, heartbeat, defer, complete, fail | yes | yes | yes | |
 | `tasks:approve` | Approve or reject a parked task | yes | yes | | |
 | `subscriptions:read` | List the lifecycle webhooks | yes | yes | | yes |
@@ -465,8 +478,11 @@ Rules, enforced by the server:
   only the host-tool tasks of the runs carrying them, and the token of another run's task is
   answered as a task that no longer exists (410): one tenant's environments (`env=dev`,
   `env=prod`) each run their own worker, though they register the same content-addressed
-  toolset. Such a grant cannot read tool statistics, nor use the permissions `members:invite`,
-  `members:manage`, `roles:write`, `api_keys:*` and `organization:write` (403).
+  toolset. It sees, writes and attaches only the organization's secrets carrying all its labels,
+  and the secrets it writes get them. It reads and attaches a namespace's secrets as any grant
+  does, and never writes one (403): a namespace's secret serves the end user's runs whatever
+  their labels. The same holds for a token limited to labels. Such a grant cannot read tool statistics, nor use the permissions
+  `members:invite`, `members:manage`, `roles:write`, `api_keys:*` and `organization:write` (403).
 - **Workflows.** A workflow saved under a grant limited to labels carries those labels, as part
   of the version: the same workflow saved under other labels, or tenant-wide, is another version,
   and saving it again under the same labels returns it. A tenant-wide save keeps the version it
@@ -488,7 +504,7 @@ Rules, enforced by the server:
 - **Every request reads the grant.** A grant removed or narrowed applies from the next request,
   without waiting for the access token to expire. An event stream opened with an access token
   is closed at the token's expiry, and the dashboard resumes it with `from`.
-- **Connections.** A connection's grant gives `reader` or `harness`, bounded by the five
+- **Connections.** A connection's grant gives `reader` or `harness`, bounded by the seven
   permissions of its accesses and by the person's own grant at each request
   ([connections](#connections)). Only its person changes it; an administrator removes it.
 - **The operator.** The key given with `--admin-key` has the role `operator`: every permission
@@ -496,12 +512,14 @@ Rules, enforced by the server:
   of every tenant (`PUT /v1/organizations/{tenant}/quotas`), and the stop of the embedded server.
   `operator` is not a role of any organization; only an operator creates an operator key.
 - **Tokens.** A token holds the permissions it was given, among `runs:read`, `runs:start`,
-  `runs:control`, `runs:quarantine`, `runs:delete`, `toolsets:read`, `credentials:write`,
-  `tasks:work` and `tasks:approve`, by default `runs:read`, `runs:start`, `runs:control` and
-  `toolsets:read`, and only within its namespace. It never holds another permission. Whoever mints
-  a token or registers a token key must hold every permission it gives; a signed token that asks
-  for a permission its key may not give is refused (401). A token's labels work as a grant's.
-  `credentials:write` in a token covers its runs and its namespace's credentials.
+  `runs:control`, `runs:quarantine`, `runs:delete`, `toolsets:read`, `secrets:read`,
+  `secrets:write`, `secrets:use`, `tasks:work` and `tasks:approve`, by default `runs:read`,
+  `runs:start`, `runs:control` and `toolsets:read`, and only within its namespace. It never holds
+  another permission. Whoever mints a token or registers a token key must hold every permission
+  it gives; a signed token that asks for a permission its key may not give is refused (401). A
+  token's labels work as a grant's. `secrets:read` and `secrets:write` in a token cover its
+  namespace's secrets only; `secrets:use` lets it attach the organization's secrets its labels
+  allow. A token attaches its own namespace's secrets without it.
 
 ## Retention and deletion
 
@@ -516,13 +534,13 @@ Active runs are never touched. Defaults, configurable per tenant:
 | A test | As long as a workflow version references it; one no version references is deleted 24 h after it was stored. A recorded test outlives its run, and is erased with its namespace |
 
 - `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-  rows, its credentials, its payload references and its count in `namespace_scripts`. Tool
+  rows, its payload references and its count in `namespace_scripts`. Tool
   arguments can hold personal data.
 - `DELETE /v1/namespaces/{name}` erases an end user and answers 202. The namespace stops taking
   runs and tokens (409 `namespace-deleting`); its tokens are revoked and its active runs
   cancelled through the normal path; then, in the background, its runs are erased as `DELETE
-  /v1/runs/{id}` erases one, then the tests recorded from them, then its credentials, its usage
-  and alerts, and the namespace. A version keeps the digest of an erased test in its document;
+  /v1/runs/{id}` erases one, then the tests recorded from them, then its secrets and their
+  reads, its usage and alerts, and the namespace. A version keeps the digest of an erased test in its document;
   the next version's gate leaves the test out
   ([suites](05-testing-and-observability.md#suites-and-the-gate)). The
   tenant's own usage row keeps what the namespace consumed: deleting an end user gives nothing
@@ -542,19 +560,27 @@ Active runs are never touched. Defaults, configurable per tenant:
 
 Scripts are untrusted (model-generated). They have no ambient authority: every
 capability comes from the toolset, and secrets never enter the isolate
-([credentials](04-tools.md#credentials)).
+([secrets](04-tools.md#secrets)). A run reads only the secrets attached when it started, checked
+against the rights of whoever attached them.
 
 A run's seed keys its random generators, `crypto` included. It is protected like the
 payloads.
 
-A deployed server also sends requests where a tenant says: to its MCP servers (from the API
-role at registration, from the workers at each call) and to its lifecycle webhooks. Neither goes
-to the internal network: both go through the egress checks of the `http` tool, a name resolved
+A deployed server also sends requests where a tenant says: to its MCP servers and APIs (from the
+API role at registration, from the workers at each call) and to its lifecycle webhooks. None goes
+to the internal network: all go through the egress checks of the `http` tool, a name resolved
 once, private, loopback, link-local and metadata addresses refused, the connection to the
-checked address ([MCP servers](04-tools.md#where-mcp-servers-may-be)). Only the operator opens
-the way: to internal MCP servers by host or network (`--allow-internal-mcp`), whose answers are
-then never quoted to the tenant, and to webhook receivers on the private network
-(`--allow-private-webhooks`). The embedded server, for one local developer, reaches any address.
+checked address ([MCP servers and APIs](04-tools.md#where-mcp-servers-and-apis-may-be)). Only the
+operator opens the way: to internal MCP servers and APIs by host or network
+(`--allow-internal-tools`), whose answers are then never quoted to the tenant, and to webhook
+receivers on the private network (`--allow-private-webhooks`). The embedded server, for one
+local developer, reaches any address.
+
+What Rewind sends to a tenant's servers proves who calls in one of two ways
+([authenticating calls](04-tools.md#authenticating-calls)): a secret the run attached, or a JWT
+signed with the tenant's Ed25519 key, whose public part anyone reads at
+`{public-url}/organizations/{tenant}/jwks.json`. One tenant's key never signs for another, and a
+JWT names its audience: a server that receives one cannot replay it against another.
 
 ### Sandboxed workers
 

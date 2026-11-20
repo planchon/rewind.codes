@@ -38,17 +38,20 @@ directory (Turso, local files), or of a remote one
 │                                        │       │                                         │
 │  model ── run_script(code) ──► SDK ────┼─HTTP─►│  API server ──► Postgres (journal, …)   │
 │    ▲                            │      │       │                    ▲          S3 (payloads)
-│    └── result | "suspended" ◄───┘      │       │  workers (V8) ─────┤──► MCP servers      │
+│    └── result | "suspended" ◄───┘      │       │  workers (V8) ─────┤──► MCP servers, APIs│
 │                                        │       │  scheduler (timers)┘                    │
 │  host-tool worker ◄──── long-poll ─────┼───────│  tool dispatcher                        │
 │  (harness functions, LLM calls, …)     │       │                                         │
 └────────────────────────────────────────┘       └─────────────────────────────────────────┘
 ```
 
-1. The harness **registers a toolset**: MCP servers and, optionally, its own *host tools*
-   (JSON Schema + handler) and the [workflows](#workflows) its scripts may start. Rewind
-   connects to the MCP servers, pins their schemas and the workflows' versions, and returns the
-   generated TypeScript declarations ([routes](04-tools.md#routes)).
+1. The harness **registers a toolset**: MCP servers, APIs described by their OpenAPI documents
+   and, optionally, its own *host tools* (JSON Schema + handler) and the [workflows](#workflows)
+   its scripts may start. Rewind connects to the MCP servers, reads the APIs' documents, pins
+   their schemas and the workflows' versions, and returns the generated TypeScript declarations
+   ([routes](04-tools.md#routes)). Each server says how its calls authenticate: with a secret, or
+   with Rewind's signature, which the harness's own APIs check against the organization's public
+   key ([authenticating calls](04-tools.md#authenticating-calls)).
 2. The harness puts those declarations in the system prompt and exposes the **agent
    tools** to its model (below).
 3. When the model calls `run_script`, the harness calls
@@ -60,7 +63,8 @@ directory (Turso, local files), or of a remote one
    searchable in the dashboard and appears under the agent's span in its traces.
    It also passes an `idempotencyKey`, so a retried request returns the same run instead
    of starting a second one, and may set a `ttl` (30 days by default, see
-   [execution](03-execution.md#run-ttl)).
+   [execution](03-execution.md#run-ttl)). The run reads only the secrets the request attaches,
+   by name, for the servers that need one ([secrets](04-tools.md#secrets)).
 4. Host tools are executed by the harness through an SDK worker (long-poll), like
    Temporal activity workers. This is how a script calls harness functions, another
    LLM, a sub-agent, or a human. Each task says the namespace of its run, and the handler
@@ -75,7 +79,12 @@ import { Rewind } from "@rewind.codes/sdk";
 const rewind = new Rewind({ url: process.env.REWIND_URL });
 
 const toolset = await rewind.toolsets.create({
-  mcp: [{ name: "github", url: "https://mcp.example.com/github" }],
+  mcp: [{
+    name: "github",
+    url: "https://mcp.example.com/github",
+    auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
+  }],
+  apis: [{ name: "crm", openapi: "https://api.example.com/openapi.json", auth: { type: "rewind" } }],
   host: [{
     name: "ask_user",
     description: "Ask the end user a question and return their answer.",
@@ -93,6 +102,7 @@ const run = await rewind.namespace(user.id).runs.start({ // the end user's names
   script: code,
   input: {},
   wait: "30s",
+  secrets: { github: "ns/github" }, // the end user's own GitHub token, put on their namespace
   idempotencyKey: toolCall.id, // a retried request returns the same run
   labels: { agent: "triage", conversation: conversation.id },
   traceparent, // the LLM call that wrote the script
@@ -102,7 +112,7 @@ const run = await rewind.namespace(user.id).runs.start({ // the end user's names
 ### End users and namespaces
 
 A harness serves its own users, the **end users** of its product. Each one has a
-**namespace**: their runs, the scripts those runs ran, their credentials and their consumption
+**namespace**: their runs, the scripts those runs ran, their secrets and their consumption
 live there, and nothing of one end user is visible to another
 ([namespaces](06-storage-and-scale.md#namespaces)).
 
@@ -142,8 +152,8 @@ harness's model ([below](#agent-tools)), served as MCP tools.
    ([connections](06-storage-and-scale.md#connections)). Runs started from Claude carry the label
    `via: claude`, unless the person unticks it.
 3. In the conversation, the person names the organization, the namespace and the toolset, or
-   lets Claude find them (`list_orgs`, `list_namespaces`, `list_toolsets`). Nothing is pinned
-   at connection.
+   lets Claude find them (`list_orgs`, `list_namespaces`, `list_toolsets`), and the secrets a
+   script attaches (`list_secrets`). Nothing is pinned at connection.
 
 The person revokes the connection, or changes what it opens, from the dashboard, without
 reconnecting Claude.
@@ -162,16 +172,17 @@ const agentTools = rewind.agentTools({ toolset: toolset.id, labels: { conversati
 
 | Tool | What it does |
 | --- | --- |
-| `run_script({ code, input?, wait? })` | Type-checks, starts the run, returns the output or the run's state. |
+| `run_script({ code, input?, wait?, secrets? })` | Type-checks, starts the run with the secrets it attaches, returns the output or the run's state. |
 | `check_script({ code })` | Type-check only. |
 | `test_script({ code, tests?, workflow? })` | Runs [tests](05-testing-and-observability.md#testing-and-mocks) against the script, in mock mode and virtual time: the tests given, and the suite of `workflow` when it names one. |
 | `get_run({ run_id, entry? })` | Status and LLM trace, or one journal entry in full. |
 | `list_runs({ status? })` | Runs started with the same labels (for example the same conversation). |
 | `signal_run({ run_id, name, payload })` | Sends a signal. |
 | `cancel_run({ run_id })` | Cancels a run. |
-| `retry_run({ run_id, code })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). For a run of a workflow, the suite of its version must pass first. |
+| `retry_run({ run_id, code, secrets? })` | Starts a new run from a failed one with a corrected script. The calls that already happened are not made again: their recorded results are reused ([forks](05-testing-and-observability.md#replay-debugging-and-forks)). For a run of a workflow, the suite of its version must pass first. |
 | `search_tools({ query })` | Returns the declarations matching a query, for toolsets too large for the prompt. |
-| `save_workflow({ name, description, code, input, output, signals, tests?, update?, retire?, parent? })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts. Its suite runs first (the parent's tests, updated and retired with reasons, plus the new ones), and it is saved only if every test passes. The agent's later scripts can start it and signal its runs. |
+| `list_secrets({})` | The names of the secrets the agent may attach, the organization's and its namespace's, never a value. |
+| `save_workflow({ name, description, code, input, output, signals, secrets?, tests?, update?, retire?, parent? })` | Checks and saves a [workflow](#workflows): its script, with JSON Schemas for its input, its output and the signals it accepts, and the secrets its runs attach. Its suite runs first (the parent's tests, updated and retired with reasons, plus the new ones), and it is saved only if every test passes. The agent's later scripts can start it and signal its runs. |
 | `get_workflow({ name })` | A workflow's source, schemas, suite and lineage, with the reasons its tests were updated or retired: what the model reads to repair or extend a workflow it did not write. |
 | `record_tests({ workflow, query?, runs?, limit? })` | Records tests from past runs of a workflow, one per path, and returns their digests for `save_workflow` ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)). |
 

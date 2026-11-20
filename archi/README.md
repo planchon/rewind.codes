@@ -24,7 +24,7 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 | [01-product.md](01-product.md) | What Rewind is, who it is for, how a harness integrates it, what the model writes, the sandbox |
 | [02-journal.md](02-journal.md) | The journal: event families, `seq`, callsites, the commit invariant, run state, the stored format v1 |
 | [03-execution.md](03-execution.md) | Activations, logical time, replay, sticky execution, forks, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
-| [04-tools.md](04-tools.md) | Tool routes, idempotency, the tool task lifecycle, policies, toolsets, code generation, observed result types, credentials, egress of the `http` tool, type-checking |
+| [04-tools.md](04-tools.md) | Tool routes, idempotency, the tool task lifecycle, policies, toolsets, code generation, observed result types, API tools from OpenAPI documents, authenticating calls (secrets attached to runs, calls signed with the tenant's key), egress of the `http` tool, MCP servers and APIs, type-checking |
 | [05-testing-and-observability.md](05-testing-and-observability.md) | Mocks, cassettes, scenarios, replay and forks, evals; OpenTelemetry, read model and dashboard as projections of the journal |
 | [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payload tiers, scaling path, tenancy and authentication, retention, security and sandboxed workers |
 | [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, the HTTP API `/v1`, the embedded server and the CLI |

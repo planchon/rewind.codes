@@ -10,8 +10,8 @@ ports, adapters that implement them, and composition roots that wire everything.
                     │  composition roots: the only crates that know every adapter
                     └───────────── rewind-api (DTOs, OpenAPI, HTTP client) ─────────────┘
  ───────────────────┼─────────────────────────────────────────────────────────────────────
- adapters       rewind-runtime   rewind-store-turso   rewind-store-postgres   rewind-blob   rewind-mcp   rewind-check   rewind-otel
-                (V8)             └──────── rewind-format (stored format, v1) ────────┘
+ adapters       rewind-runtime   rewind-store-turso   rewind-store-postgres   rewind-blob   rewind-mcp   rewind-openapi   rewind-check   rewind-otel
+                (V8)             └──────── rewind-format (stored format, v1) ────────┘       └ rewind-outbound ┘
                     │  implement the ports
  ───────────────────┼─────────────────────────────────────────────────────────────────────
  application    rewind-engine     use cases + ports (traits) + in-memory adapters
@@ -95,11 +95,11 @@ observable through the port alone (the egress rules, an identity provider): thei
 | `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
 | `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `rewind-runtime` (V8); a fake in engine tests |
-| `ToolDispatcher` | Execute a tool call with its idempotency key and credentials | static responses and cassettes (engine, mock mode); TypeScript mocks (`rewind-runtime`, in a separate isolate); `rewind-mcp` (MCP servers, built-ins `http` and `webhook`) |
+| `ToolDispatcher` | Execute a tool call with its idempotency key and its authentication: a secret, or the tenant's signing key | static responses and cassettes (engine, mock mode); TypeScript mocks (`rewind-runtime`, in a separate isolate); `rewind-mcp` (MCP servers, built-ins `http` and `webhook`); `rewind-openapi` (APIs) |
 | `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `rewind-check` (tsgo) |
 | `ReadModel` | Projections for questions across runs | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `SpanExporter` | Export spans derived from committed entries | memory (engine), `rewind-otel` (OpenTelemetry) |
-| `SecretStore` | Credentials per toolset, per namespace and toolset, and per run, encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `SecretStore` | Named secrets of the organization and of each namespace, their metadata and reads, and each tenant's signing keys; values and private keys encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`rewind-server`) |
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
@@ -142,7 +142,8 @@ heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)    ne
 defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
 approve_tool_task(task, now) / reject_tool_task(task, failure, now)
-resume_parked(Run(run) | Toolset { tenant, toolset } | Namespace { tenant, namespace, toolset }, now)
+resume_parked(Secret { tenant, namespace, name }, now)
+secret_usage(tenant, SecretRef { namespace, name }) -> { active_runs, waiting_runs, versions }
 tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
@@ -276,8 +277,11 @@ Contracts, all covered by the conformance suite:
   refused; `tool_task` finds the task a live token holds. `complete_tool_task` writes the outcome
   to the run's inbox, and drops the outcome of a task that no longer exists. Approving a task
   parked by `schema_changed` marks it `schema_change_approved`. `resume_parked` makes ready again
-  the tasks parked by `credentials_expired`, once the run's, the namespace's or the toolset's
-  credentials are renewed.
+  the tasks parked by `credentials_refused` or `secret_missing` in the runs that attach a secret
+  put again (for a namespace's secret, the runs of that namespace). `secret_usage` reads, for a
+  secret, the active runs that attach it, those of them with a call to a server it serves that
+  is parked or not yet sent, and the latest version of each workflow that attaches it; a
+  version attaching `ns/<name>` counts for every namespace's secret of that name.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
   failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
   `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.
@@ -352,14 +356,18 @@ Contracts, all covered by the conformance suite:
   `main(input)` after `start`, one delivery after `deliver`). The executor knows nothing about
   the instance cache nor about replay, which live in the engine: the engine decides which calls
   count toward a namespace's `cpuPerMonth` ([quotas](06-storage-and-scale.md#quotas)).
-- **`ToolDispatcher`**: `dispatch(call, credentials) -> Dispatched`. The call carries the run,
-  the `seq`, the pinned tool and its server, the args, the idempotency key, the attempt, whether
-  the harness approved a schema change (then the call is sent without checking the schema
-  again), the claim's token and the trace context. `Dispatched` is one of: `Result` and `Failed` (the
+- **`ToolDispatcher`**: `dispatch(call, auth) -> Dispatched`. The call carries the run, its
+  namespace and labels, the `seq`, the pinned tool and its server or API, the args, the
+  idempotency key, the attempt, whether the harness approved a schema change (then the call is
+  sent without checking the schema again), the claim's token and the trace context. `auth` is what
+  the server's `auth` asks ([authenticating calls](04-tools.md#authenticating-calls)): nothing,
+  the attached secret's value, or the tenant's signing key, with which the dispatcher signs each
+  request it builds, since the JWT covers the method, the URL and the body. `Dispatched` is one of: `Result` and `Failed` (the
   outcome); `Transient`, after which the engine puts the task back to `ready` with backoff, or
   fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
   token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher
-  never writes to the journal.
+  never writes to the journal. The engine parks a call itself (`secret_missing`) when the secret
+  the run attached no longer exists, before anything is sent.
 - **`TypeChecker`**: `check(script, declarations) -> diagnostics`, and
   `check_workflow(script, declarations, workflow)` for a workflow's script, `workflow` being its
   own declarations (its signals, and `entry.ts`). Deterministic.
@@ -381,18 +389,26 @@ Contracts, all covered by the conformance suite:
   and `delete_run(run)` serve [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
-- **`SecretStore`**: `put(tenant, owner, credentials)`, where the owner is a toolset, a run, or
-  a namespace's toolset; `resolve(tenant, run, namespace, toolset)`, which returns the run's
-  credentials if it has some, else the namespace's for the toolset, else the toolset's, never
-  merged; `delete(tenant, owner)`, and `delete_namespace(tenant, namespace)` for an erased end
-  user. Credentials are headers and
-  environment variables per MCP server. Envelope encryption: each tenant has a data key, itself
-  encrypted by a master key from the deployment's configuration. Secrets leave the store only
-  toward the dispatcher ([credentials](04-tools.md#credentials)).
+- **`SecretStore`**: secrets are keyed by tenant, namespace (`*` for the organization's) and
+  name. `put(tenant, namespace, name, value, labels, by, now)` creates or replaces one;
+  `list(tenant, namespace, labels) -> [SecretMeta]` and `meta(…)` answer names, labels, who wrote
+  them and when, reads per day and the last read, never a value; `read(tenant, namespace, name,
+  run, now) -> Option<Secret>` answers the value and counts the read, for the dispatcher only;
+  `delete(tenant, namespace, name)`, and `delete_namespace(tenant, namespace)` for an erased end
+  user. Signing keys: `signing_key(tenant, now) -> SigningKey`, made at the first call;
+  `rotate_signing_key(tenant, now)`; `public_keys(tenant, now) -> [Jwk]`, the current key and
+  those retired less than 24 hours ago. Envelope encryption: each tenant has a data key, itself
+  encrypted by a master key from the deployment's configuration; a value is bound to its tenant,
+  namespace and name, a private key to its tenant and `kid`. The adapter holds the current
+  master key and the previous ones; `master_keys_in_use() -> [id]` answers the ids its data keys
+  are held under, and `rewrap_data_keys() -> count` encrypts those held under a previous key with
+  the current one ([master key](04-tools.md#secrets)). Values and private keys leave the
+  store only toward the dispatcher ([secrets](04-tools.md#secrets)).
 - **`WebhookSender`**: `send(subscription, event)`. Each delivery is signed with HMAC, and
   retried when it fails. Events are `run.completed`, `run.failed`, `run.cancelled`,
   `run.aborted`, `run.suspended`, `run.quarantined`, `tool.schema_changed`,
-  `credentials.expired` and `quota.alert`, with a deterministic id for receivers to deduplicate;
+  `credentials.expired` (with its reason, `refused` or `missing`, and the attached secret's scope
+  and name when there is one) and `quota.alert`, with a deterministic id for receivers to deduplicate;
   every event about a run names its namespace. Subscriptions
   are kept by the `JournalStore`.
 - **`Clock`** and **`Entropy`**: unchanged.
@@ -415,8 +431,10 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `AccessStore`, `ReadModel` and `SecretStore` |
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
 | `rewind-blob` | adapter | `BlobStore` on local files and S3 |
-| `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, credentials in the transport) and the built-ins `http` (with its egress checks) and `webhook` |
-| `rewind-agent-tools` | adapter support | the agent tools in Rust, as the SDK defines them: their definitions (the SDK's set, and MCP's: `save_workflow` out, `list_orgs`, `list_namespaces` and `list_toolsets` in, `org`, `namespace` and `toolset` as arguments), their handlers over a port `Api` (one method per operation of `/v1` they call, with `rewind-api`'s DTOs), and their bounded plain-text results; golden fixtures shared with the SDK's |
+| `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-ins `http` and `webhook` |
+| `rewind-openapi` | adapter | API tools ([04](04-tools.md#api-tools)): an OpenAPI 3.0 or 3.1 document read into pinned tools at registration, and `ApiDispatcher`, the `ToolDispatcher` of the `api` route: the request built from the args, its authentication, the answer mapped to an outcome |
+| `rewind-outbound` | adapter support | what leaves Rewind for a tenant's servers: the egress checks (a name resolved once, private addresses refused, the connection to the checked address, redirects within the origin) and the HTTP client built on them, the JWT signing of [signed calls](04-tools.md#signed-calls); used by `rewind-mcp`, `rewind-openapi` and the server's webhooks |
+| `rewind-agent-tools` | adapter support | the agent tools in Rust, as the SDK defines them: their definitions (the SDK's set, and MCP's: `save_workflow` out, `list_orgs`, `list_namespaces` and `list_toolsets` in, `org`, `namespace` and `toolset` as arguments; `list_secrets` and the `secrets` argument in both), their handlers over a port `Api` (one method per operation of `/v1` they call, with `rewind-api`'s DTOs), and their bounded plain-text results; golden fixtures shared with the SDK's |
 | `rewind-mcp-server` | adapter support | Rewind's MCP server ([MCP and OAuth](#mcp-and-oauth)): an `rmcp` `ServerHandler` over `rewind-agent-tools`, with the tools' titles, annotations and `instructions`, served over Streamable HTTP without session (by `rewind-server`) or stdio (by `rewind-cli`) |
 | `rewind-codegen` | adapter support | our JSON Schema → TypeScript converter; pinned toolsets → `rewind:tools`, `rewind-tools.d.ts` (with `rewind:workflows`), prompt rendering; a workflow's own declarations |
 | `rewind-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `rewind` binary; the checker's own rules on the swc syntax tree |
@@ -427,7 +445,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-architecture-tests` | tooling | dependency rules |
 | `rewind-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `rewind-e2e replay <case>` |
 | `evals` | tooling | eval suite: tasks, deterministic fake MCP servers, the engine wired in process behind `rewind-agent-tools`' port `Api`, clients of the model APIs, reports ([08](08-decisions.md#taken-while-building-the-evals-november-2026)) |
-| `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools |
+| `sdk/typescript` | client | client (types generated from the OpenAPI document), host-tool worker, agent tools, `verifyRewindCall` for a server that receives [signed calls](04-tools.md#signed-calls) (`jose`) |
 | `dashboard` | client | React single-page application over the public HTTP API, built to `dashboard/dist/` ([below](#dashboard)) |
 
 One `rewind` binary holds both composition roots. The `rewind` crate is that binary: it depends on
@@ -458,8 +476,9 @@ Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sou
 - `rewind-agent-tools` depends only on `rewind-core` and `rewind-api`; `rewind-mcp-server` only
   on those and `rewind-agent-tools`. Only the composition roots and the tooling crates depend on
   them. Neither knows the engine: the agent tools reach Rewind through `/v1`'s operations.
-- Adapters depend on `rewind-core` and `rewind-engine` (stores also on `rewind-format`), and never
-  on each other.
+- Adapters depend on `rewind-core` and `rewind-engine` (stores also on `rewind-format`, the tool
+  dispatchers also on `rewind-outbound`), and never on each other. `rewind-outbound` depends only
+  on `rewind-core`.
 - Only `rewind-cli` and `rewind-server` may depend on adapters, and the tooling crates
   (`rewind-e2e`, `evals`), which wire adapters like a composition root for tests. `rewind-cli` and
   `rewind-server` never depend on each other. Only the `rewind` binary crate depends on the
@@ -501,7 +520,7 @@ counted), and another sends the quota alerts the store recorded (`claim_quota_al
 to the subscriptions that take it, `ack_quota_alerts`). The retention jobs go on erasing the
 namespaces marked for erasure: their active runs get one ordinary cancellation, their ended and
 quarantined runs are erased as `DELETE /v1/runs/{id}` erases them, and a namespace with no run
-left loses its credentials, then its use, alerts and script counts (`drop_namespace`). The
+left loses its secrets and their reads, then its use, alerts and script counts (`drop_namespace`). The
 activation itself is a `tracing` span
 (service telemetry), with the run's trace id, span id `H(run, fence)` and parent, the run span
 `H(run, "run")`, recorded as fields.
@@ -564,34 +583,31 @@ Conventions:
 
 | Group | Endpoint | Permission | Does |
 | --- | --- | --- | --- |
-| Toolsets | `POST /v1/toolsets` | `toolsets:write` | Registers and pins a toolset, with the workflows it names; `base` derives it from a pinned toolset; returns its declarations |
+| Toolsets | `POST /v1/toolsets` | `toolsets:write` | Registers and pins a toolset: its MCP servers, its APIs from their OpenAPI documents ([API tools](04-tools.md#api-tools)), its host tools, and the workflows it names; `secrets` attaches organization's secrets to list the tools of an MCP server that needs one (`secrets:use`); `base` derives it from a pinned toolset; returns its declarations and the API operations it left out |
 |  | `GET /v1/toolsets` | `toolsets:read` | The tenant's toolsets, with their servers and tool names |
 |  | `GET /v1/toolsets/{id}/declarations` | `toolsets:read` | The declarations, `format=dts` or `prompt` |
 |  | `GET /v1/toolsets/{id}/search` | `toolsets:read` | `search_tools`, for large toolsets |
-|  | `PUT /v1/toolsets/{id}/credentials` | `credentials:write` | Sets or renews the toolset's [credentials](04-tools.md#credentials) |
-|  | `PUT /v1/namespaces/{name}/toolsets/{id}/credentials` | `credentials:write` | Sets or renews an end user's credentials for the toolset |
-| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, runs its suite through the [gate](05-testing-and-observability.md#suites-and-the-gate), and saves it as a new version; returns its declarations. 422 `tests-failed` lists the tests that did not pass |
+| Workflows | `POST /v1/workflows` | `toolsets:write` | Checks a [workflow](01-product.md#workflows) against its toolset and its schemas, and its attached `secrets` against the caller's rights ([secrets](04-tools.md#secrets)), runs its suite through the [gate](05-testing-and-observability.md#suites-and-the-gate), and saves it as a new version; returns its declarations. 422 `tests-failed` lists the tests that did not pass |
 |  | `GET /v1/workflows` | `toolsets:read` | The tenant's workflows, each with its latest version; with `script`, every version whose script it is, newest first |
 |  | `GET /v1/workflows/{name}` | `toolsets:read` | A workflow's versions, newest first, each with its suite |
 |  | `POST /v1/workflows/{name}/record` | `runs:read` | Records tests from the workflow's past runs, one per path ([recorded tests](05-testing-and-observability.md#tests-recorded-from-runs)); stores them, adds them to no suite |
 |  | `GET /v1/tests/{digest}` | `toolsets:read` | A test document; a recorded one also needs `runs:read` in its namespace |
 | Scripts | `POST /v1/check` | `runs:start` | Type-check only |
 |  | `POST /v1/test` | `runs:start` | Runs tests in mock mode, in virtual time: the given ones, and a workflow's suite ([testing](05-testing-and-observability.md#running-tests)) |
-| Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script and a toolset, or a `workflow` (`triage` or `triage@<version>`) |
+| Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script, a toolset and the `secrets` it attaches, or a `workflow` (`triage` or `triage@<version>`), which brings its version's |
 |  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
 |  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
 |  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
-|  | `GET /v1/runs/{id}` | `runs:read` | The run's state |
+|  | `GET /v1/runs/{id}` | `runs:read` | The run's state, with the names of the secrets it attached |
 |  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
 |  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
 |  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
-|  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at` and `input` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
+|  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at`, `input` and `secrets` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
 |  | `GET /v1/runs/{id}/journal` | `runs:read` | Exports the journal document; `?as=cassette` exports a cassette |
 |  | `POST /v1/runs/{id}/release` | `runs:quarantine` | Takes the run out of quarantine |
 |  | `POST /v1/runs/{id}/give-up` | `runs:quarantine` | Gives up a quarantined run |
-|  | `PUT /v1/runs/{id}/credentials` | `credentials:write` | Sets or renews the run's credentials |
 |  | `DELETE /v1/runs/{id}` | `runs:delete` | Erases the run, payloads included |
 | Host-tool tasks | `GET /v1/tasks` | `tasks:work` | Long-poll, filtered by toolset and tools, and to the runs the caller sees (a token's namespace, a grant's labels) |
 |  | `POST /v1/tasks/{token}/heartbeat` | `tasks:work` | Extends the task's claim |
@@ -638,7 +654,7 @@ Conventions:
 |  | `GET /v1/namespaces/{name}` | `namespaces:read` | One namespace: its display name, its limits and exceptions, its use per day over a `month`, its alerts, its tokens in use |
 |  | `PUT /v1/namespaces/{name}` | `namespaces:write` | Creates the namespace, or sets its exceptions; `null` gives a quota back to the default |
 |  | `PATCH /v1/namespaces/{name}` | `namespaces:write` | A JSON merge patch of an existing namespace (404 otherwise): `displayName` sets its display name, `null` or `""` removes it. Answers as `PUT` |
-|  | `DELETE /v1/namespaces/{name}` | `namespaces:write` | Erases the end user in the background (202): tokens, runs, credentials, usage |
+|  | `DELETE /v1/namespaces/{name}` | `namespaces:write` | Erases the end user in the background (202): tokens, runs, secrets, usage |
 |  | `GET /v1/organization/namespace-defaults` | `namespaces:read` | The default limits of every namespace, and the tenant's ceiling |
 |  | `PUT /v1/organization/namespace-defaults` | `namespaces:write` | Sets the default limits |
 |  | `GET /v1/organization/namespace-names` | `namespaces:read` | Every namespace that has a display name, with it, by name; not paged: what the dashboard loads once to show display names |
@@ -649,6 +665,17 @@ Conventions:
 |  | `GET /v1/organization/token-keys` | `tokens:write` | The keys the tenant signs its tokens with |
 |  | `POST /v1/organization/token-keys` | `tokens:write` | Registers a public key (a JWK: Ed25519, P-256 or RSA) with a name and the permissions its tokens may carry; answers its `kid` |
 |  | `DELETE /v1/organization/token-keys/{kid}` | `tokens:write` | Deletes a key: every token it signed is refused |
+| Secrets | `GET /v1/secrets` | `secrets:read` | The organization's [secrets](04-tools.md#secrets) the caller sees (its labels): each one's name, labels, who wrote it and when, reads per day over 30 days and last read; never a value |
+|  | `PUT /v1/secrets/{name}` | `secrets:write` | Creates or replaces an organization's secret: `value`, `labels`; makes ready the calls parked by a refusal or a missing secret in the runs that attach it. Refused to an end user's token (403) |
+|  | `DELETE /v1/secrets/{name}` | `secrets:write` | Deletes it: the next call of a run that attaches it is parked |
+|  | `GET /v1/secrets/{name}/usage` | `secrets:read` | What reads it: the active runs that attach it, those of them waiting on a call it serves, the workflows whose latest version attaches it, its reads per day, its last read |
+|  | `GET /v1/namespaces/{name}/secrets` | `secrets:read` | The end user's secrets, as above |
+|  | `PUT /v1/namespaces/{name}/secrets/{secret}` | `secrets:write` | Creates or replaces an end user's secret, as above; a token, in its own namespace. Refused to a grant or a token limited to labels (403) |
+|  | `DELETE /v1/namespaces/{name}/secrets/{secret}` | `secrets:write` | Deletes it, as above |
+|  | `GET /v1/namespaces/{name}/secrets/{secret}/usage` | `secrets:read` | What reads it, as above |
+|  | `GET /v1/organization/signing-keys` | `secrets:read` | The tenant's [signing keys](04-tools.md#signed-calls): `kid`, made, retired; and the URL of their public keys |
+|  | `POST /v1/organization/signing-keys` | `organization:write` | Replaces the signing key: the old one stops signing and stays published 24 hours |
+|  | `GET /organizations/{tenant}/jwks.json` | none | The public keys, outside `/v1`: the current one and those retired less than 24 hours ago; `Cache-Control: max-age=300` |
 | Operator | `PUT /v1/organizations/{tenant}/quotas` | the operator | Sets a tenant's ceiling |
 | Server | `GET /v1/server` | any caller | The server's version, epochs and roles |
 | | `POST /v1/server/stop` | the operator | Stops the embedded server, when the CLI replaces it with one of its own version |
@@ -736,7 +763,7 @@ The flow:
    and `error="invalid_token"` when a token was sent.
 2. **Clients.** A `client_id` that is an `https` URL with a path is a client's metadata document
    (CIMD): the api role fetches it with the egress rules of MCP servers
-   ([04](04-tools.md#where-mcp-servers-may-be)), no redirect, at most 5 KiB within 5 s, and
+   ([04](04-tools.md#where-mcp-servers-and-apis-may-be)), no redirect, at most 5 KiB within 5 s, and
    keeps it as its HTTP caching says, 24 hours at most. It names itself as `client_id`, lists
    its `redirect_uris`, and authenticates with `none`. Other clients register
    (`POST /oauth/register`) and get a `client_id` `rc_…`, and a secret only for
@@ -776,7 +803,8 @@ The flow:
   access token is 401. A key and a token fix their tenant, and a token its namespace: `org` and
   `namespace` may repeat them, not name others.
 - **`initialize`** answers `instructions`: from an organization to a run, through `list_orgs`,
-  `list_namespaces`, `list_toolsets`, `search_tools`, then checking, testing and running.
+  `list_namespaces`, `list_toolsets`, `search_tools`, then checking, testing, and running with
+  the secrets `list_secrets` names for the servers that need one.
 - **`tools/list`** lists the tools that some organization of the caller allows, each with a
   `title`, its input schema and its annotations. **`tools/call`** runs the agent tool as the
   SDK's handler does, with the same plain-text results; a mistake the model can fix is a result
@@ -797,6 +825,7 @@ The flow:
 | `list_namespaces` | `namespaces:read` | `org`, `prefix` | read-only |
 | `list_toolsets` | `toolsets:read` | `org` | read-only |
 | `search_tools` | `toolsets:read` | `org`, `toolset` | read-only |
+| `list_secrets` | `secrets:read` | `org`, `namespace` (optional) | read-only |
 | `get_workflow` | `toolsets:read` | `org` | read-only |
 | `check_script`, `test_script` | `runs:start` | `org`, `namespace`, `toolset` | read-only |
 | `get_run`, `list_runs` | `runs:read` | `org`, `namespace` (optional) | read-only |
@@ -865,20 +894,21 @@ Commands:
 
 | Command | Does |
 | --- | --- |
-| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d]` | Starts a run and waits for it, up to `--wait` |
+| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--secret <server>=<scope>/<name>]…` | Starts a run and waits for it, up to `--wait`; `--secret` attaches a [secret](04-tools.md#secrets) |
 | `rewind check script.ts` | Type-checks a script against the toolset's declarations ([tools](04-tools.md#type-checking)) |
 | `rewind test [script.ts] [--tests file] [--workflow name] [--toolset id\|file]` | Runs tests in virtual time ([testing](05-testing-and-observability.md#testing-and-mocks)): those of `--tests` (`script.tests.json` next to the script by default), in the process; with `--workflow`, the suite of that workflow too, on the server, against the script or the version's own |
 | `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | Records tests from a workflow's past runs; prints their digests, names and paths |
 | `rewind signal <run> <name> [payload]` | Sends a signal |
 | `rewind cancel <run>` | Cancels a run |
 | `rewind replay <run> [--script fixed.ts]` | Replays locally and checks determinism; `<run>` is a run id or an exported journal |
-| `rewind fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a [fork](03-execution.md#forks) |
+| `rewind fork <run> --script fixed.ts [--at <index>] [--input …] [--secret …]` | Starts a [fork](03-execution.md#forks) |
 | `rewind trace <run> [--entry n]` | LLM-readable trace |
 | `rewind runs` | Lists runs: a query of the [query language](05-testing-and-observability.md#query-language) (`rewind runs '@agent:triage status:failed'`), filters, `--sort` |
 | `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
 | `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
 | `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
+| `rewind secrets list\|put\|delete\|usage [name] [--namespace <name>]` | The organization's secrets, or a namespace's; `put` reads the value from standard input, never from an argument |
 | `rewind namespaces list\|show\|rename\|quotas\|delete` | The namespaces and their use; one namespace; sets its display name, or removes it; sets its exceptions, or the defaults with `--defaults`; erases one |
 | `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
 | `rewind mcp` | Serves the agent tools over MCP on stdin and stdout, against the embedded server: to debug them with an MCP client (the MCP Inspector, Claude Code on this machine). Never a remote server |
@@ -916,7 +946,7 @@ Its build is what `rewind-server` serves:
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
 | Serving | At the root of its origin. The routes are paths (`/runs/…`): the server, and Vercel for the hosted dashboard, answer `index.html` for any path that is neither a file of the build nor under a root of the API (`/v1`, `/auth`, `/oauth`, `/.well-known`, `/mcp`, `/hooks`, `/assets`); the server answers 404 for a missing file name at the root (`/favicon.ico`). An old link with a fragment (`/#/runs/…`) is rewritten by the app at load. `index.html` is not cached; `assets/` is immutable |
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist, which someone new also opens from the first page. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
-| API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read` |
+| API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read`, Secrets to whoever holds `secrets:read`, and their writes to whoever holds `secrets:write`; a value is a field that is written and never read back |
 | Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |

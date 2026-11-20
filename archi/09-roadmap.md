@@ -87,6 +87,22 @@ dashboard's and the documentation's checks. Not yet done: the example `examples/
 waits for a release of the SDK with these changes (the examples pin the published SDK), the
 acceptance suite and the release gate run against the binary, and a run of CI.
 
+On November 20, 2026, [secrets and API toolsets](08-decisions.md#taken-for-secrets-and-api-toolsets-november-2026)
+were designed with the owner and specified; none of it is built. The code still has credentials
+per toolset, per namespace and toolset and per run, resolved with a fallback. Left to build:
+the `SecretStore` of named secrets, their reads and the signing keys, on both stores (a migration
+of the `secrets` table, `secret_reads`, `signing_keys`, the master key's id on each data key)
+with its conformance suite, `--previous-master-keys` and `--rewrap-data-keys`; in the
+engine, the attachments of runs, versions and forks, their checks at start, `secret_missing`,
+`resume_parked` by secret and `secret_usage`; `rewind-outbound` (the egress checks moved out of
+`rewind-mcp`, the signing) and `rewind-openapi` (the reading of OpenAPI documents, the `api`
+route); `auth` in the pinned toolset and in format v1; the endpoints of secrets and signing keys
+and the public JWKS, the permissions `secrets:*` in place of `credentials:write`; the agent tools'
+`secrets` and `list_secrets`, over MCP too; the SDK, with `verifyRewindCall`; the dashboard's
+Secrets; `rewind secrets`
+and `--secret`; the documentation (`docs/`); `--allow-internal-tools`; the acceptance suite and
+the release gate, whose canary secret becomes an attached one. Dax keeps its host tools.
+
 | Crate | State |
 | --- | --- |
 | `rewind-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
@@ -168,14 +184,17 @@ specified.
 - **Fork semantics** (was question 9) ([03](03-execution.md#forks)).
 - **Tool task lifecycle**: host tools that last days, the `approval` policy, tool
   concurrency, toolset change during a run ([04](04-tools.md#tool-task-lifecycle)).
-- **Credentials** resolved at dispatch ([04](04-tools.md#credentials)).
+- **Secrets and API toolsets**: tools from OpenAPI documents, calls signed with a key per tenant,
+  named secrets that a run attaches at start and reads alone, the dashboard's Secrets
+  ([04](04-tools.md#api-tools), [04](04-tools.md#authenticating-calls),
+  [08](08-decisions.md#taken-for-secrets-and-api-toolsets-november-2026)).
 - **API authentication and tenancy** ([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 - **Accounts, organizations and access**: WorkOS for identity only, Rewind's permissions, roles and
   grants, sign-in on the dashboard's pages ([06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).
 - **Namespaces**: one per end user of a customer, end users' tokens, quotas against abuse and
   their alerts ([06](06-storage-and-scale.md#namespaces)).
 - **Egress of the `http` tool** ([04](04-tools.md#the-http-tool-and-egress)), and of MCP
-  servers ([04](04-tools.md#where-mcp-servers-may-be)).
+  servers and APIs ([04](04-tools.md#where-mcp-servers-and-apis-may-be)).
 - **Retention and deletion** (was question 11)
   ([06](06-storage-and-scale.md#retention-and-deletion)).
 - **Sandboxed workers** ([06](06-storage-and-scale.md#sandboxed-workers)).
@@ -283,4 +302,8 @@ dashboard show.
 Questions 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 and 17 were settled in November
 2026: see [08-decisions.md](08-decisions.md#taken-after-the-layering-november-2026). Questions
 2, 9 and 11 were settled with the [designs](#designs-settled-november-2026). Question 6
-(`continueAsNew`) is [out of 0.1](#out-of-01). No other question is open.
+(`continueAsNew`) is [out of 0.1](#out-of-01).
+
+Question 18 is open: a secret an agent passes in a run's input, instead of
+[attaching](04-tools.md#secrets) it, is kept in the journal as any input is, and nothing
+prevents it yet.

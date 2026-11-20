@@ -2,22 +2,25 @@
 
 ## Routes
 
-A toolset has three kinds of tools:
+A toolset has four kinds of tools:
 
 | Route | Called by | Used for |
 | --- | --- | --- |
 | MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
+| API tools | The dispatcher of Rewind, an HTTP client | Every operation of the toolset's APIs, each described by an OpenAPI document ([API tools](#api-tools)) |
 | Built-ins: `http`, `webhook`; `workflows.<name>.start` and `workflows.<name>.signal` for each workflow the toolset pins | The dispatcher of Rewind; the engine itself for `webhook` and the workflows' | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)); the workflows' start and signal runs of [workflows](03-execution.md#workflows-across-runs), in the namespace of the run that calls them |
-| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for. A worker claims the tasks of the runs its key or token sees: an end user's namespace, a grant's labels ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)) | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent |
+| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for. A worker claims the tasks of the runs its key or token sees: an end user's namespace, a grant's labels ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)) | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent. A customer's backend that pulls its calls instead of receiving them, as an API's are: nothing reaches it from outside, and it needs no signature to check (Dax) |
 
-Rewind calls MCP tools and built-ins directly. Their results go back to the script, never to
-the agent. The harness is on the path only for its host tools, and they are optional: a
-toolset may have only MCP servers. There is no other kind of tool in 0.1.
+Rewind calls MCP tools, API tools and built-ins directly. Their results go back to the script,
+never to the agent. The harness is on the path only for its host tools, and they are optional: a
+toolset may have only MCP servers or APIs. There is no other kind of tool in 0.1.
 
 Every call carries an **idempotency key** `"{run_id}/{seq}"`, passed in MCP `_meta`
-(`codes.rewind/idempotency-key`) and to host tool handlers. Calls also carry the W3C trace
-context (`traceparent`, `tracestate`) in `_meta`, with the tool call span as parent, so
-the MCP server's own spans join the run's trace.
+(`codes.rewind/idempotency-key`), to an API in the `Idempotency-Key` header when its operation
+declares one, and to host tool handlers. Calls also carry the W3C trace context (`traceparent`,
+`tracestate`), in `_meta` for MCP and in headers for an API, with the tool call span as parent,
+so the server's own spans join the run's trace. How Rewind proves who calls, a secret or its own
+signature, is in [authenticating calls](#authenticating-calls).
 
 This key protects the way out. The way in (starting a run, sending a signal) has its
 own keys: see [storage](06-storage-and-scale.md#idempotency-of-the-api). A fork's calls
@@ -49,7 +52,7 @@ One state machine covers every route:
 | `ready` | Can be claimed once `next_attempt_at ≤ now` and a concurrency slot is free | claim → `claimed` |
 | `claimed` | Attempt n, under a lease kept alive by heartbeats | See the next table |
 | `deferred` | Holds a token until the handler answers | `/complete` or `/fail` → `done`; a timeout, bounded by the run's TTL → `done` |
-| `parked` | Waits for the harness after a schema change or a 401 | continue, or credentials renewed → `ready`; cancel → `done` |
+| `parked` | Waits for the harness after a schema change, a refused call or a missing secret | continue, or the secret put again → `ready`; cancel → `done` |
 | `done` | Its completion is in the run's inbox: a result, a failure, or `outcomeUnknown` | |
 
 From `claimed`:
@@ -61,11 +64,13 @@ From `claimed`:
 | The claim expired: the dispatcher or the worker died mid-call | `ready` with attempt + 1, up to 5 attempts, then `done` with `outcomeUnknown` (policy `retry`); `done` with `outcomeUnknown` at once (`at_most_once`) |
 | The handler answers later | `deferred` |
 | The schema changed at dispatch | `parked`, and the harness gets the webhook `tool.schema_changed` ([toolset change](#when-a-toolset-changes-during-a-run)) |
-| The server answered 401 | `parked`, and the harness gets the webhook `credentials.expired` ([credentials](#credentials)) |
+| The server answered 401 | `parked`, and the harness gets the webhook `credentials.expired` with the reason `refused` ([authenticating calls](#authenticating-calls)) |
+| The secret the run attached for the server no longer exists | `parked` before anything is sent, and the harness gets `credentials.expired` with the reason `missing` |
 
-The harness answers a task in `approval`, and a task `parked` by a schema change, with
-`POST /v1/tasks/{id}/approve` (→ `ready`) or `POST /v1/tasks/{id}/reject` (→ `done`, the call
-fails with a `ToolError`). A run with a task in `approval` or `parked` is suspended, and its
+The harness answers a task in `approval`, and a task `parked` by a schema change or a refused
+call, with `POST /v1/tasks/{id}/approve` (→ `ready`) or `POST /v1/tasks/{id}/reject` (→ `done`,
+the call fails with a `ToolError`). Putting a secret again makes `ready` the tasks parked by a
+refusal or a missing secret in the runs that attach it. A run with a task in `approval` or `parked` is suspended, and its
 state says which call waits.
 
 When a run ends, its tasks are deleted: a call still queued is never sent. Results arriving
@@ -80,11 +85,11 @@ registers the toolset.
 
 | Setting | Values | Default |
 | --- | --- | --- |
-| After an interruption | `retry` or `at_most_once` | `retry` |
+| After an interruption | `retry` or `at_most_once` | `retry`; for an API operation `POST` or `PATCH`, `at_most_once` unless it declares an `Idempotency-Key` header ([API tools](#api-tools)) |
 | `approval` | The task waits for the harness before it is sent | Off |
-| Execution timeout | A duration | 5 min for MCP tools |
+| Execution timeout | A duration | 5 min for MCP and API tools |
 | Heartbeat timeout | A duration | 60 s for host tools |
-| Concurrency | Calls in flight | 16 per run; 8 per MCP server on each worker |
+| Concurrency | Calls in flight | 16 per run; 8 per MCP server or API on each worker |
 
 | Policy | On transient error | Claim expired (outcome unknown) |
 | --- | --- | --- |
@@ -104,17 +109,21 @@ The script sees failures as a thrown `ToolError` and decides what to do.
 
 ## Toolsets and code generation
 
-A toolset is a list of MCP servers and host tools, with a policy per tool, and of the
+A toolset is a list of MCP servers, APIs and host tools, with a policy per tool, and of the
 [workflows](01-product.md#workflows) its scripts may start. Registering it
-(`POST /v1/toolsets`) connects to the servers, lists their tools, and **pins** the schemas, and
-the latest version of each workflow it names (or the version it names: `triage@9f2c4e1a07b3`).
-The pinned toolset is a document of the [stored format](02-journal.md#stored-format-v1): its
-servers, for each tool its name, route, schemas and policy, and for each workflow its name,
-version, description and schemas. The toolset is content-addressed, and every run records the
-digest it was started with. A toolset can also be derived from a pinned one (`base`): its
-servers and tools are kept as pinned, and the workflows it names are added or pinned again,
-without listing the servers again. It calls the same servers, so it takes the base's
-credentials, unless the request gives its own.
+(`POST /v1/toolsets`) connects to the MCP servers and lists their tools, reads the APIs'
+OpenAPI documents, and **pins** the schemas, and the latest version of each workflow it names (or
+the version it names: `triage@9f2c4e1a07b3`). The pinned toolset is a document of the
+[stored format](02-journal.md#stored-format-v1): its servers and APIs, with how each one
+authenticates its calls ([authenticating calls](#authenticating-calls)), for each tool its name,
+route, schemas and policy, and for each workflow its name, version, description and schemas. The
+toolset is content-addressed, and every run records the digest it was started with. A toolset
+can also be derived from a pinned one (`base`): its servers and tools are kept as pinned, and the
+workflows it names are added or pinned again, without listing the servers again.
+
+A toolset holds no secret. A run reads a secret only when it attached it at start, by name, and
+secrets do not depend on the toolset: a toolset registered again with one more tool keeps
+calling with the same secrets.
 
 Each pinned workflow gives two built-in tools, `workflows.<name>.start` and
 `workflows.<name>.signal`, with the default policy of built-ins. They are not part of the
@@ -141,13 +150,14 @@ not know that `repo` is a string. With it, `github.list_issues({ repo: 42 })` is
 start, before any run exists: `Type 'number' is not assignable to type 'string'
 (script.ts:3:28)`.
 
-Tool names are kept as the server defines them (`github.list_issues`) so they match the
-descriptions the model reads. The names `rewind:tools` declares, a server, a host-tool group and a
-host tool without a group, are identifiers that are not reserved words of JavaScript (`default`,
+Tool names are kept as the server defines them (`github.list_issues`), and an API's as its
+document names its operations (`dax.createMeasure`), so they match the descriptions the model
+reads. The names `rewind:tools` declares, a server, an API, a host-tool group and a host tool
+without a group, are identifiers that are not reserved words of JavaScript (`default`,
 `delete`, `class`…), nor the words strict mode reserves (`let`, `static`, `eval`…): a toolset
 naming one is refused when it is registered. So are the names of workflows, which
-`rewind:workflows` declares. The namespace `workflows` is reserved for their built-ins: no server
-or host-tool group takes it.
+`rewind:workflows` declares. The namespace `workflows` is reserved for their built-ins: no server,
+API or host-tool group takes it.
 
 Args are also validated at run time, against the same JSON Schema, inside the op, before any
 command is recorded. Invalid args throw a `TypeError` at the call site. This is deterministic,
@@ -160,8 +170,9 @@ maintained crate exists. It covers objects, `required`, enums, `anyOf`/`oneOf`/`
 ### When a toolset changes during a run
 
 A run keeps the toolset it started with, but the server behind it can change during a long
-pause: a tool renamed, removed, or with a new schema. The dispatcher checks each call against
-the server's current schema at dispatch. A call that no longer matches is not failed
+pause: a tool renamed, removed, or with a new schema. The dispatcher checks each MCP call against
+the server's current schema at dispatch. An API has no listing to ask: its pinned document is
+the contract, and a call that the API no longer accepts fails with its 4xx. A call that no longer matches is not failed
 silently: its task is `parked`, and the harness gets the webhook `tool.schema_changed`. The
 agent or the developer decides what happens to the run:
 
@@ -178,32 +189,208 @@ infers, per tool, the **shape observed** in recorded results, and codegen uses i
 the server declares nothing.
 
 - Shapes only: keys and types, never values. Observations stay within a tenant.
-- A field missing from some results is optional. A tool never observed keeps the MCP
-  content type and its helpers.
+- A field missing from some results is optional. An MCP tool never observed keeps the MCP
+  content type and its helpers; an API tool never observed returns `unknown`.
 - The declaration says it is observed, not declared (`@observed` in its JSDoc), so the
   model knows it may be incomplete.
 - Observed types serve type-checking and the prompt only. Results are never validated
   against them, and they are not part of the toolset digest, so replay does not depend
   on them.
 
-## Credentials
+## API tools
 
-| Step | What happens |
+A toolset names its APIs in `apis`, each with:
+
+| Field | Meaning |
 | --- | --- |
-| Sent | By the harness, per toolset, per end user (a namespace) and toolset, or per run: `PUT /v1/toolsets/{id}/credentials`, `PUT /v1/namespaces/{name}/toolsets/{id}/credentials`, `PUT /v1/runs/{id}/credentials` |
-| Stored | Encrypted in the `SecretStore`, with a data key per tenant, itself encrypted by a master key from the deployment's configuration |
-| Resolved | By the dispatcher, at call time: the run's credentials if it has some, else those of its namespace for its toolset, else the toolset's; never merged |
-| Used | Injected into the MCP transport |
+| `name` | Its namespace in `rewind:tools`, an identifier as a server's name is |
+| `openapi` | Its OpenAPI 3.0 or 3.1 document, in JSON: given in the request, or its URL. A URL is read once, at registration, through the [egress checks](#where-mcp-servers-and-apis-may-be), at most 2 MiB; the document is then pinned and never read again |
+| `baseUrl` | Where the calls go: the document's first `servers[]` unless given. `https`, or `http` on the embedded server |
+| `auth` | How its calls prove who calls ([authenticating calls](#authenticating-calls)); the document's security requirement when left out |
+| `operations` | Optional: the `operationId`s to keep, for an API too large for the prompt |
+| `concurrency` | Its calls in flight on each worker, 8 by default |
 
-Credentials never enter the journal, the isolate, a cassette or OpenTelemetry.
+From the document:
 
-A token can expire during a long sleep. A 401 from the server parks the task, and the
-harness gets the webhook `credentials.expired`. Once the harness has renewed the
-credentials (the run's, its namespace's or the toolset's), the task is `ready` again, and the
-call is sent with the same idempotency key.
+- **One tool per operation**, named by its `operationId`, or from its method and path when it has
+  none (`post_v1_measures`). A name that is not a valid tool name, or two operations with the same
+  name, refuse the registration (`invalid-toolset`), naming the operation's path.
+- **Its input schema** is an object: the path, query and header parameters by their names, and
+  the JSON request body under `body`. A name two parameters share, or a parameter named `body`,
+  refuses the registration. The header `Idempotency-Key` and the headers of the authentication
+  are not parameters: Rewind fills them.
+- **Its output schema** is the schema of its first `2xx` response in `application/json`; without
+  one, the tool gets an [observed](#observed-result-types) type.
+- `$ref` is resolved within the document (`#/components/…`); a reference to another document
+  refuses the registration. `summary` and `description` become the tool's description.
+- An operation with a body other than `application/json`, or with a cookie parameter, is left
+  out, and the registration's answer lists it (`skipped`).
 
-An end user's credentials stay theirs: Alice's GitHub token, set on her namespace, is never
-sent for a run of Bob's.
+A call:
+
+1. The dispatcher builds the request from the args: the path parameters percent-encoded into
+   the path, the query, the headers, the body as JSON. It adds `traceparent` and `tracestate`,
+   `Idempotency-Key: {run_id}/{seq}` when the operation declares that header, and the
+   [authentication](#authenticating-calls).
+2. The request goes through the [egress checks](#where-mcp-servers-and-apis-may-be).
+3. The answer decides the outcome:
+
+| Answer | The call |
+| --- | --- |
+| `2xx` | Succeeds: the JSON body, `null` for an empty one, `{ contentType, text }` for another type; bounded to 5 MB |
+| `401` | Is `parked` ([lifecycle](#tool-task-lifecycle)) |
+| `408`, `429`, `5xx`, a failed connection | Is transient: retried with backoff under `retry`, never before its `Retry-After` |
+| Another status | Fails with a `ToolError` holding the status, and the body's `title` and `detail` when it is `application/problem+json`, else its first 2 KB |
+
+The default policy follows the method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`,
+which HTTP defines as idempotent; `at_most_once` for `POST` and `PATCH`, unless the operation
+declares an `Idempotency-Key` header, by which the API recognizes a call sent again. The toolset
+may set another policy per tool, as for any tool.
+
+An API suits calls answered within the execution timeout. A call that waits days, for a person's
+answer, is a host tool, or the script waits for a signal ([`webhook()`](01-product.md#signals)).
+
+## Authenticating calls
+
+Each MCP server and API of a toolset says, in its `auth`, how its calls prove who calls. `auth` is
+part of the pinned toolset; no value is.
+
+| `auth` | The request carries | For |
+| --- | --- | --- |
+| none | Nothing | Public servers |
+| `{ "type": "rewind" }` | A JWT signed with the tenant's key ([signed calls](#signed-calls)), in `Authorization: Bearer` | The customer's own APIs and MCP servers: they check the signature and learn the end user |
+| `{ "type": "secret", "header": "<name>", "format"?: "Bearer {secret}" }` | The [secret](#secrets) the run attached, in that header, `{secret}` replaced by its value; the value alone without `format` | Other servers: GitHub, Linear, an API with a key |
+| `{ "type": "secret", "env": "<VARIABLE>" }` | The attached secret in that variable of the process | A stdio MCP server |
+
+A secret never goes in a URL. Without `auth`, an API follows its document's security
+requirement: `http` `bearer`, `oauth2` and `openIdConnect` are `Authorization: Bearer {secret}`;
+`http` `basic` is `Authorization: Basic` with the secret (`user:password`) in base64; `apiKey` in
+a header is that header with the secret. An `apiKey` in the query or a cookie, or a requirement
+of several schemes at once, refuses the registration unless `auth` is given.
+
+The `http` built-in carries no secret and no signature: a call that needs one is an API tool.
+
+### Secrets
+
+A **secret** is a named value, encrypted at rest, that only the dispatcher reads, for the runs
+that attached it.
+
+| | An organization's | A namespace's |
+| --- | --- | --- |
+| Belongs to | The tenant, shared by every end user | One end user: Alice's GitHub token |
+| Named in an attachment | `org/<name>` | `ns/<name>`: the secret `<name>` of the run's own namespace |
+| Labels | Its own: a grant limited to labels sees, writes and attaches only the secrets carrying them, and the secrets it writes take them | None: the namespace is its scope |
+| Written with | `PUT /v1/secrets/{name}` | `PUT /v1/namespaces/{namespace}/secrets/{name}` |
+
+- A name is 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter. A value is a
+  string of at most 16 KiB.
+- **Write-only.** No endpoint answers a value. A secret is listed with its metadata: its name, its
+  labels, who wrote it and when, its reads per day, its last read (run, namespace, date)
+  ([07](07-code-architecture.md#http-api-v1)).
+- **Stored** in the `SecretStore`, encrypted with a data key per tenant, itself encrypted by a
+  master key from the deployment's configuration.
+- **The master key can be replaced.** Each data key records which master key encrypted it, by
+  the key's id (the first 8 bytes of its SHA-256, in hex). The operator gives the new key as
+  `--master-key` and the old one in `--previous-master-keys` (`REWIND_PREVIOUS_MASTER_KEYS`),
+  which only decrypt, then runs `rewind server --rewrap-data-keys`: it encrypts each data key
+  held under a previous key with the current one, one tenant at a time, prints how many it
+  changed, and exits. The secrets and the private keys are not encrypted again. A server refuses
+  to start (exit 70) while a data key is held under a master key it was not given, naming its id,
+  so the old key cannot be removed too early.
+- Secrets never enter the journal, the isolate, a cassette, OpenTelemetry, nor an answer of the
+  API.
+
+**Attaching.** A run reads a secret only if it attached it at start, server by server, in the
+request that gives the script, never in the script: `secrets: { "github": "ns/github",
+"zendesk": "org/zendesk" }`.
+
+| Where | The attachments |
+| --- | --- |
+| `POST /v1/runs` with a script | The request's |
+| `POST /v1/runs` with a workflow, and `workflows.<name>.start` | The version's, saved with it (`POST /v1/workflows`), in its document and so in its digest. The request gives none |
+| `POST /v1/runs/{id}/fork` | The parent's, unless the request gives its own |
+| `POST /v1/toolsets` | An organization's secrets only, to list the tools of an MCP server that needs one; no run keeps them |
+
+The start is refused before any run exists (422 `secret-required`, with a message for a model
+that lists the secrets the caller may attach for that server) when:
+
+- the script imports a server or an API whose `auth` is `secret`, and nothing is attached for it;
+- an attachment names a server that takes no secret, or a secret that does not exist (an `ns/`
+  secret in the run's namespace);
+- the caller may not attach it.
+
+Who may attach:
+
+- **A namespace's secret**: whoever starts a run in that namespace. The secret is the end
+  user's own, and only that namespace's runs read it.
+- **An organization's secret**: who holds `secrets:use`, for a secret whose labels are within
+  the grant's. An end user's token only if it was given `secrets:use`; a connection with the
+  access "Run", within its person's grant.
+- **A workflow version is the permission.** Saving a version checks its attachments against the
+  saver's rights: an organization's secret must exist and be theirs to attach; an `ns/` secret
+  has no namespace yet, and only its name is checked. Starting a run of it, from the API or from
+  a script, checks nothing more than that its `ns/` secrets exist in the run's namespace: its
+  code is fixed and its suite passed. A script written for one run, and a fork, whose script is
+  new code, are checked against their caller.
+
+**Reading.** At each call to a server whose `auth` is `secret`, the dispatcher reads the secret
+the run attached for it, in the run's namespace for an `ns/` one, injects it into the transport
+and counts the read. A secret deleted since parks the call (`credentials.expired`, reason
+`missing`); a 401 parks it too (reason `refused`). Putting the secret again under the same name
+makes those calls `ready`, sent with the same idempotency key. Nothing falls back on another
+secret: Alice's run that attached `ns/github` never calls with the organization's token, nor
+with Bob's.
+
+**Who reads what.** Attachments are run metadata and part of a version's document. Before a
+deletion, the dashboard and `GET …/secrets/{name}/usage` say which active runs and which
+workflows read the secret, and how often it was read.
+
+### Signed calls
+
+With `auth: { "type": "rewind" }`, Rewind signs each request with the tenant's key, and the
+server checks it with the public key, as any JWT library does with a JWKS. Rewind keeps no secret
+of the customer, and the server learns the end user from a signature, not from a claim.
+
+- **The key.** Ed25519, one per tenant, made with the first toolset that needs it; its private
+  part is encrypted in the `SecretStore` with the tenant's data key, as its secrets are. No key
+  per namespace: every private key would sit in the same store, read by the same workers, and
+  `sub` comes from the run, never from the script. `POST
+  /v1/organization/signing-keys` replaces it: the old key stops signing and stays published for
+  24 hours.
+- **The public keys** are at `{public-url}/organizations/{tenant}/jwks.json`, without
+  authentication, with `Cache-Control: max-age=300`.
+- **The JWT**, in `Authorization: Bearer`, with `alg` `EdDSA` and the key's `kid`:
+
+| Claim | Value |
+| --- | --- |
+| `iss` | `{public-url}/organizations/{tenant}`: the tenant is in the issuer, its keys at `{iss}/jwks.json` |
+| `aud` | The API's `baseUrl`, or the MCP server's URL |
+| `sub` | The run's namespace: the end user |
+| `labels` | The run's labels |
+| `run`, `tool` | The run's id and the tool's name |
+| `idempotency_key` | `{run_id}/{seq}` |
+| `jti` | `{run_id}/{seq}/{attempt}`: one per request |
+| `htm`, `htu`, `body` | The method, the URL, and the SHA-256 of the body in base64url (absent without a body) |
+| `iat`, `exp` | Now, and 60 s later |
+
+- **What the server checks**: the signature, with a key of `{iss}/jwks.json` for the issuer it
+  expects; `aud` is its own; `exp` has not passed, give or take a few seconds; `htm`, `htu` and
+  `body` match the request; and, for an organization that runs several environments, that
+  `labels` hold its own (`env=prod`): one key signs every run of the organization, whatever its
+  labels, and a key limited to `env=dev` may register a toolset that names the production server.
+  `sub` is then the end user it acts for.
+- **The SDK checks it.** `verifyRewindCall(request, { issuer, audience, labels? })` in
+  `@rewind.codes/sdk` does every check above: the keys fetched from `{issuer}/jwks.json` and
+  cached, a key with an unknown `kid` fetched again at most every 10 s, 5 s of leeway on `exp`
+  and `iat`, the body hashed from the raw bytes. It answers `{ namespace, labels, run, tool,
+  idempotencyKey }`, or throws a `RewindSignatureError` naming the check that failed. It takes a
+  Fetch `Request`, or `{ method, url, headers, body }` for a server that has already read it
+  (Express, NestJS); `url` is the one the client called, which a server behind a proxy gives.
+- **MCP.** Each HTTP request of the session is signed. Those of a call carry `sub`, `labels`,
+  `run`, `tool` and `idempotency_key`; the others (`initialize`, the listing at registration)
+  only `iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat` and `exp`.
+- A refused signature (401) parks the call; the harness approves it once the server accepts the
+  key again.
 
 ## The `http` tool and egress
 
@@ -224,24 +411,24 @@ Each request goes through these steps, in order:
 A refused request fails with a `ToolError`. In production, egress also goes through an
 egress proxy ([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
 
-### Where MCP servers may be
+### Where MCP servers and APIs may be
 
-A tenant names the URLs of its MCP servers, and Rewind connects to them: the API role at
-registration, to list their tools, and the workers at each call. On a deployed server, these
-connections go through the egress checks of the `http` tool, at registration and at every
-connection:
+A tenant names the URLs of its MCP servers and APIs, and Rewind connects to them: the API role at
+registration, to list an MCP server's tools or read an OpenAPI document, and the workers at each
+call. On a deployed server, these connections go through the egress checks of the `http` tool,
+at registration and at every connection:
 
 1. The name is resolved once.
 2. Private, loopback, link-local and cloud-metadata IPs are refused.
 3. The connection goes to the IP that was checked.
 4. A redirect is followed only within the server's origin, with a 307 or a 308, up to 5 times,
-   each new connection checked again. A redirect elsewhere is refused: the credentials would
-   follow it.
+   each new connection checked again. A redirect elsewhere is refused: the secret or the
+   signature would follow it.
 
-An operator may let internal MCP servers through, by configuration: host names
+An operator may let internal servers through, by configuration: host names
 (`mcp.internal.example`, `*.svc.cluster.local`) and networks (`10.20.0.0/16`), never a switch
-for the whole private network (`rewind server --allow-internal-mcp`). What such an internal server
-answers is never quoted to the tenant: an error gives the HTTP status, not the body.
+for the whole private network (`rewind server --allow-internal-tools`). What such an internal
+server answers is never quoted to the tenant: an error gives the HTTP status, not the body.
 
 A refused server fails the registration (`toolset-unavailable`), and a call with a `ToolError`
 (`unavailable`), for good. The embedded server reaches any address, as it starts stdio servers:

@@ -15,7 +15,10 @@ column in `script.ts`):
 - no default export, or a default export that is certainly not a function (a literal, an
   object, a class);
 - more lines than its namespace's `maxScriptLines`
-  ([quotas](06-storage-and-scale.md#quotas)).
+  ([quotas](06-storage-and-scale.md#quotas));
+- an import of a server or an API that needs a secret, without one attached for it; an
+  attachment of a secret that does not exist, or that the caller may not attach
+  ([secrets](04-tools.md#secrets)).
 
 A run is started in a namespace, the end user it acts for, and the start must pass that
 namespace's quotas and its tenant's ([quotas](06-storage-and-scale.md#quotas)).
@@ -190,6 +193,7 @@ can fix step 7 without redoing the side effects of steps 1 to 6
 | TTL | A new one |
 | Toolset | The parent's |
 | Namespace | The parent's: a fork never leaves it |
+| Attached secrets | The parent's, unless the request gives its own; checked against the caller, since the script is new code ([secrets](04-tools.md#secrets)) |
 
 The engine replays the new script against the parent's history:
 
@@ -348,7 +352,7 @@ of its own for any of it.
 
 | In the script | In the caller's journal | What the engine does | In the target's journal |
 | --- | --- | --- | --- |
-| `triage.start(input, opts)` | `schedule_tool_call` of `workflows.triage.start` with `{ input, detached?, labels?, ttl? }`, then `tool_call_completed { runId }` | Creates the run of the pinned version: its script and toolset, the caller's labels plus `labels`, the trace context of the call, the caller's scope. Its run key is `rewind:{idempotency key}`, so an attempt after a lost claim finds the same run | `run_started` |
+| `triage.start(input, opts)` | `schedule_tool_call` of `workflows.triage.start` with `{ input, detached?, labels?, ttl? }`, then `tool_call_completed { runId }` | Creates the run of the pinned version: its script, toolset and attached secrets, the caller's labels plus `labels`, the trace context of the call, the caller's scope. Its run key is `rewind:{idempotency key}`, so an attempt after a lost claim finds the same run | `run_started` |
 | `run.signal(name, payload)`, `triage.get(id).signal(name, payload)` | `schedule_tool_call` of `workflows.triage.signal` with `{ run, name, payload }`, then `tool_call_completed {}` | Puts the signal in the target's inbox with the key `rewind:{idempotency key}`, so it is delivered once | `signal_received` |
 | `run.result()` | `signal_awaited`, then `signal_received rewind:ended:<run>` | The target's terminal commit puts its end in the inbox of the run that started it, and of every run that watches it, in the same transaction | `complete_run`, `fail_run` or `run_aborted` |
 
@@ -361,7 +365,9 @@ Checks:
 - At dispatch, `signal` fails with a `ToolError` when the target does not exist or is out of
   the caller's scope, is not a run of that workflow, has ended, or refuses the payload (its own
   version declares the signal differently). `start` fails with a `ToolError` (`unavailable`)
-  when the tenant has reached its quota of active runs.
+  when the tenant has reached its quota of active runs, and when a secret the version attaches
+  does not exist (an `ns/` secret in the caller's namespace). The version's attachments are not
+  checked against anyone's rights: they were when it was saved ([secrets](04-tools.md#secrets)).
 - `result()` checks the output against the pinned output schema. A mismatch rejects with
   `WorkflowError` (`invalid_output`).
 
