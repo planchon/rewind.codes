@@ -7,7 +7,9 @@ import type { Callsite, ParkedReason, Payload, Run, Waiting } from "./types.js";
  * because the tool's schema changed during the run. The harness approves it (the call goes on)
  * or rejects it (the script gets a `ToolError`).
  *
- * A call parked by `credentials_expired` is not one: renew the credentials instead.
+ * A call parked by `credentials_refused` or `secret_missing` is not one: put the secret it attached again
+ * (`secrets.put`, `namespaces.secrets.put`), which sends it again. A call whose signature was refused is approved
+ * with `tasks.approve` once its server accepts the organization's key.
  */
 export interface PendingApproval {
   readonly runId: string;

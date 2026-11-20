@@ -39,7 +39,12 @@ export class Workflows {
    * labels), minus those `retire` names, with those `update` names replaced, plus `tests`; `retire` and `update` give
    * a reason, kept in the lineage. Every test must pass: there is no way around it.
    *
-   * Refusals, each a `RewindApiError`: a script that does not check is `invalid-script` (with `diagnostics`); a name,
+   * The version's `secrets` (`{ github: "ns/github", zendesk: "org/zendesk" }`) are part of it: checked against the
+   * saver's rights now (an organization's secret must exist and be theirs to attach; an `ns/` secret, which has no
+   * namespace yet, by its name only), then read by every run of the version without checking its caller again.
+   *
+   * Refusals, each a `RewindApiError`: a script that does not check is `invalid-script` (with `diagnostics`); an
+   * attachment the saver may not make, `secret-required` (with `attachments`); a name,
    * a signal's name or a schema that cannot be used, `invalid-workflow`; a test or a suite that cannot be read (an
    * unknown digest, a retired or updated test that is not inherited, two tests of the same name), `invalid-test`;
    * tests that did not pass, `tests-failed`, whose `tests` holds each test's outcome. Nothing is saved then.

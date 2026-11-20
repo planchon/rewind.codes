@@ -244,6 +244,8 @@ export function createWorkflowWorld(options: WorkflowOptions): WorkflowWorld {
     output: TRIAGE_OUTPUT,
     signals: { approval: APPROVAL },
     labels,
+    // Each end user's GitHub, the organization's Slack.
+    secrets: { github: "ns/github", slack: "org/slack" },
     declarations: triageDeclarations(description),
   };
 
@@ -310,6 +312,7 @@ export function createWorkflowWorld(options: WorkflowOptions): WorkflowWorld {
     output: { type: "object", properties: { prs: { type: "integer" }, ts: { type: "string" } } },
     signals: {},
     labels: { agent: "digest" },
+    secrets: { github: "org/github", slack: "org/slack" },
     createdAt: iso(now - 9 * DAY),
     declarations: {
       dts: 'declare module "rewind:workflows" {\n  export const digest: Workflow<{ repos: string[]; channel: string }, { prs?: number; ts?: string }, {}>;\n}',

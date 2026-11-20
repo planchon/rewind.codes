@@ -2,7 +2,7 @@
   "name": "@rewind.codes/dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "The Rewind dashboard: Overview, Observability, Run, Scripts, Testing, Tools, Namespaces, Organization and Connect Claude views over the public HTTP API /v1",
+  "description": "The Rewind dashboard: Overview, Observability, Run, Scripts, Testing, Tools, Namespaces, Secrets, Organization and Connect Claude views over the public HTTP API /v1",
   "type": "module",
   "packageManager": "pnpm@10.15.0",
   "engines": {

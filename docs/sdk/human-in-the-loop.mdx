@@ -88,8 +88,11 @@ from the webhook `run.suspended`.
 
 <Note>
   The same calls handle a tool call **parked** because the tool's schema changed during the run (`approval.reason` is
-  `"schema_changed"`): approve it to continue against the new schema, or reject it. A call parked because credentials
-  expired is not an approval: [renew the credentials](/sdk/toolsets#credentials) instead.
+  `"schema_changed"`): approve it to continue against the new schema, or reject it. A call parked because its server
+  refused the secret the run attached (`credentials_refused`), or because that secret was deleted (`secret_missing`),
+  is not an approval: [put the secret again](/sdk/secrets#when-a-server-refuses-a-secret), and the call is sent again.
+  A [signed call](/sdk/signed-calls) the server refused is approved with `rewind.tasks.approve` once the server accepts
+  the organization's key again.
 </Note>
 
 ## A complete example

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { JournalState } from "../../api/queries";
 import type { Run, Waiting } from "../../api/types";
+import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, CopyButton, Digest, LabelList, RunId, useNow } from "../../components/bits";
 import { NamespaceName } from "../../components/NamespaceName";
@@ -237,6 +238,14 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           </span>
         </dd>
       </div>
+      {Object.keys(run.secrets ?? {}).length > 0 && (
+        <div>
+          <dt>Secrets</dt>
+          <dd>
+            <AttachedSecrets run={run} />
+          </dd>
+        </div>
+      )}
       {Object.keys(run.labels).length > 0 && (
         <div className="run-details-labels">
           <dt>Labels</dt>
@@ -254,6 +263,35 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         </div>
       )}
     </dl>
+  );
+}
+
+/** The secrets the run attached, by server: names, never values; each opens where it is listed. */
+function AttachedSecrets({ run }: { run: Run }) {
+  const access = useAccess();
+  const reads = access.can("secrets:read");
+  return (
+    <ul className="attached-secrets">
+      {Object.entries(run.secrets ?? {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([server, ref]) => {
+          const to = ref.startsWith("org/")
+            ? "/secrets"
+            : `/namespaces/${encodeURIComponent(run.namespace)}`;
+          return (
+            <li key={server}>
+              <span className="muted">{server}</span>{" "}
+              {reads ? (
+                <Link className="mono" to={to} title="Where the secret is listed">
+                  {ref}
+                </Link>
+              ) : (
+                <span className="mono">{ref}</span>
+              )}
+            </li>
+          );
+        })}
+    </ul>
   );
 }
 

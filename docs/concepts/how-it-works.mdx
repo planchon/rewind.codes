@@ -39,7 +39,7 @@ flowchart LR
 | --- | --- |
 | API server | Registers toolsets and workflows, starts runs, takes signals and approvals, serves reads and the dashboard. |
 | Workers | Execute scripts in V8 isolates, one activation at a time, and commit each step to the journal. |
-| Tool dispatcher | Sends the calls Rewind makes itself: MCP tools and the built-in `http` tool. Credentials are injected here, never in the sandbox. |
+| Tool dispatcher | Sends the calls Rewind makes itself: MCP tools, API tools and the built-in `http` tool. The secrets a run attached, or the signature of your organization's key, are added here, never in the sandbox. |
 | Scheduler | Fires durable timers: `sleep`, `setTimeout`, signal timeouts, run deadlines. |
 | Journal | Postgres holds every run's history; large payloads go to S3. It is the only source of truth. |
 | Host-tool worker | Part of your harness, from the SDK. Executes the tools that live in your code. |

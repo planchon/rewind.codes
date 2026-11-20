@@ -24,6 +24,13 @@ export const SECTIONS: readonly Section[] = [
   },
   { path: "roles", title: "Roles", permission: "roles:read", needsOrganization: false },
   { path: "api-keys", title: "API keys", permission: "api_keys:read", needsOrganization: false },
+  // The keys Rewind signs its calls with, and the address of their public keys.
+  {
+    path: "signing-keys",
+    title: "Signing keys",
+    permission: "secrets:read",
+    needsOrganization: false,
+  },
   // People's connections, which open the organization: a WorkOS organization's members'.
   {
     path: "connections",

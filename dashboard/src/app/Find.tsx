@@ -66,6 +66,12 @@ function useViews(): Choice[] {
       to: "/namespaces",
       kind: "view",
     },
+    access.can("secrets:read") && {
+      key: "secrets",
+      label: "Secrets",
+      to: "/secrets",
+      kind: "view",
+    },
     access.sections.length > 0 && {
       key: "organization",
       label: "Organization",

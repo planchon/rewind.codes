@@ -134,14 +134,16 @@ const { alerts } = await rewind.namespaces.alerts({ month: "2026-11" });
 
 Crossing 80 % and 100 % of a limit also sends the webhook [`quota.alert`](/sdk/webhooks).
 
-## Credentials and erasure
+## Secrets and erasure
 
 ```ts
-// An end user's own credentials for a toolset (their GitHub token):
-await rewind.namespaces.setCredentials(user.id, toolset.id, {
-  servers: { github: { headers: { Authorization: `Bearer ${theirToken}` } } },
-});
+// An end user's own secret (their GitHub token), which their runs attach as ns/github:
+await rewind.namespaces.secrets.put(user.id, "github", { value: theirToken });
+await rewind.namespace(user.id).runs.start({ toolset: toolset.id, script, secrets: { github: "ns/github" } });
 
-// Erase an end user, in the background: their tokens, runs, credentials and use.
+// Erase an end user, in the background: their tokens, runs, secrets and use.
 await rewind.namespaces.delete(user.id);
 ```
+
+An end user's token holding `secrets:write` writes its own namespace's secrets, so your product can store a token the
+end user connects without passing it through your backend's key. See [Secrets](/sdk/secrets).

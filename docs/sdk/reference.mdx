@@ -8,18 +8,21 @@ Every call takes an `AbortSignal` as `signal`. The types are those of the API, g
 
 | Resource | Calls |
 | --- | --- |
-| `rewind.toolsets` | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials` |
+| `rewind.toolsets` | `create` (`mcp`, `apis` from OpenAPI documents, `host`, `http`, each server's `auth`; `workflows` pins workflows, `base` derives from a toolset), `declarations`, `search` |
 | `rewind.workflows` | `create` (`tests`, `update`, `retire`, `parent`: saved once its suite passes), `list` and `listAll` (the latest version of each), `versions` (newest first, with their suites and lineage), `record` (tests from past runs) |
 | `rewind.scripts` | `check`, `test` (tests in virtual time, and a workflow's suite), `list`, `listAll`, `get` (a script's source by its digest) |
 | `rewind.tests` | `get`: a stored test by its digest |
-| `rewind.runs` | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`, `sort`, `workflow`, `startedBy`…), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
+| `rewind.runs` | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`, `sort`, `workflow`, `startedBy`…), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `delete`; `start` and `fork` take `secrets` |
 | `rewind.tasks` | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`: host-tool tasks at the level of the API |
 | `rewind.approvals` | `pending(run)`, `args`, `approve`, `reject` |
 | `rewind.payloads` | `get`: a value left out above 256 KiB |
-| `rewind.namespaces` | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts` |
+| `rewind.namespaces` | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `rename`, `delete`, `alerts` |
+| `rewind.namespaces.secrets` | `list`, `put`, `delete`, `usage`: an end user's own [secrets](/sdk/secrets), attached as `ns/<name>` |
 | `rewind.namespaces.defaults` | `get`, `put`: the default limits of every end user, and the ceiling |
 | `rewind.namespaces.tokens` | `create` (its answer holds the token, once), `revoke`, `revokeAll` |
 | `rewind.tokenKeys` | `create`, `list`, `delete`: the keys your backend signs end users' tokens with |
+| `rewind.secrets` | `list`, `put`, `delete`, `usage`: the organization's [secrets](/sdk/secrets), attached as `org/<name>` |
+| `rewind.signingKeys` | `list` (with the `issuer` and the `jwksUrl`), `rotate`, `jwks`: the keys Rewind [signs its calls](/sdk/signed-calls) with |
 | `rewind.subscriptions` | `create` (its answer holds the secret, once), `list`, `delete` |
 | `rewind.webhooks` | `verify` |
 | `rewind.tools` | `stats`: latency, errors and retries per tool |

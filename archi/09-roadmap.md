@@ -133,6 +133,17 @@ journal suite's `run_all` for the memory journal's; `--previous-master-keys`
 while a data key is held under a master key the server was not given. Both stores pass every
 conformance suite, the secrets checks included, against Postgres 17 in Docker for Postgres.
 
+Then the `ts` workstream built, against the frozen document and a mocked server
+([08](08-decisions.md#taken-while-building-the-sdks-and-the-dashboards-secrets-november-2026)):
+the SDK's `rewind.secrets`, `rewind.namespaces.secrets`, `rewind.signingKeys`, the attachments
+of forks and `secret-required` with its `attachments`, and `verifyRewindCall` on `jose`, tested
+with real Ed25519 keys and a mocked JWKS; the dashboard's Secrets view, a namespace's secrets,
+Organization › Signing keys and a run's attached secrets, gated by `secrets:read`,
+`secrets:write` and `organization:write`; and the documentation (Secrets, Signed calls, API
+tools, `auth`, the host tools' long poll as the other choice, `--allow-internal-tools`, the
+master key's rotation). Not yet done on that side: screenshots of the new views, and a run
+against the real endpoints once the `engine-server` workstream serves them.
+
 | Crate | State |
 | --- | --- |
 | `rewind-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |
@@ -197,8 +208,8 @@ connections and MCP on the 19th.
 | Observability | `rewind-otel` | Nothing beyond what `rewind-cli` wires: the subscriber, and the exporter given to the projector | Engine ports, stored format v1, HTTP API `/v1` |
 | Server | `rewind-server`, `rewind-api` | Nothing | Engine ports, HTTP API `/v1`, access and identity, namespaces |
 | CLI | `rewind-cli` | Client of the embedded or a remote server, through `rewind-api`; local commands: `check`, `test`, replay of an exported journal; exit codes | HTTP API `/v1`, stored format v1, sandbox lib, namespaces |
-| TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats | HTTP API `/v1`, pinned toolset, namespaces |
-| Dashboard | `dashboard` | Nothing: Connect Claude, the consent and the connections were built on 19 November 2026 | HTTP API `/v1`, access and identity, namespaces, connections and MCP |
+| TypeScript SDK | `sdk/typescript` | Client; host-tool worker; agent tools; adapters for the Anthropic and OpenAI tool formats; secrets, signing keys and `verifyRewindCall` (20 November 2026; the agent tools' `secrets` and `list_secrets` are the `engine-server` workstream's) | HTTP API `/v1`, pinned toolset, namespaces, secrets |
+| Dashboard | `dashboard` | Nothing: Connect Claude, the consent and the connections were built on 19 November 2026; Secrets and Signing keys on 20 November 2026, against the mocked API | HTTP API `/v1`, access and identity, namespaces, connections and MCP, secrets |
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Claude as a harness | `rewind-agent-tools`, `rewind-mcp-server`, `rewind-server`, the stores, `rewind-cli`, `dashboard` | Designed and built on 19 November 2026: the connections in `AccessStore` and both stores, their `/v1` endpoints, `Rewind-Organization`, the OAuth authorization server, `rewind-agent-tools`, `rewind-mcp-server`, `/mcp`, `rewind mcp`, the dashboard's pages and the docs. Remains: a connection made from claude.ai and Claude Code against a deployment | Connections and MCP, HTTP API `/v1`, access and identity, namespaces |
 | Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Setting WorkOS's variables on Railway's api service, and deploying the dashboard with its `/auth` rewrite | Engine ports, HTTP API `/v1`, access and identity |

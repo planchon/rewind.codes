@@ -8,7 +8,15 @@ type Schemas = components["schemas"];
 
 export type AbortKind = Schemas["AbortKind"];
 export type AbortReason = Schemas["AbortReason"];
+/** An API of a toolset, described by its OpenAPI document: one tool per operation, called by Rewind. */
+export type Api = Schemas["Api"];
 export type ApiKey = Schemas["ApiKey"];
+export type ApiSummary = Schemas["ApiSummary"];
+/** With `secret-required`: one attachment that refused a start, a fork or a save, and what may be attached instead. */
+export type AttachmentProblem = Schemas["AttachmentProblem"];
+export type AttachmentProblemKind = Schemas["AttachmentProblemKind"];
+/** How a server's or an API's calls prove who calls: none, `rewind` (signed by the organization's key), or `secret`. */
+export type Auth = Schemas["Auth"];
 export type Callsite = Schemas["Callsite"];
 export type CallOrder = Schemas["CallOrder"];
 export type CancelReason = Schemas["CancelReason"];
@@ -20,6 +28,8 @@ export type CreateTokenKey = Schemas["CreateTokenKey"];
 export type CreateToolset = Schemas["CreateToolset"];
 export type CreateWorkflow = Schemas["CreateWorkflow"];
 export type CredentialsExpired = Schemas["CredentialsExpired"];
+export type CredentialsExpiredReason = Schemas["CredentialsExpiredReason"];
+export type DailyReads = Schemas["DailyReads"];
 export type DayUsage = Schemas["DayUsage"];
 export type DeclarationFormat = Schemas["DeclarationFormat"];
 export type Declarations = Schemas["Declarations"];
@@ -43,8 +53,11 @@ export type ForkParent = Schemas["ForkParent"];
 export type HeartbeatAck = Schemas["HeartbeatAck"];
 export type HostTool = Schemas["HostTool"];
 export type HttpTool = Schemas["HttpTool"];
+export type Jwk = Schemas["Jwk"];
+export type Jwks = Schemas["Jwks"];
 export type LabelFacet = Schemas["LabelFacet"];
 export type Labels = Schemas["Labels"];
+export type LastRead = Schemas["LastRead"];
 export type Latency = Schemas["Latency"];
 export type Location = Schemas["Location"];
 export type LogLevel = Schemas["LogLevel"];
@@ -72,6 +85,7 @@ export type Permission = Schemas["Permission"];
 export type Problem = Omit<Schemas["Problem"], keyof QuotaReached> & Partial<QuotaReached>;
 export type PutNamespace = Schemas["PutNamespace"];
 export type PutNamespaceDefaults = Schemas["PutNamespaceDefaults"];
+export type PutSecret = Schemas["PutSecret"];
 export type Quarantine = Schemas["Quarantine"];
 export type QuarantineCause = Schemas["QuarantineCause"];
 export type QuerySpan = Schemas["QuerySpan"];
@@ -106,6 +120,13 @@ export type Script = Schemas["Script"];
 export type ScriptError = Schemas["ScriptError"];
 export type ScriptPage = Schemas["ScriptPage"];
 export type ScriptSummary = Schemas["ScriptSummary"];
+/** A secret as listed: its name, scope, labels, who wrote it and when, its reads per day and its last read; never its value. */
+export type Secret = Schemas["Secret"];
+export type SecretEncoding = Schemas["SecretEncoding"];
+export type SecretList = Schemas["SecretList"];
+export type SecretScope = Schemas["SecretScope"];
+/** What reads a secret, and what deleting it would stop. */
+export type SecretUsage = Schemas["SecretUsage"];
 export type SeriesBucket = Schemas["SeriesBucket"];
 export type ServerInfo = Schemas["ServerInfo"];
 export type ServerRole = Schemas["ServerRole"];
@@ -114,6 +135,10 @@ export type Severity = Schemas["Severity"];
 export type SignalAccepted = Schemas["SignalAccepted"];
 /** The claims of a token the customer signs itself, with a key it registered (`kid` `rk_…`). */
 export type SignedTokenClaims = Schemas["SignedTokenClaims"];
+export type SigningKey = Schemas["SigningKey"];
+/** The organization's signing keys, the issuer of its JWTs and the address of its public keys. */
+export type SigningKeyList = Schemas["SigningKeyList"];
+export type SkippedOperation = Schemas["SkippedOperation"];
 export type SkippedRun = Schemas["SkippedRun"];
 export type StartedBy = Schemas["StartedBy"];
 export type StatusCounts = Schemas["StatusCounts"];
@@ -164,6 +189,7 @@ export type WaitKind = Schemas["WaitKind"];
 export type WebhookEvent = Schemas["WebhookEvent"];
 export type WebhookEventType = Schemas["WebhookEventType"];
 export type Workflow = Schemas["Workflow"];
+export type WorkflowAttaching = Schemas["WorkflowAttaching"];
 export type WorkflowPage = Schemas["WorkflowPage"];
 export type WorkflowVersions = Schemas["WorkflowVersions"];
 export type World = Schemas["World"];

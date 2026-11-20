@@ -40,6 +40,14 @@ export {
   type ToolStatsParams,
 } from "./resources/admin.js";
 export {
+  NamespaceSecrets,
+  Secrets,
+  SigningKeys,
+  isSecretName,
+  rewindIssuer,
+  rewindJwksUrl,
+} from "./resources/secrets.js";
+export {
   DefaultLimits,
   Namespaces,
   TokenKeys,
@@ -61,6 +69,14 @@ export {
 } from "./worker.js";
 export { Approvals, pendingApprovals, type PendingApproval } from "./approvals.js";
 export { WebhookVerificationFailed, verifyWebhook, type WebhookHeaders } from "./webhooks.js";
+export {
+  RewindSignatureError,
+  verifyRewindCall,
+  type ReceivedRequest,
+  type RewindCall,
+  type SignatureCheck,
+  type VerifyRewindCallOptions,
+} from "./signatures.js";
 
 export {
   AgentTools,

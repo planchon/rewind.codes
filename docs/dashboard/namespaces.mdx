@@ -27,7 +27,7 @@ query (`namespace:`), tokens and webhooks use.
 ## One end user
 
 Open an end user to see their month in detail: how their runs went, what they used against their limits, then their
-runs and their scripts.
+runs, their scripts and their secrets.
 
 <Frame>
   <img src="/images/dashboard/namespace-light.webp" alt="One end user: cumulative CPU against its quota, limits and use, alerts, tokens and exceptions" className="block dark:hidden" />
@@ -46,6 +46,7 @@ runs and their scripts.
 | **Tokens and exceptions** | The tokens in use, and the exceptions to the defaults |
 | **Runs** | Its runs started this month, the newest first; **Open in Observability** shows them all there |
 | **Scripts** | The scripts its runs ran, the most recently run first; **Open in Scripts** shows them all there |
+| **Secrets** | The end user's own [secrets](/dashboard/secrets) (`ns/<name>`), with `secrets:read`: who wrote each and when, its reads, its last read and what attaches it. With `secrets:write`, write a new one or a new value, or delete one after seeing what it would stop; a grant limited to labels never writes them |
 
 The arrows next to the month go back in time.
 
@@ -56,6 +57,6 @@ The arrows next to the month go back in time.
 | **Rename** | `namespaces:write` | Sets its display name in a dialog; emptied, removes it. Its id never changes |
 | **Edit its limits** | `namespaces:write` | Sets its exceptions in a dialog: more for a paying user, `0` active runs to block someone |
 | **Revoke its tokens** | `tokens:write` | Revokes every token of the end user, signed ones issued before now included |
-| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its id in the dialog to confirm |
+| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, secrets and use. Type its id in the dialog to confirm |
 
 The SDK does the same with [`rewind.namespaces`](/sdk/end-users).
