@@ -106,10 +106,11 @@ impl Scope<'_> {
     }
 
     async fn delete(&self, name: &str) -> Result<(), CliError> {
-        Ok(match self.namespace {
+        match self.namespace {
             Some(namespace) => self.client.delete_namespace_secret(namespace, name).await?,
             None => self.client.delete_secret(name).await?,
-        })
+        }
+        Ok(())
     }
 
     async fn usage(&self, name: &str) -> Result<SecretUsage, CliError> {

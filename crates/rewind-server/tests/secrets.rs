@@ -390,10 +390,12 @@ async fn an_attachment_for_a_server_taking_none_is_secret_required(server: &Test
     );
 
     // A registration's listing takes the organization's secrets only.
-    let mut listed = CreateToolset::default();
-    listed.secrets = [("github".to_owned(), "ns/github".to_owned())]
-        .into_iter()
-        .collect();
+    let mut listed = CreateToolset {
+        secrets: [("github".to_owned(), "ns/github".to_owned())]
+            .into_iter()
+            .collect(),
+        ..CreateToolset::default()
+    };
     assert_eq!(
         refused(customer.create_toolset(&listed).await),
         (400, Some(ProblemType::InvalidRequest))
