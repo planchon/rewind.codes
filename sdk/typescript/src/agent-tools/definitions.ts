@@ -9,6 +9,7 @@ export type AgentToolName =
   | "cancel_run"
   | "retry_run"
   | "search_tools"
+  | "list_secrets"
   | "save_workflow"
   | "get_workflow"
   | "record_tests";
@@ -23,6 +24,7 @@ export const AGENT_TOOL_NAMES: readonly AgentToolName[] = [
   "cancel_run",
   "retry_run",
   "search_tools",
+  "list_secrets",
   "save_workflow",
   "get_workflow",
   "record_tests",
@@ -54,6 +56,18 @@ const WAIT = {
   description:
     'How long to wait for the run to end before answering, such as "30s" or "2m". If the run is still going then, you get its id and what it waits for.',
 };
+/** What a run reads: the secrets it attaches, by MCP server or API. */
+function secrets(description: string): Record<string, unknown> {
+  return {
+    type: "object",
+    description,
+    additionalProperties: { type: "string", description: "org/<name> or ns/<name>." },
+  };
+}
+
+const RUN_SECRETS =
+  'The secrets the run reads, by the MCP server or API whose calls need one: {"github": "ns/github"} for the end user\'s own secret, read in the namespace the run acts for, or "org/<name>" for the organization\'s. Names only, never a value: list_secrets gives those you may attach. A script that imports a server needing a secret is refused without one.';
+
 const STATUS = {
   type: "string",
   enum: ["pending", "active", "completed", "failed", "cancelled", "aborted"],
@@ -247,6 +261,7 @@ const DEFINITIONS: Record<AgentToolName, AgentToolDefinition> = {
         code: CODE,
         input: { description: "The input passed to `main`, any JSON value. {} when absent." },
         wait: WAIT,
+        secrets: secrets(RUN_SECRETS),
       },
       required: ["code"],
       additionalProperties: false,
@@ -349,6 +364,9 @@ const DEFINITIONS: Record<AgentToolName, AgentToolDefinition> = {
       properties: {
         run_id: { ...RUN_ID, description: "The run to correct." },
         code: { ...CODE, description: "The corrected TypeScript source." },
+        secrets: secrets(
+          "The secrets the new run reads, by MCP server or API, as run_script takes them. The failed run's when absent; either way checked again, since the script is new code.",
+        ),
       },
       required: ["run_id", "code"],
       additionalProperties: false,
@@ -362,6 +380,16 @@ const DEFINITIONS: Record<AgentToolName, AgentToolDefinition> = {
       type: "object",
       properties: { query: { type: "string", description: "Words to look for in tool names and descriptions." } },
       required: ["query"],
+      additionalProperties: false,
+    },
+  },
+  list_secrets: {
+    name: "list_secrets",
+    description:
+      'List the secrets you may attach to a run, by name, never a value: the end user\'s own (ns/<name>, read in the namespace the run acts for) and the organization\'s (org/<name>). Give them in `secrets` of run_script, retry_run or save_workflow, by the MCP server or API whose calls need one, such as {"github": "ns/github"}.',
+    inputSchema: {
+      type: "object",
+      properties: {},
       additionalProperties: false,
     },
   },
@@ -430,6 +458,9 @@ const DEFINITIONS: Record<AgentToolName, AgentToolDefinition> = {
           description:
             "The version it derives from, whose suite it inherits: name@version, or a version. The latest version of this name when absent.",
         },
+        secrets: secrets(
+          'The secrets its runs read, by MCP server or API: {"github": "ns/github"}, the secret github of the namespace each run acts for, or "org/<name>", the organization\'s. Saved with the version: a run of it needs no right on them, only its namespace\'s ns/ secrets.',
+        ),
       },
       required: ["name", "description", "code", "input", "output"],
       additionalProperties: false,

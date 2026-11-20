@@ -91,6 +91,11 @@ export interface ForkRunParams extends RequestOptions {
   traceparent?: string | undefined;
   tracestate?: string | undefined;
   ttl?: Duration | undefined;
+  /**
+   * The fork's secrets, by MCP server or API, as `runs.start` takes them. The parent's when absent; either way they
+   * are checked against the caller, since the script is new code.
+   */
+  secrets?: Record<string, string> | undefined;
   /** Type-check the corrected script first. `true` by default. */
   check?: boolean | undefined;
 }

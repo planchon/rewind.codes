@@ -21,7 +21,7 @@ describe("the adapters", () => {
       caller: { type: "direct" },
     };
     const result: Anthropic.Messages.ToolResultBlockParam = await tools.anthropic.handle(toolUse);
-    expect(definitions).toHaveLength(12);
+    expect(definitions).toHaveLength(13);
     expect(result).toEqual({
       type: "tool_result",
       tool_use_id: "toolu_1",
@@ -38,7 +38,7 @@ describe("the adapters", () => {
       function: { name: "list_runs", arguments: '{"status":"nope"}' },
     };
     const message: OpenAI.Chat.Completions.ChatCompletionToolMessageParam = await tools.openai.handle(call);
-    expect(definitions).toHaveLength(12);
+    expect(definitions).toHaveLength(13);
     expect(message.tool_call_id).toBe("call_1");
   });
 
@@ -51,7 +51,7 @@ describe("the adapters", () => {
       arguments: "{}",
     };
     const output: OpenAI.Responses.ResponseInputItem.FunctionCallOutput = await tools.openai.responses.handle(call);
-    expect(definitions).toHaveLength(12);
+    expect(definitions).toHaveLength(13);
     expect(output).toEqual({
       type: "function_call_output",
       call_id: "call_2",

@@ -568,6 +568,39 @@ export function describeRuns(runs: RunSummary[], more: boolean, status: RunStatu
 }
 
 /** The tools matching a search. */
+/**
+ * `list_secrets`: the secrets the caller may attach, by name, never a value: the organization's with their labels,
+ * then the namespace's.
+ */
+export function describeSecrets(
+  organization: readonly ListedSecretView[],
+  ofNamespace: readonly ListedSecretView[] | undefined,
+): string {
+  const lines: string[] = [];
+  for (const secret of organization) {
+    const labels = Object.entries(secret.labels ?? {})
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, value]) => `${key}=${value}`);
+    lines.push(
+      `- ${secret.reference}, the organization's${labels.length === 0 ? "" : ` (labels ${labels.join(", ")})`}`,
+    );
+  }
+  for (const secret of ofNamespace ?? []) {
+    lines.push(`- ${secret.reference}, the end user's in the namespace ${secret.namespace ?? ""}`);
+  }
+  if (lines.length === 0) {
+    return "No secret you may attach exists yet: a person puts one first, the end user's in their namespace or the organization's.";
+  }
+  return `The secrets you may attach, never a value:\n${lines.join("\n")}\nAttach one in \`secrets\`, by the MCP server or API whose calls need it, such as {"github": "ns/github"}.`;
+}
+
+/** What `describeSecrets` reads of a secret. */
+export interface ListedSecretView {
+  reference: string;
+  namespace?: string | null | undefined;
+  labels?: Record<string, string> | undefined;
+}
+
 export function describeMatches(query: string, matches: ToolMatch[]): string {
   if (matches.length === 0) {
     return `No tool matches ${JSON.stringify(query)}.`;
