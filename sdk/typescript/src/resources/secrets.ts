@@ -23,7 +23,11 @@ function checkSecretName(name: string): void {
  * to labels sees, writes and attaches only the secrets carrying them, and the secrets it writes take them.
  */
 export class Secrets {
-  constructor(private readonly transport: Transport) {}
+  constructor(
+    private readonly transport: Transport,
+    /** The namespace the client acts for (`rewind.namespace(name)`), if any. */
+    private readonly namespace?: string | undefined,
+  ) {}
 
   /**
    * The organization's secrets the caller sees, by name: each one's labels, who wrote it and when, its reads per day
@@ -35,6 +39,18 @@ export class Secrets {
       signal: options.signal,
     });
     return list.secrets;
+  }
+
+  /**
+   * The secrets of the namespace the client acts for (`rewind.namespace(name)`), attached as `ns/<name>`; `undefined`
+   * when the client names no namespace. A client holding an end user's token lists them with
+   * `namespaces.secrets.list(name)`.
+   */
+  async ofNamespace(options: RequestOptions = {}): Promise<Secret[] | undefined> {
+    if (this.namespace === undefined) {
+      return undefined;
+    }
+    return new NamespaceSecrets(this.transport).list(this.namespace, options);
   }
 
   /**

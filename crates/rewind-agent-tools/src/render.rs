@@ -1180,6 +1180,47 @@ pub fn describe_orgs(organizations: &[OrganizationView<'_>]) -> String {
     lines.join("\n")
 }
 
+/// `list_secrets`: the secrets the caller may attach, by name, never a value: the
+/// organization's with their labels, then the namespace's.
+pub fn describe_secrets(
+    organization: &[rewind_api::secrets::Secret],
+    namespace: Option<(&str, &[rewind_api::secrets::Secret])>,
+) -> String {
+    let mut lines = Vec::new();
+    for secret in organization {
+        let labels: Vec<String> = secret
+            .labels
+            .0
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+        let labels = if labels.is_empty() {
+            String::new()
+        } else {
+            format!(" (labels {})", labels.join(", "))
+        };
+        lines.push(format!(
+            "- {}, the organization's{labels}",
+            secret.reference
+        ));
+    }
+    if let Some((name, secrets)) = namespace {
+        for secret in secrets {
+            lines.push(format!(
+                "- {}, the end user's in the namespace {name}",
+                secret.reference
+            ));
+        }
+    }
+    if lines.is_empty() {
+        return "No secret you may attach exists yet: a person puts one first, the end user's in their namespace or the organization's.".into();
+    }
+    format!(
+        "The secrets you may attach, never a value:\n{}\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {{\"github\": \"ns/github\"}}.",
+        lines.join("\n")
+    )
+}
+
 /// `list_namespaces`: a page of namespaces, the most active first, each with its display name
 /// beside its name.
 pub fn describe_namespaces(

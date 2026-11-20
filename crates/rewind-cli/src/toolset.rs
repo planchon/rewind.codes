@@ -38,13 +38,13 @@ pub(crate) async fn pin_file(path: &Path) -> Result<Toolset, CliError> {
 /// Pins a toolset as `POST /v1/toolsets` does.
 pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
     let mut servers = Vec::new();
+    if !create.secrets.is_empty() {
+        return Err(LISTING_SECRETS.to_owned());
+    }
     let (apis, mut tools) = read_apis(create).await?;
     if !create.mcp.is_empty() {
-        let listing = if create.secrets.is_empty() {
-            BTreeMap::new()
-        } else {
-            listing_secrets(create)
-        };
+        // A secret attached for a listing is refused above: only the server reads secrets.
+        let listing = BTreeMap::new();
         // As the embedded server: the developer's own servers, at any address.
         let discovery = McpDispatcher::new(McpConfig {
             egress: ToolEgress::open(),
@@ -194,16 +194,12 @@ async fn discover(
     Ok(())
 }
 
-/// The secrets a toolset file attaches to list its servers' tools (`secrets`), by server.
-/// Called only when `secrets` is not empty.
-#[expect(
-    clippy::todo,
-    reason = "the engine-server workstream gives the CLI its secrets for the listings"
-)]
-fn listing_secrets(create: &CreateToolset) -> BTreeMap<String, Secret> {
-    let _ = create;
-    todo!("engine-server: the CLI's secrets for the listings")
-}
+/// Why this process pins no toolset file that attaches secrets to list its servers' tools: a
+/// secret is written and never read back, and only the server's dispatcher reads it
+/// (`archi/04-tools.md`, "Secrets").
+const LISTING_SECRETS: &str = "secrets: this process cannot read a secret, which only the \
+    server reads: register the toolset on the server (a run's --toolset FILE does), then give \
+    its id to --toolset";
 
 /// `list_issues` for `github.list_issues`.
 fn short_name<'a>(server: &str, name: &'a str) -> &'a str {

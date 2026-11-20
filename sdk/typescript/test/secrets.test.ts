@@ -142,6 +142,15 @@ describe("a namespace's secrets", () => {
     expect(server.calls("DELETE", "/v1/namespaces/alice/secrets/github")).toHaveLength(1);
   });
 
+  it("lists the secrets of the namespace the client acts for, and none without one", async () => {
+    server.on("GET", "/v1/namespaces/{name}/secrets", (request) =>
+      json({ secrets: [secret("github", { scope: "ns", reference: "ns/github", namespace: request.params["name"] })] }),
+    );
+    const listed = await rewind.namespace("alice").secrets.ofNamespace();
+    expect(listed?.map((s) => [s.reference, s.namespace])).toEqual([["ns/github", "alice"]]);
+    expect(await rewind.secrets.ofNamespace()).toBeUndefined();
+  });
+
   it("refuses a namespace or a secret name the server would refuse", async () => {
     await expect(rewind.namespaces.secrets.put("bad name", "github", { value: "x" })).rejects.toThrow(/namespace/);
     await expect(rewind.namespaces.secrets.delete("alice", "Bad")).rejects.toThrow(/secret name/);

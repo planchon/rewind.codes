@@ -159,6 +159,10 @@ impl McpTools {
             call,
         };
         match name {
+            "list_secrets" => {
+                let namespace = optional_string(values, "namespace")?;
+                session.list_secrets(namespace.as_deref()).await
+            }
             "search_tools" => session.search_tools(values).await,
             "check_script" => session.check_script(values).await,
             "test_script" => session.test_script(values).await,

@@ -20,20 +20,20 @@ use std::time::Duration;
 use rewind_core::{
     Attachments, Command, Completion, Digest, Event, HistoryEntry, InvalidWorkflow, JsonValue,
     Payload, RunEnd, RunId, RunMode, RunState, Script, Seq, ToolFailure, ToolFailureKind,
-    ToolOutcome, Workflow, WorkflowOp, WorkflowSchemas, end_signal_name, ended_run,
+    ToolOutcome, Toolset, Workflow, WorkflowOp, WorkflowSchemas, end_signal_name, ended_run,
     is_reserved_signal, parse_duration,
 };
 use serde_json::json;
 
-use crate::attachments::{AttachRights, AttachmentProblem};
+use crate::attachments::{self, AttachRights, AttachmentCheck, RefusedAttachments};
 use crate::engine::{
     Engine, EngineError, NamespaceBounds, NewRunRequest, StartError, refuse_nul_in_metadata,
 };
 use crate::ports::{
     BlobError, BlobStore, CheckerError, Clock, Created, Diagnostic, Dispatched, Entropy,
     InvalidScript, JournalStore, NamespaceName, RunMetadata, RunRecord, RunRef, RunWorkflow,
-    ScriptExecutor, SecretStore, Severity, StartedBy, StoreError, StoredWorkflow, TenantId,
-    ToolCall, ToolDispatcher, TypeChecker, WebhookSender, WorkflowDeclarations,
+    ScriptExecutor, SecretError, SecretStore, Severity, StartedBy, StoreError, StoredWorkflow,
+    TenantId, ToolCall, ToolDispatcher, TypeChecker, WebhookSender, WorkflowDeclarations,
 };
 use crate::schema::{Refused, Validator};
 use crate::suites::{SuiteChanges, SuiteError, SuiteLoadError, TestFormat, TestKit};
@@ -77,8 +77,8 @@ pub enum RegisterError {
     ToolsetNotFound(Digest),
     /// An attachment is missing, takes no secret, names an organization's secret that does not
     /// exist or one the saver may not attach: 422 `secret-required`.
-    #[error("{}", attachment_problems(.0))]
-    SecretRequired(Vec<AttachmentProblem>),
+    #[error("{0}")]
+    SecretRequired(RefusedAttachments),
     /// The script cannot run: it does not compile, imports what does not exist…
     #[error("the script is invalid: {0}")]
     InvalidScript(InvalidScript),
@@ -91,6 +91,8 @@ pub enum RegisterError {
     NulCharacter(#[from] NulCharacter),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Secret(#[from] SecretError),
     #[error(transparent)]
     Blob(#[from] BlobError),
     /// The suite cannot be composed: a name, a reason or a test is wrong.
@@ -106,11 +108,6 @@ pub enum RegisterError {
     /// The tests could not run, for a reason that is not theirs.
     #[error(transparent)]
     Tests(#[from] TestError),
-}
-
-fn attachment_problems(problems: &[AttachmentProblem]) -> String {
-    let problems: Vec<String> = problems.iter().map(ToString::to_string).collect();
-    problems.join("; ")
 }
 
 /// Two versions with the same name, description, script, toolset, schemas, labels and
@@ -188,9 +185,6 @@ where
             text::refuse_nul("the workflow's description", description)?;
         }
         text::refuse_nul_in_labels(&request.labels)?;
-        if !request.secrets.is_empty() {
-            self.check_saved_attachments(&request).await?;
-        }
         let workflow = Workflow::new(
             request.name,
             request.description,
@@ -227,6 +221,14 @@ where
             .executor
             .compile(&request.script, &stored.toolset)
             .map_err(RegisterError::InvalidScript)?;
+        self.check_saved_attachments(
+            &tenant,
+            &request.script,
+            &stored.toolset,
+            workflow.secrets(),
+            &request.attach,
+        )
+        .await?;
         let diagnostics = checker
             .check_workflow(&request.script, &stored.declarations, &request.declarations)
             .await?;
@@ -411,31 +413,38 @@ where
         .await
     }
 
-    /// Refuses the attachments of a version to save that do not fit its toolset, or that the
-    /// saver may not attach: an organization's secret must exist and be theirs to attach; an
-    /// `ns/` secret is checked by its name only (`archi/04-tools.md`, "Secrets").
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream checks the attachments"
-    )]
+    /// Refuses the attachments of a version to save that do not fit its toolset and its script,
+    /// or that the saver may not attach: an organization's secret must exist and be theirs to
+    /// attach; an `ns/` secret is checked by its name only, since no namespace is known yet
+    /// (`archi/04-tools.md`, "Secrets": a workflow version is the permission).
     async fn check_saved_attachments(
         &self,
-        request: &RegisterWorkflow,
+        tenant: &TenantId,
+        script: &Script,
+        toolset: &Toolset,
+        secrets: &Attachments,
+        rights: &AttachRights,
     ) -> Result<(), RegisterError> {
-        let _ = request;
-        todo!(
-            "engine-server: check a saved version's attachments against its toolset's auth, the \
-             organization's secrets and AttachRights; refuse with RegisterError::SecretRequired"
-        )
+        if secrets.is_empty() && toolset.taking_secrets().next().is_none() {
+            return Ok(());
+        }
+        let imports = self.executor.tool_imports(script);
+        let check = AttachmentCheck {
+            tenant,
+            namespace: None,
+            toolset,
+            imports: imports.as_ref(),
+            attachments: secrets,
+            rights,
+        };
+        attachments::check(&self.secrets, self.clock.now(), check)
+            .await?
+            .map_err(RegisterError::SecretRequired)
     }
 
     /// Refuses a run of a version whose `ns/` secrets do not exist in the run's namespace. The
     /// version's attachments are not checked against anyone's rights: they were when it was
     /// saved (`archi/03-execution.md`, "Workflows across runs").
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream checks the attachments"
-    )]
     pub(crate) async fn check_version_attachments(
         &self,
         tenant: &TenantId,
@@ -445,11 +454,17 @@ where
         if workflow.secrets().is_empty() {
             return Ok(());
         }
-        let _ = (tenant, namespace);
-        todo!(
-            "engine-server: refuse with StartError::SecretRequired a version whose ns/ secrets \
-             do not exist in the run's namespace"
-        )
+        let check = AttachmentCheck {
+            tenant,
+            namespace: Some(namespace),
+            toolset: &Toolset::empty(),
+            imports: None,
+            attachments: workflow.secrets(),
+            rights: &AttachRights::Version,
+        };
+        attachments::check(&self.secrets, self.clock.now(), check)
+            .await?
+            .map_err(StartError::SecretRequired)
     }
 
     /// Refuses a workflow whose script has more lines than the namespace of its run takes.
@@ -604,6 +619,9 @@ where
         let Some(epoch) = self.executor.epochs().last().copied() else {
             return transient("this worker supports no determinism epoch".into());
         };
+        // A secret the version attaches that the run's namespace lacks: the end user puts it,
+        // and the script may start the workflow again (`archi/03-execution.md`, "Workflows across
+        // runs").
         match self
             .check_version_attachments(tenant, &record.namespace, &workflow)
             .await
@@ -612,7 +630,16 @@ where
             Err(StartError::Store(error)) => {
                 return transient(format!("the workflow's secrets could not be read: {error}"));
             }
-            Err(error) => return failed(format!("no run of {workflow} was started: {error}")),
+            Err(StartError::Secret(error)) => {
+                return transient(format!("the workflow's secrets could not be read: {error}"));
+            }
+            Err(error) => {
+                return Dispatched::Failed(ToolFailure {
+                    kind: ToolFailureKind::Unavailable,
+                    message: format!("no run of {workflow} was started: {error}"),
+                    data: None,
+                });
+            }
         }
         let metadata = RunMetadata {
             labels,

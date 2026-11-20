@@ -38,9 +38,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle, McpServer,
-    McpTransport, RunId, RunMode, RunOutcome, RunState, Script, Timestamp, Tool, ToolRoute,
-    Toolset, Workflow, WorkflowSchemas, parse_duration,
+    Attachments, Builtin, Command, Event, HistoryEntry, Interruption, JournalDocument, Lifecycle,
+    McpServer, McpTransport, RunId, RunMode, RunOutcome, RunState, Script, SecretPlacement,
+    SecretRef, Timestamp, Tool, ToolAuth, ToolRoute, Toolset, Workflow, WorkflowSchemas,
+    parse_duration,
 };
 use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, StaticTypeChecker,
@@ -160,6 +161,20 @@ impl Case {
         case.check_color()?;
         scenario_toolset(&case.scenario).map_err(|err| format!("{name}/scenario.json: {err}"))?;
         case.workflows()?;
+        attachments(&case.scenario.secrets)
+            .map_err(|err| format!("{name}/scenario.json: secrets: {err}"))?;
+        for reference in case.scenario.put_secrets.keys() {
+            SecretRef::parse(reference)
+                .map_err(|err| format!("{name}/scenario.json: put_secrets: {err}"))?;
+        }
+        if !matches!(
+            case.scenario.attach.as_deref(),
+            None | Some("namespace" | "organization")
+        ) {
+            return Err(format!(
+                "{name}/scenario.json: attach is namespace or organization"
+            ));
+        }
         Ok(case)
     }
 
@@ -170,6 +185,9 @@ impl Case {
             .workflows
             .iter()
             .map(|(name, case)| {
+                let secrets = attachments(&case.secrets).map_err(|err| {
+                    format!("{}/scenario.json: workflow {name}: {err}", self.name)
+                })?;
                 Workflow::new(
                     name.clone(),
                     case.description.clone(),
@@ -181,6 +199,7 @@ impl Case {
                         signals: case.signals.clone(),
                     },
                 )
+                .map(|workflow| workflow.with_secrets(secrets))
                 .map_err(|err| format!("{}/scenario.json: workflow {name}: {err}", self.name))
             })
             .collect()
@@ -275,18 +294,34 @@ fn scenario_toolset(scenario: &Scenario) -> Result<Toolset, String> {
     {
         return Err(format!("schemas: {unknown} is not a tool of the scenario"));
     }
+    if let Some(unknown) = scenario
+        .auth
+        .keys()
+        .find(|server| !scenario.mcp_servers.contains(server))
+    {
+        return Err(format!("auth: {unknown} is not one of mcp_servers"));
+    }
     let servers: Vec<McpServer> = scenario
         .mcp_servers
         .iter()
         .map(|server| {
-            McpServer::new(
+            let mut pinned = McpServer::new(
                 server.clone(),
                 McpTransport::Http {
                     url: format!("https://mcp.example.com/{server}"),
                 },
-            )
+            );
+            pinned.auth = match scenario.auth.get(server).map(String::as_str) {
+                None => ToolAuth::None,
+                Some("secret") => ToolAuth::Secret(SecretPlacement::bearer()),
+                Some("rewind") => ToolAuth::Rewind,
+                Some(other) => {
+                    return Err(format!("auth: {server} is secret or rewind, not {other:?}"));
+                }
+            };
+            Ok(pinned)
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let mut tools = Vec::new();
     for (name, response) in &scenario.tools {
         // The built-ins of a workflow come from `workflows`; in mock mode, their answers are
@@ -414,6 +449,17 @@ fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))
 }
 
+/// The attachments of a scenario or of a workflow, read.
+fn attachments(secrets: &BTreeMap<String, String>) -> Result<Attachments, String> {
+    secrets
+        .iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(secret).map_err(|err| format!("{server}: {err}"))?;
+            Ok((server.clone(), secret))
+        })
+        .collect()
+}
+
 type CorpusEngine = Engine<
     MemoryJournal,
     MemoryBlobs,
@@ -452,6 +498,10 @@ fn engine(case: &Case) -> CorpusEngine {
             .unwrap_or(defaults.max_payload_bytes),
         ..defaults
     };
+    if case.scenario.auth.values().any(|auth| auth == "rewind") {
+        // Signed calls name their issuer from the public URL.
+        config.public_url = Some("https://rewind.example.com".into());
+    }
     if case.scenario.host_worker {
         // Host tools wait for the harness's worker, as on a server.
         config.tool_tasks = TaskFilter::Dispatched {
@@ -484,6 +534,10 @@ pub struct Recorded {
     pub dispatched: BTreeMap<String, usize>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Vec<String>,
+    /// How each call the tools answered authenticated, in order.
+    pub auth: Vec<String>,
+    /// The idempotency keys of the calls the tools answered, in order.
+    pub keys: Vec<String>,
 }
 
 /// The outcome of a live run.
@@ -497,12 +551,19 @@ pub enum Live {
 /// Runs a case live: starts the run, drives it, applies the steps, drives it in virtual time.
 pub async fn run_live(case: &Case) -> Result<Live, String> {
     let engine = engine(case);
+    put_secrets(case, &engine).await?;
     register_workflows(case, &engine).await?;
     let mut request = StartRun::new(
         case.script.clone(),
         case.toolset(),
         case.scenario.input.clone(),
     );
+    request.metadata.secrets = attachments(&case.scenario.secrets)?;
+    if case.scenario.attach.as_deref() == Some("organization") {
+        request.attach = rewind_engine::attachments::AttachRights::Organization {
+            labels: BTreeMap::new(),
+        };
+    }
     request.mode = if case.scenario.live {
         RunMode::Live
     } else {
@@ -602,7 +663,31 @@ pub async fn run_live(case: &Case) -> Result<Live, String> {
         state,
         dispatched: engine.dispatcher().dispatched(),
         children: children.into_iter().map(|(_, status)| status).collect(),
+        auth: engine.dispatcher().auth(),
+        keys: engine.dispatcher().keys(),
     })))
+}
+
+/// Puts the secrets the scenario says exist before the run starts: `ns/` ones in the run's
+/// namespace.
+async fn put_secrets(case: &Case, engine: &CorpusEngine) -> Result<(), String> {
+    let namespace =
+        rewind_engine::ports::NamespaceName::new(rewind_engine::ports::NamespaceName::LOCAL)
+            .map_err(|err| err.to_string())?;
+    for (reference, value) in &case.scenario.put_secrets {
+        let reference = SecretRef::parse(reference).map_err(|err| err.to_string())?;
+        let secret = NewSecret {
+            id: SecretId::resolve(&reference, &namespace),
+            value: Secret::new(value.clone()),
+            labels: BTreeMap::new(),
+            by: "user:harness".into(),
+        };
+        engine
+            .put_secret(&TenantId::local(), &secret)
+            .await
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
 }
 
 /// Registers the scenario's workflows, with the scenario's tools as their toolset, so that the
@@ -699,6 +784,36 @@ where
                 for (server, headers) in servers {
                     let value = headers.values().next().cloned().unwrap_or_default();
                     accept_again(engine, &run, server, value).await?;
+                }
+            }
+            Step::DeleteSecret(server) => {
+                let record = engine
+                    .get_run(&run)
+                    .await
+                    .map_err(fail)?
+                    .ok_or_else(|| format!("run {} not found", run.id))?;
+                let attached = record.metadata.secrets.get(server).ok_or_else(|| {
+                    format!("delete_secret: the run attaches no secret for {server}")
+                })?;
+                let id = SecretId::resolve(attached, &record.namespace);
+                if !engine.delete_secret(&run.tenant, &id).await.map_err(fail)? {
+                    return Err(format!("delete_secret: {id} does not exist"));
+                }
+            }
+            Step::Parked { tool, reason } => {
+                let tasks = engine.tool_tasks(&run).await.map_err(fail)?;
+                let parked = tasks.iter().any(|task| {
+                    task.tool == *tool
+                        && matches!(&task.state, TaskState::Parked(why) if why.kind.as_str() == reason)
+                });
+                if !parked {
+                    let states: Vec<String> = tasks
+                        .iter()
+                        .map(|task| format!("{} {:?}", task.tool, task.state))
+                        .collect();
+                    return Err(format!(
+                        "parked: no call of {tool} is parked by {reason}: {states:?}"
+                    ));
                 }
             }
         }
@@ -969,6 +1084,29 @@ fn check_expectations(case: &Case, recorded: &Recorded, failures: &mut Vec<Strin
             }
             other => check(false, format!("the run was not aborted: {other:?}")),
         }
+    }
+    if let Some(expected) = &expect.auth {
+        check(
+            &recorded.auth == expected,
+            format!(
+                "the calls authenticated with {:?}, expected {expected:?}",
+                recorded.auth
+            ),
+        );
+    }
+    if let Some(expected) = &expect.keys {
+        let run = case.run_id().to_string();
+        let expected: Vec<String> = expected
+            .iter()
+            .map(|key| key.replace("{run}", &run))
+            .collect();
+        check(
+            recorded.keys == expected,
+            format!(
+                "the calls carried the keys {:?}, expected {expected:?}",
+                recorded.keys
+            ),
+        );
     }
     if let Some(expected) = &expect.dispatched {
         check(

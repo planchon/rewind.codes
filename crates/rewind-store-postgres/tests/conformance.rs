@@ -23,11 +23,6 @@ async fn the_store_conforms_on_postgres() {
         return;
     };
     conformance::journal::run_all(stores(&postgres)).await;
-    // Outside `run_all` until the memory journal answers it.
-    conformance::journal::secret_usage_answers_the_runs_and_versions_attaching_it(&stores(
-        &postgres,
-    )())
-    .await;
     conformance::access::run_all(stores(&postgres)).await;
     conformance::read_model::run_all(stores(&postgres)).await;
     conformance::secrets::run_all(stores(&postgres)).await;

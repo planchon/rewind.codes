@@ -17,7 +17,7 @@ use crate::ports::{
     SecretId, SecretUsage, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
     TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId,
     TenantScope, TestRecord, ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget,
-    WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter,
@@ -1747,21 +1747,91 @@ impl JournalStore for MemoryJournal {
         Ok(resumed)
     }
 
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream answers what reads a secret"
-    )]
     async fn secret_usage(
         &self,
         tenant: &TenantId,
         secret: &SecretId,
         limit: usize,
     ) -> Result<SecretUsage, StoreError> {
-        let _ = (tenant, secret, limit);
-        todo!(
-            "engine-server: the active runs whose metadata attaches the secret, those waiting on \
-             a call to a server it serves, the latest versions attaching it"
-        )
+        let state = self.lock()?;
+        // The active runs that attach the secret, oldest first, with whether one of their calls
+        // to a server it serves is parked or not yet sent.
+        let mut active: Vec<(Timestamp, RunId, bool)> = Vec::new();
+        for run in state.runs.values() {
+            let record = &run.record;
+            if record.run.tenant != *tenant || record.status.is_terminal() {
+                continue;
+            }
+            let serves: BTreeSet<&str> = record
+                .metadata
+                .secrets
+                .iter()
+                .filter(|(_, attached)| SecretId::resolve(attached, &record.namespace) == *secret)
+                .map(|(server, _)| server)
+                .collect();
+            if serves.is_empty() {
+                continue;
+            }
+            let waiting = run.tasks.values().any(|task| {
+                task.route
+                    .server()
+                    .is_some_and(|server| serves.contains(server))
+                    && matches!(
+                        task.state,
+                        TaskState::Ready { .. } | TaskState::Approval | TaskState::Parked(_)
+                    )
+            });
+            active.push((record.created_at, record.run.id, waiting));
+        }
+        active.sort();
+        let reference = secret.to_ref();
+        let mut latest: BTreeMap<&str, &(u64, StoredWorkflow)> = BTreeMap::new();
+        for ((owner, _), row) in &state.workflows {
+            if owner != tenant {
+                continue;
+            }
+            let (order, stored) = row;
+            let name = stored.workflow.name();
+            let newer = latest.get(name).is_none_or(|(known_order, known)| {
+                (stored.created_at, order) > (known.created_at, known_order)
+            });
+            if newer {
+                latest.insert(name, row);
+            }
+        }
+        let versions = latest
+            .into_values()
+            .filter_map(|(_, stored)| {
+                let servers: Vec<String> = stored
+                    .workflow
+                    .secrets()
+                    .servers_reading(&reference)
+                    .map(str::to_owned)
+                    .collect();
+                (!servers.is_empty()).then(|| WorkflowAttaching {
+                    name: stored.workflow.name().to_owned(),
+                    version: stored.workflow.version(),
+                    servers,
+                })
+            })
+            .collect();
+        let run_ref = |id: RunId| RunRef::new(tenant.clone(), id);
+        let waiting: Vec<RunId> = active
+            .iter()
+            .filter(|(_, _, waiting)| *waiting)
+            .map(|(_, id, _)| *id)
+            .collect();
+        Ok(SecretUsage {
+            active_total: active.len() as u64,
+            active_runs: active
+                .iter()
+                .take(limit)
+                .map(|(_, id, _)| run_ref(*id))
+                .collect(),
+            waiting_total: waiting.len() as u64,
+            waiting_runs: waiting.into_iter().take(limit).map(run_ref).collect(),
+            versions,
+        })
     }
 
     async fn expire_deferred_tool_tasks(

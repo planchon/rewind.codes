@@ -24,16 +24,17 @@ use serde_json::{Value, json};
 use crate::api::{Api, ApiError};
 use crate::definitions::{AGENT_TOOLS, NEEDS_TOOLSET, ToolDefinition, definition};
 use crate::input::{
-    InputError, Values, optional_index, optional_retirements, optional_string, optional_strings,
-    optional_tests, optional_updates, require_object, require_string,
+    InputError, Values, optional_attachments, optional_index, optional_retirements,
+    optional_string, optional_strings, optional_tests, optional_updates, require_object,
+    require_string,
 };
 use crate::keys::{idempotency_key, run_key, sha256_hex};
 use crate::render::{
     Limits, OUTPUT_LIMIT, RunExtras, SuiteEntry, WorkflowDetails, args, describe_check,
     describe_matches, describe_page, describe_recorded, describe_refusal, describe_retry_refused,
-    describe_run, describe_runs, describe_save_refused, describe_test_results, describe_workflow,
-    describe_workflow_details, describe_workflow_refusal, entry_text, json, quoted, truncate_end,
-    truncate_middle, workflow_ref,
+    describe_run, describe_runs, describe_save_refused, describe_secrets, describe_test_results,
+    describe_workflow, describe_workflow_details, describe_workflow_refusal, entry_text, json,
+    quoted, truncate_end, truncate_middle, workflow_ref,
 };
 
 /// What a tool call returns to the model, and to the harness.
@@ -217,8 +218,10 @@ impl<A: Api> Session<'_, A> {
     pub(crate) async fn run_script(&self, input: &Values) -> Handled {
         let code = require_string(input, "code")?;
         let wait = self.wait_of(input.get("wait"))?;
+        let secrets = optional_attachments(input)?;
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
         let mut start = StartRun::new(code.clone());
+        start.secrets = secrets.unwrap_or_default();
         start.toolset.clone_from(&self.toolset);
         start.input = input.get("input").cloned().unwrap_or_else(|| json!({}));
         start.wait = Some(wait.into());
@@ -427,9 +430,11 @@ impl<A: Api> Session<'_, A> {
     pub(crate) async fn retry_run(&self, input: &Values) -> Handled {
         let run_id = require_string(input, "run_id")?;
         let code = require_string(input, "code")?;
+        let secrets = optional_attachments(input)?;
         let parent = self.scoped_run(&run_id).await?;
         let key = run_key(self.labels, self.call.tool_call_id.as_deref());
         let mut fork = ForkRun::new(code.clone());
+        fork.secrets = secrets;
         fork.labels = (!self.labels.is_empty()).then(|| Labels(self.labels.clone()));
         fork.wait = Some(self.default_wait.into());
         fork.ttl = self.ttl.map(Into::into);
@@ -462,6 +467,28 @@ impl<A: Api> Session<'_, A> {
         self.check_answered(&run, &code, key.as_ref())?;
         let failed = run.status == RunStatus::Failed;
         self.report(run, true, failed).await
+    }
+
+    /// `list_secrets`: the organization's secrets the caller sees, and those of `namespace`. A
+    /// list the caller may not read (403) is left out: its key may attach none of them.
+    pub(crate) async fn list_secrets(&self, namespace: Option<&str>) -> Handled {
+        let readable = |listed: Result<rewind_api::secrets::SecretList, ApiError>| match listed {
+            Ok(list) => Ok(list.secrets),
+            Err(ApiError::Problem(problem)) if problem.status == 403 => Ok(Vec::new()),
+            Err(error) => Err(error),
+        };
+        let organization = readable(self.api.list_secrets().await)?;
+        let of_namespace = match namespace {
+            Some(name) => Some((name, readable(self.api.namespace_secrets(name).await)?)),
+            None => None,
+        };
+        let content = describe_secrets(
+            &organization,
+            of_namespace
+                .as_ref()
+                .map(|(name, secrets)| (*name, secrets.as_slice())),
+        );
+        Ok(result(content, false))
     }
 
     pub(crate) async fn search_tools(&self, input: &Values) -> Handled {
@@ -508,6 +535,7 @@ impl<A: Api> Session<'_, A> {
         let update = optional_updates(input)?;
         let retire = optional_retirements(input)?;
         let parent = optional_string(input, "parent")?;
+        let secrets = optional_attachments(input)?;
         let toolset = self.needs_toolset("save_workflow")?;
         // The body, as the API reads it.
         let request = CreateWorkflow {
@@ -522,9 +550,7 @@ impl<A: Api> Session<'_, A> {
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             update: from_values::<TestUpdate>(update.unwrap_or_default())?,
             retire: from_values::<TestRetirement>(retire.unwrap_or_default())?,
-            // `save_workflow`'s `secrets` argument is the engine-server workstream's
-            // (`archi/09-roadmap.md`): the version attaches none until then.
-            secrets: Default::default(),
+            secrets: secrets.unwrap_or_default(),
         };
         match self.api.create_workflow(&request).await {
             Ok(workflow) => Ok(Ok(workflow)),
@@ -885,6 +911,10 @@ impl<A: Api> AgentTools<A> {
                 "cancel_run" => session.cancel_run(&values).await,
                 "retry_run" => session.retry_run(&values).await,
                 "search_tools" => session.search_tools(&values).await,
+                "list_secrets" => {
+                    let namespace = self.api.namespace();
+                    session.list_secrets(namespace.as_deref()).await
+                }
                 "save_workflow" => self.save_workflow(&session, &values).await,
                 "get_workflow" => session.get_workflow(&values).await,
                 "record_tests" => session.record_tests(&values).await,

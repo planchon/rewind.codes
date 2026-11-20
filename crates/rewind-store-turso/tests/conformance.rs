@@ -30,9 +30,6 @@ async fn the_journal_conforms() {
     let dir = TempDir::new().expect("temporary directory");
     let new_store = stores(&dir);
     conformance::journal::run_all(&new_store).await;
-    // Outside `run_all` until the memory journal answers it.
-    conformance::journal::secret_usage_answers_the_runs_and_versions_attaching_it(&new_store())
-        .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

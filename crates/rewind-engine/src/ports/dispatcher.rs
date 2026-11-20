@@ -6,7 +6,7 @@ use rewind_core::{Api, JsonValue, McpServer, RunId, SecretPlacement, Seq, Tool, 
 use crate::ports::journal::{ParkReason, TaskToken, TraceContext};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::secrets::{Secret, SigningKey};
-use crate::ports::tenancy::RunRef;
+use crate::ports::tenancy::{RunRef, TenantId};
 
 /// One attempt at a tool call, as handed to a [`ToolDispatcher`].
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +87,16 @@ pub struct CallClaims {
 }
 
 impl CallClaims {
+    /// The issuer of a tenant's signed calls, `{public-url}/organizations/{tenant}`: its public
+    /// keys are at `{issuer}/jwks.json`, and a server set up with one issuer accepts no other
+    /// tenant's JWT.
+    pub fn issuer(public_url: &str, tenant: &TenantId) -> String {
+        format!(
+            "{}/organizations/{tenant}",
+            public_url.trim_end_matches('/')
+        )
+    }
+
     /// `jti` of the request of the call itself: `{run_id}/{seq}/{attempt}`, one per attempt.
     pub fn jti(&self) -> String {
         format!("{}/{}/{}", self.run, self.seq.0, self.attempt)

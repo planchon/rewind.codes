@@ -55,6 +55,61 @@ pub(crate) fn compile(
     })
 }
 
+/// The names a script imports from `rewind:tools`, from its syntax tree; `None` when it may
+/// reach every one: it imports or re-exports the whole module, or it does not parse. Type-only
+/// imports are left out: they are erased before the script loads.
+pub(crate) fn tool_imports(script: &Script) -> Option<BTreeSet<String>> {
+    let parsed = parse(script, SCRIPT_SPECIFIER).ok()?;
+    let ProgramRef::Module(module) = parsed.program_ref() else {
+        return Some(BTreeSet::new());
+    };
+    let is_tools = |src: &Str| src.value.to_atom_lossy().as_str() == "rewind:tools";
+    let mut names = BTreeSet::new();
+    for item in &module.body {
+        let ModuleItem::ModuleDecl(decl) = item else {
+            continue;
+        };
+        match decl {
+            ModuleDecl::Import(import) if !import.type_only && is_tools(&import.src) => {
+                for specifier in &import.specifiers {
+                    match specifier {
+                        ImportSpecifier::Named(named) if !named.is_type_only => {
+                            names.insert(match &named.imported {
+                                Some(imported) => export_name(imported),
+                                None => named.local.sym.to_string(),
+                            });
+                        }
+                        ImportSpecifier::Named(_) => {}
+                        ImportSpecifier::Namespace(_) | ImportSpecifier::Default(_) => {
+                            return None;
+                        }
+                    }
+                }
+            }
+            ModuleDecl::ExportAll(export) if !export.type_only && is_tools(&export.src) => {
+                return None;
+            }
+            ModuleDecl::ExportNamed(export)
+                if !export.type_only && export.src.as_deref().is_some_and(is_tools) =>
+            {
+                for specifier in &export.specifiers {
+                    match specifier {
+                        ExportSpecifier::Named(named) if !named.is_type_only => {
+                            names.insert(export_name(&named.orig));
+                        }
+                        ExportSpecifier::Named(_) => {}
+                        ExportSpecifier::Namespace(_) | ExportSpecifier::Default(_) => {
+                            return None;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(names)
+}
+
 /// TypeScript compiled to JavaScript, with its source map.
 pub(crate) struct Transpiled {
     pub(crate) javascript: String,
@@ -382,6 +437,38 @@ mod tests {
 
     fn refused(source: &str) -> String {
         check(source).expect_err(source).message
+    }
+
+    #[test]
+    fn tells_what_a_script_imports_from_rewind_tools() {
+        let imports = |source: &str| tool_imports(&Script::new(source));
+        let names = |names: &[&str]| Some(names.iter().map(|name| (*name).to_owned()).collect());
+        assert_eq!(
+            imports(
+                "import { sleep } from \"rewind\";\nimport { github, ask_user as ask, type Issue } \
+                 from \"rewind:tools\";\nimport type { Linear } from \"rewind:tools\";\nexport \
+                 default async () => [sleep, github, ask];"
+            ),
+            names(&["ask_user", "github"]),
+            "the named imports, by the name the module exports, and no type"
+        );
+        assert_eq!(
+            imports("export default async () => 1;"),
+            names(&[]),
+            "nothing imported"
+        );
+        assert_eq!(
+            imports("export { zendesk } from \"rewind:tools\";\nexport default async () => 1;"),
+            names(&["zendesk"]),
+            "a re-export reaches what it names"
+        );
+        for whole in [
+            "import * as tools from \"rewind:tools\";\nexport default async () => tools;",
+            "export * from \"rewind:tools\";\nexport default async () => 1;",
+            "export * as tools from \"rewind:tools\";\nexport default async () => 1;",
+        ] {
+            assert_eq!(imports(whole), None, "{whole}");
+        }
     }
 
     #[test]

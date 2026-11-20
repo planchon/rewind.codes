@@ -27,6 +27,22 @@ pub struct Scenario {
     /// The pinned output schema of some MCP tools, by name.
     #[serde(default)]
     pub output_schemas: BTreeMap<String, Value>,
+    /// How the calls of some MCP servers authenticate, by server: `secret` (the attached secret
+    /// as a bearer token) or `rewind` (signed with the tenant's key). None for the others.
+    #[serde(default)]
+    pub auth: BTreeMap<String, String>,
+    /// The secrets the run attaches, by server: `org/<name>` or `ns/<name>`
+    /// (`archi/04-tools.md`, "Secrets").
+    #[serde(default)]
+    pub secrets: BTreeMap<String, String>,
+    /// The secrets that exist before the run starts, by reference (`ns/<name>` in the run's
+    /// namespace, `org/<name>`), with their values.
+    #[serde(default)]
+    pub put_secrets: BTreeMap<String, String>,
+    /// What the caller that starts the run may attach: `namespace` (the default: its
+    /// namespace's secrets only) or `organization` (`secrets:use`).
+    #[serde(default)]
+    pub attach: Option<String>,
     /// The policies that differ from the default, by tool.
     #[serde(default)]
     pub policies: BTreeMap<String, Policy>,
@@ -92,6 +108,9 @@ pub struct WorkflowCase {
     pub output: Value,
     #[serde(default)]
     pub signals: BTreeMap<String, Value>,
+    /// The secrets its runs attach, by server, saved with the version.
+    #[serde(default)]
+    pub secrets: BTreeMap<String, String>,
 }
 
 /// A fork of the case's run (`archi/03-execution.md`, "Forks").
@@ -178,6 +197,11 @@ pub enum Step {
     /// map of one header, as the corpus wrote it when runs had credentials): it puts the secret
     /// the run attached for the server again, or approves the calls the server refused.
     Credentials(BTreeMap<String, BTreeMap<String, String>>),
+    /// Deletes the secret the run attached for this server.
+    DeleteSecret(String),
+    /// The call of this tool waits for the harness, parked for this reason
+    /// (`credentials_refused`, `secret_missing`, `schema_changed`).
+    Parked { tool: String, reason: String },
 }
 
 /// What must be true once the run is driven. Everything not given is not checked.
@@ -205,6 +229,12 @@ pub struct Expect {
     pub dispatched: Option<BTreeMap<String, usize>>,
     /// The statuses of the runs of workflows the run started, in the order of its calls.
     pub children: Option<Vec<String>>,
+    /// How each call the tools answered authenticated, in order, across the case: the value of
+    /// the secret it carried, `signed`, or `none`.
+    pub auth: Option<Vec<String>>,
+    /// The idempotency keys of the calls the tools answered, in order, across the case; `{run}`
+    /// stands for the recorded run's id.
+    pub keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

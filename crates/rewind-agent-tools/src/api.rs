@@ -18,6 +18,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
 use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
@@ -169,6 +170,21 @@ pub trait Api: Send + Sync {
         workflow: &str,
         record: &RecordTests,
     ) -> impl Future<Output = Result<RecordedTests, ApiError>> + Send;
+
+    /// `GET /v1/secrets`: the organization's secrets the caller sees, never a value.
+    fn list_secrets(&self) -> impl Future<Output = Result<SecretList, ApiError>> + Send;
+
+    /// `GET /v1/namespaces/{name}/secrets`: the namespace's secrets, never a value.
+    fn namespace_secrets(
+        &self,
+        namespace: &str,
+    ) -> impl Future<Output = Result<SecretList, ApiError>> + Send;
+
+    /// The namespace this API acts for (`Rewind-Namespace`), whose secrets `list_secrets` lists;
+    /// `None` when it names none, or does not know it (an end user's token holds its own).
+    fn namespace(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What the MCP set calls beyond the SDK's: what the caller reaches in the organization.
@@ -309,6 +325,21 @@ impl<A: Api> Api for &A {
         record: &RecordTests,
     ) -> impl Future<Output = Result<RecordedTests, ApiError>> + Send {
         (**self).record_tests(workflow, record)
+    }
+
+    fn list_secrets(&self) -> impl Future<Output = Result<SecretList, ApiError>> + Send {
+        (**self).list_secrets()
+    }
+
+    fn namespace_secrets(
+        &self,
+        namespace: &str,
+    ) -> impl Future<Output = Result<SecretList, ApiError>> + Send {
+        (**self).namespace_secrets(namespace)
+    }
+
+    fn namespace(&self) -> Option<String> {
+        (**self).namespace()
     }
 }
 

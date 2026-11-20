@@ -24,6 +24,9 @@ pub struct ScenarioTools {
     responses: Mutex<BTreeMap<String, Responses>>,
     /// The calls dispatched, by tool, and the idempotency keys they carried.
     dispatched: Mutex<Vec<(String, String)>>,
+    /// How each call the dispatcher answered authenticated: the secret's value, `signed` or
+    /// `none`.
+    auth: Mutex<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -60,7 +63,17 @@ impl ScenarioTools {
         Self {
             responses: Mutex::new(responses),
             dispatched: Mutex::new(Vec::new()),
+            auth: Mutex::new(Vec::new()),
         }
+    }
+
+    /// How each call the dispatcher answered authenticated, in order: the secret's value,
+    /// `signed`, or `none`.
+    pub fn auth(&self) -> Vec<String> {
+        self.auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// How many times each tool was dispatched.
@@ -161,7 +174,16 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 }
 
 impl ToolDispatcher for ScenarioTools {
-    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+        let carried = match &auth {
+            CallAuth::None => "none".to_owned(),
+            CallAuth::Secret { value, .. } => value.expose().to_owned(),
+            CallAuth::Signed { .. } => "signed".to_owned(),
+        };
+        self.auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(carried);
         match self.answer(&call.tool.name, &call.args, &call.idempotency_key) {
             Answer::Result(result) => Dispatched::Result(result),
             Answer::Deferred => Dispatched::Deferred,

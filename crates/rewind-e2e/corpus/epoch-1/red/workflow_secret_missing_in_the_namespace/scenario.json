@@ -1,0 +1,67 @@
+{
+  "description": "A workflow's version attaches the namespace's crm, and the namespace of the run that starts it has none: the start fails with a ToolError (unavailable), and no run of it exists.",
+  "live": true,
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "workflows": {
+    "triage": {
+      "script": "triage.ts",
+      "input": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "secrets": {
+        "crm": "ns/crm"
+      }
+    }
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "status": "failed",
+    "error": {
+      "name": "ToolError",
+      "message": "the secret ns/crm attached for crm does not exist"
+    },
+    "children": [],
+    "auth": []
+  }
+}

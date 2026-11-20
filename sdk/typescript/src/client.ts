@@ -96,7 +96,7 @@ export class Rewind {
     this.tools = new Tools(this.transport);
     this.apiKeys = new ApiKeys(this.transport);
     this.namespaces = new Namespaces(this.transport);
-    this.secrets = new Secrets(this.transport);
+    this.secrets = new Secrets(this.transport, this.options.namespace);
     this.signingKeys = new SigningKeys(this.transport);
     this.tokenKeys = new TokenKeys(this.transport);
     this.server = new Server(this.transport);

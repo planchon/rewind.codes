@@ -83,8 +83,10 @@ export {
   idempotencyKeyOf,
   runIdempotencyKey,
   type AgentToolResult,
+  type AgentSecrets,
   type AgentToolsClient,
   type AgentToolsOptions,
+  type ListedSecret,
   type HandleOptions,
 } from "./agent-tools/agent-tools.js";
 export {

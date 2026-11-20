@@ -81,6 +81,23 @@ impl ToolsetRef {
     }
 }
 
+/// `--secret server=scope/name`, repeated: the secrets a run reads, by server. The server checks
+/// the references.
+pub(crate) fn attachments(pairs: &[String]) -> Result<rewind_api::secrets::Attachments, CliError> {
+    pairs
+        .iter()
+        .map(|pair| match pair.split_once('=') {
+            Some((server, secret)) if !server.is_empty() && !secret.is_empty() => {
+                Ok((server.to_owned(), secret.to_owned()))
+            }
+            _ => Err(CliError::Usage(format!(
+                "--secret {pair:?}: expected <server>=<scope>/<name>, such as github=ns/github or \
+                 zendesk=org/zendesk"
+            ))),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

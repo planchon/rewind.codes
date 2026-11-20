@@ -1,0 +1,69 @@
+{
+  "description": "A fork attaches its parent's secrets when its request gives none: the corrected script's new call reads the namespace's crm, as the parent's did.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "crm.plan": {
+      "type": "object",
+      "properties": {
+        "tier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier"
+      ]
+    }
+  },
+  "put_secrets": {
+    "ns/crm": "crm-token"
+  },
+  "secrets": {
+    "crm": "ns/crm"
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    },
+    "crm.plan": {
+      "tier": "pro"
+    }
+  },
+  "fork": {
+    "script": "fixed.ts"
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "name": "Ada",
+      "plan": "pro"
+    },
+    "dispatched": {
+      "crm.lookup": 1,
+      "crm.plan": 1
+    },
+    "auth": [
+      "crm-token",
+      "crm-token"
+    ]
+  }
+}

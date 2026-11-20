@@ -94,13 +94,13 @@ export interface ForkRunParams extends RequestOptions {
   traceparent?: string | undefined;
   tracestate?: string | undefined;
   ttl?: Duration | undefined;
-  /** Type-check the corrected script first. `true` by default. */
-  check?: boolean | undefined;
   /**
-   * The fork's attachments, as `start` takes them: `{ github: "ns/github" }`. The parent's when absent. Either way they
-   * are checked against the caller, since the script is new code (`secret-required`).
+   * The fork's secrets, by MCP server or API, as `runs.start` takes them. The parent's when absent; either way they
+   * are checked against the caller, since the script is new code.
    */
   secrets?: Record<string, string> | undefined;
+  /** Type-check the corrected script first. `true` by default. */
+  check?: boolean | undefined;
 }
 
 export interface ListRunsParams extends RequestOptions {

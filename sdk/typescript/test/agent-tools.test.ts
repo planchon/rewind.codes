@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   AGENT_TOOL_NAMES,
+  AgentTools as AgentToolsClass,
   NamespaceRequiredError,
   Rewind,
   RewindApiError,
   RewindError,
+  type AgentSecrets,
   type AgentTools,
+  type ListedSecret,
   type Run,
 } from "../src/index.js";
 import { NAMESPACE, RUN_ID, TOOLSET, VERSION, payload, run, toolset, workflow } from "./fixtures.js";
@@ -63,6 +66,7 @@ describe("the agent tools' definitions", () => {
     }
     expect(withoutToolset.has("run_script")).toBe(true);
     expect(withoutToolset.has("test_script")).toBe(true);
+    expect(withoutToolset.has("list_secrets")).toBe(true);
     expect(() => rewind.agentTools({ tools: ["search_tools"] })).toThrow(TypeError);
     expect(() => rewind.agentTools({ tools: ["save_workflow"] })).toThrow("save_workflow needs a toolset");
     expect(() => rewind.agentTools({ tools: ["get_workflow"] })).toThrow("get_workflow needs a toolset");
@@ -133,6 +137,7 @@ describe("the agent tools' definitions", () => {
       "update",
       "retire",
       "parent",
+      "secrets",
     ]);
     expect(save.description).toContain("saved only if every test passes");
     expect(save.description).toContain("retire the test when the behavior is deprecated");
@@ -1566,5 +1571,128 @@ describe("the adapters", () => {
       arguments: '{"code":"y"}',
     });
     expect(output).toEqual({ type: "function_call_output", call_id: "call_2", output: "The script type-checks." });
+  });
+});
+
+describe("secrets", () => {
+  /** A secret as the API lists it: its metadata, never its value. */
+  function listed(reference: string, labels?: Record<string, string>): ListedSecret {
+    const [scope, name] = reference.split("/") as ["org" | "ns", string];
+    return {
+      name,
+      scope,
+      reference,
+      ...(scope === "ns" ? { namespace: "alice" } : {}),
+      ...(labels ? { labels } : {}),
+      createdBy: "user:u",
+      createdAt: "2026-11-19T10:00:00Z",
+      updatedBy: "user:u",
+      updatedAt: "2026-11-19T10:00:00Z",
+      reads: [],
+    };
+  }
+
+  function withSecrets(secrets: AgentSecrets | undefined): AgentTools {
+    const client = rewind.namespace(NAMESPACE);
+    return new AgentToolsClass(
+      {
+        runs: client.runs,
+        scripts: client.scripts,
+        toolsets: client.toolsets,
+        workflows: client.workflows,
+        tests: client.tests,
+        payloads: client.payloads,
+        secrets,
+      },
+      { toolset: TOOLSET, labels: LABELS },
+    );
+  }
+
+  it("list_secrets: what the agent may attach, never a value", async () => {
+    const agent = withSecrets({
+      list: async () => [listed("org/zendesk", { env: "prod" }), listed("org/linear")],
+      ofNamespace: async () => [listed("ns/github")],
+    });
+    const result = await agent.handle("list_secrets", {});
+    expect(result.isError).toBe(false);
+    // The same text as the Rust port's (`crates/rewind-agent-tools/tests/tools.rs`).
+    expect(result.content).toBe(
+      'The secrets you may attach, never a value:\n- org/zendesk, the organization\'s (labels env=prod)\n- org/linear, the organization\'s\n- ns/github, the end user\'s in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {"github": "ns/github"}.',
+    );
+  });
+
+  it("list_secrets: leaves out what the caller may not read, and says when nothing exists", async () => {
+    const forbidden = new RewindApiError({
+      type: "urn:rewind:problem:forbidden",
+      title: "Forbidden",
+      status: 403,
+      detail: "an end user's token reaches its own namespace's secrets only",
+    });
+    const token = withSecrets({
+      list: async () => {
+        throw forbidden;
+      },
+      ofNamespace: async () => [listed("ns/github")],
+    });
+    expect((await token.handle("list_secrets", {})).content).toBe(
+      'The secrets you may attach, never a value:\n- ns/github, the end user\'s in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {"github": "ns/github"}.',
+    );
+    const none = await withSecrets(undefined).handle("list_secrets", {});
+    expect(none).toEqual({
+      content:
+        "No secret you may attach exists yet: a person puts one first, the end user's in their namespace or the organization's.",
+      isError: false,
+    });
+  });
+
+  it("go with run_script, retry_run and save_workflow", async () => {
+    const attached = { github: "ns/github", zendesk: "org/zendesk" };
+    server.on("POST", "/v1/runs", started());
+    await tools.handle("run_script", { code: "a", secrets: attached }, { toolCallId: "c1" });
+    expect((server.calls("POST", "/v1/runs")[0]?.body as { secrets: unknown }).secrets).toEqual(attached);
+
+    serveRun(run({ status: "failed" }));
+    server.on("POST", "/v1/runs/{id}/fork", started({ id: "fork-1", parent: { run: RUN_ID } }));
+    await tools.handle("retry_run", { run_id: RUN_ID, code: "b", secrets: { github: "org/github" } });
+    expect(server.calls("POST", `/v1/runs/${RUN_ID}/fork`)[0]?.body).toEqual({
+      script: "b",
+      labels: LABELS,
+      wait: "30s",
+      secrets: { github: "org/github" },
+    });
+
+    server.on("POST", "/v1/workflows", json(workflow(), 201));
+    server.on("POST", "/v1/toolsets", json(toolset("de".repeat(32), [workflow()]), 201));
+    await tools.handle("save_workflow", {
+      name: "triage",
+      description: "Triage.",
+      code: "c",
+      input: {},
+      output: {},
+      secrets: { github: "ns/github" },
+    });
+    expect((server.calls("POST", "/v1/workflows")[0]?.body as { secrets: unknown }).secrets).toEqual({
+      github: "ns/github",
+    });
+
+    const refused = await tools.handle("run_script", { code: "a", secrets: { github: 1 } });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toMatch(/^run_script: `secrets` must be an object of secrets by MCP server or API/);
+  });
+
+  it("a start refused for its secrets tells the model what it may attach", async () => {
+    server.on("POST", "/v1/runs", () =>
+      problem(
+        422,
+        // `secret-required` joins the SDK's problem slugs with the ts workstream.
+        "secret-required" as never,
+        'the script imports github, which needs a secret: attach one in "secrets" ("github": "org/<name>" or "ns/<name>"). The secrets you may attach: ns/github',
+      ),
+    );
+    const result = await tools.handle("run_script", { code: "a" });
+    expect(result.isError).toBe(true);
+    expect(result.content).toBe(
+      'run_script failed: the script imports github, which needs a secret: attach one in "secrets" ("github": "org/<name>" or "ns/<name>"). The secrets you may attach: ns/github',
+    );
   });
 });

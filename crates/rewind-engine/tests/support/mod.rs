@@ -3,7 +3,7 @@
 
 #![allow(dead_code, unreachable_pub)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -207,10 +207,12 @@ impl FakeRun {
 }
 
 /// Programs by name: a script's source is the name of its program. A source starting with
-/// `syntax error` does not compile; the program `unloadable` fails to load.
+/// `syntax error` does not compile; the program `unloadable` fails to load. A program imports
+/// every name of `rewind:tools` unless [`FakeExecutor::importing`] says which.
 #[derive(Clone, Default)]
 pub struct FakeExecutor {
     programs: HashMap<String, Arc<dyn Program>>,
+    imports: HashMap<String, BTreeSet<String>>,
     starts: Arc<Mutex<usize>>,
 }
 
@@ -233,6 +235,15 @@ impl FakeExecutor {
     ) -> Self {
         self.programs
             .insert(name.into(), Arc::new(FnProgram { start, deliver }));
+        self
+    }
+
+    /// The program `name` imports only these names from `rewind:tools`.
+    pub fn importing(mut self, name: &str, imports: &[&str]) -> Self {
+        self.imports.insert(
+            name.into(),
+            imports.iter().map(|name| (*name).to_owned()).collect(),
+        );
         self
     }
 
@@ -270,6 +281,10 @@ impl ScriptExecutor for FakeExecutor {
             javascript: script.source().into(),
             source_map: String::new(),
         })
+    }
+
+    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        self.imports.get(script.source()).cloned()
     }
 
     async fn start(

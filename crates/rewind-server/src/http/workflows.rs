@@ -384,9 +384,10 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::Invalid(_) | RegisterError::Schema { .. } => {
             ApiError::new(ProblemType::InvalidWorkflow, error.to_string())
         }
-        RegisterError::SecretRequired(ref problems) => {
-            ApiError::secret_required(error.to_string(), problems)
+        RegisterError::SecretRequired(ref refused) => {
+            ApiError::secret_required(error.to_string(), refused)
         }
+        RegisterError::Secret(error) => error.into(),
         RegisterError::ToolsetNotFound(digest) => ApiError::not_found(format!(
             "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
         )),
