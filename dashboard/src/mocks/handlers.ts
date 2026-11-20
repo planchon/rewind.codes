@@ -25,6 +25,7 @@ import {
   toolStats,
   visibleEntries,
 } from "./readmodel";
+import { secretHandlers } from "./secret-handlers";
 import { workflowHandlers } from "./workflow-handlers";
 
 export { problem };
@@ -104,6 +105,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     ...workflowHandlers(world),
 
     ...connectionHandlers(world),
+
+    ...secretHandlers(world, now),
 
     http.get("*/v1/server", () =>
       HttpResponse.json({

@@ -4678,3 +4678,63 @@ table.grid .conn-orgs {
 .conn-edit-row .field-hint {
   grid-column: 1 / -1;
 }
+
+/* Secrets: the organization's and a namespace's; the signing keys */
+
+.secret-reads {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.attached-by {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+a.tag {
+  color: var(--ink);
+  text-decoration: none;
+}
+
+a.tag:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.secret-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-body);
+}
+
+.secret-impact {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.secret-impact .plain-list {
+  margin-top: 6px;
+}
+
+.signing-kv {
+  max-width: 100%;
+}
+
+.signing-kv dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.attached-secrets {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}

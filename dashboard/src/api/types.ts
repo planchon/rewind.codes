@@ -99,6 +99,15 @@ export type PutNamespace = Schemas["PutNamespace"];
 export type PutNamespaceDefaults = Schemas["PutNamespaceDefaults"];
 export type RevokedTokens = Schemas["RevokedTokens"];
 
+// Secrets: the organization's and each namespace's, never a value; the keys Rewind signs with.
+export type Secret = Schemas["Secret"];
+export type SecretUsage = Schemas["SecretUsage"];
+export type PutSecret = Schemas["PutSecret"];
+export type WorkflowAttaching = Schemas["WorkflowAttaching"];
+export type DailyReads = Schemas["DailyReads"];
+export type SigningKey = Schemas["SigningKey"];
+export type SigningKeyList = Schemas["SigningKeyList"];
+
 // Workflows: their versions, each with its suite, and the tests (archi/05, "Suites and the gate").
 export type Workflow = Schemas["Workflow"];
 export type WorkflowPage = Schemas["WorkflowPage"];

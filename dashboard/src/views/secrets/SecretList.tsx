@@ -1,0 +1,524 @@
+// The secrets of the organization (`namespace` null) or of one namespace, as a table: each one's
+// labels, who wrote it and when, its reads over 30 days, its last read, and the runs and workflows
+// that attach it (archi/05, "Secrets"). A value is written in a dialog and never shown nor read
+// back; a deletion is confirmed in a dialog that first says what it would stop, read from
+// `GET …/secrets/{name}/usage`. Writing needs `secrets:write`, and a namespace's secret a grant
+// that is not limited to labels.
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { PenLine, Plus, Trash2 } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { Link } from "react-router";
+import { SECRETS, useSecrets, useSecretUsage } from "../../api/secrets";
+import type { Secret, SecretUsage } from "../../api/types";
+import { useAccess } from "../../app/access";
+import { useApi } from "../../app/session";
+import { Ago, Empty, LabelList, Loading, RunId, useNow } from "../../components/bits";
+import { Sparkline } from "../../components/Charts";
+import { ErrorNote } from "../../components/ErrorNote";
+import { DialogForm, FormDialog } from "../../components/FormDialog";
+import { HoverCard } from "../../components/HoverCard";
+import { NamespaceName } from "../../components/NamespaceName";
+import { formatLabels } from "../../model/access";
+import { formatCount } from "../../model/format";
+import {
+  labelsTaken,
+  plural,
+  READ_DAYS,
+  readSeries,
+  secretNameProblem,
+  secretValueProblem,
+  stopsNothing,
+  totalReads,
+} from "../../model/secrets";
+import { Field, LabelsInput, PrincipalName, useLabels, useMemberNames } from "../org/bits";
+
+/** Who may write here: `secrets:write`, and for a namespace's secret a grant without labels. */
+export function useCanWriteSecrets(namespace: string | null): boolean {
+  const access = useAccess();
+  return access.can("secrets:write") && (namespace === null || !access.limited);
+}
+
+export function SecretList({
+  namespace,
+  intro,
+}: {
+  /** `null`: the organization's secrets. */
+  namespace: string | null;
+  intro: ReactNode;
+}) {
+  const list = useSecrets(namespace);
+  const write = useCanWriteSecrets(namespace);
+  const names = useMemberNames();
+  const now = useNow(60_000);
+  const [writing, setWriting] = useState<{ existing: Secret | null } | null>(null);
+  const [deleting, setDeleting] = useState<Secret | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const org = namespace === null;
+
+  return (
+    <div className="org-section secrets">
+      <div className="section-bar">
+        <p className="section-intro dim">{intro}</p>
+        {write && (
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              setNotice(null);
+              setWriting({ existing: null });
+            }}
+          >
+            <Plus size={12} /> New secret
+          </button>
+        )}
+      </div>
+      {notice && (
+        <div className="notice" role="status">
+          {notice}
+        </div>
+      )}
+      <FormDialog open={writing !== null} onOpenChange={(open) => !open && setWriting(null)}>
+        {writing && (
+          <WriteSecret
+            namespace={namespace}
+            existing={writing.existing}
+            taken={(list.data ?? []).map((s) => s.name)}
+            onDone={(secret, created) => {
+              setWriting(null);
+              setNotice(
+                created
+                  ? `The secret ${secret.reference} was created. Its value is not shown again.`
+                  : `The value of ${secret.reference} was replaced: its parked calls are sent again.`,
+              );
+            }}
+          />
+        )}
+      </FormDialog>
+      <FormDialog open={deleting !== null} onOpenChange={(open) => !open && setDeleting(null)}>
+        {deleting && (
+          <DeleteSecret
+            namespace={namespace}
+            secret={deleting}
+            onDone={() => {
+              setNotice(`The secret ${deleting.reference} was deleted.`);
+              setDeleting(null);
+            }}
+          />
+        )}
+      </FormDialog>
+      {list.isPending ? (
+        <Loading />
+      ) : list.error ? (
+        <ErrorNote error={list.error} title="The secrets could not be read" />
+      ) : list.data.length === 0 ? (
+        <Empty>
+          {org
+            ? "No secret yet: the runs attach none of the organization's."
+            : "No secret of this end user yet."}
+        </Empty>
+      ) : (
+        <div className="table-wrap">
+          <table className="grid secrets-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                {org && <th>Labels</th>}
+                <th>Written</th>
+                <th>Reads, {READ_DAYS} days</th>
+                <th>Last read</th>
+                <th>Attached by</th>
+                {write && <th className="right">Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {list.data.map((s) => (
+                <tr key={s.reference}>
+                  <td>
+                    <span className="key-name">{s.name}</span>{" "}
+                    <span className="mono muted">{s.reference}</span>
+                  </td>
+                  {org && (
+                    <td className="wrap">
+                      <LabelList labels={s.labels ?? {}} />
+                    </td>
+                  )}
+                  <td className="dim">
+                    <span
+                      title={`Created by ${s.createdBy} on ${new Date(Date.parse(s.createdAt)).toUTCString()}`}
+                    >
+                      <PrincipalName text={s.updatedBy} names={names} />,{" "}
+                      <Ago ms={Date.parse(s.updatedAt)} />
+                    </span>
+                  </td>
+                  <td>
+                    <span className="secret-reads">
+                      <Sparkline
+                        series={readSeries(s.reads, now)}
+                        label={`Reads of ${s.reference} per day`}
+                        width={90}
+                        height={18}
+                      />
+                      <span className="num">{formatCount(totalReads(s.reads))}</span>
+                    </span>
+                  </td>
+                  <td className="dim">
+                    <LastRead secret={s} org={org} />
+                  </td>
+                  <td>
+                    <AttachedBy namespace={namespace} secret={s} />
+                  </td>
+                  {write && (
+                    <td className="right">
+                      <span className="row-actions">
+                        <button
+                          type="button"
+                          className="btn small"
+                          aria-label={`Write a new value of ${s.reference}`}
+                          onClick={() => {
+                            setNotice(null);
+                            setWriting({ existing: s });
+                          }}
+                        >
+                          <PenLine size={12} aria-hidden="true" /> New value
+                        </button>
+                        <button
+                          type="button"
+                          className="btn small"
+                          aria-label={`Delete ${s.reference}`}
+                          onClick={() => {
+                            setNotice(null);
+                            setDeleting(s);
+                          }}
+                        >
+                          <Trash2 size={12} aria-hidden="true" /> Delete…
+                        </button>
+                      </span>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
+  const last = secret.lastRead;
+  if (!last) return <span className="muted">never</span>;
+  return (
+    <span className="secret-last-read">
+      <Ago ms={Date.parse(last.at)} />
+      {" by "}
+      <Link to={`/runs/${last.run}`} title="The run that read it last">
+        <RunId id={last.run} />
+      </Link>
+      {org && (
+        <>
+          {" · "}
+          <NamespaceName name={last.namespace} />
+        </>
+      )}
+    </span>
+  );
+}
+
+/** The runs and workflows that attach the secret now. */
+function AttachedBy({ namespace, secret }: { namespace: string | null; secret: Secret }) {
+  const usage = useSecretUsage(namespace, secret.name);
+  const access = useAccess();
+  if (usage.isPending) return <span className="muted">…</span>;
+  if (usage.error) return <span className="muted">unknown</span>;
+  const u = usage.data;
+  if (stopsNothing(u)) return <span className="muted">nothing active</span>;
+  return (
+    <span className="attached-by">
+      {u.activeTotal > 0 && (
+        <HoverCard
+          label={`The active runs that attach ${secret.reference}`}
+          trigger={
+            <button type="button" className="link-btn">
+              {plural(u.activeTotal, "active run")}
+              {u.waitingTotal > 0 ? `, ${u.waitingTotal} waiting` : ""}
+            </button>
+          }
+        >
+          <p className="card-title">{plural(u.activeTotal, "active run")} attach it</p>
+          <RunList usage={u} />
+        </HoverCard>
+      )}
+      {u.workflows.map((w) =>
+        access.can("toolsets:read") ? (
+          <Link
+            key={w.name}
+            className="tag"
+            to={`/testing/${encodeURIComponent(w.name)}?version=${w.version}`}
+            title={`Its latest version attaches it for ${w.servers.join(", ")}`}
+          >
+            {w.name}
+          </Link>
+        ) : (
+          <span key={w.name} className="tag" title={`For ${w.servers.join(", ")}`}>
+            {w.name}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
+
+function RunList({ usage, max = 12 }: { usage: SecretUsage; max?: number }) {
+  const waiting = new Set(usage.waitingRuns);
+  const shown = usage.activeRuns.slice(0, max);
+  return (
+    <ul className="plain-list secret-runs">
+      {shown.map((id) => (
+        <li key={id}>
+          <Link to={`/runs/${id}`}>
+            <RunId id={id} />
+          </Link>
+          {waiting.has(id) && <span className="muted"> · waits on a call it serves</span>}
+        </li>
+      ))}
+      {usage.activeTotal > shown.length && (
+        <li className="muted">and {formatCount(usage.activeTotal - shown.length)} more</li>
+      )}
+    </ul>
+  );
+}
+
+/** Writes a new secret, or a new value of one: the value is typed, sent, and never read back. */
+function WriteSecret({
+  namespace,
+  existing,
+  taken,
+  onDone,
+}: {
+  namespace: string | null;
+  existing: Secret | null;
+  /** The names in use: a new secret of one of them replaces it. */
+  taken: readonly string[];
+  onDone: (secret: Secret, created: boolean) => void;
+}) {
+  const api = useApi();
+  const access = useAccess();
+  const queryClient = useQueryClient();
+  const org = namespace === null;
+  const grantLabels = access.identity.grant?.allowedLabels ?? {};
+  const [name, setName] = useState(existing?.name ?? "");
+  const [value, setValue] = useState("");
+  const [touched, setTouched] = useState(false);
+  const labels = useLabels(existing?.labels ?? (access.limited ? grantLabels : undefined));
+  const nameError = existing ? null : secretNameProblem(name);
+  const valueError = secretValueProblem(value);
+  const replaces = !existing && taken.includes(name);
+  const save = useMutation({
+    mutationFn: () =>
+      api.putSecret(namespace, name, {
+        value,
+        ...(org ? { labels: labelsTaken(labels.labels ?? {}, grantLabels) } : {}),
+      }),
+    onSuccess: async (secret) => {
+      setValue("");
+      await queryClient.invalidateQueries({ queryKey: SECRETS });
+      onDone(secret, !existing && !replaces);
+    },
+  });
+  const ready = !nameError && !valueError && (!org || labels.labels !== null);
+  const reference = `${org ? "org" : "ns"}/${name || "<name>"}`;
+  return (
+    <DialogForm
+      title={existing ? `New value of ${existing.reference}` : "New secret"}
+      description={
+        existing ? (
+          <>
+            The value replaces the current one at once. The calls parked because it was missing or
+            refused, in the runs that attach it, are sent again with the same idempotency key.
+          </>
+        ) : org ? (
+          <>
+            A value the runs of every end user may attach, as <code>{reference}</code>. Only
+            Rewind's dispatcher reads it, for the runs that attach it.
+          </>
+        ) : (
+          <>
+            This end user's own value, attached as <code>{reference}</code> by the runs of this
+            namespace only.
+          </>
+        )
+      }
+      submit={existing || replaces ? "Replace the value" : "Create the secret"}
+      pending={save.isPending}
+      pendingLabel="Saving…"
+      disabled={!ready}
+      error={save.error}
+      errorTitle="The secret was not saved"
+      onSubmit={() => {
+        setTouched(true);
+        if (ready) save.mutate();
+      }}
+    >
+      {!existing && (
+        <Field
+          label="Name"
+          hint={
+            replaces
+              ? "A secret of this name exists: saving replaces its value."
+              : "Lowercase letters, digits, - and _, starting with a letter: github, zendesk."
+          }
+          error={touched || name.length > 0 ? nameError : null}
+        >
+          {(props) => (
+            <input
+              {...props}
+              className="input mono"
+              placeholder="github"
+              value={name}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+            />
+          )}
+        </Field>
+      )}
+      <Field
+        label="Value"
+        hint="Written, never shown again: no one reads it back, not even you. At most 16 KiB."
+        error={touched ? valueError : null}
+      >
+        {(props) => (
+          <input
+            {...props}
+            type="password"
+            className="input mono"
+            value={value}
+            spellCheck={false}
+            autoComplete="new-password"
+            onChange={(e) => setValue(e.target.value)}
+          />
+        )}
+      </Field>
+      {org && (
+        <LabelsInput
+          label="Labels"
+          value={labels.text}
+          onChange={labels.setText}
+          error={labels.error}
+          placeholder="env:prod"
+          hint={
+            access.limited
+              ? `Your grant is limited to ${formatLabels(grantLabels)}: the secret takes them.`
+              : "Optional. Only the keys and grants limited to these labels see and attach it, with those without labels."
+          }
+        />
+      )}
+    </DialogForm>
+  );
+}
+
+/** Deletes a secret, once the dialog has said what that would stop. */
+function DeleteSecret({
+  namespace,
+  secret,
+  onDone,
+}: {
+  namespace: string | null;
+  secret: Secret;
+  onDone: () => void;
+}) {
+  const api = useApi();
+  const queryClient = useQueryClient();
+  const usage = useSecretUsage(namespace, secret.name);
+  const remove = useMutation({
+    mutationFn: () => api.deleteSecret(namespace, secret.name),
+    onSuccess: async () => {
+      onDone();
+      await queryClient.invalidateQueries({ queryKey: SECRETS });
+    },
+  });
+  return (
+    <DialogForm
+      title={`Delete ${secret.reference}?`}
+      submit="Delete"
+      pending={remove.isPending}
+      pendingLabel="Deleting…"
+      disabled={usage.isPending}
+      danger
+      error={remove.error}
+      errorTitle="It was not deleted"
+      onSubmit={() => remove.mutate()}
+    >
+      {usage.isPending ? (
+        <Loading>Reading what attaches it…</Loading>
+      ) : usage.error ? (
+        <ErrorNote error={usage.error} title="What attaches it could not be read" />
+      ) : (
+        <Impact namespace={namespace} usage={usage.data} />
+      )}
+    </DialogForm>
+  );
+}
+
+/** What deleting the secret stops, from its usage. */
+function Impact({ namespace, usage }: { namespace: string | null; usage: SecretUsage }) {
+  const reads = totalReads(usage.secret.reads);
+  const last = usage.secret.lastRead;
+  return (
+    <div className="secret-impact" data-testid="impact">
+      {stopsNothing(usage) ? (
+        <p className="dialog-text">No active run and no workflow attaches it.</p>
+      ) : (
+        <>
+          {usage.activeTotal > 0 && (
+            <div>
+              <p className="dialog-text">
+                <strong>{plural(usage.activeTotal, "active run")}</strong> attach it: their next
+                call to the server it serves is parked until a secret of this name is put again.
+                {usage.waitingTotal > 0 && (
+                  <>
+                    {" "}
+                    <strong>{usage.waitingTotal}</strong> of them wait on such a call now.
+                  </>
+                )}
+              </p>
+              <RunList usage={usage} max={8} />
+            </div>
+          )}
+          {usage.workflows.length > 0 && (
+            <div>
+              <p className="dialog-text">
+                The latest version of <strong>{plural(usage.workflows.length, "workflow")}</strong>{" "}
+                attaches it:{" "}
+                {namespace === null
+                  ? "their runs start, and park their calls to the server it serves."
+                  : "their runs in this namespace are refused at start (secret-required)."}
+              </p>
+              <ul className="plain-list">
+                {usage.workflows.map((w) => (
+                  <li key={w.name}>
+                    <span className="key-name">{w.name}</span>{" "}
+                    <span className="mono muted" title={w.version}>
+                      {w.version.slice(0, 12)}
+                    </span>{" "}
+                    for {w.servers.join(", ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+      <p className="dialog-text muted">
+        Read {plural(reads, "time")} in {READ_DAYS} days
+        {last ? (
+          <>
+            , last <Ago ms={Date.parse(last.at)} />
+          </>
+        ) : null}
+        . A deleted secret cannot be restored: its value is gone.
+      </p>
+    </div>
+  );
+}

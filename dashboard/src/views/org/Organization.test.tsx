@@ -33,7 +33,8 @@ function row(table: HTMLElement, text: string): HTMLElement {
 
 describe("the Organization view", () => {
   it("shows each part to whoever holds its permission", async () => {
-    // Grace's role, harness, reads the members and the roles, and nothing else of it.
+    // Grace's role, harness, reads the members, the roles and the signing keys, and nothing else
+    // of it.
     const world = signedIn("grace@example.net");
     renderApp("/organization", { world });
     const nav = await screen.findByRole("navigation", { name: "Organization" });
@@ -41,7 +42,7 @@ describe("the Organization view", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["Members", "Invitations", "Roles", "Connections"]);
+    ).toEqual(["Members", "Invitations", "Roles", "Signing keys", "Connections"]);
     const table = await screen.findByRole("table");
     expect(within(row(table, "Ada Lovelace")).getByText("owner")).toBeInTheDocument();
     expect(within(table).queryByRole("columnheader", { name: "Actions" })).toBeNull();
@@ -82,7 +83,7 @@ describe("the Organization view", () => {
     const { callsTo } = renderApp("/organization/roles", { world });
     await user.click(await screen.findByRole("button", { name: /new role/i }));
     const editor = screen.getByRole("form", { name: "New role" });
-    expect(within(editor).getAllByRole("checkbox")).toHaveLength(23);
+    expect(within(editor).getAllByRole("checkbox")).toHaveLength(25);
     expect(within(editor).getByText("Erase a run, its payloads included.")).toBeInTheDocument();
 
     const name = within(editor).getByLabelText("Name");
@@ -188,6 +189,7 @@ describe("the Organization view", () => {
     const world = graceWithRole("inviter", [
       "runs:read",
       "toolsets:read",
+      "secrets:read",
       "subscriptions:read",
       "members:read",
       "members:invite",
@@ -311,7 +313,7 @@ describe("the Organization view", () => {
       within(nav)
         .getAllByRole("link")
         .map((a) => a.textContent),
-    ).toEqual(["Roles", "API keys"]);
+    ).toEqual(["Roles", "API keys", "Signing keys"]);
     // Without an organization, its sidebar says access, and the page opens on the first part.
     expect(screen.getByRole("region", { name: "Organization" })).toHaveTextContent(/Access/);
     expect(await screen.findByRole("heading", { name: "Roles" })).toBeInTheDocument();

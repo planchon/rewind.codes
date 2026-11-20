@@ -2,7 +2,7 @@
 // roles and their permissions, the API keys, the settings; each part shown to whoever holds its
 // permission, and listed in the organization's own sidebar.
 
-import { KeyRound, Mail, Plug, Shield, SlidersHorizontal, Users } from "lucide-react";
+import { FileKey, KeyRound, Mail, Plug, Shield, SlidersHorizontal, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { OrgAvatar } from "../../app/AccountMenus";
@@ -17,6 +17,7 @@ const ICONS: Record<string, ReactNode> = {
   invitations: <Mail size={16} />,
   roles: <Shield size={16} />,
   "api-keys": <KeyRound size={16} />,
+  "signing-keys": <FileKey size={16} />,
   connections: <Plug size={16} />,
   settings: <SlidersHorizontal size={16} />,
 };

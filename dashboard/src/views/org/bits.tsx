@@ -8,6 +8,7 @@ import { useAccess } from "../../app/access";
 import { Avatar } from "../../app/Brand";
 import { useApi } from "../../app/session";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
+import { NamespaceName } from "../../components/NamespaceName";
 import {
   canGive,
   displayName,
@@ -147,16 +148,40 @@ export function LabelsField({
   error: string | null;
 }) {
   return (
-    <Field
+    <LabelsInput
       label="Allowed labels"
+      value={value}
+      onChange={onChange}
       error={error}
+      placeholder="agent:triage conversation:c-42"
       hint="Optional. Only runs carrying all of them are seen; such a grant cannot administer."
-    >
+    />
+  );
+}
+
+/** Labels typed as `key:value` pairs, with a label and a hint of the caller's. */
+export function LabelsInput({
+  label,
+  value,
+  onChange,
+  error,
+  placeholder,
+  hint,
+}: {
+  label: string;
+  value: string;
+  onChange: (text: string) => void;
+  error: string | null;
+  placeholder: string;
+  hint: ReactNode;
+}) {
+  return (
+    <Field label={label} error={error} hint={hint}>
       {(props) => (
         <input
           {...props}
           className="input mono"
-          placeholder="agent:triage conversation:c-42"
+          placeholder={placeholder}
           spellCheck={false}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -278,7 +303,10 @@ export function useMemberNames(): Map<string, string> {
   return names;
 }
 
-/** Who a principal's text (`user:<id>`, `key:<id>`) is, as well as it is known. */
+/**
+ * Who a principal's text (`user:<id>`, `key:<id>`, `connection:<id>`, or an end user's token,
+ * `token:<namespace>`) is, as well as it is known.
+ */
 export function PrincipalName({
   text,
   names,
@@ -299,6 +327,20 @@ export function PrincipalName({
     return (
       <span title={text}>
         key <span className="mono">{key?.name ?? id.slice(0, 8)}</span>
+      </span>
+    );
+  }
+  if (kind === "token") {
+    return (
+      <span title={text}>
+        the token of <NamespaceName name={id} />
+      </span>
+    );
+  }
+  if (kind === "connection") {
+    return (
+      <span title={text}>
+        connection <span className="mono">{id.slice(0, 11)}</span>
       </span>
     );
   }
