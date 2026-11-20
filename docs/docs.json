@@ -56,6 +56,8 @@
             "group": "Build a harness",
             "pages": [
               "sdk/toolsets",
+              "sdk/secrets",
+              "sdk/signed-calls",
               "sdk/agent-tools",
               "sdk/runs",
               "sdk/host-tools",
@@ -90,7 +92,13 @@
           },
           {
             "group": "Code, tools and end users",
-            "pages": ["dashboard/scripts", "dashboard/testing", "dashboard/tools", "dashboard/namespaces"]
+            "pages": [
+              "dashboard/scripts",
+              "dashboard/testing",
+              "dashboard/tools",
+              "dashboard/namespaces",
+              "dashboard/secrets"
+            ]
           },
           {
             "group": "Your organization",

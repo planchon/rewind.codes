@@ -1,0 +1,183 @@
+---
+title: "Signed calls"
+description: "Your own APIs and MCP servers check that a call comes from Rewind, and for which end user, with verifyRewindCall: no secret of yours stored in Rewind."
+---
+
+With `auth: { type: "rewind" }` on an API or an MCP server of a [toolset](/sdk/toolsets#how-calls-prove-who-calls),
+Rewind signs each request with your organization's Ed25519 key. Your server checks the signature with the public key,
+and learns the end user from the signature, not from an argument the model wrote. Rewind keeps no secret of yours.
+
+```ts
+const toolset = await rewind.toolsets.create({
+  apis: [{ name: "dax", openapi: "https://api.dax.example/openapi.json", auth: { type: "rewind" } }],
+});
+```
+
+## What a call carries
+
+`Authorization: Bearer <JWT>`, signed with `EdDSA`, valid 60 seconds:
+
+| Claim | Value |
+| --- | --- |
+| `iss` | `https://api.rewind.codes/organizations/<your organization>`: its public keys are at `{iss}/jwks.json` |
+| `aud` | The API's `baseUrl`, or the MCP server's URL |
+| `sub` | The run's namespace: the end user the call acts for |
+| `labels` | The run's labels |
+| `run`, `tool` | The run's id, and the tool called (`dax.createMeasure`) |
+| `idempotency_key` | `{run_id}/{seq}`: the same on every attempt of the call |
+| `jti` | `{run_id}/{seq}/{attempt}`: one per request |
+| `htm`, `htu`, `body` | The method, the URL, and the SHA-256 of the body in base64url (absent without a body) |
+| `iat`, `exp` | Now, and 60 seconds later |
+
+## Check it with `verifyRewindCall`
+
+`verifyRewindCall(request, { issuer, audience, labels? })` does every check your server must do:
+
+- the signature, with a key of `{issuer}/jwks.json` (fetched once and cached; a key with an unknown `kid` is fetched
+  again at most every 10 seconds, which follows a rotation);
+- `iss` is the issuer you expect, `aud` your own;
+- `exp` has not passed and `iat` is not in the future, with 5 seconds of leeway;
+- `htm`, `htu` and `body` match the request: a JWT replayed on another method, URL or body is refused;
+- the run carries `labels`, when you give them.
+
+It answers `{ namespace, labels, run, tool, idempotencyKey }`, or throws a `RewindSignatureError` whose `check` names
+what failed (`signature`, `kid`, `iss`, `aud`, `exp`, `iat`, `htm`, `htu`, `body`, `labels`, `token`). Answer it with a
+**401**: Rewind parks the call. When the public keys cannot be fetched, it throws a `RewindConnectionError`: answer a
+**503**, which Rewind retries.
+
+Your issuer is in the dashboard, under Organization › [Signing keys](/dashboard/organization#signing-keys), and in
+`(await rewind.signingKeys.list()).issuer`.
+
+<Tabs>
+  <Tab title="Fetch (Hono, Next.js, Bun)">
+    ```ts
+    import { RewindSignatureError, verifyRewindCall } from "@rewind.codes/sdk";
+
+    const ISSUER = process.env.REWIND_ISSUER!; // https://api.rewind.codes/organizations/org_…
+    const AUDIENCE = "https://api.dax.example";
+
+    export async function POST(request: Request): Promise<Response> {
+      let call;
+      try {
+        call = await verifyRewindCall(request, { issuer: ISSUER, audience: AUDIENCE, labels: { env: "prod" } });
+      } catch (error) {
+        if (error instanceof RewindSignatureError) return Response.json({ error: error.check }, { status: 401 });
+        return new Response(null, { status: 503 });
+      }
+      // The body is read from a clone: the request's own is still there.
+      const measure = await createMeasure(call.namespace, await request.json(), call.idempotencyKey);
+      return Response.json(measure, { status: 201 });
+    }
+    ```
+  </Tab>
+  <Tab title="Express">
+    ```ts
+    import express from "express";
+    import { RewindSignatureError, verifyRewindCall, type RewindCall } from "@rewind.codes/sdk";
+
+    const app = express();
+    app.set("trust proxy", true); // req.protocol and req.get("host") are the public ones behind a proxy
+
+    // The raw body is hashed: keep it as received.
+    app.use("/v1", express.raw({ type: "application/json" }), async (req, res, next) => {
+      try {
+        res.locals.call = await verifyRewindCall(
+          {
+            method: req.method,
+            url: `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+            headers: req.headers,
+            body: req.body, // a Buffer; undefined without a body
+          },
+          { issuer: process.env.REWIND_ISSUER!, audience: "https://api.dax.example", labels: { env: "prod" } },
+        );
+        next();
+      } catch (error) {
+        if (error instanceof RewindSignatureError) return res.status(401).json({ error: error.check });
+        next(error);
+      }
+    });
+
+    app.post("/v1/measures", async (req, res) => {
+      const call: RewindCall = res.locals.call;
+      const input = JSON.parse(req.body.toString("utf8"));
+      res.status(201).json(await createMeasure(call.namespace, input, call.idempotencyKey));
+    });
+    ```
+  </Tab>
+  <Tab title="NestJS">
+    ```ts
+    // main.ts: keep the raw body beside the parsed one.
+    const app = await NestFactory.create(AppModule, { rawBody: true });
+
+    // rewind.guard.ts
+    import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
+    import type { RawBodyRequest } from "@nestjs/common";
+    import type { Request } from "express";
+    import { RewindSignatureError, verifyRewindCall } from "@rewind.codes/sdk";
+
+    @Injectable()
+    export class RewindGuard implements CanActivate {
+      async canActivate(context: ExecutionContext): Promise<boolean> {
+        const req = context.switchToHttp().getRequest<RawBodyRequest<Request> & { rewind?: unknown }>();
+        try {
+          req.rewind = await verifyRewindCall(
+            {
+              method: req.method,
+              url: `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+              headers: req.headers,
+              body: req.rawBody,
+            },
+            { issuer: process.env.REWIND_ISSUER!, audience: "https://api.dax.example", labels: { env: "prod" } },
+          );
+          return true;
+        } catch (error) {
+          if (error instanceof RewindSignatureError) throw new UnauthorizedException(error.check);
+          throw error;
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+- **`url` is the one the client called.** Behind a proxy or a load balancer, rebuild the public URL (scheme, host,
+  path and query), as above; a URL rewritten on its way fails the `htu` check.
+- **The body is the raw bytes.** A body parsed as JSON cannot be hashed: keep the raw one (`express.raw()`,
+  `express.json({ verify })`, NestJS's `rawBody: true`).
+- **`call.idempotencyKey`** is the same on every attempt of a call. Store it with the effect, and a call sent again
+  after a timeout does not act twice.
+
+## Check `labels` when environments share an organization
+
+One key signs every run of the organization, whatever its labels. When development and production share an
+organization, a key limited to `env=dev` may still register a toolset that names your production server, and its
+runs would reach it with a valid signature. Give your production server `labels: { env: "prod" }`: it then refuses the
+calls of every run not labelled `env=prod`. A run's labels are set by whoever starts it and by the key's grant, never
+by the script.
+
+## Replays
+
+`htm`, `htu` and `body` bind a signature to one request, and it expires after 60 seconds. A server that checks the
+signature alone would accept a JWT replayed within those 60 seconds, on the same method, URL and body: refuse an effect
+already done for the same `idempotencyKey` if that matters to you.
+
+## MCP servers
+
+Each HTTP request of an MCP session is signed. Those of a call carry `sub`, `labels`, `run`, `tool` and
+`idempotency_key`; the others (`initialize`, the listing of the tools when the toolset is registered) only `iss`,
+`aud`, `jti`, `htm`, `htu`, `body`, `iat` and `exp`. Pass `session: true`: such a request is answered `null` rather than
+refused.
+
+```ts
+const call = await verifyRewindCall(request, { issuer, audience: "https://mcp.example.com/mcp", session: true });
+if (call === null) {
+  // initialize or tools/list: signed by your organization, outside any call
+}
+```
+
+## Rotate the key
+
+`rewind.signingKeys.rotate()`, or Rotate in the dashboard (`organization:write`), replaces the key: the old one stops
+signing at once and stays published for 24 hours, so a call it signed is still accepted. `verifyRewindCall` fetches the
+new key when it first meets its `kid`. A server that refuses a signature answers 401: the call is parked, and your
+harness approves it once the server accepts the key again.

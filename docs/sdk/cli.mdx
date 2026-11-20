@@ -23,7 +23,7 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 
 | Command | Does |
 | --- | --- |
-| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v]` | Starts a run and waits for it, up to `--wait` |
+| `rewind run script.ts [--input …] [--wait 30s] [--ttl 30d] [--label k=v] [--secret <server>=<scope>/<name>]…` | Starts a run and waits for it, up to `--wait`; `--secret github=ns/github` attaches a [secret](/sdk/secrets) |
 | `rewind check script.ts [--toolset …]` | Type-checks a script against the sandbox and a toolset's declarations |
 | `rewind test [script.ts] [--tests file] [--workflow name] [--toolset file]` | Runs [tests](/sdk/testing#in-ci-without-a-server) in virtual time, in the CLI's process: those of `--tests` (`script.tests.json` next to the script by default), and with `--workflow` the suite of that workflow, read from the server, against the script or the version's own |
 | `rewind workflows record <name> [--query …] [--run <id>…] [--limit n]` | [Records tests](/sdk/workflows#record-tests-from-runs) from a workflow's past runs, one per path; prints their digests, names and paths |
@@ -33,10 +33,11 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 | `rewind trace <run> [--entry n]` | The run's trace, as a model reads it; one entry in full |
 | `rewind runs '<query>'` | Lists runs matching a [query](/dashboard/query-language): `rewind runs '@agent:triage status:failed'` |
 | `rewind replay <run or journal.json> [--script fixed.ts]` | Re-executes a run and checks determinism; with `--script`, tells whether a corrected script is compatible with that history |
-| `rewind fork <run> --script fixed.ts [--at <index>] [--input …]` | Starts a fork with a corrected script |
+| `rewind fork <run> --script fixed.ts [--at <index>] [--input …] [--secret …]` | Starts a fork with a corrected script, with the parent's secrets unless `--secret` gives others |
 | `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
 | `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file, prints its declarations, searches its tools |
+| `rewind secrets list\|put\|delete\|usage [name] [--namespace <name>]` | The organization's [secrets](/sdk/secrets), or a namespace's: `put` reads the value from standard input, never from an argument (`rewind secrets put github --namespace user_2fQ81 < token.txt`); `usage` says what deleting one would stop |
 | `rewind namespaces list\|show\|rename\|quotas\|delete` | The end users and their use, one end user, its display name (`rename user_2fQ81 "Acme Corp"`; without one, removes it), their limits (or the defaults with `--defaults`), erasure |
 | `rewind server` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
 | `rewind mcp` | Serves the [agent tools](/sdk/agent-tools) over MCP on standard input and output, against the embedded server: to debug them with an MCP client, such as the MCP Inspector or Claude Code on this machine. Never a remote server: Claude reaches those [over HTTP](/claude) |

@@ -1,21 +1,28 @@
 ---
 title: "Toolsets"
-description: "Register what scripts may call: MCP servers, host tools, the http tool and workflows, with a policy per tool."
+description: "Register what scripts may call: MCP servers, APIs from their OpenAPI documents, host tools, the http tool and workflows, with how each server authenticates and a policy per tool."
 ---
 
-A toolset lists what scripts may call. Registering it connects to its MCP servers, pins the schemas of their tools,
-and returns the generated declarations. See [Tools and toolsets](/concepts/tools) for how calls are made.
+A toolset lists what scripts may call. Registering it connects to its MCP servers, reads its APIs' OpenAPI documents,
+pins the schemas of their tools, and returns the generated declarations. See [Tools and toolsets](/concepts/tools) for
+how calls are made.
 
 ```ts
 const toolset = await rewind.toolsets.create({
   mcp: [
-    { name: "github", url: "https://mcp.example.com/github" },
+    {
+      name: "github",
+      url: "https://api.githubcopilot.com/mcp/",
+      auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
+    },
     {
       name: "stripe",
       url: "https://mcp.example.com/stripe",
+      auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
       policies: { create_refund: { approval: true, onInterruption: "at_most_once" } },
     },
   ],
+  apis: [{ name: "dax", openapi: "https://api.dax.example/openapi.json", auth: { type: "rewind" } }],
   host: [
     {
       name: "ask_user",
@@ -26,13 +33,23 @@ const toolset = await rewind.toolsets.create({
     },
   ],
   http: { allow: ["api.github.com", "*.example.com"] },
-  credentials: { servers: { github: { headers: { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } } } },
 });
 ```
 
+A toolset holds no secret: each server says in its `auth` how its calls prove who calls, and each run attaches the
+[secrets](/sdk/secrets) it reads.
+
 <ParamField body="mcp" type="McpServer[]">
-  MCP servers over streamable HTTP. `name` is the namespace of their tools in `rewind:tools` (`github.list_issues`);
-  `policies` sets the policy of some of their tools, by the name the server gives them.
+  MCP servers over streamable HTTP (`url`). `name` is the namespace of their tools in `rewind:tools`
+  (`github.list_issues`); `policies` sets the policy of some of their tools, by the name the server gives them; `auth`
+  says how their calls authenticate ([below](#how-calls-prove-who-calls)).
+</ParamField>
+
+<ParamField body="apis" type="Api[]">
+  APIs described by OpenAPI 3.0 or 3.1: one tool per operation, called by Rewind. `openapi` is the document in JSON, or
+  its URL, read once at registration (at most 2 MiB); `baseUrl` is where the calls go (the document's first `servers[]`
+  by default); `operations` keeps some `operationId`s only, for an API too large for the prompt; `concurrency` bounds
+  its calls in flight on each worker (8 by default). See [API tools](#api-tools).
 </ParamField>
 
 <ParamField body="host" type="HostTool[]">
@@ -43,6 +60,7 @@ const toolset = await rewind.toolsets.create({
 
 <ParamField body="http" type="{ allow: string[]; policy?: ToolPolicy }">
   Enables the built-in `http` tool, and `fetch` in scripts, for these hosts only. `*.example.com` allows the subdomains.
+  It carries no secret and no signature: a call that needs one is an API tool.
 </ParamField>
 
 <ParamField body="workflows" type="string[]">
@@ -51,17 +69,79 @@ const toolset = await rewind.toolsets.create({
 </ParamField>
 
 <ParamField body="base" type="string">
-  Derives the toolset from a registered one: its servers, tools and workflows are kept as pinned, and `workflows` adds
-  or pins workflows again. `mcp`, `host` and `http` must then be empty.
+  Derives the toolset from a registered one: its servers, APIs, tools and workflows are kept as pinned, and `workflows`
+  adds or pins workflows again. `mcp`, `apis`, `host` and `http` must then be empty.
 </ParamField>
 
-<ParamField body="credentials" type="Credentials">
-  The MCP servers' credentials, by server name: the `headers` sent to each server, such as `Authorization`. Used to
-  list their tools, then kept as the toolset's. They are not part of its id.
+<ParamField body="secrets" type="Record<string, string>">
+  Organization's secrets used only to list the tools of an MCP server whose `auth` takes one, by server:
+  `{ github: "org/github" }`. No run keeps them, and they are not part of the toolset's id. Needs `secrets:use`.
 </ParamField>
 
 A toolset is content-addressed: registering the same toolset again returns the same `id`, so registering it at every
 start of your harness is fine.
+
+## How calls prove who calls
+
+Each MCP server and API says in its `auth` how its calls authenticate. `auth` is pinned with the toolset; no value is.
+
+| `auth` | The request carries | For |
+| --- | --- | --- |
+| none | Nothing | Public servers |
+| `{ type: "rewind" }` | A JWT signed with your organization's key, in `Authorization: Bearer` | Your own APIs and MCP servers: they check it with [`verifyRewindCall`](/sdk/signed-calls) and learn the end user |
+| `{ type: "secret", header: "Authorization", format: "Bearer {secret}" }` | The secret the run attached, in that header; the value alone without `format` | Other servers: GitHub, Linear, an API with a key |
+| `{ type: "secret", env: "GITHUB_TOKEN" }` | The attached secret in that environment variable | A stdio MCP server |
+
+A secret never goes in a URL. Without `auth`, an API follows its document's security requirement: `http` `bearer`,
+`oauth2` and `openIdConnect` send `Authorization: Bearer {secret}`, `http` `basic` sends the secret (`user:password`)
+in base64, an `apiKey` in a header sends that header. An `apiKey` in the query or a cookie, or several schemes at once,
+need an explicit `auth`; `{ type: "none" }` sets the document's requirement aside.
+
+## API tools
+
+Rewind calls your backend itself, from the toolset's OpenAPI document: your backend runs no worker.
+
+```ts
+const toolset = await rewind.toolsets.create({
+  apis: [
+    {
+      name: "dax",
+      openapi: "https://api.dax.example/openapi.json",
+      baseUrl: "https://api.dax.example",
+      auth: { type: "rewind" },
+      operations: ["createMeasure", "listModels"],
+      policies: { createMeasure: { approval: true } },
+    },
+  ],
+});
+toolset.skipped; // the operations left out, each with why
+```
+
+- **One tool per operation**, named by its `operationId` (`dax.createMeasure`), or from its method and path without one
+  (`post_v1_measures`).
+- **Its arguments** are the path, query and header parameters by name, and the JSON body under `body`. Rewind adds the
+  `Idempotency-Key` header (`{run_id}/{seq}`) when the operation declares it, the trace context, and the
+  authentication.
+- **Its result** is the JSON of the answer, typed by the operation's first `2xx` response.
+- An operation whose body is not JSON, or with a cookie parameter, is left out and listed in `skipped`.
+
+| The answer | The call |
+| --- | --- |
+| `2xx` | Succeeds: the JSON body, `null` when empty, `{ contentType, text }` for another type; at most 5 MB |
+| `401` | Is parked: [put the secret again](/sdk/secrets#when-a-server-refuses-a-secret), or approve the call |
+| `408`, `429`, `5xx`, a failed connection | Is retried with backoff under `retry`, never before its `Retry-After` |
+| Another status | Fails with a `ToolError` holding the status, and the problem's `title` and `detail` |
+
+The default policy follows the method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once` for
+`POST` and `PATCH`, unless the operation declares an `Idempotency-Key` header. An API suits calls answered within the
+tool's timeout: a call that waits days for a person is a [host tool](/sdk/host-tools), or the script waits for a
+signal.
+
+<Tip>
+  APIs and host tools are both first-class. With an API, Rewind calls your backend and signs each call; with
+  [host tools](/sdk/host-tools), your backend pulls its calls with a worker (a long poll), and nothing reaches it from
+  outside. Choose toolset by toolset.
+</Tip>
 
 ## Policies
 
@@ -69,9 +149,9 @@ Each tool has a policy. Every field is optional.
 
 | Field | Default | What |
 | --- | --- | --- |
-| `onInterruption` | `"retry"` | `"retry"`: a call interrupted mid-flight is sent again with the same idempotency key, up to 5 attempts. `"at_most_once"`: it fails with `outcomeUnknown` |
+| `onInterruption` | `"retry"` (`"at_most_once"` for an API's `POST` and `PATCH` without `Idempotency-Key`) | `"retry"`: a call interrupted mid-flight is sent again with the same idempotency key, up to 5 attempts. `"at_most_once"`: it fails with `outcomeUnknown` |
 | `approval` | `false` | Each call waits for your harness's approval before it is sent. See [Human in the loop](/sdk/human-in-the-loop#approve-a-tool-call) |
-| `timeout` | `"5m"` for MCP tools | How long one attempt may take |
+| `timeout` | `"5m"` for MCP and API tools | How long one attempt may take |
 | `heartbeatTimeout` | `"60s"` | How long a host tool's worker may go without a heartbeat |
 | `concurrency` | | Calls of this tool in flight per run, under the run's limit of 16 |
 
@@ -96,20 +176,13 @@ const { tools } = await rewind.toolsets.search(toolset.id, "close an issue", { l
 const text = await rewind.toolsets.declarations(toolset.id, { format: "prompt" });
 ```
 
-## Credentials
+## Secrets
 
-Credentials are set per toolset, per end user and toolset, or per run. A call uses the run's if it has some, then its
-namespace's, then the toolset's; never merged.
+A toolset holds no secret, and the secrets a run reads do not depend on its toolset: a toolset registered again with
+one more tool keeps calling with the same secrets. A run attaches them at start, by server:
 
 ```ts
-const bearer = (token: string) => ({ servers: { github: { headers: { Authorization: `Bearer ${token}` } } } });
-
-await rewind.toolsets.setCredentials(toolset.id, bearer(orgToken)); // every run of the toolset
-await rewind.namespaces.setCredentials(user.id, toolset.id, bearer(userToken)); // one end user's runs
-await rewind.runs.setCredentials(run.id, bearer(freshToken)); // one run
+await rewind.namespace(user.id).runs.start({ toolset: toolset.id, script, secrets: { github: "ns/github", stripe: "org/stripe" } });
 ```
 
-Setting credentials replaces the previous ones at that level.
-
-When a token expires during a long pause, the call is parked and you get the webhook `credentials.expired`. Set new
-credentials at the same level, and the call is sent again with the same idempotency key.
+See [Secrets](/sdk/secrets).

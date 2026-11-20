@@ -55,8 +55,11 @@ const run = await rewind.namespace(user.id).runs.start({
   Type-check the script before starting it. A refused script throws `RewindApiError` with the slug `invalid-script` and
   its `diagnostics`. A workflow's script is not checked again.
 </ParamField>
-<ParamField body="credentials" type="Credentials">
-  The run's own credentials, used instead of its namespace's and its toolset's.
+<ParamField body="secrets" type="Record<string, string>">
+  The [secrets](/sdk/secrets) the run reads, by MCP server or API: `{ github: "ns/github", zendesk: "org/zendesk" }`.
+  Names, never values; required for each server the script imports whose `auth` takes a secret. A run of a `workflow`
+  gives none: its version's are read. A refused attachment throws `secret-required`, whose `attachments` say what may
+  be attached instead.
 </ParamField>
 
 ## Read a run
@@ -148,11 +151,13 @@ const fixed = await rewind.runs.fork(failed.id, {
   wait: "30s",
   // at: 12,          go live from this journal entry, even if the calls still match
   // input: { ... },  another input than the parent's
+  // secrets: { ... }, other attachments than the parent's
 });
 ```
 
-The fork has its own id and TTL, and its parent's seed, input, toolset and namespace. The fork's `parent` names the run
-it came from.
+The fork has its own id and TTL, and its parent's seed, input, toolset, namespace and attached secrets. Its
+attachments are checked against your rights, since its script is new code. The fork's `parent` names the run it came
+from.
 
 ## Export a run
 

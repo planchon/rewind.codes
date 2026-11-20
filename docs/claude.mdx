@@ -74,8 +74,9 @@ Claude opens Rewind's page in your browser. Sign in if asked, then choose what C
 
 - **The organizations.** Tick each organization Claude may reach. The one open in the dashboard is ticked already;
   an organization where your role gives neither access cannot be ticked.
-- **An access for each.** **Read** lets Claude read runs, namespaces, toolsets and workflows. **Run** also lets it
-  check, test and start scripts, and signal and cancel runs. An access your role does not give is not offered.
+- **An access for each.** **Read** lets Claude read runs, namespaces, toolsets and workflows, and list the secrets'
+  names. **Run** also lets it check, test and start scripts, attach the organization's secrets to them, and signal and
+  cancel runs. An access your role does not give is not offered.
 - **Only what Claude starts.** The runs Claude starts carry the label `via: claude`, and Claude sees only the runs
   carrying it. Untick it to let Claude read and steer the organization's other runs too, to debug them for instance.
 
@@ -85,8 +86,8 @@ Claude opens Rewind's page in your browser. Sign in if asked, then choose what C
 </Frame>
 
 **Allow** sends you back to Claude, connected. Claude never gets more than your own role gives, at every call: if your
-role shrinks, so does Claude's reach. It never administers anything: no members, roles, keys, credentials, toolsets
-nor workflows.
+role shrinks, so does Claude's reach. It never administers anything: no members, roles, keys, secrets, toolsets
+nor workflows. It never reads a secret's value: it attaches a secret by its name.
 
 The page names where it returns. When it returns to a program on your computer (`localhost`, as Claude Code does),
 allow it only if you started that program yourself.
@@ -113,13 +114,14 @@ organization and a toolset of it.
 | `list_namespaces` | The namespaces of an organization, by prefix | Read |
 | `list_toolsets` | The toolsets of an organization, with their servers and tools | Read |
 | `search_tools` | The declarations of a toolset's tools that match a query | Read |
+| `list_secrets` | The secrets Claude may attach, the organization's and a namespace's, by name: never a value | Read |
 | `get_workflow` | A [workflow](/sdk/workflows)'s source, schemas, suite and lineage | Read |
 | `check_script` | Type-checks a script against the toolset | Run |
 | `test_script` | Runs [tests](/sdk/testing) against a script, in mock mode and virtual time | Run |
 | `get_run` | A run's state and trace, or one journal entry in full | Read |
 | `list_runs` | The runs the connection sees: those Claude started, unless you unticked the label | Read |
 | `record_tests` | Records tests from a workflow's past runs | Read |
-| `run_script` | Type-checks a script and starts a run; returns its output, its error, or what it waits for | Run |
+| `run_script` | Type-checks a script and starts a run with the secrets it attaches (`secrets`); returns its output, its error, or what it waits for | Run |
 | `retry_run` | Starts a new run from a failed one with a corrected script, reusing the calls already made | Run |
 | `signal_run` | Sends a signal to a run | Run |
 | `cancel_run` | Cancels a run | Run |
@@ -137,8 +139,9 @@ and `run_script` waits for the run's end 30 seconds by default, 200 at most, bef
 - **Keep Claude's confirmation** on `run_script`, `retry_run`, `signal_run` and `cancel_run`. The read-only tools
   (`list_*`, `search_tools`, `get_workflow`, `check_script`, `test_script`, `get_run`, `list_runs`) may be "Always
   allow".
-- **Secrets stay in Rewind.** The credentials of your MCP servers live in the [toolset](/sdk/toolsets#credentials),
-  never in the chat.
+- **Secrets stay in Rewind.** Write their values in the dashboard's [Secrets](/dashboard/secrets) or with the SDK,
+  never in the chat. Claude attaches a secret to a run by its name (`ns/github`, `org/zendesk`), for the servers that
+  need one: the script never sees it, and a refused attachment tells Claude what it may attach instead.
 - **Revoke** a connection you no longer use.
 
 ## Change or revoke a connection

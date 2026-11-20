@@ -46,6 +46,6 @@ cp .env.example .env    # REWIND_URL, REWIND_API_KEY, and a model's key for agen
 pnpm quickstart         # or: pnpm human-approval, pnpm workflows, pnpm testing…
 ```
 
-The scripts reach `api.github.com` without credentials: GitHub allows 60 such requests an hour. `pnpm webhooks` needs
+The scripts reach `api.github.com` without a token: GitHub allows 60 such requests an hour. `pnpm webhooks` needs
 a URL Rewind can deliver to: a public `https://` URL (a tunnel to your machine, in `WEBHOOK_URL`), or a server of your
 own started with `--allow-private-webhooks`.

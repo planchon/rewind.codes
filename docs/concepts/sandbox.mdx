@@ -70,8 +70,9 @@ exhausts it. CPU time is also counted per end user each month, for [quotas](/con
 
 ## Security
 
-- **Credentials never enter the sandbox.** They are injected by the dispatcher into the connection to your MCP
-  server, and never appear in the journal, a cassette or a trace.
+- **Secrets never enter the sandbox.** A run attaches them by name at start; the dispatcher injects each into the
+  request to its server, and none appears in the journal, a cassette or a trace. Calls to your own APIs carry a
+  signature of your organization's key instead.
 - **No network of its own.** The `http` tool sends requests from the dispatcher, only to the toolset's allowed
   hosts, and refuses private, loopback, link-local and cloud-metadata addresses, at every redirect.
 - **Your permission gates stay yours.** A tool with the `approval` policy is not sent until your harness approves
