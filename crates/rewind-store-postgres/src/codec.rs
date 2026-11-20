@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode, RunStatus, Shape,
-    ToolFailureKind, ToolRoute, WorkflowOp, canonical_json,
+    Attachments, Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode,
+    RunStatus, SecretRef, Shape, ToolFailureKind, ToolRoute, WorkflowOp, canonical_json,
 };
 use rewind_engine::ports::{
     ParkKind, QuarantineKind, TaskPhase, Trigger, WaitKind, WaitingFor, WebhookEventType,
@@ -199,6 +199,27 @@ pub(crate) fn decode_labels(json: &str) -> Result<BTreeMap<String, String>, Erro
         .map(|(key, value)| match value {
             Value::String(value) => Ok((key, value)),
             other => Err(Error::Corrupt(format!("label {key:?} is {other}"))),
+        })
+        .collect()
+}
+
+/// A run's attachments (`runs.secrets`), as a JSON object from a server's or an API's name to
+/// the secret it reads, `org/<name>` or `ns/<name>`: never a value.
+pub(crate) fn encode_attachments(secrets: &Attachments) -> String {
+    let object: Map<String, Value> = secrets
+        .iter()
+        .map(|(server, secret)| (server.to_owned(), Value::String(secret.to_string())))
+        .collect();
+    canonical_json(&Value::Object(object))
+}
+
+pub(crate) fn decode_attachments(json: &str) -> Result<Attachments, Error> {
+    decode_labels(json)?
+        .into_iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(&secret)
+                .map_err(|err| Error::Corrupt(format!("attachment of {server:?}: {err}")))?;
+            Ok((server, secret))
         })
         .collect()
 }
