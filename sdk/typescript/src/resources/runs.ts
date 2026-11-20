@@ -73,7 +73,10 @@ export interface StartRunOptions extends RequestOptions {
   check?: boolean | undefined;
   /**
    * The secrets the run reads, by MCP server or API: `{ github: "ns/github", zendesk: "org/zendesk" }`
-   * (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's). Names, never values.
+   * (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's). Names, never values. Required for each
+   * server the script imports whose `auth` takes a secret; a run of a workflow gives none, its version's are read. An
+   * attachment missing, unknown or not the caller's to attach refuses the start before any run exists:
+   * `secret-required`, whose `attachments` say which and what may be attached instead.
    */
   secrets?: Record<string, string> | undefined;
 }
@@ -93,6 +96,11 @@ export interface ForkRunParams extends RequestOptions {
   ttl?: Duration | undefined;
   /** Type-check the corrected script first. `true` by default. */
   check?: boolean | undefined;
+  /**
+   * The fork's attachments, as `start` takes them: `{ github: "ns/github" }`. The parent's when absent. Either way they
+   * are checked against the caller, since the script is new code (`secret-required`).
+   */
+  secrets?: Record<string, string> | undefined;
 }
 
 export interface ListRunsParams extends RequestOptions {

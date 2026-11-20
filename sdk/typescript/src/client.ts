@@ -6,6 +6,7 @@ import { ApiKeys, Payloads, Server, Subscriptions, Tools } from "./resources/adm
 import { Namespaces, TokenKeys } from "./resources/namespaces.js";
 import { Runs } from "./resources/runs.js";
 import { Scripts } from "./resources/scripts.js";
+import { Secrets, SigningKeys } from "./resources/secrets.js";
 import { Tasks } from "./resources/tasks.js";
 import { Tests } from "./resources/tests.js";
 import { Toolsets } from "./resources/toolsets.js";
@@ -58,8 +59,15 @@ export class Rewind {
   readonly webhooks: Webhooks;
   readonly tools: Tools;
   readonly apiKeys: ApiKeys;
-  /** The end users: their limits, use, alerts, credentials and tokens. */
+  /** The end users: their limits, use, alerts, secrets and tokens. */
   readonly namespaces: Namespaces;
+  /**
+   * The organization's secrets, attached to runs as `org/<name>`. A namespace's own secrets, attached as `ns/<name>`,
+   * are `namespaces.secrets`.
+   */
+  readonly secrets: Secrets;
+  /** The keys Rewind signs its calls with (`auth: { type: "rewind" }`), which `verifyRewindCall` checks. */
+  readonly signingKeys: SigningKeys;
   /** The public keys the customer signs end users' tokens with. */
   readonly tokenKeys: TokenKeys;
   readonly server: Server;
@@ -88,6 +96,8 @@ export class Rewind {
     this.tools = new Tools(this.transport);
     this.apiKeys = new ApiKeys(this.transport);
     this.namespaces = new Namespaces(this.transport);
+    this.secrets = new Secrets(this.transport);
+    this.signingKeys = new SigningKeys(this.transport);
     this.tokenKeys = new TokenKeys(this.transport);
     this.server = new Server(this.transport);
   }
