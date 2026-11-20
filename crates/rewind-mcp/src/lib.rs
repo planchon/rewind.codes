@@ -4,20 +4,27 @@
 //! | Route | Dispatcher | What it does |
 //! | --- | --- | --- |
 //! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the toolset), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
-//! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, one DNS resolution, private and metadata addresses refused, a connection to the checked address, redirects checked again, bounded responses. `webhook` is answered by the engine |
+//! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, then `rewind-outbound`'s checks (one DNS resolution, private and metadata addresses refused, a connection to the checked address), redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
-//! [`Egress`] lends the egress checks of `http` to the other requests a deployment sends where a
-//! tenant says: the server's lifecycle webhooks, and the MCP servers of a deployed server
-//! ([`McpEgress`]), where the operator may let some internal hosts through
-//! ([`InternalAllowList`]).
-//! The dispatchers never write to the journal; a secret goes only into the transport, never into
-//! a result, a failure or a log.
+//! Where a deployment's HTTP servers may be is `rewind-outbound`'s [`ToolEgress`], with the
+//! operator's internal hosts (`--allow-internal-tools`). The dispatchers never write to the
+//! journal; a secret or a key goes only into the transport, never into a result, a failure or a
+//! log.
+//!
+//! How an attempt proves who calls (`archi/04-tools.md`, "Authenticating calls"), from the
+//! [`CallAuth`] the engine resolved:
+//!
+//! | `CallAuth` | The session |
+//! | --- | --- |
+//! | `None` | Carries nothing |
+//! | `Secret` | Carries the secret in the header (format, encoding) or the variable of the server's `auth`, and is pooled apart from the sessions of other secrets |
+//! | `Signed` | Signs each HTTP request with the tenant's key: the call's `tools/call` with its claims, the others with the reduced set; pooled by key and end user |
 //!
 //! What becomes of an attempt:
 //!
 //! ```text
-//! connection (pooled by tenant, server and secrets) ── 401 ──► Park(credentials_refused)
+//! connection (pooled by tenant, server and identity) ── 401 ──► Park(credentials_refused)
 //!   │   only where McpConfig::egress lets it go           ├ unreachable ──► Transient
 //!   │                                                     └ address refused ──► Failed
 //!   ▼ unless approved after a schema change: the server's current tool
@@ -33,10 +40,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use rewind_core::{McpServer, Tool, ToolFailureKind, ToolRoute};
+use rewind_core::{McpServer, Tool, ToolAuth, ToolFailureKind, ToolRoute};
 use rewind_engine::ports::{
-    CallAuth, Dispatched, ParkKind, ParkReason, TenantId, ToolCall, ToolDispatcher,
+    CallAuth, Dispatched, ParkKind, ParkReason, Secret, SigningKey, TenantId, ToolCall,
+    ToolDispatcher,
 };
+use rewind_outbound::{CallIdentity, ToolEgress};
 use rmcp::model::{CallToolRequestParams, JsonObject, MetaObject, RequestMetaObject};
 use serde_json::Value;
 
@@ -47,14 +56,9 @@ mod result;
 mod schema;
 mod transport;
 
-pub use connection::TransportSecrets;
-pub use http::{
-    Egress, HttpConfig, HttpTool, InternalAllowList, NameResolver, Resolving, SystemResolver,
-    http_input_schema, http_output_schema, http_tool,
-};
-pub use transport::McpEgress;
+pub use http::{HttpConfig, HttpTool, http_input_schema, http_output_schema, http_tool};
 
-use connection::Pool;
+use connection::{Credentials, Pool};
 use failure::Failure;
 
 /// The `_meta` key of the idempotency key (`archi/04-tools.md`, "Routes").
@@ -65,7 +69,7 @@ pub const IDEMPOTENCY_KEY_META: &str = "codes.rewind/idempotency-key";
 pub struct McpConfig {
     /// Where the streamable HTTP servers may be: with the egress checks of a deployment by
     /// default, anywhere for the embedded server and the CLI.
-    pub egress: McpEgress,
+    pub egress: ToolEgress,
     /// How long opening a session may take: connecting or starting the process, then
     /// initializing. Listing the tools at discovery gets as long again.
     pub connect_timeout: Duration,
@@ -87,7 +91,7 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            egress: McpEgress::default(),
+            egress: ToolEgress::default(),
             connect_timeout: Duration::from_secs(30),
             idle_timeout: Duration::from_secs(5 * 60),
             tools_ttl: Duration::from_secs(60),
@@ -178,16 +182,19 @@ impl McpDispatcher {
     /// Discovery: the tools of a server, as a toolset pins them (`archi/04-tools.md`, "Toolsets
     /// and code generation"), sorted by name. Each is named `{server}.{tool}`, with its
     /// description (or its title), its input and output schemas, and the default policy of an
-    /// MCP tool; the harness's policies are applied by whoever builds the toolset.
+    /// MCP tool; the harness's policies are applied by whoever builds the toolset. `auth` is how
+    /// the listing proves who calls: the organization's secret the registration attaches, or a
+    /// listing signed with the reduced set of claims.
     pub async fn list_tools(
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        secrets: Option<&TransportSecrets>,
+        auth: ListingAuth,
     ) -> Result<Vec<Tool>, McpError> {
+        let credentials = auth.credentials(server)?;
         let lease = self
             .pool
-            .connection(tenant, server, secrets)
+            .connection(tenant, server, &credentials)
             .await
             .map_err(|failure| failure.into_error(&server.name))?;
         let timeout = self.pool.config().connect_timeout;
@@ -224,16 +231,24 @@ impl McpDispatcher {
         &self,
         call: &ToolCall,
         server: &McpServer,
-        secrets: Option<&TransportSecrets>,
+        credentials: &Credentials,
+        identity: Option<CallIdentity>,
     ) -> Dispatched {
         let lease = match self
             .pool
-            .connection(&call.run.tenant, server, secrets)
+            .connection(&call.run.tenant, server, credentials)
             .await
         {
             Ok(lease) => lease,
             Err(failure) => return failure.into_dispatched(),
         };
+        // A signed session signs the call's `tools/call` with its claims while it is in flight.
+        let _signing = identity.and_then(|identity| {
+            lease
+                .connection()
+                .signer()
+                .map(|signer| signer.register(call.idempotency_key.clone(), identity))
+        });
         let local = call.tool.local_name();
         if !call.schema_change_approved {
             match lease.connection().tools(&server.name).await {
@@ -301,8 +316,8 @@ impl ToolDispatcher for McpDispatcher {
             )
             .into_dispatched();
         };
-        let secrets = transport_secrets(server, auth);
-        let attempt = self.attempt(&call, server, secrets.as_ref());
+        let (credentials, identity) = credentials_of(auth);
+        let attempt = self.attempt(&call, server, &credentials, identity);
         let dispatched = match call.tool.policy.execution_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                 Ok(dispatched) => dispatched,
@@ -323,24 +338,67 @@ impl ToolDispatcher for McpDispatcher {
     }
 }
 
-/// What the call's authentication puts into the transport: nothing for a server without `auth`;
-/// the attached secret in the header or the variable the server's `auth` names; for a signed
-/// call, a JWT in `Authorization: Bearer` on each HTTP request of the session
-/// (`archi/04-tools.md`, "Signed calls").
-#[expect(
-    clippy::todo,
-    reason = "the outbound workstream puts secrets and signatures in MCP"
-)]
-fn transport_secrets(server: &McpServer, auth: CallAuth) -> Option<TransportSecrets> {
+/// How a listing at registration proves who calls (`archi/04-tools.md`, "Authenticating calls"
+/// and "Signed calls"). Never printed: `Debug` redacts the secret and the key.
+#[derive(Debug, Clone, Default)]
+pub enum ListingAuth {
+    /// Nothing: a public server, or one whose secret the registration does not attach.
+    #[default]
+    None,
+    /// The organization's secret the registration attaches for the server (`secrets`), put
+    /// where the server's `auth` says.
+    Secret(Secret),
+    /// Each request signed with the tenant's key, issued by `issuer`
+    /// (`{public-url}/organizations/{tenant}`), with only `iss`, `aud`, `jti`, `htm`, `htu`,
+    /// `body`, `iat` and `exp`.
+    Signed { key: SigningKey, issuer: String },
+}
+
+impl ListingAuth {
+    fn credentials(self, server: &McpServer) -> Result<Credentials, McpError> {
+        let refused = |message: &str| McpError::Refused {
+            server: server.name.clone(),
+            message: format!("{}: {message}", server.name),
+        };
+        match (self, &server.auth) {
+            (ListingAuth::None, _) => Ok(Credentials::None),
+            (ListingAuth::Secret(value), ToolAuth::Secret(placement)) => Ok(Credentials::Secret {
+                placement: placement.clone(),
+                value,
+            }),
+            (ListingAuth::Secret(_), _) => Err(refused("its auth takes no secret")),
+            (ListingAuth::Signed { key, issuer }, ToolAuth::Rewind) => Ok(Credentials::Signed {
+                key,
+                issuer,
+                subject: None,
+            }),
+            (ListingAuth::Signed { .. }, _) => Err(refused("its auth is not a signature")),
+        }
+    }
+}
+
+/// What the call's authentication puts into the session (`archi/04-tools.md`, "Authenticating
+/// calls"): nothing; the attached secret where the server's `auth` says; or the tenant's key, on
+/// a session of the run's end user, with the claims of the call for its own request.
+fn credentials_of(auth: CallAuth) -> (Credentials, Option<CallIdentity>) {
     match auth {
-        CallAuth::None => None,
-        CallAuth::Secret { .. } | CallAuth::Signed { .. } => {
-            let _ = server;
-            todo!(
-                "outbound: the attached secret in the header (format, encoding) or variable of \
-                 the server's auth; a JWT signed per HTTP request of the session, through \
-                 rewind-outbound"
-            )
+        CallAuth::None => (Credentials::None, None),
+        CallAuth::Secret { value, placement } => (Credentials::Secret { placement, value }, None),
+        CallAuth::Signed { key, claims } => {
+            let identity = CallIdentity {
+                subject: claims.subject.as_str().to_owned(),
+                labels: claims.labels.clone(),
+                run: claims.run.to_string(),
+                tool: claims.tool.clone(),
+                idempotency_key: claims.idempotency_key.clone(),
+                jti: claims.jti(),
+            };
+            let credentials = Credentials::Signed {
+                key,
+                issuer: claims.issuer,
+                subject: Some(identity.subject.clone()),
+            };
+            (credentials, Some(identity))
         }
     }
 }

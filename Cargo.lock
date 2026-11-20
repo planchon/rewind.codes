@@ -1587,6 +1587,7 @@ dependencies = [
  "rewind-engine",
  "rewind-format",
  "rewind-mcp",
+ "rewind-outbound",
  "rewind-runtime",
  "rmcp",
  "serde",
@@ -4214,7 +4215,9 @@ dependencies = [
  "rewind-format",
  "rewind-mcp",
  "rewind-mcp-server",
+ "rewind-openapi",
  "rewind-otel",
+ "rewind-outbound",
  "rewind-runtime",
  "rmcp",
  "rustix 1.1.6",
@@ -4314,15 +4317,18 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "futures-util",
- "ipnet",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
  "jsonschema",
  "libtest-mimic",
  "reqwest 0.13.5",
  "rewind-core",
  "rewind-engine",
+ "rewind-outbound",
  "rmcp",
  "serde_json",
  "sha2 0.11.1",
+ "sse-stream 0.2.6",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -4351,9 +4357,19 @@ dependencies = [
 name = "rewind-openapi"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "httpdate",
+ "percent-encoding",
+ "reqwest 0.13.5",
  "rewind-core",
  "rewind-engine",
  "rewind-outbound",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -4378,7 +4394,18 @@ dependencies = [
 name = "rewind-outbound"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "getrandom 0.3.4",
+ "ipnet",
+ "jsonwebtoken",
+ "reqwest 0.13.5",
  "rewind-core",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4426,7 +4453,9 @@ dependencies = [
  "rewind-format",
  "rewind-mcp",
  "rewind-mcp-server",
+ "rewind-openapi",
  "rewind-otel",
+ "rewind-outbound",
  "rewind-runtime",
  "rewind-store-postgres",
  "rewind-store-turso",

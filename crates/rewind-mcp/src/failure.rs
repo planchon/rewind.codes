@@ -28,8 +28,9 @@ use rmcp::transport::streamable_http_client::{
 };
 use serde_json::Value;
 
+use rewind_outbound::{Egress, SigningError};
+
 use crate::McpError;
-use crate::http::Egress;
 
 /// Characters of a message from a server kept in a failure: the script and the model read it.
 const MESSAGE: usize = 2000;
@@ -236,6 +237,13 @@ fn of_transport(server: &str, error: &(dyn Error + 'static), answers: Answers) -
             None,
         );
     }
+    if let Some(unsigned) = signing_error(error) {
+        return Failure::permanent(
+            ToolFailureKind::Unavailable,
+            format!("{server}: {unsigned}"),
+            None,
+        );
+    }
     let status = http_status(error);
     // What follows the status, or the place of one: the error's text, or for an internal
     // server, only the client's own error.
@@ -294,6 +302,25 @@ fn client_error<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a reqwest::Err
 fn refusal(error: &(dyn Error + 'static)) -> Option<String> {
     Egress::refusal_of(error)
         .or_else(|| client_error(error).and_then(|client| Egress::refusal_of(client)))
+}
+
+/// Rewind could not sign a request of a signed session: its key is unusable, which retrying
+/// does not change.
+fn signing_error(error: &(dyn Error + 'static)) -> Option<SigningError> {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if let Some(signing) = current.downcast_ref::<SigningError>() {
+            return Some(signing.clone());
+        }
+        if let Some(StreamableHttpError::Io(io)) =
+            current.downcast_ref::<StreamableHttpError<reqwest::Error>>()
+            && let Some(signing) = io.get_ref().and_then(|inner| inner.downcast_ref())
+        {
+            return Some(SigningError::clone(signing));
+        }
+        source = current.source();
+    }
+    None
 }
 
 /// A stdio server that could not be started. A missing or forbidden program will not appear

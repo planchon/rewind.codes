@@ -6,7 +6,7 @@
  *   sends what runs tests (`POST /v1/test`, `POST /v1/workflows`, `POST /v1/runs/{id}/fork`) to
  *   the workers and everything else to the api server
  *   (`deploy/edge/Caddyfile`). It lets MCP servers on
- *   127.0.0.1 through (`--allow-internal-mcp`), and webhooks to private addresses, so that the
+ *   127.0.0.1 through (`--allow-internal-tools`), and webhooks to private addresses, so that the
  *   gate's fixtures are reachable; stdio MCP servers too.
  * - **B, strict**: one server with both roles on Turso and local files, with a deployed server's
  *   defaults: no internal MCP server, no private webhook, no stdio, no WorkOS. Egress attacks

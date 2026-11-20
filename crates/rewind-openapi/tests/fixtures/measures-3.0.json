@@ -1,0 +1,104 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "Measures", "version": "1" },
+  "servers": [
+    { "url": "https://{region}.api.example.com/v1", "variables": { "region": { "default": "eu", "enum": ["eu", "us"] } } },
+    { "url": "https://staging.example.com/v1" }
+  ],
+  "security": [{ "bearer": [] }],
+  "components": {
+    "securitySchemes": { "bearer": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" } },
+    "parameters": {
+      "MeasureId": { "name": "id", "in": "path", "required": true, "description": "The measure's id.", "schema": { "type": "string" } }
+    },
+    "schemas": {
+      "Measure": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "note": { "type": "string", "nullable": true },
+          "parent": { "$ref": "#/components/schemas/Measure" }
+        }
+      },
+      "NewMeasure": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "example": "weight" },
+          "threshold": { "type": "number", "minimum": 0, "exclusiveMinimum": true }
+        }
+      }
+    },
+    "requestBodies": {
+      "NewMeasure": {
+        "required": true,
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewMeasure" } } }
+      }
+    }
+  },
+  "paths": {
+    "/measures": {
+      "get": {
+        "operationId": "listMeasures",
+        "summary": "List the measures.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "tag", "in": "query", "schema": { "type": "array", "items": { "type": "string" } } },
+          { "name": "Accept", "in": "header", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "The measures.",
+            "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Measure" } } } }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createMeasure",
+        "summary": "Create a measure.",
+        "description": "Creates it once per idempotency key.",
+        "parameters": [{ "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "$ref": "#/components/requestBodies/NewMeasure" },
+        "responses": {
+          "201": { "description": "Created.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Measure" } } } }
+        }
+      }
+    },
+    "/measures/{id}": {
+      "parameters": [{ "$ref": "#/components/parameters/MeasureId" }],
+      "get": {
+        "operationId": "getMeasure",
+        "responses": {
+          "200": { "description": "The measure.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Measure" } } } },
+          "404": { "description": "None." }
+        }
+      },
+      "patch": {
+        "operationId": "renameMeasure",
+        "requestBody": { "content": { "application/json": { "schema": { "type": "object", "properties": { "name": { "type": "string" } } } } } },
+        "responses": { "204": { "description": "Renamed." } }
+      },
+      "delete": {
+        "operationId": "deleteMeasure",
+        "responses": { "204": { "description": "Deleted." } }
+      }
+    },
+    "/measures/{id}/export": {
+      "parameters": [{ "$ref": "#/components/parameters/MeasureId" }],
+      "put": {
+        "operationId": "importMeasure",
+        "requestBody": { "content": { "application/xml": { "schema": { "type": "string" } } } },
+        "responses": { "204": { "description": "Imported." } }
+      }
+    },
+    "/session": {
+      "get": {
+        "operationId": "whoAmI",
+        "parameters": [{ "name": "sid", "in": "cookie", "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Me." } }
+      }
+    }
+  }
+}

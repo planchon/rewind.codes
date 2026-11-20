@@ -219,15 +219,82 @@ impl ServerHandler for Fixture {
     }
 }
 
-/// What the HTTP server accepts: no token, or `Authorization: Bearer <token>`.
+/// What the HTTP server accepts: no token, or `Authorization: Bearer <token>`; or, when
+/// `signed` is set, only requests whose JWT checks against its keys.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Auth {
     pub(crate) token: Arc<Mutex<Option<String>>>,
     /// Send `WWW-Authenticate` with the 401.
     pub(crate) challenge: bool,
+    pub(crate) signed: Option<Signed>,
 }
 
-async fn check(State(auth): State<Auth>, request: Request, next: Next) -> Response {
+/// A server that checks Rewind's signature, as a customer's does.
+#[derive(Debug, Clone)]
+pub(crate) struct Signed {
+    /// `{"keys": [...]}`, as `{iss}/jwks.json` publishes them.
+    pub(crate) jwks: Value,
+    pub(crate) issuer: String,
+    /// What each request carried: its HTTP method, its JSON-RPC method, the JWT's claims.
+    pub(crate) seen: Arc<Mutex<Vec<Seen>>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Seen {
+    pub(crate) http: String,
+    pub(crate) rpc: Option<String>,
+    pub(crate) claims: Value,
+}
+
+/// The URL this server answers at, which the signature's audience must be.
+#[derive(Debug, Clone)]
+struct Audience(Arc<Mutex<String>>);
+
+async fn check(
+    State((auth, audience)): State<(Auth, Audience)>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if let Some(signed) = &auth.signed {
+        let (parts, body) = request.into_parts();
+        let body = axum::body::to_bytes(body, 1 << 20).await.unwrap();
+        let token = parts
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .unwrap_or_default();
+        let host = parts
+            .headers
+            .get("host")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let url = format!("http://{host}{}", parts.uri);
+        let audience = audience.0.lock().unwrap().clone();
+        let expected = rewind_outbound::Expected {
+            issuer: &signed.issuer,
+            audience: &audience,
+            method: parts.method.as_str(),
+            url: &url,
+            body: &body,
+        };
+        match rewind_outbound::verify(token, &signed.jwks, &expected) {
+            Ok(claims) => {
+                let rpc = serde_json::from_slice::<Value>(&body)
+                    .ok()
+                    .and_then(|message| message["method"].as_str().map(str::to_owned));
+                signed.seen.lock().unwrap().push(Seen {
+                    http: parts.method.to_string(),
+                    rpc,
+                    claims,
+                });
+            }
+            Err(reason) => return (StatusCode::UNAUTHORIZED, reason).into_response(),
+        }
+        return next
+            .run(Request::from_parts(parts, axum::body::Body::from(body)))
+            .await;
+    }
     let expected = auth.token.lock().unwrap().clone();
     if let Some(expected) = expected {
         let given = request
@@ -266,6 +333,7 @@ impl Drop for Server {
 /// Serves the fixture over streamable HTTP at `/mcp`, on a free port of 127.0.0.1; `/moved`
 /// redirects there with a 307.
 pub(crate) async fn serve_http(fixture: Fixture, auth: Auth) -> Server {
+    let audience = Audience(Arc::new(Mutex::new(String::new())));
     let stop = CancellationToken::new();
     let sessions = fixture.clone();
     let service = StreamableHttpService::new(
@@ -288,9 +356,13 @@ pub(crate) async fn serve_http(fixture: Fixture, auth: Auth) -> Server {
                 (StatusCode::TEMPORARY_REDIRECT, [("location", "/mcp")]).into_response()
             }),
         )
-        .layer(middleware::from_fn_with_state(auth, check));
+        .layer(middleware::from_fn_with_state(
+            (auth, audience.clone()),
+            check,
+        ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    *audience.0.lock().unwrap() = format!("http://{address}/mcp");
     let shutdown = stop.clone();
     tokio::spawn(async move {
         let _ = axum::serve(listener, router)

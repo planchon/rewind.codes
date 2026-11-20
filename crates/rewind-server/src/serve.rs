@@ -202,7 +202,7 @@ async fn start_wired(
     let clock = clock(&config, &store).await?;
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| StartupError::Setup(error.to_string()))?;
-    let tools = Tools::new(config.mcp_egress.clone()).map_err(StartupError::Setup)?;
+    let tools = Tools::new(config.tool_egress.clone()).map_err(StartupError::Setup)?;
     let exporter = Exporter::new(
         config.otlp.as_ref(),
         &telemetry::service(&config.worker_name),

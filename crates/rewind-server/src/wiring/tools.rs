@@ -1,11 +1,11 @@
 //! Tools: the dispatcher of the routes Rewind calls itself, the discovery of a toolset's MCP
-//! servers, the built-ins pinned in every toolset, and the declarations generated for a toolset
-//! (`archi/04-tools.md`).
+//! servers, the reading of its APIs' OpenAPI documents, the built-ins pinned in every toolset,
+//! and the declarations generated for a toolset (`archi/04-tools.md`).
 //!
 //! | Route | Dispatcher |
 //! | --- | --- |
-//! | MCP tools | `rewind-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled; HTTP servers only where the configuration's `McpEgress` lets it go |
-//! | API tools | `Unrouted` until `rewind-openapi`'s `ApiDispatcher` (the outbound workstream, `archi/09-roadmap.md`) |
+//! | MCP tools | `rewind-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled; HTTP servers only where the configuration's `ToolEgress` lets it go |
+//! | API tools | `rewind-openapi`'s `ApiDispatcher`: APIs only where the same `ToolEgress` lets it go |
 //! | Built-ins | `rewind-mcp`'s `HttpTool` for `http`, with its egress rules; `webhook` is answered by the engine |
 //! | Host tools | none: the harness's worker claims them (`GET /v1/tasks`) |
 //!
@@ -17,10 +17,12 @@ use std::collections::BTreeMap;
 use rewind_core::{Builtin, McpServer, Shape, Tool, ToolRoute, Toolset};
 use rewind_engine::adapters::{RoutingDispatcher, Unrouted};
 use rewind_engine::ports::TenantId;
-use rewind_mcp::{HttpConfig, HttpTool, McpConfig, McpDispatcher, McpEgress, TransportSecrets};
+use rewind_mcp::{HttpConfig, HttpTool, ListingAuth, McpConfig, McpDispatcher};
+use rewind_openapi::{ApiConfig, ApiDispatcher, FetchError, Fetched};
+use rewind_outbound::ToolEgress;
 
 /// The dispatcher of the routes Rewind calls itself.
-pub(crate) type Dispatcher = RoutingDispatcher<McpDispatcher, Unrouted, HttpTool, Unrouted>;
+pub(crate) type Dispatcher = RoutingDispatcher<McpDispatcher, ApiDispatcher, HttpTool, Unrouted>;
 
 /// Why the tools of an MCP server could not be listed: unreachable, refused (401), too
 /// slow, or an answer that is not a tool list. The message names the server.
@@ -31,37 +33,55 @@ pub(crate) struct DiscoveryError(pub(crate) String);
 #[derive(Debug, Clone)]
 pub(crate) struct Tools {
     mcp: McpDispatcher,
+    api: ApiDispatcher,
     http: HttpTool,
+    /// Where MCP servers, APIs and OpenAPI documents may be.
+    egress: ToolEgress,
 }
 
 impl Tools {
-    /// The tools of a server whose MCP servers may be where `egress` says, at discovery as at
-    /// each call.
-    pub(crate) fn new(egress: McpEgress) -> Result<Self, String> {
+    /// The tools of a server whose MCP servers and APIs may be where `egress` says, at
+    /// registration as at each call.
+    pub(crate) fn new(egress: ToolEgress) -> Result<Self, String> {
         Ok(Self {
             mcp: McpDispatcher::new(McpConfig {
-                egress,
+                egress: egress.clone(),
                 ..McpConfig::default()
             }),
+            api: ApiDispatcher::new(ApiConfig {
+                egress: egress.clone(),
+                ..ApiConfig::default()
+            }),
             http: HttpTool::new(HttpConfig::default()).map_err(|error| error.to_string())?,
+            egress,
         })
     }
 
     pub(crate) fn dispatcher(&self) -> Dispatcher {
-        RoutingDispatcher::new(self.mcp.clone(), Unrouted, self.http.clone(), Unrouted)
+        RoutingDispatcher::new(
+            self.mcp.clone(),
+            self.api.clone(),
+            self.http.clone(),
+            Unrouted,
+        )
     }
 
-    /// The tools of an MCP server, as a toolset pins them.
+    /// The tools of an MCP server, as a toolset pins them, listed as `auth` says.
     pub(crate) async fn discover(
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        secrets: Option<&TransportSecrets>,
+        auth: ListingAuth,
     ) -> Result<Vec<Tool>, DiscoveryError> {
         self.mcp
-            .list_tools(tenant, server, secrets)
+            .list_tools(tenant, server, auth)
             .await
             .map_err(|error| DiscoveryError(error.to_string()))
+    }
+
+    /// The OpenAPI document at `url`, read once through the egress checks.
+    pub(crate) async fn fetch_document(&self, url: &str) -> Result<Fetched, FetchError> {
+        rewind_openapi::fetch(url, &self.egress).await
     }
 
     /// The `http` built-in, for these hosts.

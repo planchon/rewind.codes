@@ -27,7 +27,7 @@ use rewind_engine::ports::{
     CredentialsExpiredReason, JournalStore, RunRef, Subscription, TaskRef, WebhookError,
     WebhookEvent, WebhookEventKind, WebhookSender,
 };
-use rewind_mcp::{Egress, NameResolver, SystemResolver};
+use rewind_outbound::{Egress, NameResolver, SystemResolver};
 use tokio::time::Instant;
 
 use crate::views::{Views, task_id};
@@ -637,8 +637,8 @@ mod tests {
     #[derive(Debug)]
     struct Fixed(Vec<std::net::IpAddr>);
 
-    impl rewind_mcp::NameResolver for Fixed {
-        fn resolve(&self, _host: &str) -> rewind_mcp::Resolving {
+    impl rewind_outbound::NameResolver for Fixed {
+        fn resolve(&self, _host: &str) -> rewind_outbound::Resolving {
             let addresses = self.0.clone();
             Box::pin(async move { Ok(addresses) })
         }

@@ -3,18 +3,25 @@
 //!
 //! A toolset file is the body of `POST /v1/toolsets` (`CreateToolset`), pinned as a server pins
 //! it: the tools of each MCP server are discovered by connecting to it (`rewind-mcp`), each with
-//! its `auth`; host tools and the `http` tool are taken as written, the `webhook` built-in is
-//! always there.
+//! its `auth`; the operations of each API are read from its OpenAPI document (`rewind-openapi`);
+//! host tools and the `http` tool are taken as written, the `webhook` built-in is always there.
+//! As the embedded server, the CLI reaches any address, and APIs over `http` too. It holds no
+//! signing key: a server whose `auth` is `rewind` is listed without a signature.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use rewind_api::toolsets::{CreateToolset, OnInterruption, ToolPolicy as ApiPolicy};
-use rewind_core::{
-    Builtin, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy, ToolRoute, Toolset,
+use rewind_api::toolsets::{
+    CreateToolset, OnInterruption, OpenApiDocument, ToolPolicy as ApiPolicy,
 };
-use rewind_engine::ports::TenantId;
-use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
+use rewind_core::{
+    Api, Builtin, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy, ToolRoute,
+    Toolset,
+};
+use rewind_engine::ports::{Secret, TenantId};
+use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
+use rewind_openapi::{ReadOptions, read};
+use rewind_outbound::ToolEgress;
 use serde_json::json;
 
 use crate::error::CliError;
@@ -31,17 +38,19 @@ pub(crate) async fn pin_file(path: &Path) -> Result<Toolset, CliError> {
 /// Pins a toolset as `POST /v1/toolsets` does.
 pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
     let mut servers = Vec::new();
-    let mut tools = Vec::new();
-    if !create.apis.is_empty() || !create.secrets.is_empty() {
-        apis_and_secrets(create);
-    }
+    let (apis, mut tools) = read_apis(create).await?;
     if !create.mcp.is_empty() {
+        let listing = if create.secrets.is_empty() {
+            BTreeMap::new()
+        } else {
+            listing_secrets(create)
+        };
         // As the embedded server: the developer's own servers, at any address.
         let discovery = McpDispatcher::new(McpConfig {
-            egress: McpEgress::open(),
+            egress: ToolEgress::open(),
             ..McpConfig::default()
         });
-        let pinned = discover(&discovery, create, &mut servers, &mut tools).await;
+        let pinned = discover(&discovery, create, listing, &mut servers, &mut tools).await;
         discovery.close();
         pinned?;
     }
@@ -63,12 +72,64 @@ pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
         tools.push(tool);
     }
     tools.push(webhook());
-    Toolset::new(servers, tools).map_err(|error| error.to_string())
+    Toolset::from_parts(servers, apis, tools).map_err(|error| error.to_string())
+}
+
+/// The APIs of a toolset file, read from their OpenAPI documents as `POST /v1/toolsets` reads
+/// them: given in the file, or read once from their URL, at any address.
+async fn read_apis(create: &CreateToolset) -> Result<(Vec<Api>, Vec<Tool>), String> {
+    let mut apis = Vec::new();
+    let mut tools = Vec::new();
+    for declared in &create.apis {
+        let mut options = ReadOptions::new(declared.name.clone());
+        options.base_url = declared.base_url.clone();
+        options.auth = declared
+            .auth
+            .as_ref()
+            .map(|auth| {
+                auth.to_core()
+                    .map_err(|error| format!("the API {:?}: {error}", declared.name))
+            })
+            .transpose()?;
+        options.operations = declared.operations.clone();
+        options.concurrency = declared.concurrency;
+        options.allow_http = true;
+        let read_api = match &declared.openapi {
+            OpenApiDocument::Document(document) => read(document, &options),
+            OpenApiDocument::Url(url) => {
+                let fetched = rewind_openapi::fetch(url, &ToolEgress::open())
+                    .await
+                    .map_err(|error| format!("the API {:?}: {error}", declared.name))?;
+                options.document_url = Some(fetched.url);
+                read(&fetched.document, &options)
+            }
+        }
+        .map_err(|error| error.to_string())?;
+        if let Some(unknown) = declared.policies.keys().find(|name| {
+            !read_api
+                .tools
+                .iter()
+                .any(|tool| tool.local_name() == name.as_str())
+        }) {
+            return Err(format!(
+                "policies: the API {:?} has no operation {unknown:?}",
+                declared.name
+            ));
+        }
+        for mut tool in read_api.tools {
+            let policy = declared.policies.get(tool.local_name());
+            apply(&mut tool.policy, policy);
+            tools.push(tool);
+        }
+        apis.push(read_api.api);
+    }
+    Ok((apis, tools))
 }
 
 async fn discover(
     discovery: &McpDispatcher,
     create: &CreateToolset,
+    mut listing: BTreeMap<String, Secret>,
     servers: &mut Vec<McpServer>,
     tools: &mut Vec<Tool>,
 ) -> Result<(), String> {
@@ -93,13 +154,26 @@ async fn discover(
                 .to_core()
                 .map_err(|error| format!("the MCP server {:?}: {error}", server.name))?;
         }
-        if pinned.auth != ToolAuth::None {
-            listing_auth(&pinned);
-        }
+        // The CLI holds no signing key: a server whose auth is `rewind` is listed unsigned.
+        let auth = match (&pinned.auth, listing.remove(&server.name)) {
+            (ToolAuth::Secret(_), Some(secret)) => ListingAuth::Secret(secret),
+            _ => ListingAuth::None,
+        };
         let listed = discovery
-            .list_tools(&TenantId::local(), &pinned, None)
+            .list_tools(&TenantId::local(), &pinned, auth)
             .await
-            .map_err(|error| format!("cannot list the tools of {:?}: {error}", server.name))?;
+            .map_err(|error| {
+                let unsigned = if pinned.auth == ToolAuth::Rewind {
+                    " (the CLI does not sign: register the toolset on a server, which signs its \
+                     listing)"
+                } else {
+                    ""
+                };
+                format!(
+                    "cannot list the tools of {:?}: {error}{unsigned}",
+                    server.name
+                )
+            })?;
         if let Some(unknown) = server.policies.keys().find(|name| {
             !listed
                 .iter()
@@ -120,28 +194,15 @@ async fn discover(
     Ok(())
 }
 
-/// A toolset file's APIs, read from their OpenAPI documents, and the secrets that list its
-/// servers' tools.
+/// The secrets a toolset file attaches to list its servers' tools (`secrets`), by server.
+/// Called only when `secrets` is not empty.
 #[expect(
     clippy::todo,
-    reason = "the outbound and engine-server workstreams build them"
+    reason = "the engine-server workstream gives the CLI its secrets for the listings"
 )]
-fn apis_and_secrets(create: &CreateToolset) {
+fn listing_secrets(create: &CreateToolset) -> BTreeMap<String, Secret> {
     let _ = create;
-    todo!(
-        "outbound: read a toolset file's APIs (rewind-openapi) as POST /v1/toolsets does; \
-         engine-server: the CLI's secrets for the listings"
-    )
-}
-
-/// How the listing of a server's tools authenticates: its secret or a signed listing.
-#[expect(
-    clippy::todo,
-    reason = "the outbound workstream authenticates MCP listings"
-)]
-fn listing_auth(server: &McpServer) {
-    let _ = server;
-    todo!("outbound: list the tools of a server whose auth is a secret or rewind")
+    todo!("engine-server: the CLI's secrets for the listings")
 }
 
 /// `list_issues` for `github.list_issues`.
@@ -210,9 +271,52 @@ pub(crate) fn of_mocks(names: &BTreeSet<String>) -> Result<Toolset, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use rewind_api::toolsets::{HostTool, HttpTool};
+    use rewind_api::toolsets::{Api as ApiDeclared, HostTool, HttpTool};
 
     use super::*;
+
+    #[tokio::test]
+    async fn apis_are_read_from_their_documents_as_a_server_reads_them() {
+        let document = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "t", "version": "1" },
+            "servers": [{ "url": "http://127.0.0.1:8080/v1" }],
+            "paths": {
+                "/measures": {
+                    "post": { "operationId": "createMeasure", "responses": { "201": { "description": "ok" } } },
+                    "get": { "operationId": "listMeasures", "responses": { "200": { "description": "ok" } } }
+                }
+            }
+        });
+        let create = CreateToolset {
+            apis: vec![ApiDeclared {
+                name: "dax".into(),
+                openapi: OpenApiDocument::Document(document),
+                base_url: None,
+                auth: None,
+                operations: None,
+                concurrency: None,
+                policies: [(
+                    "listMeasures".to_owned(),
+                    ApiPolicy {
+                        approval: Some(true),
+                        ..ApiPolicy::default()
+                    },
+                )]
+                .into(),
+            }],
+            ..CreateToolset::default()
+        };
+        let toolset = pin(&create).await.unwrap();
+        assert_eq!(toolset.apis()[0].base_url, "http://127.0.0.1:8080/v1");
+        let create_measure = toolset.tool("dax.createMeasure").unwrap();
+        // A POST without Idempotency-Key is called at most once.
+        assert_eq!(
+            create_measure.policy.on_interruption,
+            Interruption::AtMostOnce
+        );
+        assert!(toolset.tool("dax.listMeasures").unwrap().policy.approval);
+    }
 
     #[tokio::test]
     async fn host_tools_and_http_are_pinned_as_written() {

@@ -44,7 +44,7 @@ x-rewind-env: &rewind-env
   REWIND_MAX_TTL: ${REWIND_MAX_TTL:-365d}
   # MCP servers at private addresses the servers may reach (names, *.domain, CIDR networks):
   # `loadgen` is the load generator's fake MCP server (profile load).
-  REWIND_ALLOW_INTERNAL_MCP: ${REWIND_ALLOW_INTERNAL_MCP:-loadgen}
+  REWIND_ALLOW_INTERNAL_TOOLS: ${REWIND_ALLOW_INTERNAL_TOOLS:-loadgen}
 
 x-worker: &worker
   <<: *rewind

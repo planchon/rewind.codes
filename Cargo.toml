@@ -58,6 +58,8 @@ hmac = "0.13"
 # The request parts rewind-mcp-server reads its caller from (rmcp's streamable HTTP server
 # gives them to its handler), the version rmcp and axum build.
 http = "1"
+# `Retry-After` as an HTTP date, in rewind-openapi's answers (the crate hyper already builds).
+httpdate = "1"
 # The networks of the internal MCP servers an operator allows (`--allow-internal-mcp 10.0.0.0/8`).
 ipnet = "2"
 # Timestamps of the HTTP API (RFC 3339).
@@ -92,6 +94,8 @@ serde_html_form = "0.2"
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
+# The path parameters of API calls, percent-encoded (the crate url already builds).
+percent-encoding = "2"
 # The production store (rewind-store-postgres): Postgres through sqlx, without its macros (queries are
 # built at run time) and with rustls on aws-lc-rs, the provider the HTTP clients already use. 0.8:
 # sqlx 0.9 needs Rust 1.94, above the workspace's 1.88.
