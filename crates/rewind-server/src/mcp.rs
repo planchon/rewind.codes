@@ -30,6 +30,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
 use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
@@ -340,6 +341,18 @@ impl Api for ServerApi {
         record: &RecordTests,
     ) -> Result<RecordedTests, ToolError> {
         Api::record_tests(&self.local, workflow, record).await
+    }
+
+    async fn list_secrets(&self) -> Result<SecretList, ToolError> {
+        Api::list_secrets(&self.local).await
+    }
+
+    async fn namespace_secrets(&self, namespace: &str) -> Result<SecretList, ToolError> {
+        Api::namespace_secrets(&self.local, namespace).await
+    }
+
+    fn namespace(&self) -> Option<String> {
+        Api::namespace(&self.local)
     }
 }
 

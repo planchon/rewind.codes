@@ -51,6 +51,30 @@ pub(crate) fn optional_string(values: &Values, key: &str) -> Result<Option<Strin
     }
 }
 
+/// `secrets`: the secrets a run reads, by MCP server or API, each `org/<name>` or `ns/<name>`.
+/// The API checks the references; this checks their shape.
+pub(crate) fn optional_attachments(
+    values: &Values,
+) -> Result<Option<std::collections::BTreeMap<String, String>>, InputError> {
+    let invalid = || {
+        InputError::new(
+            "`secrets` must be an object of secrets by MCP server or API, each \"org/<name>\" or \"ns/<name>\", such as {\"github\": \"ns/github\"}.",
+        )
+    };
+    match values.get("secrets") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Object(secrets)) => secrets
+            .iter()
+            .map(|(server, secret)| match secret {
+                Value::String(secret) if !secret.is_empty() => Ok((server.clone(), secret.clone())),
+                _ => Err(invalid()),
+            })
+            .collect::<Result<_, _>>()
+            .map(Some),
+        Some(_) => Err(invalid()),
+    }
+}
+
 pub(crate) fn optional_strings(
     values: &Values,
     key: &str,

@@ -22,6 +22,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
 use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
@@ -35,18 +36,23 @@ use rmcp::transport::StreamableHttpClientTransport;
 use rmcp::{RoleClient, ServiceExt as _};
 use serde_json::{Value, json};
 
-const READ: [Permission; 3] = [
+/// A connection's access `read` (`archi/06-storage-and-scale.md`, "Connections").
+const READ: [Permission; 4] = [
     Permission::RunsRead,
     Permission::ToolsetsRead,
     Permission::NamespacesRead,
+    Permission::SecretsRead,
 ];
 
-const RUN: [Permission; 5] = [
+/// A connection's access `run`.
+const RUN: [Permission; 7] = [
     Permission::RunsRead,
     Permission::ToolsetsRead,
     Permission::NamespacesRead,
+    Permission::SecretsRead,
     Permission::RunsStart,
     Permission::RunsControl,
+    Permission::SecretsUse,
 ];
 
 fn organization(id: &str, name: Option<&str>, permissions: &[Permission]) -> Organization {
@@ -226,6 +232,26 @@ impl Api for FakeApi {
     ) -> Result<RecordedTests, ApiError> {
         Err(unused("record_tests"))
     }
+
+    async fn list_secrets(&self) -> Result<SecretList, ApiError> {
+        self.saw("list_secrets");
+        Ok(serde_json::from_value(json!({ "secrets": [{
+            "name": "zendesk", "scope": "org", "reference": "org/zendesk",
+            "createdBy": "user:u", "createdAt": "2026-11-19T10:00:00Z",
+            "updatedBy": "user:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
+        }] }))
+        .unwrap())
+    }
+
+    async fn namespace_secrets(&self, namespace: &str) -> Result<SecretList, ApiError> {
+        self.saw(&format!("namespace_secrets of={namespace}"));
+        Ok(serde_json::from_value(json!({ "secrets": [{
+            "name": "github", "scope": "ns", "namespace": namespace, "reference": "ns/github",
+            "createdBy": "token:alice", "createdAt": "2026-11-19T10:00:00Z",
+            "updatedBy": "token:alice", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
+        }] }))
+        .unwrap())
+    }
 }
 
 impl McpApi for FakeApi {
@@ -347,6 +373,7 @@ async fn the_tools_listed_are_those_one_organization_of_the_caller_allows() {
             "list_namespaces",
             "list_toolsets",
             "search_tools",
+            "list_secrets",
             "get_run",
             "list_runs",
             "get_workflow",
@@ -425,6 +452,7 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
         "list_namespaces",
         "list_toolsets",
         "search_tools",
+        "list_secrets",
         "check_script",
         "test_script",
         "run_script",
@@ -432,6 +460,26 @@ async fn initialize_names_rewind_and_says_how_to_go_from_an_organization_to_a_ru
         assert!(INSTRUCTIONS.contains(step), "{step}");
     }
     assert!(info.capabilities.tools.is_some());
+}
+
+#[tokio::test]
+async fn list_secrets_names_what_a_run_may_attach_in_the_namespace_given() {
+    let (connector, log) = FakeConnector::new(vec![organization("org_1", Some("Acme"), &RUN)]);
+    let client = client(connector).await;
+    let listed = call(&client, "list_secrets", json!({ "namespace": "alice" })).await;
+    assert_eq!(listed.is_error, Some(false));
+    assert_eq!(
+        text(&listed),
+        "The secrets you may attach, never a value:\n- org/zendesk, the organization's\n- ns/github, the end user's in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
+    );
+    let seen = log.lock().unwrap().clone();
+    assert_eq!(
+        &seen[seen.len() - 2..],
+        [
+            "list_secrets org=org_1 ns=alice",
+            "namespace_secrets of=alice org=org_1 ns=alice"
+        ]
+    );
 }
 
 #[tokio::test]

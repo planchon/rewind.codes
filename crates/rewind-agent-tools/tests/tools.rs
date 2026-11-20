@@ -17,6 +17,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
 use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset};
 use rewind_api::workflows::{
@@ -290,6 +291,46 @@ impl Api for Fake {
     ) -> Result<RecordedTests, ApiError> {
         Err(ApiError::fault("unused"))
     }
+
+    async fn list_secrets(&self) -> Result<SecretList, ApiError> {
+        self.saw("list_secrets", json!({}), None);
+        Ok(secrets(&[
+            ("org/zendesk", Some("prod")),
+            ("org/linear", None),
+        ]))
+    }
+
+    async fn namespace_secrets(&self, namespace: &str) -> Result<SecretList, ApiError> {
+        self.saw("namespace_secrets", json!({ "namespace": namespace }), None);
+        Ok(secrets(&[("ns/github", None)]))
+    }
+
+    fn namespace(&self) -> Option<String> {
+        Some("alice".into())
+    }
+}
+
+/// Secrets as the API lists them, with an `env` label for some.
+fn secrets(references: &[(&str, Option<&str>)]) -> SecretList {
+    let secrets = references
+        .iter()
+        .map(|(reference, env)| {
+            let (scope, name) = reference.split_once('/').unwrap();
+            let mut secret = json!({
+                "name": name, "scope": scope, "reference": reference,
+                "createdBy": "user:u", "createdAt": "2026-11-19T10:00:00Z",
+                "updatedBy": "user:u", "updatedAt": "2026-11-19T10:00:00Z", "reads": []
+            });
+            if scope == "ns" {
+                secret["namespace"] = json!("alice");
+            }
+            if let Some(env) = env {
+                secret["labels"] = json!({ "env": env });
+            }
+            serde_json::from_value(secret).unwrap()
+        })
+        .collect();
+    SecretList { secrets }
 }
 
 fn tools(toolset: Option<&str>) -> (AgentTools<Fake>, Fake) {
@@ -538,7 +579,8 @@ async fn the_tools_are_those_given_and_some_need_a_toolset() {
             "list_runs",
             "signal_run",
             "cancel_run",
-            "retry_run"
+            "retry_run",
+            "list_secrets"
         ]
     );
     assert!(matches!(
@@ -609,4 +651,91 @@ async fn a_retry_carries_the_agent_s_labels_and_the_default_wait() {
         .find(|seen| seen.operation == "cancel_run")
         .unwrap();
     assert_eq!(cancel.body, json!({ "wait": "30s" }));
+}
+
+#[tokio::test]
+async fn list_secrets_lists_what_the_agent_may_attach_never_a_value() {
+    let (tools, fake) = tools(None);
+    let listed = tools
+        .handle("list_secrets", &json!({}), &call("c"))
+        .await
+        .unwrap();
+    assert!(!listed.is_error);
+    assert_eq!(
+        listed.content,
+        "The secrets you may attach, never a value:\n- org/zendesk, the organization's (labels env=prod)\n- org/linear, the organization's\n- ns/github, the end user's in the namespace alice\nAttach one in `secrets`, by the MCP server or API whose calls need it, such as {\"github\": \"ns/github\"}."
+    );
+    assert_eq!(
+        fake.seen()
+            .iter()
+            .map(|seen| seen.operation)
+            .collect::<Vec<_>>(),
+        ["list_secrets", "namespace_secrets"]
+    );
+}
+
+#[tokio::test]
+async fn the_secrets_a_run_reads_go_with_the_start_the_retry_and_the_save() {
+    let (tools, fake) = tools(Some("ts1"));
+    let attached = json!({ "github": "ns/github", "zendesk": "org/zendesk" });
+    tools
+        .handle(
+            "run_script",
+            &json!({ "code": CODE, "secrets": attached }),
+            &call("c1"),
+        )
+        .await
+        .unwrap();
+    tools
+        .handle(
+            "retry_run",
+            &json!({ "run_id": "r1", "code": CODE, "secrets": { "github": "org/github" } }),
+            &call("c2"),
+        )
+        .await
+        .unwrap();
+    tools
+        .handle(
+            "save_workflow",
+            &json!({
+                "name": "triage", "description": "Triage.", "code": CODE,
+                "input": {}, "output": {}, "secrets": { "github": "ns/github" }
+            }),
+            &call("c3"),
+        )
+        .await
+        .unwrap();
+    let body = |operation: &str| {
+        fake.seen()
+            .into_iter()
+            .find(|seen| seen.operation == operation)
+            .unwrap()
+            .body
+    };
+    assert_eq!(body("start_run")["secrets"], attached);
+    assert_eq!(
+        body("fork_run")["secrets"],
+        json!({ "github": "org/github" })
+    );
+    assert_eq!(
+        body("create_workflow")["secrets"],
+        json!({ "github": "ns/github" })
+    );
+
+    let refused = tools
+        .handle(
+            "run_script",
+            &json!({ "code": CODE, "secrets": { "github": 1 } }),
+            &call("c4"),
+        )
+        .await
+        .unwrap();
+    assert!(refused.is_error);
+    assert!(
+        refused
+            .content
+            .starts_with("run_script: `secrets` must be an object of secrets by MCP server or API"),
+        "{}",
+        refused.content
+    );
 }

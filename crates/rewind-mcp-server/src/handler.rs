@@ -28,10 +28,14 @@ namespace you give as `namespace`; a new name creates one.\n\
 3. list_toolsets: the toolsets, the MCP servers and tools a script imports from \
 \"rewind:tools\". Give the toolset's id as `toolset`.\n\
 4. search_tools: the TypeScript declarations of the tools you need, before you write the script.\n\
-5. check_script, then test_script: type-check the script, then test it in virtual time against \
-answers you give for its calls, without calling anything.\n\
-6. run_script: run it. You get its output, or the run's id and what it waits for: follow it with \
-get_run, answer it with signal_run, stop it with cancel_run, and fix a failed run with retry_run.\n\
+5. list_secrets: the secrets you may attach, by name, never a value: the end user's own \
+(ns/<name>) and the organization's (org/<name>). A server whose calls need one takes it in \
+`secrets` of run_script and retry_run: {\"github\": \"ns/github\"}.\n\
+6. check_script, then test_script: type-check the script, then test it in virtual time against \
+answers you give for its calls, without calling anything or reading any secret.\n\
+7. run_script: run it with the secrets its servers need. You get its output, or the run's id and \
+what it waits for: follow it with get_run, answer it with signal_run, stop it with cancel_run, \
+and fix a failed run with retry_run.\n\
 When the person has not said which organization, namespace or toolset to use and a list holds \
 more than one, ask them.";
 

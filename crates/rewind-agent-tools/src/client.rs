@@ -5,11 +5,12 @@
 use rewind_api::common::Duration;
 use rewind_api::events::Entry;
 use rewind_api::headers::IdempotencyKey;
-use rewind_api::namespaces::{NamespaceList, NamespaceListQuery};
+use rewind_api::namespaces::{NamespaceList, NamespaceListQuery, NamespaceName};
 use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace, TraceFormat,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, Script, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{Test, TestRun};
 use rewind_api::toolsets::{CreateToolset, SearchQuery, ToolSearchResults, Toolset, ToolsetList};
 use rewind_api::workflows::{
@@ -123,6 +124,19 @@ impl Api for Client {
         record: &RecordTests,
     ) -> Result<RecordedTests, ApiError> {
         Ok(Client::record_tests(self, workflow, record).await?)
+    }
+
+    async fn list_secrets(&self) -> Result<SecretList, ApiError> {
+        Ok(Client::secrets(self).await?)
+    }
+
+    async fn namespace_secrets(&self, namespace: &str) -> Result<SecretList, ApiError> {
+        let namespace: NamespaceName = namespace.parse().map_err(ApiError::fault)?;
+        Ok(Client::namespace_secrets(self, &namespace).await?)
+    }
+
+    fn namespace(&self) -> Option<String> {
+        Client::namespace(self).map(|namespace| namespace.as_str().to_owned())
     }
 }
 

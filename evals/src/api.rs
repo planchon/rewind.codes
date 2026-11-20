@@ -24,6 +24,7 @@ use rewind_api::runs::{
     CancelRun, ForkRun, Run, RunFilter, RunPage, SignalAccepted, StartRun, Trace, TraceFormat,
 };
 use rewind_api::scripts::{CheckRequest, CheckResult, RunCounts, Script as ApiScript, TestRequest};
+use rewind_api::secrets::SecretList;
 use rewind_api::testing::{
     Test as ApiTest, TestInput as ApiTestInput, TestProblem as ApiTestProblem, TestResult, TestRun,
 };
@@ -1308,6 +1309,19 @@ impl Api for World {
                     reason: skipped.reason.clone(),
                 })
                 .collect(),
+        })
+    }
+
+    /// The evals' world keeps no secret: its servers take none.
+    async fn list_secrets(&self) -> Result<SecretList, ApiError> {
+        Ok(SecretList {
+            secrets: Vec::new(),
+        })
+    }
+
+    async fn namespace_secrets(&self, _namespace: &str) -> Result<SecretList, ApiError> {
+        Ok(SecretList {
+            secrets: Vec::new(),
         })
     }
 }
