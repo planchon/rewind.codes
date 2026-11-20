@@ -4,7 +4,7 @@
  *
  * A namespace isolates one end user of a customer: Alice's agent holds a token of Alice's
  * namespace and reaches nothing of Bob's, whatever it sends or whatever script its model writes.
- * Each end user has quotas, credentials of their own, and can be erased.
+ * Each end user has quotas, secrets of their own that only their runs attach, and can be erased.
  */
 import { eventually } from "../../support/processes.js";
 import { hmacConfusedToken, type SigningKey, signingKey, startMcpFixture, type TokenAlg, unsignedToken } from "../support/fixtures.js";
@@ -525,7 +525,8 @@ export default async function main(input: { id: string }) {
     { what: "POST /v1/runs/{bob}/fork", send: () => alice.post(`/v1/runs/${bob.waiting.id}/fork`, { script: waiting(unique("fork")) }) },
     { what: "POST /v1/runs/{bob}/release", send: () => alice.post(`/v1/runs/${bob.waiting.id}/release`) },
     { what: "POST /v1/runs/{bob}/give-up", send: () => alice.post(`/v1/runs/${bob.waiting.id}/give-up`) },
-    { what: "PUT /v1/runs/{bob}/credentials", send: () => alice.put(`/v1/runs/${bob.waiting.id}/credentials`, { servers: {} }) },
+    { what: "GET /v1/namespaces/bob/secrets", send: () => alice.get("/v1/namespaces/bob/secrets") },
+    { what: "PUT /v1/namespaces/bob/secrets/github", send: () => alice.put("/v1/namespaces/bob/secrets/github", { value: "mallory's" }) },
     { what: "DELETE /v1/runs/{bob}", send: () => alice.delete(`/v1/runs/${bob.waiting.id}`) },
   ];
 
@@ -848,54 +849,159 @@ test.describe("quotas", () => {
 });
 
 // =============================================================================================
-// Credentials per end user
+// Secrets per end user
 
-test.describe("credentials per namespace", () => {
-  test("an end user's credentials reach their MCP calls only, and never come back", { tag: "@attack" }, async () => {
-    const tenant = await newTenant("ns-credentials");
+test.describe("secrets per namespace", () => {
+  /** An MCP server whose calls carry the secret attached for it in `Authorization`. */
+  const keyed = (url: string) => ({ name: "fx", url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } });
+  const ECHO = `import { fx } from "rewind:tools";\n\nexport default async function main() {\n  return (await fx.echo({ text: "hello" })).text();\n}\n`;
+
+  test("an end user's secret reaches the calls of their own runs only, and never comes back", { tag: "@attack" }, async () => {
+    const tenant = await newTenant("ns-secrets");
     const mcp = await startMcpFixture();
     try {
-      const toolset = await tenant.api.post("/v1/toolsets", { mcp: [{ name: "fx", url: mcp.url }] });
+      const toolset = await tenant.api.post("/v1/toolsets", { mcp: [keyed(mcp.url)] });
       expectOk(toolset);
       const id = toolset.json.id;
-      const secret = canary();
-      expectOk(
-        await tenant.api.put(`/v1/namespaces/alice/toolsets/${id}/credentials`, { servers: { fx: { headers: { authorization: `Bearer ${secret}` } } } }),
-        204,
-      );
-      const script = `import { fx } from "rewind:tools";\n\nexport default async function main() {\n  return await fx.echo({ text: "hello" });\n}\n`;
-      const hers = await start(tenant.api.ns("alice"), { script, toolset: id, wait: "30s" });
-      const his = await start(tenant.api.ns("bob"), { script, toolset: id, wait: "30s" });
-      expect(hers.status, JSON.stringify(hers)).toBe("completed");
-      expect(his.status, JSON.stringify(his)).toBe("completed");
+      const hers = `${canary()}-alice`;
+      const organization = `${canary()}-organization`;
+      expectOk(await tenant.api.put("/v1/secrets/fx", { value: organization }), 201);
+      // Alice's token puts her own secret, which only her runs attach.
+      const aliceToken = tenant.api.as((await mint(tenant.api, "alice", { permissions: ["runs:start", "runs:read", "secrets:read", "secrets:write"] })).token);
+      const put = await aliceToken.put("/v1/namespaces/alice/secrets/fx", { value: hers });
+      expectOk(put, 201);
+      expect(put.json).toMatchObject({ reference: "ns/fx", namespace: "alice", createdBy: "token:alice" });
+      const run = await start(aliceToken, { script: ECHO, toolset: id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      expect(run.status, JSON.stringify(run)).toBe("completed");
+      expect(run.secrets).toEqual({ fx: "ns/fx" });
       const calls = mcp.calls.filter((c) => c.tool === "echo");
-      expect(calls).toHaveLength(2);
-      const authorizations = calls.map((c) => c.headers.authorization ?? "");
-      expect(authorizations.filter((a) => a === `Bearer ${secret}`)).toHaveLength(1);
-      expect(authorizations.filter((a) => a.includes(secret))).toHaveLength(1);
-      // Nothing Rewind answers holds them: the recorder flags any answer with the canary.
+      expect(calls.map((c) => c.headers.authorization)).toEqual([`Bearer ${hers}`]);
+      expect(calls[0]!.meta?.["codes.rewind/idempotency-key"]).toBe(`${run.id}/1`);
+
+      // Bob has none: his run attaching ns/fx is refused before it exists, and never falls back
+      // on the organization's fx nor on Alice's.
+      const started = (namespace: string) => async () => ((await namespaceState(tenant.api, namespace)) as { runsStarted?: number }).runsStarted ?? 0;
+      const refused = await expectRefused({
+        attempt: () => tenant.api.ns("bob").post("/v1/runs", { script: ECHO, toolset: id, secrets: { fx: "ns/fx" } }),
+        status: 422,
+        slug: "secret-required",
+        probe: started("bob"),
+      });
+      expect(refused.json.attachments[0]).toMatchObject({ server: "fx", problem: "unknown", secret: "ns/fx" });
+      expect(refused.json.attachments[0].attachable).toEqual(["org/fx"]);
+      // Nothing attached at all: refused too.
+      const missing = await expectRefused({
+        attempt: () => tenant.api.ns("alice").post("/v1/runs", { script: ECHO, toolset: id }),
+        status: 422,
+        slug: "secret-required",
+        probe: started("alice"),
+      });
+      expect(missing.json.attachments[0]).toMatchObject({ server: "fx", problem: "missing" });
+      expect(mcp.calls.filter((c) => c.tool === "echo")).toHaveLength(1);
+
+      // Alice's token reaches her namespace's secrets only.
+      await expectRefused({ attempt: () => aliceToken.get("/v1/namespaces/bob/secrets"), status: 404, slug: "not-found" });
+      await expectRefused({ attempt: () => aliceToken.put("/v1/namespaces/bob/secrets/fx", { value: "mallory" }), status: 404, slug: "not-found" });
+      await expectRefused({ attempt: () => aliceToken.get("/v1/secrets"), status: 403, slug: "forbidden" });
+      await expectRefused({ attempt: () => aliceToken.put("/v1/secrets/fx", { value: "mallory" }), status: 403, slug: "forbidden" });
+
+      // Nothing Rewind answers holds a value: the recorder flags any answer with the canary.
       for (const path of [
-        `/v1/runs/${hers.id}`,
-        `/v1/runs/${hers.id}/journal`,
-        `/v1/runs/${hers.id}/journal?as=cassette`,
-        `/v1/runs/${hers.id}/trace?format=llm`,
-        `/v1/runs/${hers.id}/entries/1`,
+        `/v1/runs/${run.id}`,
+        `/v1/runs/${run.id}/journal`,
+        `/v1/runs/${run.id}/journal?as=cassette`,
+        `/v1/runs/${run.id}/trace?format=llm`,
+        `/v1/runs/${run.id}/entries/1`,
+        `/v1/runs/${run.id}/events`,
         "/v1/namespaces/alice",
-        `/v1/toolsets`,
+        "/v1/namespaces/alice/secrets",
+        "/v1/namespaces/alice/secrets/fx/usage",
+        "/v1/secrets",
+        "/v1/secrets/fx/usage",
+        "/v1/toolsets",
       ]) {
         const reply = await tenant.api.get(path);
-        expect(reply.status, path).toBeLessThan(500);
-        expect(reply.text.includes(secret), `${path} holds the credentials`).toBe(false);
+        expect(reply.status, `${path}: ${reply.text.slice(0, 300)}`).toBe(200);
+        expect(reply.text.includes(canary()), `${path} holds a secret's value`).toBe(false);
       }
-      // A token sets its own namespace's credentials, never another's.
-      const aliceToken = tenant.api.as((await mint(tenant.api, "alice", { permissions: ["credentials:write"] })).token);
-      expectOk(await aliceToken.put(`/v1/namespaces/alice/toolsets/${id}/credentials`, { servers: { fx: { headers: { authorization: `Bearer ${secret}` } } } }), 204);
-      const astray = await aliceToken.put(`/v1/namespaces/bob/toolsets/${id}/credentials`, { servers: { fx: { headers: { authorization: "Bearer mallory" } } } });
-      expect([403, 404], astray.text).toContain(astray.status);
-      const again = await start(tenant.api.ns("bob"), { script, toolset: id, wait: "30s" });
-      expect(again.status).toBe("completed");
-      expect(mcp.calls.at(-1)?.headers.authorization ?? "").not.toContain("mallory");
-      evidence(`Alice's credentials reached her MCP call only; no answer holds them; Alice's token on bob's credentials → ${astray.status} ${astray.slug}`);
+      const usage = await tenant.api.get("/v1/namespaces/alice/secrets/fx/usage");
+      expect(usage.json.secret.lastRead).toMatchObject({ run: run.id, namespace: "alice" });
+      evidence(`Alice's secret reached her MCP call only (Bearer <canary>-alice, key ${run.id}/1); Bob's run attaching ns/fx → 422 secret-required (unknown, attachable org/fx), no fallback; Alice's token on Bob's secrets → 404, on the organization's → 403; no answer holds a value`);
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("a token attaches its own namespace's secrets, and the organization's only with secrets:use", { tag: "@attack" }, async () => {
+    const tenant = await newTenant("ns-secrets-use");
+    const mcp = await startMcpFixture();
+    try {
+      const toolset = await tenant.api.post("/v1/toolsets", { mcp: [keyed(mcp.url)] });
+      expectOk(toolset);
+      const id = toolset.json.id;
+      expectOk(await tenant.api.put("/v1/secrets/fx", { value: `${canary()}-org` }), 201);
+      expectOk(await tenant.api.put("/v1/namespaces/carol/secrets/fx", { value: `${canary()}-carol` }), 201);
+      const plain = tenant.api.as((await mint(tenant.api, "carol")).token);
+      const runs = async () => ((await namespaceState(tenant.api, "carol")) as { runsStarted?: number }).runsStarted ?? 0;
+      const refused = await expectRefused({
+        attempt: () => plain.post("/v1/runs", { script: ECHO, toolset: id, secrets: { fx: "org/fx" } }),
+        status: 422,
+        slug: "secret-required",
+        probe: runs,
+      });
+      expect(refused.json.attachments[0]).toMatchObject({ server: "fx", problem: "forbidden", secret: "org/fx" });
+      expect(refused.json.attachments[0].attachable).toEqual(["ns/fx"]);
+      const own = await start(plain, { script: ECHO, toolset: id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      expect(own.status, JSON.stringify(own)).toBe("completed");
+      const using = tenant.api.as((await mint(tenant.api, "carol", { permissions: ["runs:start", "runs:read", "secrets:use"] })).token);
+      const shared = await start(using, { script: ECHO, toolset: id, secrets: { fx: "org/fx" }, wait: "30s" });
+      expect(shared.status, JSON.stringify(shared)).toBe("completed");
+      expect(mcp.calls.filter((c) => c.tool === "echo").map((c) => c.headers.authorization)).toEqual([
+        `Bearer ${canary()}-carol`,
+        `Bearer ${canary()}-org`,
+      ]);
+      evidence("a token without secrets:use: org/fx → 422 secret-required (forbidden, attachable ns/fx), ns/fx → completed; with secrets:use, org/fx → completed");
+    } finally {
+      await mcp.close();
+    }
+  });
+
+  test("the dashboard lists the secrets and what reads them, and never shows a value", { tag: "@attack" }, async ({ page }) => {
+    const tenant = await newTenant("ns-secrets-dashboard");
+    const mcp = await startMcpFixture();
+    try {
+      const toolset = await tenant.api.post("/v1/toolsets", { mcp: [keyed(mcp.url)] });
+      expectOk(toolset);
+      expectOk(await tenant.api.put("/v1/secrets/shared-fx", { value: `${canary()}-dashboard-org`, labels: { env: "prod" } }), 201);
+      expectOk(await tenant.api.put("/v1/namespaces/alice/secrets/fx", { value: `${canary()}-dashboard-alice` }), 201);
+      const run = await start(tenant.api.ns("alice"), { script: ECHO, toolset: toolset.json.id, secrets: { fx: "ns/fx" }, wait: "30s" });
+      expect(run.status, JSON.stringify(run)).toBe("completed");
+
+      await page.goto(`${stacks().a.url}/`);
+      await page.getByPlaceholder("rewind_sk_…").fill(tenant.ownerKey);
+      await page.getByRole("button", { name: "Continue" }).click();
+      const views = page.getByRole("navigation", { name: "Views" });
+      await views.getByRole("link", { name: "Secrets" }).click();
+      await expect(page.getByText("org/shared-fx")).toBeVisible();
+      await expect(page.getByText("prod").first()).toBeVisible();
+      // A new value is typed in a password field, never offered back.
+      await page.getByRole("button", { name: /new secret/i }).click();
+      const form = page.getByRole("form", { name: "New secret" });
+      await expect(form.locator('input[type="password"]')).toHaveCount(1);
+      await page.keyboard.press("Escape");
+      const secretsView = await page.content();
+      expect(secretsView.includes(canary()), "the Secrets view shows a value").toBe(false);
+
+      // Alice's page: her secret, read by her run.
+      await page.goto(`${stacks().a.url}/namespaces/alice`);
+      await expect(page.getByText("ns/fx")).toBeVisible();
+      const hers = await page.content();
+      expect(hers.includes(canary()), "a namespace's page shows a value").toBe(false);
+      // The run's page names what it attached, never a value.
+      await page.goto(`${stacks().a.url}/runs/${run.id}`);
+      await expect(page.getByText("ns/fx").first()).toBeVisible();
+      expect((await page.content()).includes(canary()), "a run's page shows a value").toBe(false);
+      evidence("signed in with the owner key: Secrets lists org/shared-fx (env=prod), its value typed in a password field; Alice's page lists ns/fx; the run's page names ns/fx; no page holds a value");
     } finally {
       await mcp.close();
     }
@@ -914,6 +1020,7 @@ test.describe("erasure", () => {
     await untilWaiting(tenant.api, run.id);
     const token = await mint(tenant.api, namespace);
     expectOk(await tenant.api.as(token.token).get("/v1/whoami"), 200);
+    expectOk(await tenant.api.put(`/v1/namespaces/${namespace}/secrets/github`, { value: `${canary()}-leaving` }), 201);
 
     expectOk(await tenant.api.delete(`/v1/namespaces/${namespace}`), 202);
     const cancelled = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "20s" } });
@@ -922,11 +1029,14 @@ test.describe("erasure", () => {
     expectProblem(await api.post("/v1/runs", { script: short(unique("again")) }), 409, "namespace-deleting");
     expectProblem(await tenant.api.post(`/v1/namespaces/${namespace}/tokens`, {}), 409, "namespace-deleting");
     expectProblem(await tenant.api.put(`/v1/namespaces/${namespace}`, {}), 409, "namespace-deleting");
+    // Its secrets go with it, in the background at a worker's housekeeping: the lifecycle stage
+    // proves no row is left. Meanwhile none is written.
+    expectProblem(await tenant.api.put(`/v1/namespaces/${namespace}/secrets/github`, { value: "again" }), 409, "namespace-deleting");
     const detail = await tenant.api.get(`/v1/namespaces/${namespace}`);
     if (detail.status === 200) expect(detail.json.namespace.deletingSince).toBeTruthy();
     else expectProblem(detail, 404, "not-found");
     expect([202, 404]).toContain((await tenant.api.delete(`/v1/namespaces/${namespace}`)).status);
     expectProblem(await tenant.api.delete(`/v1/namespaces/${unique("nobody-")}`), 404, "not-found");
-    evidence("DELETE /v1/namespaces/{name} → 202; its run cancelled, its token 401, starts and tokens 409 namespace-deleting");
+    evidence("DELETE /v1/namespaces/{name} → 202; its run cancelled, its token 401, starts, tokens and secrets 409 namespace-deleting");
   });
 });

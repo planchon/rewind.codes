@@ -157,6 +157,29 @@ Its tests pass on the in-memory adapters; the HTTP tests on Turso and Postgres w
 stores workstream's `SecretStore`, and the calls to MCP servers and APIs that authenticate for
 the outbound workstream.
 
+Then the workstreams were proven together end to end
+([08](08-decisions.md#taken-while-proving-secrets-and-signed-calls-end-to-end-november-2026)).
+`crates/rewind-server/tests/secrets_end_to_end.rs`, over HTTP on Turso and on Postgres: an MCP
+server that takes a secret, listed with an organization's secret and refused without, called by
+Alice's run with Alice's value and by Bob's with Bob's, a start attaching nothing or a secret the
+namespace lacks refused before any run exists, with no fallback; a signed MCP server and a signed
+API (on the embedded server, since a deployed server calls APIs over https only) checking every
+request with `rewind_outbound::verify` against the server's JWKS, a replaced key still verifying,
+a refused signature parked until approved; a secret deleted mid-run parked `secret_missing`, a
+401 parked `credentials_refused`, both sent again with the same key once the secret is put
+again; a key limited to `env=dev` attaching only `env=dev` secrets; and no value in any answer,
+problem, webhook, OTLP export or log. The acceptance suite and the release gate moved to attached
+secrets: the canary is the value of secrets runs attach, the permission matrix covers every
+operation with the 25 permissions, and the gate adds signed calls checked by `verifyRewindCall`,
+an API read from its OpenAPI document and called by the CLI's embedded server, labels and
+`secrets:use` on attachments, malformed secrets, the dashboard's Secrets, a `pg_dump` holding no
+value, and a secret read across a full restart and erased with its namespace. `api/README.md`
+gains `secret-required`. The gate's run on the branch: NO-GO, 343 of 345 checks, 0 unexpected
+5xx, 0 canary leaks; both failures predate secrets: criterion 7 expects a value's text as
+pretty-printed JSON, which the foldable tree of November 17 no longer gives, and no check of the
+gate provokes `invalid-test` nor `tests-failed`. `acceptance/run.sh`: criteria 1 to 6 pass, 7
+fails on the same check, 8 is not run without WorkOS Staging's keys.
+
 | Crate | State |
 | --- | --- |
 | `rewind-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |

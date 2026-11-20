@@ -1,7 +1,14 @@
 /**
- * MCP servers, the `http` tool and egress (`archi/04-tools.md`, "Routes", "Credentials", "The
- * `http` tool and egress", "Where MCP servers may be"; `archi/06-storage-and-scale.md`,
- * "Security").
+ * MCP servers, APIs, the `http` tool and egress (`archi/04-tools.md`, "Routes", "API tools",
+ * "Authenticating calls", "Secrets", "Signed calls", "The `http` tool and egress", "Where MCP
+ * servers and APIs may be"; `archi/06-storage-and-scale.md`, "Security").
+ *
+ * A server that takes a secret gets the one the run attached (`org/<name>`, `ns/<name>`), never
+ * another; a deleted secret parks the call, a 401 too, and putting the secret again sends it with
+ * the same idempotency key. A signed server checks every request with the SDK's
+ * `verifyRewindCall` against the keys setup A publishes. An API is read from its OpenAPI document
+ * (a deployed server calls APIs over https only: their calls are proven by the CLI area, on the
+ * embedded server).
  *
  * Success paths run on setup A, which lets MCP servers on 127.0.0.1 through, as an operator allows
  * an internal host. Egress attacks run on setup B, a deployed server's defaults: an MCP server or
@@ -14,14 +21,17 @@ import { createServer, type IncomingMessage, type Server as HttpServer } from "n
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyWebhook } from "@rewind.codes/sdk";
+import { type RewindCall, RewindSignatureError, verifyRewindCall, verifyWebhook } from "@rewind.codes/sdk";
+import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
 import { eventually } from "../../support/processes.js";
 import {
   type Delivery,
   defaultTools,
+  type FixtureTool,
   type McpFixture,
   type Redirector,
   type Sink,
+  startApiFixture,
   startMcpFixture,
   startRedirector,
   startSink,
@@ -89,6 +99,21 @@ export default async function main(input: { id: string }) {
 }
 `;
 
+/** An MCP server's `auth` taking the attached secret in `Authorization`. */
+const BEARER = { type: "secret", header: "authorization", format: "Bearer {secret}" };
+
+/** A script that waits for `go` between two calls of `fx.lookup`. */
+const TWO_LOOKUPS = `import { fx } from "rewind:tools";
+import { signal } from "rewind";
+
+export default async function main(input: { id: string }) {
+  const first = await fx.lookup({ id: input.id });
+  await signal("go");
+  const second = await fx.lookup({ id: input.id });
+  return [first.name, second.name];
+}
+`;
+
 /** The deliveries of `type` about `runId`, verified with the subscription's secret. */
 function deliveries(type: string, runId: string): { delivery: Delivery; event: any }[] {
   return receiver.deliveries
@@ -150,60 +175,235 @@ export default async function main() {
   expect(done.output.value.message).toContain("failed: quota");
 });
 
-test("credentials resolve per call: the run's, else its namespace's, else the toolset's, never mixed", { tag: "@success" }, async () => {
+test("each run calls with the secret it attached: Alice's, Bob's or the organization's, never another's", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   try {
-    const secrets = { toolset: `${canary()}-toolset`, alice: `${canary()}-alice`, run: `${canary()}-run` };
-    const header = (value: string) => ({ servers: { fx: { headers: { authorization: `Bearer ${value}` } } } });
-    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url }], { credentials: header(secrets.toolset) });
-    expectOk(await a.api.put(`/v1/namespaces/alice/toolsets/${toolset}/credentials`, header(secrets.alice)));
-    const seenBy = async (namespace: string, body: Record<string, unknown> = {}) => {
+    const values = { listing: `${canary()}-listing`, organization: `${canary()}-organization`, alice: `${canary()}-alice`, bob: `${canary()}-bob` };
+    const name = unique("fx-");
+    expectOk(await a.api.put(`/v1/secrets/${name}-listing`, { value: values.listing }), 201);
+    expectOk(await a.api.put(`/v1/secrets/${name}`, { value: values.organization }), 201);
+    expectOk(await a.api.put(`/v1/namespaces/alice/secrets/${name}`, { value: values.alice }), 201);
+    expectOk(await a.api.put(`/v1/namespaces/bob/secrets/${name}`, { value: values.bob }), 201);
+    // The listing carries the organization's secret attached for it; no run keeps it.
+    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url, auth: BEARER }], { secrets: { fx: `org/${name}-listing` } });
+    expect(server.requests.filter((r) => r.body.includes('"tools/list"')).map((r) => r.headers.authorization)).toContain(`Bearer ${values.listing}`);
+    const seenBy = async (namespace: string, attached: string) => {
       const before = server.calls.length;
-      const run = await startRun(a.api.ns(namespace), { toolset, script: LOOKUP, input: { id: namespace }, ...body });
-      const done = await ended(a.api.ns(namespace), run.id);
+      const run = await startRun(a.api.ns(namespace), { toolset, script: LOOKUP, input: { id: namespace }, secrets: { fx: attached }, wait: "30s" });
+      const done = run.status === "completed" ? run : await ended(a.api.ns(namespace), run.id);
       expect(done.status, JSON.stringify(done)).toBe("completed");
-      expect(JSON.stringify(done)).not.toContain(canary());
+      expect(done.secrets).toEqual({ fx: attached });
       const calls = server.calls.slice(before);
       expect(calls).toHaveLength(1);
+      expect(calls[0]!.meta?.["codes.rewind/idempotency-key"]).toBe(`${run.id}/1`);
       return calls[0]!.headers.authorization;
     };
-    expect(await seenBy("bob")).toBe(`Bearer ${secrets.toolset}`);
-    expect(await seenBy("alice")).toBe(`Bearer ${secrets.alice}`);
-    expect(await seenBy("alice", { credentials: header(secrets.run) })).toBe(`Bearer ${secrets.run}`);
-    expect(await seenBy("bob", { credentials: header(secrets.run) })).toBe(`Bearer ${secrets.run}`);
-    // Alice's credentials were never sent for a run of Bob's.
-    const bobs = server.calls.filter((c) => c.args.id === "bob");
-    expect(bobs.every((c) => !c.headers.authorization?.includes(secrets.alice))).toBe(true);
-    evidence("bob → toolset's, alice → hers, a run's own → the run's; no answer of Rewind held them");
+    expect(await seenBy("alice", `ns/${name}`)).toBe(`Bearer ${values.alice}`);
+    expect(await seenBy("bob", `ns/${name}`)).toBe(`Bearer ${values.bob}`);
+    expect(await seenBy("carol", `org/${name}`)).toBe(`Bearer ${values.organization}`);
+    // Dave has none of his own: ns/ is refused before any run exists, with no fallback.
+    const refused = await a.api.ns("dave").post("/v1/runs", { toolset, script: LOOKUP, input: { id: "dave" }, secrets: { fx: `ns/${name}` } });
+    expectProblem(refused, 422, "secret-required");
+    expect(refused.json.attachments).toEqual([
+      expect.objectContaining({ server: "fx", problem: "unknown", secret: `ns/${name}`, attachable: expect.arrayContaining([`org/${name}`]) }),
+    ]);
+    const nothing = await a.api.ns("alice").post("/v1/runs", { toolset, script: LOOKUP, input: { id: "alice" } });
+    expectProblem(nothing, 422, "secret-required");
+    expect(nothing.json.attachments[0]).toMatchObject({ server: "fx", problem: "missing" });
+    expect(server.calls.filter((c) => c.args.id === "dave"), "nothing was sent for Dave").toEqual([]);
+    evidence("alice → her ns/ secret, bob → his, carol → org/; dave's ns/ (absent) and a start attaching nothing → 422 secret-required before any run; no answer of Rewind held a value");
   } finally {
     await server.close();
   }
 });
 
-test("a call refused with 401 is parked, and sent again with the same key once the credentials are renewed", { tag: "@success" }, async () => {
+test("a secret deleted mid-run parks the call, and putting it again sends it with the same key", { tag: "@success" }, async () => {
+  const server = await startMcpFixture();
+  try {
+    const name = unique("gone-");
+    expectOk(await a.api.put(`/v1/namespaces/erin/secrets/${name}`, { value: `${canary()}-erin` }), 201);
+    const toolset = await toolsetOf(a, [{ name: "fx", url: server.url, auth: BEARER }]);
+    const run = await startRun(a.api.ns("erin"), { toolset, script: TWO_LOOKUPS, input: { id: "erin" }, secrets: { fx: `ns/${name}` } });
+    await waitingSignal(a.api.ns("erin"), run.id, "go");
+    expectOk(await a.api.delete(`/v1/namespaces/erin/secrets/${name}`), 204);
+    expectOk(await a.api.post(`/v1/runs/${run.id}/signals/go`, {}));
+    const parked = await waitingCall(a.api.ns("erin"), run.id, "parked");
+    expect(parked.parked).toBe("secret_missing");
+    const hook = await eventually("credentials.expired (missing) is delivered", () => deliveries("credentials.expired", run.id)[0], 60_000);
+    expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("credentials.expired");
+    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "erin", tool: "fx.lookup", server: "fx", reason: "missing", secret: `ns/${name}`, taskId: parked.taskId });
+    expect(hook.event.data.message).toContain(`PUT /v1/namespaces/erin/secrets/${name}`);
+    const key = `${run.id}/${parked.seq}`;
+    expect(server.calls.filter((c) => c.meta?.["codes.rewind/idempotency-key"] === key), "nothing was sent while parked").toEqual([]);
+    expectOk(await a.api.put(`/v1/namespaces/erin/secrets/${name}`, { value: `${canary()}-erin-again` }), 201);
+    const done = await ended(a.api.ns("erin"), run.id);
+    expect(done.status, JSON.stringify(done)).toBe("completed");
+    const sent = server.calls.filter((c) => c.meta?.["codes.rewind/idempotency-key"] === key);
+    expect(sent.map((c) => c.headers.authorization)).toEqual([`Bearer ${canary()}-erin-again`]);
+    evidence(`deleted mid-run → parked secret_missing, credentials.expired (missing) naming the PUT to make; put again → sent once with ${key}`);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a call refused with 401 is parked, and sent again with the same key once the secret is put again", { tag: "@success" }, async () => {
   const server = await startMcpFixture();
   const gate = await startAuthGate(server.url, `Bearer ${canary()}-v1`);
   try {
-    const credentials = (v: string) => ({ servers: { fx: { headers: { authorization: `Bearer ${canary()}-${v}` } } } });
-    const toolset = await toolsetOf(a, [{ name: "fx", url: gate.url }], { credentials: credentials("v1") });
+    const name = unique("gate-");
+    expectOk(await a.api.put(`/v1/secrets/${name}`, { value: `${canary()}-v1` }), 201);
+    const toolset = await toolsetOf(a, [{ name: "fx", url: gate.url, auth: BEARER }], { secrets: { fx: `org/${name}` } });
     // The token expires during the run's pause.
     gate.accept = `Bearer ${canary()}-v2`;
-    const run = await startRun(a.api.ns("carol"), { toolset, script: LOOKUP, input: { id: "7" } });
+    const run = await startRun(a.api.ns("carol"), { toolset, script: LOOKUP, input: { id: "7" }, secrets: { fx: `org/${name}` } });
     const parked = await waitingCall(a.api.ns("carol"), run.id, "parked");
-    expect(parked.parked).toBe("credentials_expired");
+    expect(parked.parked).toBe("credentials_refused");
     const hook = await eventually("credentials.expired is delivered", () => deliveries("credentials.expired", run.id)[0], 60_000);
     expect(verifyWebhook(hook.delivery.body, hook.delivery.headers as never, secret).type).toBe("credentials.expired");
-    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "carol", tool: "fx.lookup", toolset });
+    expect(hook.event.data).toMatchObject({ runId: run.id, namespace: "carol", tool: "fx.lookup", toolset, reason: "refused", secret: `org/${name}` });
     expect(hook.delivery.body).not.toContain(canary());
-    expectOk(await a.api.put(`/v1/toolsets/${toolset}/credentials`, credentials("v2")));
+    const usage = await a.api.get(`/v1/secrets/${name}/usage`);
+    expectOk(usage, 200);
+    expect(usage.json.waitingRuns).toContain(run.id);
+    expectOk(await a.api.put(`/v1/secrets/${name}`, { value: `${canary()}-v2` }), 200);
     const done = await ended(a.api.ns("carol"), run.id);
     expect(done.status, JSON.stringify(done)).toBe("completed");
     const keys = server.calls.filter((c) => c.args.id === "7").map((c) => c.meta?.["codes.rewind/idempotency-key"]);
     expect(keys).toEqual([`${run.id}/1`]);
     expect(gate.refused).toBeGreaterThan(0);
+    evidence(`401 → parked credentials_refused, credentials.expired (refused, org/${name}); the usage lists the waiting run; put again → sent with ${run.id}/1`);
   } finally {
     await gate.close();
     await server.close();
+  }
+});
+
+test("a signed MCP server checks every request with verifyRewindCall and learns the end user; a replaced key still verifies", { tag: "@success" }, async () => {
+  const issuer = `${stacks().a.url}/organizations/${a.id}`;
+  const verified = new Map<string, RewindCall>();
+  const state = { labels: { env: "prod" } as Record<string, string>, audience: "" };
+  const whoami: FixtureTool = {
+    name: "whoami",
+    description: "Who calls, from the signature.",
+    inputSchema: { type: "object" },
+    handler: (_args, call) => {
+      const found = verified.get(String(call.meta?.["codes.rewind/idempotency-key"]));
+      return { content: [{ type: "text", text: JSON.stringify({ namespace: found?.namespace ?? null, labels: found?.labels ?? null }) }] };
+    },
+  };
+  const server = await startMcpFixture([whoami], {
+    check: async (request) => {
+      try {
+        const call = await verifyRewindCall(request, { issuer, audience: state.audience, labels: state.labels, session: true });
+        if (call) verified.set(call.idempotencyKey, call);
+        return undefined;
+      } catch (error) {
+        if (error instanceof RewindSignatureError) return `${error.check}: ${error.message}`;
+        throw error;
+      }
+    },
+  });
+  state.audience = server.url;
+  const script = `import { crm } from "rewind:tools";
+
+export default async function main() {
+  return (await crm.whoami({})).json();
+}
+`;
+  try {
+    const toolset = await toolsetOf(a, [{ name: "crm", url: server.url, auth: { type: "rewind" } }]);
+    expect(server.requests.length).toBeGreaterThan(0);
+    expect(server.requests.filter((r) => r.refused), "the listing's requests verified").toEqual([]);
+    const keys = await a.api.get("/v1/organization/signing-keys");
+    expectOk(keys, 200);
+    expect(keys.json).toMatchObject({ issuer, jwksUrl: `${issuer}/jwks.json` });
+    const first = keys.json.keys[0].kid as string;
+
+    const run = await startRun(a.api.ns("alice"), { toolset, script, labels: { env: "prod" }, wait: "30s" });
+    const done = run.status === "completed" ? run : await ended(a.api.ns("alice"), run.id);
+    expect(done.status, JSON.stringify(done)).toBe("completed");
+    expect(done.output.value).toEqual({ namespace: "alice", labels: { env: "prod" } });
+    const call = verified.get(`${run.id}/1`)!;
+    expect(call).toMatchObject({ namespace: "alice", run: run.id, tool: "crm.whoami", idempotencyKey: `${run.id}/1` });
+    const signed = server.requests.find((r) => r.body.includes(`"${run.id}/1"`))!;
+    const token = signed.headers.authorization!.replace(/^Bearer /, "");
+    expect(decodeProtectedHeader(token)).toMatchObject({ alg: "EdDSA", kid: first });
+    const jwks = await fetch(`${issuer}/jwks.json`);
+    expect(jwks.status).toBe(200);
+    expect(jwks.headers.get("cache-control")).toBe("max-age=300");
+
+    // Replaced: the old key stops signing and stays published; what it signed still verifies.
+    const rotated = await a.api.post("/v1/organization/signing-keys");
+    expectOk(rotated, 200);
+    expect(rotated.json.kid).not.toBe(first);
+    const published = (await (await fetch(`${issuer}/jwks.json`)).json()) as { keys: { kid: string }[] };
+    expect(published.keys.map((k) => k.kid)).toEqual([rotated.json.kid, first]);
+    const again = await jwtVerify(token, createLocalJWKSet(published as never), { issuer, audience: server.url });
+    expect(again.payload.sub).toBe("alice");
+    const listed = await a.api.get("/v1/organization/signing-keys");
+    expect(listed.json.keys.map((k: { kid: string; retiredAt?: string }) => [k.kid, Boolean(k.retiredAt)])).toEqual([
+      [rotated.json.kid, false],
+      [first, true],
+    ]);
+
+    // Another environment's run: the server refuses its labels (401), the call is parked, and the
+    // harness approves it once the server takes them; it is sent again with the same key. The SDK
+    // reads the keys again for an unknown kid at most every 10 s: past that, the new key is known.
+    await new Promise((resolve) => setTimeout(resolve, 11_000));
+    const dev = await startRun(a.api.ns("bob"), { toolset, script, labels: { env: "dev" } });
+    const parked = await waitingCall(a.api.ns("bob"), dev.id, "parked");
+    expect(parked.parked).toBe("credentials_refused");
+    const hook = await eventually("credentials.expired (refused) is delivered", () => deliveries("credentials.expired", dev.id)[0], 60_000);
+    expect(hook.event.data).toMatchObject({ runId: dev.id, reason: "refused", server: "crm" });
+    expect(hook.event.data.secret).toBeUndefined();
+    state.labels = {};
+    expectOk(await a.api.post(`/v1/tasks/${parked.taskId}/approve`));
+    const devDone = await ended(a.api.ns("bob"), dev.id);
+    expect(devDone.status, JSON.stringify(devDone)).toBe("completed");
+    expect(devDone.output.value).toEqual({ namespace: "bob", labels: { env: "dev" } });
+    const devKey = `${dev.id}/${parked.seq}`;
+    const devCalls = server.requests.filter((r) => r.body.includes(`"${devKey}"`));
+    expect(devCalls.map((r) => (r.refused ?? "").split(":")[0])).toEqual(["labels", ""]);
+    expect(decodeProtectedHeader(devCalls[1]!.headers.authorization!.replace(/^Bearer /, "")).kid).toBe(rotated.json.kid);
+    evidence(`${server.requests.length} requests signed and verified by verifyRewindCall against ${issuer}/jwks.json; sub=alice from the signature; the replaced key ${first} still verifies; an env=dev run refused (labels) → parked, approved → sent again with ${devKey} under ${rotated.json.kid}`);
+  } finally {
+    await server.close();
+  }
+});
+
+test("an API is read from its OpenAPI document by URL: one tool per operation, the others skipped, its key attached at start", { tag: "@success" }, async () => {
+  const fixture = await startApiFixture({ server: "https://measures.example.com/v1" });
+  try {
+    const reply = await a.api.post("/v1/toolsets", { apis: [{ name: "dax", openapi: fixture.documentUrl }] });
+    expectOk(reply);
+    const toolset = reply.json;
+    expect(fixture.documentReads).toBe(1);
+    expect(toolset.tools.map((t: { name: string }) => t.name)).toEqual(["dax.createMeasure", "dax.getMeasure", "webhook"]);
+    expect(toolset.apis).toEqual([
+      expect.objectContaining({
+        name: "dax",
+        baseUrl: "https://measures.example.com/v1",
+        tools: 2,
+        auth: expect.objectContaining({ type: "secret", header: expect.stringMatching(/^x-api-key$/i) }),
+      }),
+    ]);
+    expect(toolset.skipped).toEqual([expect.objectContaining({ method: "put", path: "/measures/{id}" })]);
+    const create = toolset.tools.find((t: { name: string }) => t.name === "dax.createMeasure");
+    expect(create.policy.onInterruption, "a POST declaring Idempotency-Key may be sent again").toBe("retry");
+    // The declarations type-check scripts before they run.
+    const wrong = `import { dax } from "rewind:tools";\nexport default async function main() { return await dax.getMeasure({ id: 42 }); }\n`;
+    const checked = await a.api.ns("alice").post("/v1/check", { script: wrong, toolset: toolset.id });
+    expectOk(checked, 200);
+    expect(JSON.stringify(checked.json)).toContain("TS2322");
+    // Its key is a secret the run attaches: none attached, the start is refused.
+    const right = `import { dax } from "rewind:tools";\nexport default async function main() { return await dax.getMeasure({ id: "42" }); }\n`;
+    const refused = await a.api.ns("alice").post("/v1/runs", { script: right, toolset: toolset.id });
+    expectProblem(refused, 422, "secret-required");
+    expect(refused.json.attachments[0]).toMatchObject({ server: "dax", problem: "missing" });
+    expect(fixture.requests, "the API itself was never called").toEqual([]);
+    evidence(`the document read once from ${fixture.documentUrl}; dax.createMeasure and dax.getMeasure pinned, PUT /measures/{id} skipped (text/csv); auth from its apiKey scheme; a wrong argument → TS2322; no key attached → 422 secret-required`);
+  } finally {
+    await fixture.close();
   }
 });
 
@@ -277,6 +477,22 @@ test("an MCP server that cannot be reached fails the registration with toolset-u
   expectProblem(reply, 502, "toolset-unavailable");
 });
 
+test("a deployed server calls APIs over https only", { tag: "@failure" }, async () => {
+  const fixture = await startApiFixture();
+  try {
+    // The document given inline: one read from an internal address is refused without a word of
+    // why (08), which the check would not see.
+    const document = await (await fetch(fixture.documentUrl)).json();
+    const reply = await a.api.post("/v1/toolsets", { apis: [{ name: "dax", openapi: document }] });
+    expectProblem(reply, 422, "invalid-toolset");
+    expect(detail(reply)).toContain("a deployed server calls APIs over https");
+    expect(fixture.requests).toEqual([]);
+    evidence(`an API whose base URL is ${fixture.base} → 422 invalid-toolset: ${detail(reply)}`);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test("invalid toolsets are refused with invalid-toolset", { tag: "@failure" }, async () => {
   const host = (name: string) => ({ name, description: "d", inputSchema: { type: "object" } });
   const cases: [string, Record<string, unknown>][] = [
@@ -343,11 +559,18 @@ test("stdio servers are refused where the operator does not allow them, and noth
 // ---------------------------------------------------------------------------------------------
 // Attack: MCP servers at internal addresses, on a deployed server's defaults (setup B)
 
-/** Registers an MCP server at `url` on B: refused, the sink untouched, the detail naming the reason. */
+let internalSecret: Promise<void> | undefined;
+
+/**
+ * Registers an MCP server at `url` on B, listed with the organization's secret holding the canary:
+ * refused, the sink untouched, the detail naming the reason.
+ */
 async function refusedOnB(url: string, reason: RegExp): Promise<string> {
+  internalSecret ??= b.api.put("/v1/secrets/internal", { value: canary() }).then((reply) => expectOk(reply));
+  await internalSecret;
   allow5xx("toolset-unavailable");
   const reply = await expectRefused({
-    attempt: () => register(b, [{ name: "internal", url }], { credentials: { servers: { internal: { headers: { authorization: `Bearer ${canary()}` } } } } }),
+    attempt: () => register(b, [{ name: "internal", url, auth: BEARER }], { secrets: { internal: "org/internal" } }),
     status: 502,
     slug: "toolset-unavailable",
     probe: () => sink.hits.length,
@@ -406,19 +629,22 @@ test("an MCP server at a cloud metadata endpoint is refused", { tag: "@attack" }
   evidence(seen.join("\n"));
 });
 
-test("an MCP server that redirects to another origin is refused, and its credentials never follow", { tag: "@attack" }, async () => {
+test("an MCP server that redirects to another origin is refused, and its secret never follows", { tag: "@attack" }, async () => {
   const target = await startMcpFixture();
   try {
     const url = redirector.to(target.url, 307);
+    const name = unique("hop-");
+    expectOk(await a.api.put(`/v1/secrets/${name}`, { value: `${canary()}-hop` }), 201);
     allow5xx("toolset-unavailable");
     const reply = await expectRefused({
-      attempt: () => register(a, [{ name: "hop", url }], { credentials: { servers: { hop: { headers: { authorization: `Bearer ${canary()}-hop` } } } } }),
+      attempt: () => register(a, [{ name: "hop", url, auth: BEARER }], { secrets: { hop: `org/${name}` } }),
       status: 502,
       slug: "toolset-unavailable",
       probe: () => target.methods.length,
     });
     expect(target.methods, "the other origin received nothing").toEqual([]);
     expect(redirector.hits.length).toBeGreaterThan(0);
+    expect(reply.text).not.toContain(canary());
     evidence(`307 to ${target.url} → 502 toolset-unavailable: ${detail(reply)}`);
   } finally {
     await target.close();
@@ -438,6 +664,25 @@ test("what an internal MCP server answers is never quoted to the tenant", { tag:
   } finally {
     await broken.close();
   }
+});
+
+test("no secret's value is stored in clear: a dump of setup A's database holds none", { tag: "@attack" }, async () => {
+  const { spawnSync } = await import("node:child_process");
+  const postgres = stacks().a.postgres;
+  expect(postgres, "setup A runs Postgres").toBeDefined();
+  // At least this file's secrets are there, written above.
+  const listed = await a.api.get("/v1/secrets");
+  expect(listed.json.secrets.length).toBeGreaterThan(0);
+  const dump = spawnSync("docker", ["exec", postgres!.container, "pg_dump", "-U", "rewind", "-d", "postgres", "--data-only"], {
+    encoding: "utf8",
+    maxBuffer: 1 << 30,
+  });
+  expect(dump.status, dump.stderr).toBe(0);
+  expect(dump.stdout).toContain("secrets");
+  const hex = Buffer.from(canary()).toString("hex");
+  expect(dump.stdout.includes(canary()), "a value in clear").toBe(false);
+  expect(dump.stdout.toLowerCase().includes(hex), "a value in clear, as bytes").toBe(false);
+  evidence(`pg_dump of setup A (${(dump.stdout.length / 1e6).toFixed(1)} MB) holds the canary neither as text nor as hex: secrets are sealed under the tenant's data key`);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -529,6 +774,18 @@ test("a webhook subscription to an internal or plain-HTTP address is refused on 
 });
 
 // ---------------------------------------------------------------------------------------------
+
+/** Waits until the run waits for the signal `name`. */
+async function waitingSignal(api: typeof a.api, id: string, name: string): Promise<void> {
+  await eventually(
+    `run ${id} waits for ${name}`,
+    async () => {
+      const reply = await api.get(`/v1/runs/${id}`);
+      return (reply.json?.waitingFor ?? []).some((w: { kind: string; name?: string }) => w.kind === "signal" && w.name === name) ? true : undefined;
+    },
+    60_000,
+  );
+}
 
 /**
  * A proxy in front of an MCP server that answers 401 unless the request's `Authorization` is the
