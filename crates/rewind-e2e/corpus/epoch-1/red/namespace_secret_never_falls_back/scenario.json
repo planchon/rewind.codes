@@ -1,0 +1,41 @@
+{
+  "description": "The run attaches its namespace's crm, which does not exist, while the organization has a secret of that name: nothing falls back on it, and the start is refused.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "put_secrets": {
+    "org/crm": "org-token"
+  },
+  "secrets": {
+    "crm": "ns/crm"
+  },
+  "attach": "organization",
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "start_error": "the secret ns/crm attached for crm does not exist. The secrets you may attach: org/crm"
+  }
+}
