@@ -2,7 +2,7 @@
 //! the result is one JSON document, and an error is a problem (`application/problem+json`) on
 //! stderr.
 
-use std::io::{self, Write};
+use std::io::{self, Read as _, Write};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
@@ -20,6 +20,8 @@ pub(crate) type McpStreams = (
 pub struct Console {
     out: Box<dyn Write + Send>,
     err: Box<dyn Write + Send>,
+    /// What a command reads, such as a secret's value: stdin unless a test gave another.
+    input: Option<Box<dyn io::Read + Send>>,
     json: bool,
     /// `rewind mcp`'s, when they are not stdin and stdout.
     mcp: Option<McpStreams>,
@@ -43,9 +45,26 @@ impl Console {
         Self {
             out: Box::new(out),
             err: Box::new(err),
+            input: None,
             json: false,
             mcp: None,
         }
+    }
+
+    /// A command reads `input` instead of stdin: for tests.
+    pub fn with_input(mut self, input: impl io::Read + Send + 'static) -> Self {
+        self.input = Some(Box::new(input));
+        self
+    }
+
+    /// Everything on the input: stdin, unless a test gave another.
+    pub(crate) fn read_input(&mut self) -> io::Result<String> {
+        let mut text = String::new();
+        match &mut self.input {
+            Some(input) => input.read_to_string(&mut text)?,
+            None => io::stdin().read_to_string(&mut text)?,
+        };
+        Ok(text)
     }
 
     /// `rewind mcp` reads its MCP messages from `input` and writes them to `output` instead of

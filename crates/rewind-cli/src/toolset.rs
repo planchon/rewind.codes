@@ -32,6 +32,9 @@ pub(crate) async fn pin_file(path: &Path) -> Result<Toolset, CliError> {
 pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
     let mut servers = Vec::new();
     let mut tools = Vec::new();
+    if !create.secrets.is_empty() {
+        return Err(LISTING_SECRETS.to_owned());
+    }
     if !create.apis.is_empty() || !create.secrets.is_empty() {
         apis_and_secrets(create);
     }
@@ -119,6 +122,13 @@ async fn discover(
     }
     Ok(())
 }
+
+/// Why this process pins no toolset file that attaches secrets to list its servers' tools: a
+/// secret is written and never read back, and only the server's dispatcher reads it
+/// (`archi/04-tools.md`, "Secrets").
+const LISTING_SECRETS: &str = "secrets: this process cannot read a secret, which only the \
+    server reads: register the toolset on the server (a run's --toolset FILE does), then give \
+    its id to --toolset";
 
 /// A toolset file's APIs, read from their OpenAPI documents, and the secrets that list its
 /// servers' tools.
