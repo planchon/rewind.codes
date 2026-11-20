@@ -24,9 +24,14 @@ use rewind_api::toolsets::{
     Toolset as ApiToolset, ToolsetList, ToolsetSummary,
 };
 use rewind_core::{
-    Digest, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy, ToolRoute, Toolset,
+    Digest, Interruption, McpServer, McpTransport, RunId, SecretRef, SecretScope, Tool, ToolAuth,
+    ToolPolicy, ToolRoute, Toolset,
 };
-use rewind_engine::ports::{JournalStore, ReadModel, StoredToolset, TenantId, ToolDeclarations};
+use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
+use rewind_engine::ports::{
+    Day, JournalStore, NamespaceName, ReadModel, Secret, SecretId, SecretNamespace, SecretReader,
+    SecretStore, StoredToolset, TenantId, ToolDeclarations,
+};
 use rewind_engine::text::{TOOLSET_TEXT, refuse_nul};
 
 use crate::app::App;
@@ -58,7 +63,7 @@ pub(super) async fn create(
             }
             stored(&app, &caller.tenant, &base).await?.toolset
         }
-        None => pin(&app, &caller.tenant, request).await?,
+        None => pin(&app, &caller, request).await?,
     };
     let toolset =
         workflows::pin(&app, &caller.tenant, &caller.labels, &references, toolset).await?;
@@ -267,10 +272,13 @@ fn invalid_toolset(detail: impl Into<String>) -> ApiError {
 
 /// Pins a toolset: discovery of its MCP servers, its APIs' operations, the harness's policies,
 /// host tools and built-ins.
-async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Toolset, ApiError> {
-    if !request.secrets.is_empty() {
-        attached_for_listing(&request);
-    }
+async fn pin(app: &App, caller: &Caller, request: CreateToolset) -> Result<Toolset, ApiError> {
+    let tenant = &caller.tenant;
+    let listing = if request.secrets.is_empty() {
+        BTreeMap::new()
+    } else {
+        attached_for_listing(app, caller, &request).await?
+    };
     if !request.apis.is_empty() {
         read_apis(&request);
     }
@@ -318,7 +326,7 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
         let mut pinned = McpServer::new(server.name.clone(), transport);
         pinned.auth = auth_of(server.auth.as_ref(), &format!("MCP server {}", server.name))?;
         if pinned.auth != ToolAuth::None {
-            listing_auth(&pinned);
+            listing_auth(&pinned, listing.get(&server.name));
         }
         let listed = app.tools.discover(tenant, &pinned, None).await.map_err(
             |DiscoveryError(message)| ApiError::new(ProblemType::ToolsetUnavailable, message),
@@ -391,19 +399,105 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
     Toolset::new(servers, tools).map_err(|error| invalid_toolset(error.to_string()))
 }
 
-/// Checks the organization's secrets `secrets` attaches for the listings (`secrets:use`, the
-/// caller's labels, `org/` only), to read them for the servers that need one.
-#[expect(
-    clippy::todo,
-    reason = "the engine-server workstream attaches secrets to listings"
-)]
-fn attached_for_listing(request: &CreateToolset) {
-    let _ = request;
-    todo!(
-        "engine-server: check the org/ secrets `secrets` attaches (secrets:use, labels) and read \
-         them for the listings of the MCP servers whose auth takes one"
-    )
+/// The organization's secrets `secrets` attaches for the listings, read, by server
+/// (`archi/04-tools.md`, "Secrets": `POST /v1/toolsets` attaches an organization's secrets only,
+/// to list the tools of an MCP server that needs one; no run keeps them). The caller holds
+/// `secrets:use`, and each secret is an organization's it sees (its labels), attached for an
+/// MCP server of the request whose `auth` takes a secret. A read is counted as the run
+/// [`LISTING_RUN`]'s, in the caller's namespace (`local` without one).
+async fn attached_for_listing(
+    app: &App,
+    caller: &Caller,
+    request: &CreateToolset,
+) -> Result<BTreeMap<String, Secret>, ApiError> {
+    caller.require(Permission::SecretsUse)?;
+    let mut problems = Vec::new();
+    let mut attached = Vec::new();
+    for (server, text) in &request.secrets {
+        let secret = SecretRef::parse(text)
+            .map_err(|error| ApiError::invalid(format!("secrets.{server}: {error}")))?;
+        if secret.scope != SecretScope::Organization {
+            return Err(ApiError::invalid(format!(
+                "secrets.{server}: {secret} is a namespace's secret, and a registration has no \
+                 namespace: attach an organization's secret (org/<name>) to list the tools"
+            )));
+        }
+        let takes_secret = request
+            .mcp
+            .iter()
+            .find(|mcp| mcp.name == *server)
+            .map(|mcp| auth_of(mcp.auth.as_ref(), &format!("MCP server {server}")))
+            .transpose()?
+            .is_some_and(|auth| auth.takes_secret());
+        if !takes_secret {
+            problems.push(AttachmentProblem::TakesNone {
+                server: server.clone(),
+            });
+            continue;
+        }
+        attached.push((server.clone(), secret));
+    }
+    let today = Day::of(app.now());
+    let mut read = BTreeMap::new();
+    let reader = SecretReader {
+        run: LISTING_RUN,
+        namespace: caller.namespace.clone().unwrap_or_else(|| {
+            NamespaceName::new(NamespaceName::LOCAL).unwrap_or_else(|_| NamespaceName::migrated())
+        }),
+    };
+    for (server, secret) in attached {
+        let id = SecretId::organization(secret.name.clone());
+        let seen = app
+            .engine
+            .secrets()
+            .meta(&caller.tenant, &id, today)
+            .await?
+            .is_some_and(|meta| {
+                caller
+                    .labels
+                    .iter()
+                    .all(|(key, value)| meta.labels.get(key) == Some(value))
+            });
+        let value = if seen {
+            app.engine
+                .secrets()
+                .read(&caller.tenant, &id, &reader, app.now())
+                .await?
+        } else {
+            None
+        };
+        match value {
+            Some(value) => {
+                read.insert(server, value);
+            }
+            None => problems.push(AttachmentProblem::Unknown { server, secret }),
+        }
+    }
+    if problems.is_empty() {
+        return Ok(read);
+    }
+    problems.sort_by(|a, b| a.server().cmp(b.server()));
+    let listed = app
+        .engine
+        .secrets()
+        .list(
+            &caller.tenant,
+            &SecretNamespace::Organization,
+            &caller.labels,
+            today,
+        )
+        .await?;
+    let mut attachable: Vec<SecretRef> = listed.iter().map(|meta| meta.id.to_ref()).collect();
+    attachable.truncate(rewind_engine::attachments::MAX_ATTACHABLE);
+    let refused = RefusedAttachments {
+        problems,
+        attachable,
+    };
+    Err(ApiError::secret_required(refused.to_string(), &refused))
 }
+
+/// The run a listing's read of a secret is counted for: none, the nil id.
+pub(crate) const LISTING_RUN: RunId = RunId::from_u128(0);
 
 /// How the listing of a server's tools authenticates at registration: the attached
 /// organization's secret, or a JWT without the claims of a call (`archi/04-tools.md`, "Signed
@@ -412,8 +506,8 @@ fn attached_for_listing(request: &CreateToolset) {
     clippy::todo,
     reason = "the outbound workstream authenticates MCP listings"
 )]
-fn listing_auth(server: &McpServer) {
-    let _ = server;
+fn listing_auth(server: &McpServer, secret: Option<&Secret>) {
+    let _ = (server, secret);
     todo!(
         "outbound: list the tools of a server whose auth is a secret (the one `secrets` \
          attaches) or rewind (a signed listing), through rewind-outbound"

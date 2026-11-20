@@ -154,7 +154,6 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             routes::SIGNING_KEYS,
             get(secrets::signing_keys).post(secrets::rotate_signing_key),
         )
-        .route(routes::JWKS, get(secrets::jwks))
         .route(
             routes::NAMESPACE_TOKENS,
             post(tokens::create).delete(tokens::revoke_namespace),
@@ -230,8 +229,11 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             get(oauth::authorization_server),
         )
         .with_state(app.clone());
+    // The organizations' public keys, which the servers that check signed calls fetch without
+    // authentication (`archi/04-tools.md`, "Signed calls").
     let public = Router::new()
         .route(routes::HOOK, post(hooks::post))
+        .route(routes::JWKS, get(secrets::jwks))
         .fallback(dashboard::serve)
         .with_state(app.clone())
         .merge(sign_in)
