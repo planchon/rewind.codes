@@ -110,6 +110,19 @@ DTOs of `rewind-api` with the OpenAPI document and the TypeScript types, and `re
 and `rewind-openapi` as empty crates; what each workstream builds is a `todo!` naming it
 (`stores`, `outbound`, `engine-server`, `ts`).
 
+The engine-server workstream built its part
+([08](08-decisions.md#taken-while-building-the-attachments-of-secrets-november-2026)): the checks
+of attachments at a start, a fork, a save and a version's start, with what the caller may attach
+in `secret-required`, and the imports a script makes, read by V8's executor; at dispatch, the
+attached secret read in the run's namespace or the tenant's key with its claims, a deleted secret
+parking the call `secret_missing` and putting it again resuming it; `secret_usage` in memory and
+its check in the journal suite; the endpoints of secrets, usage, signing keys and the public JWKS,
+with labels, end users' tokens and connections; the agent tools' `secrets` and `list_secrets` in
+Rust, over MCP and in the SDK; `rewind secrets` and `--secret`; eight cases of the e2e corpus.
+Its tests pass on the in-memory adapters; the HTTP tests on Turso and Postgres wait for the
+stores workstream's `SecretStore`, and the calls to MCP servers and APIs that authenticate for
+the outbound workstream.
+
 | Crate | State |
 | --- | --- |
 | `rewind-core` | Pure domain, no serde: ids (`Seed` on 256 bits, `Epoch`), RFC 8785 canonical JSON (golden vectors of the RFC), payloads, the four event families (`signal_awaited` and `invalid_script` included), `RunState`, history validation, `ReplayCursor`; the pinned toolset (MCP servers and their transports; tools with route, description, input and output schemas, policy) and its digest; tool outcomes; cassettes derived from a history; observed result shapes. |

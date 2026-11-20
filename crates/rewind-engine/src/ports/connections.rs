@@ -109,7 +109,8 @@ pub struct OAuthClient {
 }
 
 /// What a connection may do in an organization it opens: `read` (`runs:read`, `toolsets:read`,
-/// `namespaces:read`) or `run` (`runs:start` and `runs:control` too).
+/// `namespaces:read`, `secrets:read`) or `run` (`runs:start`, `runs:control` and `secrets:use`
+/// too).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Access {
     Read,
