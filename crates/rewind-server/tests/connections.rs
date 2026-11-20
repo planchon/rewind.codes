@@ -204,7 +204,7 @@ impl World {
         assert_eq!(response.status(), StatusCode::FOUND);
         let location = location(&response);
         let (page, query) = location.split_once('?').unwrap();
-        assert_eq!(page, "https://app.rewind.test/#/connect/authorize");
+        assert_eq!(page, "https://app.rewind.test/connect/authorize");
         let params: Vec<(String, String)> = serde_html_form::from_str(query).unwrap();
         params
             .into_iter()

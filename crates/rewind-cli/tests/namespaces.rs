@@ -1,5 +1,6 @@
-//! `rewind namespaces list|show|quotas|delete` against a stand-in embedded server: what the
-//! commands send, what they print, and that they span namespaces unless `--namespace` names one.
+//! `rewind namespaces list|show|rename|quotas|delete` against a stand-in embedded server: what
+//! the commands send, what they print, and that they span namespaces unless `--namespace` names
+//! one.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -14,7 +15,7 @@ use axum::routing::get;
 use rewind_api::admin::{ServerInfo, ServerRole};
 use rewind_api::common::Timestamp;
 use rewind_api::namespaces::{
-    Namespace, NamespaceDefaults, NamespaceDetail, NamespaceList, PutNamespace,
+    Namespace, NamespaceDefaults, NamespaceDetail, NamespaceList, NamespacePatch, PutNamespace,
     PutNamespaceDefaults, QuotaUsage, Quotas,
 };
 use rewind_cli::{Console, Exit};
@@ -32,6 +33,7 @@ struct Seen {
 #[derive(Debug, Default)]
 struct Stub {
     exceptions: Quotas,
+    display_name: Option<String>,
     defaults: Quotas,
     seen: Vec<Seen>,
 }
@@ -67,6 +69,7 @@ fn namespace(name: &str, exceptions: &Quotas) -> Namespace {
     };
     Namespace {
         name: name.parse().unwrap(),
+        display_name: None,
         limits: Quotas {
             cpu_per_month: exceptions.cpu_per_month,
             active_runs: exceptions.active_runs.or(defaults.active_runs),
@@ -105,10 +108,16 @@ async fn list(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Response {
     see(&stub, "list", &headers, query, Value::Null);
-    let exceptions = stub.lock().unwrap().exceptions.clone();
+    let (exceptions, display_name) = {
+        let stub = stub.lock().unwrap();
+        (stub.exceptions.clone(), stub.display_name.clone())
+    };
     axum::Json(NamespaceList {
         month: "2026-11".into(),
-        namespaces: vec![namespace("alice", &exceptions)],
+        namespaces: vec![Namespace {
+            display_name,
+            ..namespace("alice", &exceptions)
+        }],
         total: 2,
         next: Some("840-alice".into()),
     })
@@ -128,16 +137,51 @@ async fn get_one(
         Value::Null,
     );
     if name != "alice" {
-        let problem = rewind_api::Problem::new(rewind_api::ProblemType::NotFound, "no namespace");
-        return (
-            StatusCode::NOT_FOUND,
-            [("content-type", rewind_api::problem::CONTENT_TYPE)],
-            serde_json::to_string(&problem).unwrap(),
-        )
-            .into_response();
+        return not_found();
     }
-    let exceptions = stub.lock().unwrap().exceptions.clone();
-    axum::Json(detail(&name, &exceptions)).into_response()
+    let (exceptions, display_name) = {
+        let stub = stub.lock().unwrap();
+        (stub.exceptions.clone(), stub.display_name.clone())
+    };
+    let mut detail = detail(&name, &exceptions);
+    detail.namespace.display_name = display_name;
+    axum::Json(detail).into_response()
+}
+
+fn not_found() -> Response {
+    let problem = rewind_api::Problem::new(rewind_api::ProblemType::NotFound, "no namespace");
+    (
+        StatusCode::NOT_FOUND,
+        [("content-type", rewind_api::problem::CONTENT_TYPE)],
+        serde_json::to_string(&problem).unwrap(),
+    )
+        .into_response()
+}
+
+async fn patch_one(
+    State(stub): State<Shared>,
+    Path(name): Path<String>,
+    headers: HeaderMap,
+    axum::Json(body): axum::Json<Value>,
+) -> Response {
+    see(
+        &stub,
+        &format!("patch {name}"),
+        &headers,
+        BTreeMap::new(),
+        body.clone(),
+    );
+    if name != "alice" {
+        return not_found();
+    }
+    let patch: NamespacePatch = serde_json::from_value(body).unwrap();
+    let mut stub = stub.lock().unwrap();
+    if let Some(display_name) = patch.display_name {
+        stub.display_name = display_name.filter(|text| !text.trim().is_empty());
+    }
+    let mut detail = detail(&name, &stub.exceptions);
+    detail.namespace.display_name = stub.display_name.clone();
+    axum::Json(detail).into_response()
 }
 
 async fn put_one(
@@ -245,7 +289,10 @@ impl Embedded {
             .route("/v1/namespaces", get(list))
             .route(
                 "/v1/namespaces/{name}",
-                get(get_one).put(put_one).delete(delete_one),
+                get(get_one)
+                    .put(put_one)
+                    .patch(patch_one)
+                    .delete(delete_one),
             )
             .route(
                 "/v1/organization/namespace-defaults",
@@ -342,6 +389,7 @@ async fn quotas_change_only_the_limits_given() {
             max_script_lines: Some(300),
             ..Quotas::default()
         },
+        display_name: None,
         seen: Vec::new(),
     })
     .await;
@@ -415,4 +463,57 @@ async fn a_namespace_is_erased() {
     assert_eq!(exit, Exit::Success);
     let answer: Value = serde_json::from_str(&out).unwrap();
     assert_eq!(answer, json!({ "namespace": "alice", "erasing": true }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_display_name_is_set_shown_and_removed() {
+    let server = Embedded::start(Stub::default()).await;
+    let (exit, out, err) = server
+        .rewind(&["namespaces", "rename", "alice", "Acme Corp"])
+        .await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    assert!(
+        out.contains("namespace alice is shown as \"Acme Corp\""),
+        "{out}"
+    );
+    let seen = server.seen();
+    assert_eq!(seen[0].what, "patch alice");
+    assert_eq!(seen[0].body, json!({ "displayName": "Acme Corp" }));
+    assert_eq!(seen[0].namespace, None);
+
+    let (exit, out, err) = server.rewind(&["namespaces", "list"]).await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    assert!(out.contains("alice \"Acme Corp\""), "{out}");
+    let (exit, out, err) = server.rewind(&["namespaces", "show", "alice"]).await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    assert!(
+        out.starts_with("namespace alice \"Acme Corp\": created"),
+        "{out}"
+    );
+
+    let (exit, out, err) = server
+        .rewind(&["--json", "namespaces", "rename", "alice"])
+        .await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    let answer: NamespaceDetail = serde_json::from_str(&out).unwrap();
+    assert_eq!(answer.namespace.display_name, None);
+    assert_eq!(
+        server.seen().last().unwrap().body,
+        json!({ "displayName": null }),
+        "no display name removes it"
+    );
+    let (exit, out, _) = server.rewind(&["namespaces", "show", "alice"]).await;
+    assert_eq!(exit, Exit::Success);
+    assert!(out.starts_with("namespace alice: created"), "{out}");
+
+    let (exit, _, err) = server.rewind(&["namespaces", "rename", "bob", "Bob"]).await;
+    assert_eq!(
+        exit,
+        Exit::Refused,
+        "a namespace is never created by its display name: {err}"
+    );
+    let (exit, _, _) = server
+        .rewind(&["namespaces", "rename", "not a name", "X"])
+        .await;
+    assert_eq!(exit, Exit::Usage);
 }

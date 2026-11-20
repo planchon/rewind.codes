@@ -269,6 +269,12 @@ export function shortDate(ms: number): string {
   });
 }
 
+/** The first instant of the month and that of the next, in milliseconds, in UTC. */
+export function monthBounds(month: string): [number, number] {
+  const parts = monthParts(month) ?? [1970, 0];
+  return [Date.UTC(parts[0], parts[1], 1), Date.UTC(parts[0], parts[1] + 1, 1)];
+}
+
 export function daysInMonth(month: string): number {
   const parts = monthParts(month);
   if (!parts) return 30;

@@ -604,12 +604,12 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             return Some(McpTool {
                 name: "list_namespaces",
                 title: "List namespaces",
-                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, credentials and limits are kept apart from the others'. check_script, test_script and run_script act in the namespace you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
+                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, credentials and limits are kept apart from the others'. Its name is the organization's id for the end user; a display name (\"Acme Corp\") may follow it in parentheses, to find who is who. check_script, test_script and run_script act in the namespace whose name you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
                         "org": org(),
-                        "prefix": { "type": "string", "description": "Only the namespaces whose name starts with this." }
+                        "prefix": { "type": "string", "description": "Only the namespaces whose name starts with this, or whose display name does, case aside." }
                     },
                     "additionalProperties": false
                 }),

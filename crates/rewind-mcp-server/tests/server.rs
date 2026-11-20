@@ -239,6 +239,7 @@ impl McpApi for FakeApi {
             "total": 1,
             "namespaces": [{
                 "name": "alice",
+                "displayName": "Alice Martin",
                 "limits": {}, "exceptions": {},
                 "usage": { "cpu": "1s", "activeRuns": 1, "runsStarted": 12, "scripts": 3 },
                 "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-18T10:00:00Z"
@@ -749,7 +750,11 @@ async fn a_whole_exchange_over_streamable_http_without_session() {
     assert_eq!(called["result"]["isError"], false);
     let listed_text = called["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        listed_text.starts_with("1 namespace starting with \"al\", the most active this month (2026-11) first:\n- alice: 12 runs this month, 1 active"),
+        listed_text.starts_with("1 namespace starting with \"al\", the most active this month (2026-11) first:\n- alice (\"Alice Martin\"): 12 runs this month, 1 active"),
+        "{listed_text}"
+    );
+    assert!(
+        listed_text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."),
         "{listed_text}"
     );
     assert_eq!(

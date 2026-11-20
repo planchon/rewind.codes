@@ -37,7 +37,7 @@ The binary is built from the [repository](https://github.com/planchon/rewind.cod
 | `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
 | `rewind release <run> [--give-up]` | Takes a run out of quarantine, or gives it up |
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file, prints its declarations, searches its tools |
-| `rewind namespaces list\|show\|quotas\|delete` | The end users and their use, one end user, their limits (or the defaults with `--defaults`), erasure |
+| `rewind namespaces list\|show\|rename\|quotas\|delete` | The end users and their use, one end user, its display name (`rename user_2fQ81 "Acme Corp"`; without one, removes it), their limits (or the defaults with `--defaults`), erasure |
 | `rewind server` | Runs a server in the foreground: see [Self-hosting](/self-hosting) |
 | `rewind mcp` | Serves the [agent tools](/sdk/agent-tools) over MCP on standard input and output, against the embedded server: to debug them with an MCP client, such as the MCP Inspector or Claude Code on this machine. Never a remote server: Claude reaches those [over HTTP](/claude) |
 

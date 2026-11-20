@@ -14,16 +14,17 @@ use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::common::timestamp;
 use rewind_api::namespaces::{
-    DayUsage, Namespace as ApiNamespace, NamespaceDefaults, NamespaceDetail, NamespaceList,
-    NamespaceListQuery, NamespaceOrder as ApiOrder, NamespaceQuery, PutCeiling, PutNamespace,
-    PutNamespaceDefaults, QuotaAlertList, QuotaAlertQuery,
+    DayUsage, Namespace as ApiNamespace, NamespaceDefaults, NamespaceDetail, NamespaceDisplayName,
+    NamespaceList, NamespaceListQuery, NamespaceNames, NamespaceOrder as ApiOrder, NamespacePatch,
+    NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults, QuotaAlertList,
+    QuotaAlertQuery,
 };
 use rewind_api::toolsets::Credentials;
 use rewind_core::RunStatus;
 use rewind_engine::ports::{
-    AccessStore, DeleteNamespace, JournalStore, Month, Namespace, NamespaceCursor, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, QuotaKind, RunCursor, RunFilter,
-    Tenant, TenantId, Usage, UsageOf, limits,
+    AccessStore, DeleteNamespace, DisplayName, JournalStore, Month, Namespace, NamespaceCursor,
+    NamespaceFilter, NamespaceName, NamespaceOrder, NamespaceUsage, NamespaceWrite, QuotaKind,
+    RunCursor, RunFilter, Tenant, TenantId, Usage, UsageOf, limits,
 };
 
 use crate::app::App;
@@ -47,6 +48,17 @@ pub(crate) fn name(text: &str) -> Result<NamespaceName, ApiError> {
         ApiError::invalid(format!(
             "{text:?} is not a namespace: expected 1 to 128 ASCII letters, digits, -, _, ., : \
              and @"
+        ))
+    })
+}
+
+/// A display name as a request gives it: `None` to remove it, 400 when it is not one.
+fn display_name(text: &str) -> Result<Option<DisplayName>, ApiError> {
+    DisplayName::parse(text).map_err(|_| {
+        ApiError::invalid(format!(
+            "displayName {text:?}: expected at most {} characters once trimmed, none of them a \
+             control character",
+            DisplayName::MAX_CHARS
         ))
     })
 }
@@ -101,6 +113,10 @@ fn view(
 ) -> ApiNamespace {
     ApiNamespace {
         name: views::namespace(&namespace.name),
+        display_name: namespace
+            .display_name
+            .as_ref()
+            .map(|display| display.as_str().to_owned()),
         limits: quotas(limits),
         exceptions: quotas(&namespace.exceptions),
         usage: views::usage(usage),
@@ -204,56 +220,27 @@ pub(super) async fn list(
         ApiOrder::Name => NamespaceOrder::Name,
     };
     let limit = usize::try_from(query.limit.unwrap_or(PAGE).clamp(1, MAX_PAGE)).unwrap_or(50);
-    let mut filter = NamespaceFilter {
+    let after = query.after.as_deref().map(decode_cursor).transpose()?;
+    let bound = caller.namespace.is_some();
+    let filter = NamespaceFilter {
         tenant: caller.tenant.clone(),
+        // Bound to one namespace: that one alone, on the first page only.
+        name: caller.namespace.clone(),
         prefix: query.prefix.clone(),
         above_percent,
         order,
         month,
-        after: query.after.as_deref().map(decode_cursor).transpose()?,
+        after: if bound { None } else { after },
         limit,
     };
-    if let Some(bound) = &caller.namespace {
-        // Bound to one namespace: that one alone, which sorts first by name among those it
-        // prefixes.
-        if query
-            .prefix
-            .as_deref()
-            .is_some_and(|prefix| !bound.as_str().starts_with(prefix))
-        {
-            return Ok(Json(NamespaceList {
-                month: month.to_string(),
-                namespaces: Vec::new(),
-                total: 0,
-                next: None,
-            }));
-        }
-        filter.prefix = Some(bound.as_str().to_owned());
-        filter.order = NamespaceOrder::Name;
-        filter.after = None;
-        filter.limit = 1;
-    }
     let page = app.store.list_namespaces(&filter).await?;
-    let (found, total) = match &caller.namespace {
-        // Its own namespace, on the first page only; the store's total counts those its name
-        // prefixes.
-        Some(bound) => {
-            let found: Vec<_> = page
-                .namespaces
-                .into_iter()
-                .filter(|listed| listed.namespace.name == *bound)
-                .collect();
-            let total = u64::try_from(found.len()).unwrap_or(0);
-            let found = if query.after.is_some() {
-                Vec::new()
-            } else {
-                found
-            };
-            (found, total)
-        }
-        None => (page.namespaces, page.total),
+    let total = page.total;
+    let found = if bound && query.after.is_some() {
+        Vec::new()
+    } else {
+        page.namespaces
     };
-    let next = (caller.namespace.is_none() && found.len() == limit)
+    let next = (!bound && found.len() == limit)
         .then(|| found.last())
         .flatten()
         .map(|last| encode_cursor(order, last));
@@ -306,6 +293,43 @@ pub(super) async fn put(
         return Err(deleting());
     };
     Ok(Json(detail(&app, &namespace, Month::of(app.now())).await?))
+}
+
+/// `PATCH /v1/namespaces/{name}`: changes what the merge patch holds of an existing namespace,
+/// its display name. `PUT` never touches it.
+pub(super) async fn patch(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+    Path(text): Path<String>,
+    Body(patch): Body<NamespacePatch>,
+) -> Result<Json<NamespaceDetail>, ApiError> {
+    caller.require(Permission::NamespacesWrite)?;
+    let name = name(&text)?;
+    reach(&caller, &name)?;
+    let written = match patch.display_name {
+        Some(given) => {
+            let display = given.as_deref().map(display_name).transpose()?.flatten();
+            app.store
+                .set_namespace_display_name(&caller.tenant, &name, display.as_ref())
+                .await?
+        }
+        // Nothing to change: the namespace as it is, refused as a change would be.
+        None => app
+            .store
+            .get_namespace(&caller.tenant, &name)
+            .await?
+            .map(|namespace| match namespace.deleting_since {
+                Some(_) => NamespaceWrite::Deleting,
+                None => NamespaceWrite::Written(namespace),
+            }),
+    };
+    match written {
+        None => Err(no_namespace(&name)),
+        Some(NamespaceWrite::Deleting) => Err(deleting()),
+        Some(NamespaceWrite::Written(namespace)) => {
+            Ok(Json(detail(&app, &namespace, Month::of(app.now())).await?))
+        }
+    }
 }
 
 /// `DELETE /v1/namespaces/{name}`: erases the end user. The namespace takes no run and no token
@@ -440,6 +464,26 @@ pub(super) async fn put_defaults(
     Ok(Json(
         defaults_of(&app, &caller.tenant, Month::of(app.now())).await?,
     ))
+}
+
+/// `GET /v1/organization/namespace-names`: the namespaces that have a display name, by name; a
+/// request bound to a namespace reads its own alone.
+pub(super) async fn names(
+    State(app): State<Arc<App>>,
+    caller: Caller,
+) -> Result<Json<NamespaceNames>, ApiError> {
+    caller.require(Permission::NamespacesRead)?;
+    let names = app.store.namespace_display_names(&caller.tenant).await?;
+    Ok(Json(NamespaceNames {
+        namespaces: names
+            .into_iter()
+            .filter(|(name, _)| caller.reaches(name))
+            .map(|(name, display_name)| NamespaceDisplayName {
+                name: views::namespace(&name),
+                display_name: display_name.as_str().to_owned(),
+            })
+            .collect(),
+    }))
 }
 
 /// `GET /v1/organization/quota-alerts`: the alerts of a month, newest first.

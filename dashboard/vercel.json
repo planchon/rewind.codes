@@ -6,7 +6,8 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/v1/:path*", "destination": "https://api.rewind.codes/v1/:path*" },
-    { "source": "/auth/:path*", "destination": "https://api.rewind.codes/auth/:path*" }
+    { "source": "/auth/:path*", "destination": "https://api.rewind.codes/auth/:path*" },
+    { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ],
   "headers": [
     {

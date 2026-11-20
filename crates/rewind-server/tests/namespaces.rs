@@ -21,9 +21,9 @@ use rewind_api::access::{BuiltInRole, Permission, PutRole};
 use rewind_api::common::{Labels, RunStatus};
 use rewind_api::events::EventsQuery;
 use rewind_api::namespaces::{
-    CreateToken, CreateTokenKey, NamespaceListQuery, NamespaceName, NamespaceOrder, NamespaceQuery,
-    PutCeiling, PutNamespace, PutNamespaceDefaults, QuotaAlertQuery, QuotaKind, QuotaScope, Quotas,
-    TokenAlgorithm,
+    CreateToken, CreateTokenKey, NamespaceListQuery, NamespaceName, NamespaceOrder, NamespacePatch,
+    NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults, QuotaAlertQuery, QuotaKind,
+    QuotaScope, Quotas, TokenAlgorithm,
 };
 use rewind_api::organization::{Principal, TokenKind};
 use rewind_api::problem::QuotaReached;
@@ -1356,6 +1356,252 @@ async fn namespaces_are_listed_with_their_use_and_alerts() {
         refused(admin.put_ceiling("nobody", &PutCeiling::default()).await),
         (404, Some(ProblemType::NotFound))
     );
+    server.stop().await;
+}
+
+/// A display name: set and removed by `PATCH`, which never creates the namespace, kept by
+/// `PUT`, found by a prefix case aside, and listed by `GET /v1/organization/namespace-names`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn namespaces_take_a_display_name() {
+    let server = TestServer::in_memory(&[]).await;
+    let customer = server.tenant_key("acme", "harness").await;
+    let reader = server.tenant_key("acme", "reader").await;
+    for name in ["aaa", "bob", "user_2fQ81", "user_7kP"] {
+        customer
+            .put_namespace(&ns(name), &PutNamespace::default())
+            .await
+            .unwrap();
+    }
+    let rename = |name: &str, display: Option<&str>| {
+        let (customer, name) = (customer.clone(), ns(name));
+        let patch = NamespacePatch::display_name(display.map(str::to_owned));
+        async move { customer.patch_namespace(&name, &patch).await }
+    };
+    let named = rename("user_2fQ81", Some("  Acme Corp ")).await.unwrap();
+    assert_eq!(named.namespace.name, ns("user_2fQ81"));
+    assert_eq!(named.namespace.display_name.as_deref(), Some("Acme Corp"));
+    assert_eq!(
+        named.month.len(),
+        7,
+        "the detail of the month, as PUT answers"
+    );
+    rename("user_7kP", Some("Élodie Martin")).await.unwrap();
+    rename("aaa", Some("Bob Inc")).await.unwrap();
+
+    // `{}` changes nothing, PUT leaves the display name, and every read shows it.
+    let same = customer
+        .patch_namespace(&ns("user_2fQ81"), &NamespacePatch::default())
+        .await
+        .unwrap();
+    assert_eq!(same.namespace.display_name.as_deref(), Some("Acme Corp"));
+    let put = customer
+        .put_namespace(
+            &ns("user_2fQ81"),
+            &PutNamespace {
+                exceptions: Quotas {
+                    active_runs: Some(3),
+                    ..Quotas::default()
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(put.namespace.display_name.as_deref(), Some("Acme Corp"));
+    let read = reader
+        .get_namespace(&ns("user_2fQ81"), &NamespaceQuery::default())
+        .await
+        .unwrap();
+    assert_eq!(read.namespace.display_name.as_deref(), Some("Acme Corp"));
+    assert_eq!(read.namespace.exceptions.active_runs, Some(3));
+
+    // A prefix matches a name, or a display name case aside; the total counts the same.
+    let listed = |client: &Client, prefix: &str| {
+        let (client, query) = (
+            client.clone(),
+            NamespaceListQuery {
+                prefix: Some(prefix.to_owned()),
+                order: Some(NamespaceOrder::Name),
+                ..NamespaceListQuery::default()
+            },
+        );
+        async move {
+            let page = client.list_namespaces(&query).await.unwrap();
+            let names: Vec<String> = page
+                .namespaces
+                .iter()
+                .map(|namespace| namespace.name.to_string())
+                .collect();
+            (names, page.total)
+        }
+    };
+    assert_eq!(
+        listed(&reader, "acme").await,
+        (vec!["user_2fQ81".into()], 1)
+    );
+    assert_eq!(listed(&reader, "ÉLO").await, (vec!["user_7kP".into()], 1));
+    assert_eq!(
+        listed(&reader, "user_").await,
+        (vec!["user_2fQ81".into(), "user_7kP".into()], 2)
+    );
+    assert_eq!(
+        listed(&reader, "bo").await,
+        (vec!["aaa".into(), "bob".into()], 2)
+    );
+    let all = reader
+        .list_namespaces(&NamespaceListQuery::default())
+        .await
+        .unwrap();
+    let bob = all
+        .namespaces
+        .iter()
+        .find(|namespace| namespace.name == ns("bob"))
+        .unwrap();
+    assert_eq!(bob.display_name, None);
+
+    // A read bound to a namespace holds it alone, whatever display names its name starts.
+    let as_bob = reader.with_namespace(ns("bob"));
+    assert_eq!(
+        as_bob
+            .list_namespaces(&NamespaceListQuery::default())
+            .await
+            .unwrap()
+            .namespaces
+            .iter()
+            .map(|namespace| namespace.name.to_string())
+            .collect::<Vec<_>>(),
+        ["bob"]
+    );
+    assert_eq!(listed(&as_bob, "bo").await, (vec!["bob".into()], 1));
+    let as_elodie = reader.with_namespace(ns("user_7kP"));
+    assert_eq!(
+        listed(&as_elodie, "élodie").await,
+        (vec!["user_7kP".into()], 1)
+    );
+    assert_eq!(listed(&as_elodie, "acme").await, (Vec::new(), 0));
+
+    // The display names, by name, without paging.
+    let names = reader.namespace_names().await.unwrap();
+    assert_eq!(
+        serde_json::to_value(&names).unwrap(),
+        json!({ "namespaces": [
+            { "name": "aaa", "displayName": "Bob Inc" },
+            { "name": "user_2fQ81", "displayName": "Acme Corp" },
+            { "name": "user_7kP", "displayName": "Élodie Martin" },
+        ] })
+    );
+    assert_eq!(
+        serde_json::to_value(as_elodie.namespace_names().await.unwrap()).unwrap(),
+        json!({ "namespaces": [{ "name": "user_7kP", "displayName": "Élodie Martin" }] }),
+        "a read bound to a namespace holds its own"
+    );
+    assert!(
+        as_bob
+            .namespace_names()
+            .await
+            .unwrap()
+            .namespaces
+            .is_empty(),
+        "bob has none"
+    );
+
+    // `null` or `""` removes it; a namespace without one has no `displayName` on the wire.
+    let removed = rename("user_2fQ81", None).await.unwrap();
+    assert_eq!(removed.namespace.display_name, None);
+    let removed = rename("aaa", Some("   ")).await.unwrap();
+    assert_eq!(removed.namespace.display_name, None);
+    let secret = harness_secret(&server).await;
+    let raw = |method: reqwest::Method, path: &str, body: Option<Value>| {
+        let mut request = reqwest::Client::new()
+            .request(method, format!("{}{path}", server.url))
+            .bearer_auth(&secret);
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        async move { request.send().await.unwrap() }
+    };
+    let wire: Value = raw(reqwest::Method::GET, "/v1/namespaces/user_2fQ81", None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(wire["namespace"].get("displayName").is_none(), "{wire}");
+    let empty = raw(
+        reqwest::Method::PATCH,
+        "/v1/namespaces/user_7kP",
+        Some(json!({ "displayName": "" })),
+    )
+    .await;
+    assert_eq!(empty.status(), 200);
+    assert_eq!(
+        serde_json::to_value(reader.namespace_names().await.unwrap()).unwrap(),
+        json!({ "namespaces": [] })
+    );
+
+    // Refused: an invalid display name, an unknown field, an unknown namespace (never
+    // created), one being erased, one outside the request's, and without the permission.
+    for invalid in [json!("x".repeat(129)), json!("bell \u{7}"), json!(42)] {
+        let refused = raw(
+            reqwest::Method::PATCH,
+            "/v1/namespaces/bob",
+            Some(json!({ "displayName": invalid })),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{invalid}");
+        let problem: Problem = refused.json().await.unwrap();
+        assert_eq!(problem.kind(), Some(ProblemType::InvalidRequest));
+    }
+    let unknown = raw(
+        reqwest::Method::PATCH,
+        "/v1/namespaces/bob",
+        Some(json!({ "name": "carol" })),
+    )
+    .await;
+    assert_eq!(unknown.status(), 400);
+    assert_eq!(
+        refused(rename("nobody", Some("Nobody")).await),
+        (404, Some(ProblemType::NotFound))
+    );
+    assert_eq!(
+        refused(
+            reader
+                .get_namespace(&ns("nobody"), &NamespaceQuery::default())
+                .await
+        ),
+        (404, Some(ProblemType::NotFound)),
+        "PATCH never creates a namespace"
+    );
+    assert_eq!(
+        refused(
+            customer
+                .with_namespace(ns("user_7kP"))
+                .patch_namespace(&ns("bob"), &NamespacePatch::display_name(None))
+                .await
+        ),
+        (404, Some(ProblemType::NotFound))
+    );
+    assert_eq!(
+        refused(
+            reader
+                .patch_namespace(&ns("bob"), &NamespacePatch::display_name(None))
+                .await
+        ),
+        (403, Some(ProblemType::Forbidden))
+    );
+    let worker = server.tenant_key("acme", "worker").await;
+    assert_eq!(
+        refused(worker.namespace_names().await),
+        (403, Some(ProblemType::Forbidden))
+    );
+    customer.delete_namespace(&ns("bob")).await.unwrap();
+    for patch in [
+        NamespacePatch::display_name(Some("Bob".into())),
+        NamespacePatch::default(),
+    ] {
+        assert_eq!(
+            refused(customer.patch_namespace(&ns("bob"), &patch).await),
+            (409, Some(ProblemType::NamespaceDeleting))
+        );
+    }
     server.stop().await;
 }
 

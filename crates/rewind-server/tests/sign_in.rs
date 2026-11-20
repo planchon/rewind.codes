@@ -210,7 +210,7 @@ async fn github_signs_in_through_the_callback_once_its_state_is_checked() {
     }
     assert!(!oauth.value.contains(&state), "sealed");
     let location = callback(&mut browser, &format!("code={code}&state=wrong{state}")).await;
-    assert_eq!(location, "/?auth_error=state_mismatch#/");
+    assert_eq!(location, "/?auth_error=state_mismatch");
     assert!(!browser.cookies.contains_key(OAUTH_COOKIE), "cleared");
     assert_eq!(
         browser.session().await.unwrap_err(),
@@ -223,14 +223,14 @@ async fn github_signs_in_through_the_callback_once_its_state_is_checked() {
         &format!("error=access_denied&error_description=no&state={state}"),
     )
     .await;
-    assert_eq!(location, "/?auth_error=provider_error#/");
+    assert_eq!(location, "/?auth_error=provider_error");
     let state = github(&mut browser, "").await;
     let location = callback(&mut browser, &format!("code=unknown&state={state}")).await;
-    assert_eq!(location, "/?auth_error=sign_in_failed#/");
+    assert_eq!(location, "/?auth_error=sign_in_failed");
 
     let state = github(&mut browser, "").await;
     let location = callback(&mut browser, &format!("code={code}&state={state}")).await;
-    assert_eq!(location, "/#/");
+    assert_eq!(location, "/");
     let signed_in = browser.session().await.unwrap();
     let AuthState::Authenticated { user, .. } = &signed_in else {
         panic!("signed in: {signed_in:?}");
@@ -239,7 +239,7 @@ async fn github_signs_in_through_the_callback_once_its_state_is_checked() {
 
     // A forged callback, in a browser with no GitHub sign-in in progress, changes nothing.
     let location = callback(&mut browser, &format!("code={code}&state={state}")).await;
-    assert_eq!(location, "/?auth_error=state_mismatch#/");
+    assert_eq!(location, "/?auth_error=state_mismatch");
     assert_eq!(browser.session().await.unwrap(), signed_in);
     server.stop().await;
 }

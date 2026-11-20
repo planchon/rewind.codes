@@ -278,6 +278,23 @@ describe("rewind.namespaces", () => {
     expect(server.calls("DELETE", "/v1/namespaces/alice")).toHaveLength(1);
   });
 
+  it("gives an end user a display name, and removes it", async () => {
+    server.on("PATCH", "/v1/namespaces/{name}", (r) => {
+      const { displayName } = r.body as { displayName: string | null };
+      const answer = detail(r.params["name"] ?? "");
+      return json(displayName ? { ...answer, namespace: { ...answer.namespace, displayName } } : answer);
+    });
+
+    const named = await rewind.namespaces.rename("user_2fQ81", "Acme Corp");
+    expect(named.namespace.displayName).toBe("Acme Corp");
+    expect(server.calls("PATCH", "/v1/namespaces/user_2fQ81")[0]?.body).toEqual({ displayName: "Acme Corp" });
+
+    const unnamed = await rewind.namespaces.rename("user_2fQ81", null);
+    expect(unnamed.namespace.displayName).toBeUndefined();
+    expect(server.calls("PATCH", "/v1/namespaces/user_2fQ81")[1]?.body).toEqual({ displayName: null });
+    await expect(rewind.namespaces.rename("a/b", "x")).rejects.toThrow(RewindError);
+  });
+
   it("sets an end user's credentials for a toolset", async () => {
     server.on("PUT", "/v1/namespaces/{name}/toolsets/{id}/credentials", noContent);
     await rewind.namespaces.setCredentials("alice", TOOLSET, {

@@ -39,7 +39,7 @@ use rewind_engine::ports::{
     deferred_timeout_failure,
 };
 use rewind_engine::ports::{
-    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
     NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use sqlx::PgConnection;
@@ -3706,6 +3706,30 @@ impl JournalStore for PostgresStore {
     ) -> Result<Option<Namespace>, StoreError> {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(namespaces::get_namespace(&mut conn, tenant_id, name).await?)
+    }
+
+    async fn set_namespace_display_name(
+        &self,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        display_name: Option<&DisplayName>,
+    ) -> Result<Option<NamespaceWrite>, StoreError> {
+        Ok(retrying(|| async {
+            let mut tx = self.pool.begin().await?;
+            let written =
+                namespaces::set_display_name(&mut tx, tenant_id, name, display_name).await?;
+            tx.commit().await?;
+            Ok::<_, Fail>(written)
+        })
+        .await?)
+    }
+
+    async fn namespace_display_names(
+        &self,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<(NamespaceName, DisplayName)>, StoreError> {
+        let mut conn = self.pool.acquire().await.map_err(Error::from)?;
+        Ok(namespaces::display_names(&mut conn, tenant_id).await?)
     }
 
     async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {

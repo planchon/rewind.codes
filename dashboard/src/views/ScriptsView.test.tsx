@@ -66,7 +66,8 @@ describe("ScriptsView", () => {
     );
     // chen runs the digest agent alone.
     await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
-    expect(screen.getByText(/The sources the runs of/)).toHaveTextContent("chen");
+    // Its display name, for its id.
+    expect(screen.getByText(/The sources the runs of/)).toHaveTextContent("Chen Logistics");
     const runs = within(table).getAllByTitle("Its runs")[0] as HTMLElement;
     expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
       /^script:\S+ namespace:chen$/,

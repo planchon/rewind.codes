@@ -247,7 +247,7 @@ pub(super) async fn authorize(
     let query =
         serde_html_form::to_string([("request", sealed.as_str())]).map_err(ApiError::internal)?;
     Ok(found(&format!(
-        "{}/#/connect/authorize?{query}",
+        "{}/connect/authorize?{query}",
         oauth.dashboard
     )))
 }

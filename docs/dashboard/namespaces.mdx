@@ -17,12 +17,17 @@ with their use against their limits. It needs `namespaces:read`.
   with `namespaces:write`.
 - **Then each end user**, sorted by CPU, runs or scripts of the month, or by name. Each quota is a meter: orange from
   80 %, red at 100 %. A CPU time above its quota shows its share (`160%`): CPU is never refused, only alerted on.
-- **Search** by the start of a name in the query bar, which suggests the names as you type, and **At 80 % or more**
-  keeps those near a limit.
+- **Search** by the start of a name or of a display name (any case) in the query bar, which suggests the names as
+  you type, and **At 80 % or more** keeps those near a limit.
+
+An end user you gave a **display name** shows it in every view: this one, Observability, a run's details, Scripts,
+the filters and the suggestions of the query bar. Hover it to see the namespace's id, which stays what links, the
+query (`namespace:`), tokens and webhooks use.
 
 ## One end user
 
-Open an end user to see their month in detail.
+Open an end user to see their month in detail: how their runs went, what they used against their limits, then their
+runs and their scripts.
 
 <Frame>
   <img src="/images/dashboard/namespace-light.webp" alt="One end user: cumulative CPU against its quota, limits and use, alerts, tokens and exceptions" className="block dark:hidden" />
@@ -31,10 +36,16 @@ Open an end user to see their month in detail.
 
 | Part | Shows |
 | --- | --- |
+| **Figures** | Runs started this month, the share that completed, the failed ones (and the aborted and cancelled), the runs waiting now, the duration p95 and p50. Each opens the runs behind it |
+| **Runs started each day** | The runs of each UTC day of the month, by outcome |
+| **What fails most** | The month's failures grouped by error, the most frequent first |
+| **Tools its runs call** | The tools the month's runs called, with how many runs called each |
 | **Cumulative CPU** | CPU time over the month against the quota, with the days it reached 80 % and 100 % |
 | **Limits and use** | Each limit, the end user's use of it, and whether it is an exception to the defaults |
 | **Alerts** | Every limit crossed this month, and whether the `quota.alert` webhook was sent |
 | **Tokens and exceptions** | The tokens in use, and the exceptions to the defaults |
+| **Runs** | Its runs started this month, the newest first; **Open in Observability** shows them all there |
+| **Scripts** | The scripts its runs ran, the most recently run first; **Open in Scripts** shows them all there |
 
 The arrows next to the month go back in time.
 
@@ -42,10 +53,9 @@ The arrows next to the month go back in time.
 
 | Action | Needs | Does |
 | --- | --- | --- |
-| **See its runs** | `runs:read` | Opens Observability on `namespace:<name>` |
-| **See its scripts** | `runs:read` | Opens Scripts on `namespace:<name>`: the scripts its runs ran |
+| **Rename** | `namespaces:write` | Sets its display name in a dialog; emptied, removes it. Its id never changes |
 | **Edit its limits** | `namespaces:write` | Sets its exceptions in a dialog: more for a paying user, `0` active runs to block someone |
 | **Revoke its tokens** | `tokens:write` | Revokes every token of the end user, signed ones issued before now included |
-| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its name in the dialog to confirm |
+| **Erase** | `namespaces:write` | Erases the end user in the background: tokens, runs, credentials and use. Type its id in the dialog to confirm |
 
 The SDK does the same with [`rewind.namespaces`](/sdk/end-users).

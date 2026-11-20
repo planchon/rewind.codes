@@ -191,9 +191,15 @@ export function ConfirmButton({
   disabled = false,
   pending = false,
   title,
+  icon,
+  small = true,
 }: {
   /** The button's label, and the dialog's red button's: `Revoke`, `Delete`. */
   children: string;
+  /** Before the label, as the actions of a page's header have one. */
+  icon?: ReactNode;
+  /** A small button, in a row; a page's header has the regular size of its other actions. */
+  small?: boolean;
   /** The question, such as `Revoke the key ci?`. */
   confirm: string;
   /** What happens, and what remains. */
@@ -216,11 +222,12 @@ export function ConfirmButton({
     <>
       <button
         type="button"
-        className="btn small"
+        className={small ? "btn small" : "btn"}
         disabled={disabled || pending}
         title={title}
         onClick={() => setAsking(true)}
       >
+        {icon}
         {children}
       </button>
       <ConfirmDialog

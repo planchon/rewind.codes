@@ -440,7 +440,7 @@ single-page application, served by `rewind-server`.
 | Scripts | Every distinct script (content-addressed, so deduplicated), with run counts, outcomes and tools used, searched with the runs' query bar (`@key:value`, `tool:`, `namespace:`); a script's page shows the suites of the workflow versions it is the script of |
 | Testing | Its own sidebar: the workflows, the suite of the version shown (each test a click away, its origin as a glyph) and the version's details. A workflow opens at one version, switched in the breadcrumb (the latest by default): its interface and its [suite](#suites-and-the-gate) as a table, each test with its origin (inherited, added, recorded, updated, retired, with the reasons), its input, what it expects, the calls it checks and its world. Each test has its own page, switched in the breadcrumb or with previous/next: its input and expected output, its world, signals and expectations; every JSON value opens whole, colored, in a dialog, its objects and arrays folding. No test result is shown: every test of a suite passed when its version was saved |
 | Tools | Latency, error rate and retries, per tool and per toolset, searched with the runs' query bar (a tool's name, `tool:`, `toolset:`) |
-| Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search by the start of a name with the runs' query bar, and a filter of those above 80 %. A namespace's page: its cumulative CPU against its quota over the month, its alerts, its tokens in use, its exceptions, and the actions its permissions allow (change its limits, revoke its tokens, delete it) |
+| Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search by the start of a name or of a display name with the runs' query bar, and a filter of those above 80 %. A namespace's page, over a month: how its runs went (started, completed, failed, waiting now, durations, the runs of each day by outcome, what fails most, the tools they call), its cumulative CPU against its quota, its alerts, its tokens in use, its exceptions, then its runs of the month and the scripts its runs ran; and the actions its permissions allow (rename it, change its limits, revoke its tokens, delete it) |
 | Organization | Opened from the member's menu: the members and their grants, the invitations, the roles and their permissions, the API keys, the settings; each part shown to whoever holds its permission |
 
 - **One sidebar.** The organization picker and a search of runs and views sit at its top. Below,
@@ -462,6 +462,8 @@ single-page application, served by `rewind-server`.
   searches are kept in the browser.
 - **Namespaces.** No namespace is picked in the dashboard: it reads every namespace of the
   organization. A run's namespace is a column, a filter and the term `namespace:` of the query.
+  Wherever a namespace is shown, its [display name](06-storage-and-scale.md#namespaces) stands for
+  it when it has one, and its id shows on hover; links and the query keep the id.
 - **Signing in.** Members sign in with GitHub or a code by email, on the dashboard's pages, and
   pick an organization; someone without one creates it or accepts an invitation. A server
   without WorkOS asks for an API key ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)).

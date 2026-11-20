@@ -3,7 +3,8 @@
 // organization: the filter of the run views (`?ns=`) does not narrow them. A write invalidates
 // everything under `NAMESPACES`.
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useAccess } from "../app/access";
 import { useApi } from "../app/session";
 import type { ListNamespacesQuery } from "./types";
 
@@ -35,6 +36,26 @@ export function useNamespaceSuggestions(prefix: string | null, limit = 8) {
     staleTime: 30_000,
     placeholderData: keepPreviousData,
   });
+}
+
+/**
+ * The display names the organization gave its namespaces, by id: read once for every view, for
+ * whoever reads the namespaces (the others see the ids). Empty while loading.
+ */
+export function useNamespaceNames(): ReadonlyMap<string, string> {
+  const api = useApi();
+  const access = useAccess();
+  const names = useQuery({
+    queryKey: [...NAMESPACES, "names"],
+    queryFn: ({ signal }) => api.namespaceNames(signal),
+    enabled: access.can("namespaces:read"),
+    staleTime: 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+  return useMemo(
+    () => new Map((names.data?.namespaces ?? []).map((n) => [n.name, n.displayName])),
+    [names.data],
+  );
 }
 
 /** The default limits, the organization's ceiling and its use of the month. */

@@ -38,7 +38,7 @@ pub use workflows::{
 use super::checker::ToolDeclarations;
 use super::executor::CompiledScript;
 use super::namespaces::{
-    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
     NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use super::tenancy::{RunRef, Tenant, TenantId, TenantScope};
@@ -746,6 +746,21 @@ pub trait JournalStore: Send + Sync {
         tenant: &TenantId,
         name: &NamespaceName,
     ) -> impl Future<Output = Result<Option<Namespace>, StoreError>> + Send;
+
+    /// Sets the namespace's display name, or removes it (`None`). Never creates the namespace:
+    /// `None` when it does not exist. A namespace being erased is left as it is (`Deleting`).
+    fn set_namespace_display_name(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        display_name: Option<&DisplayName>,
+    ) -> impl Future<Output = Result<Option<NamespaceWrite>, StoreError>> + Send;
+
+    /// The tenant's namespaces that have a display name, with it, by name.
+    fn namespace_display_names(
+        &self,
+        tenant: &TenantId,
+    ) -> impl Future<Output = Result<Vec<(NamespaceName, DisplayName)>, StoreError>> + Send;
 
     /// The tenant's namespaces matching the filter, each with its limits (its exceptions over
     /// the tenant's defaults) and its use of `filter.month`, without days. Ordered by the use of

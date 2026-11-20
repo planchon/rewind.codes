@@ -5,7 +5,8 @@
 //! migration (version 2 moved access to grants and roles; version 3 added the workflows, the
 //! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
 //! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
-//! workflow versions; version 7 people's connections and the OAuth clients and codes).
+//! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
+//! the namespaces' display names).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -60,13 +61,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -726,6 +727,12 @@ CREATE INDEX connection_tokens_by_connection ON connection_tokens (connection_id
 CREATE INDEX connection_tokens_by_expiry ON connection_tokens (expires_at);
 "#;
 
+/// A namespace's display name (`archi/06-storage-and-scale.md`, "Namespaces"): the customer's
+/// label for the end user. A listing's prefix matches it case aside in the store's code.
+const V8: &str = r#"
+ALTER TABLE namespaces ADD COLUMN display_name TEXT;
+"#;
+
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.
 pub(crate) async fn migrate(connection: &Connection) -> Result<(), Error> {
     migrate_to(connection, SCHEMA_VERSION).await
@@ -1039,6 +1046,10 @@ mod tests {
         assert_eq!(
             (namespace.created_at, namespace.last_active_at),
             (T0, at(86_400))
+        );
+        assert_eq!(
+            namespace.display_name, None,
+            "version 8 adds no display name"
         );
         assert!(
             store

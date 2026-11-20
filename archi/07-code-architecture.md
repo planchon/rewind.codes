@@ -154,7 +154,9 @@ runs_to_archive(now, limit)        archive_run(run, document, now)
 runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
 put_namespace(tenant, name, exceptions, now) / get_namespace(tenant, name)
-list_namespaces(NamespaceFilter { tenant, prefix, above, order, month, after, limit }) -> { [NamespaceUsage], total }
+set_namespace_display_name(tenant, name, display_name?) -> Written(Namespace) | Deleting | none
+namespace_display_names(tenant) -> [(name, display_name)]
+list_namespaces(NamespaceFilter { tenant, name, prefix, above, order, month, after, limit }) -> { [NamespaceUsage], total }
 namespace_usage(tenant, Namespace(name) | Tenant, month) -> Usage { cpu, runs_started, active_runs, scripts, days }
 revoke_namespace_tokens(tenant, name, now)    namespace_has_script(tenant, name, digest)
 delete_namespace(tenant, name, now) -> Started | NotFound    namespaces_to_erase(limit)
@@ -632,12 +634,14 @@ Conventions:
 | | `GET /v1/api-keys` | `api_keys:read` | The tenant's keys, without their secret, each with its grant |
 | | `POST /v1/api-keys` | `api_keys:write` | Creates a key with a name, a role and allowed labels; an operator may name another tenant. The secret is only in this answer |
 | | `DELETE /v1/api-keys/{id}` | `api_keys:write` | Revokes a key |
-| Namespaces | `GET /v1/namespaces` | `namespaces:read` | The namespaces, paged: `prefix`, `above` (a share of a limit, `0.8`), `order` (`cpu`, `runs`, `scripts`, `name`); each with its limits, its exceptions and its use this month; how many match across the pages (`total`) |
-|  | `GET /v1/namespaces/{name}` | `namespaces:read` | One namespace: its limits and exceptions, its use per day over a `month`, its alerts, its tokens in use |
+| Namespaces | `GET /v1/namespaces` | `namespaces:read` | The namespaces, paged: `prefix` (of the name, or of the display name case aside), `above` (a share of a limit, `0.8`), `order` (`cpu`, `runs`, `scripts`, `name`); each with its display name, its limits, its exceptions and its use this month; how many match across the pages (`total`) |
+|  | `GET /v1/namespaces/{name}` | `namespaces:read` | One namespace: its display name, its limits and exceptions, its use per day over a `month`, its alerts, its tokens in use |
 |  | `PUT /v1/namespaces/{name}` | `namespaces:write` | Creates the namespace, or sets its exceptions; `null` gives a quota back to the default |
+|  | `PATCH /v1/namespaces/{name}` | `namespaces:write` | A JSON merge patch of an existing namespace (404 otherwise): `displayName` sets its display name, `null` or `""` removes it. Answers as `PUT` |
 |  | `DELETE /v1/namespaces/{name}` | `namespaces:write` | Erases the end user in the background (202): tokens, runs, credentials, usage |
 |  | `GET /v1/organization/namespace-defaults` | `namespaces:read` | The default limits of every namespace, and the tenant's ceiling |
 |  | `PUT /v1/organization/namespace-defaults` | `namespaces:write` | Sets the default limits |
+|  | `GET /v1/organization/namespace-names` | `namespaces:read` | Every namespace that has a display name, with it, by name; not paged: what the dashboard loads once to show display names |
 |  | `GET /v1/organization/quota-alerts` | `namespaces:read` | The alerts of a `month`, of one `namespace` or of all |
 | Tokens | `POST /v1/namespaces/{name}/tokens` | `tokens:write` | Mints an end user's opaque token: `ttl`, `permissions`, `labels`; creates the namespace if needed. The secret is only in this answer |
 |  | `DELETE /v1/namespaces/{name}/tokens` | `tokens:write` | Revokes the namespace's opaque tokens and the signed ones issued before now |
@@ -659,7 +663,7 @@ described in the OpenAPI document like `/v1`.
 | --- | --- |
 | `GET /auth/config` | The sign-in methods (`github`, `magic_auth`) and whether sign-ups go through the waitlist; 404 without WorkOS, and the dashboard asks for an API key |
 | `GET /auth/github` | Redirects to WorkOS for GitHub, with a random `state` and the `invitation_token` of the page, both kept in the cookie `rewind_oauth` (5 minutes) |
-| `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/#/`); when the sign-in did not go through, to `/?auth_error=<code>#/` (`state_mismatch`, `provider_error`, `sign_in_failed`), never with a token or WorkOS's message |
+| `GET /auth/callback` | Checks `state`, exchanges the code, keeps the outcome in `rewind_session`, redirects to the dashboard (`/`); when the sign-in did not go through, to `/?auth_error=<code>` (`state_mismatch`, `provider_error`, `sign_in_failed`), never with a token or WorkOS's message |
 | `POST /auth/magic-auth` | Sends the 6-digit code to an email. While sign-ups are closed, an email without an account gets none: the answer is `sign_up_closed`, and the person may join the waitlist |
 | `POST /auth/magic-auth/verify` | Checks the code |
 | `POST /auth/email-verification` | The code WorkOS sends when it requires the email to be verified |
@@ -747,7 +751,7 @@ The flow:
    port (Claude Code's). Any other fault goes back to the client with `error` and `state`
    (`invalid_request`, `unsupported_response_type`, `invalid_target` for a `resource` other
    than `{public-url}/mcp`). A valid request is sealed, as `/auth`'s cookies are, for 10
-   minutes, and the browser sent to `{dashboard}/#/connect/authorize?request=…`, the dashboard
+   minutes, and the browser sent to `{dashboard}/connect/authorize?request=…`, the dashboard
    being the origin of `WORKOS_REDIRECT_URI`.
 4. **The consent.** The page reads the request (`GET /v1/oauth/consent`): the client's name and
    site, the host it returns to, with a warning for a loopback one, and the person's
@@ -875,7 +879,7 @@ Commands:
 | `rewind status <run> [--wait 30s]` | A run's state, waiting up to `--wait` for it to end |
 | `rewind export <run> [--as journal\|cassette] [-o file]` | The run's journal document, or a cassette of its calls and signals |
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
-| `rewind namespaces list\|show\|quotas\|delete` | The namespaces and their use; one namespace; sets its exceptions, or the defaults with `--defaults`; erases one |
+| `rewind namespaces list\|show\|rename\|quotas\|delete` | The namespaces and their use; one namespace; sets its display name, or removes it; sets its exceptions, or the defaults with `--defaults`; erases one |
 | `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
 | `rewind mcp` | Serves the agent tools over MCP on stdin and stdout, against the embedded server: to debug them with an MCP client (the MCP Inspector, Claude Code on this machine). Never a remote server |
 
@@ -910,10 +914,10 @@ Its build is what `rewind-server` serves:
 | --- | --- |
 | Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
-| Serving | Static files under any path prefix. Every path in the build is relative and the routes live in the URL fragment (`#/runs/…`), so no fallback route is needed. `index.html` is not cached; `assets/` is immutable |
+| Serving | At the root of its origin. The routes are paths (`/runs/…`): the server, and Vercel for the hosted dashboard, answer `index.html` for any path that is neither a file of the build nor under a root of the API (`/v1`, `/auth`, `/oauth`, `/.well-known`, `/mcp`, `/hooks`, `/assets`); the server answers 404 for a missing file name at the root (`/favicon.ico`). An old link with a fragment (`/#/runs/…`) is rewritten by the app at load. `index.html` is not cached; `assets/` is immutable |
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist, which someone new also opens from the first page. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read` |
-| Claude | Connect Claude (`#/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`#/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
+| Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |

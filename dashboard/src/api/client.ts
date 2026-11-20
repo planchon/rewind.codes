@@ -23,6 +23,8 @@ import type {
   NamespaceDefaults,
   NamespaceDetail,
   NamespaceList,
+  NamespaceNames,
+  NamespacePatch,
   Organization,
   OrganizationSettings,
   PermissionInfo,
@@ -536,6 +538,18 @@ export class Api {
     return this.unwrap(
       await this.client.PUT("/v1/namespaces/{name}", { params: { path: { name } }, body }),
     );
+  }
+
+  /** Sets or removes the namespace's display name (`null` or `""`); never creates one. */
+  async patchNamespace(name: string, body: NamespacePatch): Promise<NamespaceDetail> {
+    return this.unwrap(
+      await this.client.PATCH("/v1/namespaces/{name}", { params: { path: { name } }, body }),
+    );
+  }
+
+  /** The namespaces that have a display name, by name: what every view shows for an id. */
+  async namespaceNames(signal?: AbortSignal): Promise<NamespaceNames> {
+    return this.unwrap(await this.client.GET("/v1/organization/namespace-names", { signal }));
   }
 
   /** Erases the end user in the background: its tokens, runs, credentials and use. */

@@ -2,7 +2,7 @@ import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@ta
 import { Lock } from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import {
-  createHashRouter,
+  createBrowserRouter,
   Navigate,
   Outlet,
   type RouteObject,
@@ -22,7 +22,7 @@ import { useAccess } from "./access";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
-import { restoreRoute } from "./pendingRoute";
+import { adoptHashRoute, restoreRoute } from "./pendingRoute";
 import { SessionProvider, type SessionProviderProps, useSession } from "./session";
 import { SettingsProvider } from "./settings";
 
@@ -79,7 +79,7 @@ function ToolStats() {
 }
 
 /**
- * A link of an earlier version: `#/runs`, `#/waiting` and `#/failures` open Observability with their
+ * A link of an earlier version: `/runs`, `/waiting` and `/failures` open Observability with their
  * query, and the namespace filter they named (`?ns=bob`) becomes the term `namespace:bob`.
  */
 function Moved({ to }: { to: string }) {
@@ -301,9 +301,11 @@ export function Providers({
 
 export function App() {
   const [router] = useState(() => {
-    // Back from GitHub on `/#/`: the address the sign-in started from.
+    // A link of an earlier version, its route in the fragment; then, back from GitHub on `/`,
+    // the address the sign-in started from.
+    adoptHashRoute();
     restoreRoute();
-    return createHashRouter(routes);
+    return createBrowserRouter(routes);
   });
   return (
     <Providers>

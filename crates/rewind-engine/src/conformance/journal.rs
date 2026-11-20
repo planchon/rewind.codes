@@ -26,9 +26,9 @@ use crate::ports::{
     Watched, WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
-    Day, DeleteNamespace, DropNamespace, Month, NamespaceCursor, NamespaceFilter, NamespaceName,
-    NamespaceOrder, NamespaceWrite, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas,
-    Threshold, UsageDelta, UsageOf,
+    Day, DeleteNamespace, DisplayName, DropNamespace, Month, NamespaceCursor, NamespaceFilter,
+    NamespaceName, NamespaceOrder, NamespaceWrite, QuotaAlertKey, QuotaExceeded, QuotaKind,
+    QuotaScope, Quotas, Threshold, UsageDelta, UsageOf,
 };
 
 const LEASE: Duration = Duration::from_secs(30);
@@ -270,6 +270,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         quota_alerts_are_claimed_and_acknowledged
     );
     check!("journal", new_store(), namespaces_are_listed_by_their_use);
+    check!(
+        "journal",
+        new_store(),
+        namespaces_have_display_names_found_by_prefix
+    );
     check!(
         "journal",
         new_store(),
@@ -4359,6 +4364,7 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
     }
     let filter = |order, prefix: Option<&str>, above, after, limit| NamespaceFilter {
         tenant: acme(),
+        name: None,
         prefix: prefix.map(str::to_owned),
         above_percent: above,
         order,
@@ -4432,6 +4438,178 @@ pub async fn namespaces_are_listed_by_their_use<S: JournalStore>(store: &S) {
         .await
         .expect("list_namespaces");
     assert_eq!(none, crate::ports::NamespacePage::default());
+}
+
+pub async fn namespaces_have_display_names_found_by_prefix<S: JournalStore>(store: &S) {
+    let display = |text: &str| DisplayName::new(text).expect("the suites use valid display names");
+    let set = |name: NamespaceName, text: Option<&str>| {
+        let display_name = text.map(display);
+        async move {
+            store
+                .set_namespace_display_name(&acme(), &name, display_name.as_ref())
+                .await
+                .expect("set_namespace_display_name")
+        }
+    };
+    assert_eq!(
+        set(alice(), Some("Acme Corp")).await,
+        None,
+        "a display name never creates its namespace"
+    );
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &alice())
+            .await
+            .expect("get_namespace"),
+        None
+    );
+    for name in [alice(), bob(), namespace("carol"), namespace("dave")] {
+        store
+            .put_namespace(&acme(), &name, None, T0)
+            .await
+            .expect("put_namespace");
+    }
+    store
+        .put_namespace(&tenant("other"), &namespace("erin"), None, T0)
+        .await
+        .expect("put_namespace");
+    let Some(NamespaceWrite::Written(written)) = set(alice(), Some("Acme Corp")).await else {
+        panic!("alice exists");
+    };
+    assert_eq!(written.display_name, Some(display("Acme Corp")));
+    assert_eq!((written.name, written.created_at), (alice(), T0));
+    set(bob(), Some("Élodie Martin")).await;
+    set(namespace("carol"), Some("acme labs")).await;
+    store
+        .set_namespace_display_name(
+            &tenant("other"),
+            &namespace("erin"),
+            Some(&display("Acme Other")),
+        )
+        .await
+        .expect("set_namespace_display_name");
+    let exceptions = Quotas {
+        active_runs: Some(3),
+        ..Quotas::default()
+    };
+    let NamespaceWrite::Written(kept) = store
+        .put_namespace(&acme(), &alice(), Some(&exceptions), later(T0, 1))
+        .await
+        .expect("put_namespace")
+    else {
+        panic!("alice is not being erased");
+    };
+    assert_eq!(
+        kept.display_name,
+        Some(display("Acme Corp")),
+        "setting exceptions keeps the display name"
+    );
+    assert_eq!(
+        store
+            .get_namespace(&acme(), &bob())
+            .await
+            .expect("get_namespace")
+            .expect("bob")
+            .display_name,
+        Some(display("Élodie Martin"))
+    );
+    assert_eq!(
+        store
+            .namespace_display_names(&acme())
+            .await
+            .expect("namespace_display_names"),
+        [
+            (alice(), display("Acme Corp")),
+            (bob(), display("Élodie Martin")),
+            (namespace("carol"), display("acme labs")),
+        ],
+        "the tenant's own, by name, those with a display name only"
+    );
+
+    let listed = |name: Option<NamespaceName>, prefix: &str| {
+        let filter = NamespaceFilter {
+            tenant: acme(),
+            name,
+            prefix: Some(prefix.to_owned()),
+            above_percent: None,
+            order: NamespaceOrder::Name,
+            month: Month::of(T0),
+            after: None,
+            limit: 10,
+        };
+        async move {
+            let page = store
+                .list_namespaces(&filter)
+                .await
+                .expect("list_namespaces");
+            let names: Vec<String> = page
+                .namespaces
+                .iter()
+                .map(|listed| listed.namespace.name.to_string())
+                .collect();
+            (names, page.total)
+        }
+    };
+    assert_eq!(
+        listed(None, "ACME").await,
+        (vec!["alice".to_owned(), "carol".to_owned()], 2),
+        "a display name matches its prefix case aside"
+    );
+    assert_eq!(listed(None, "acme c").await, (vec!["alice".to_owned()], 1));
+    assert_eq!(listed(None, "élo").await, (vec!["bob".to_owned()], 1));
+    assert_eq!(
+        listed(None, "Ca").await,
+        (Vec::new(), 0),
+        "a name matches its prefix case-sensitively"
+    );
+    assert_eq!(
+        listed(None, "d").await,
+        (vec!["dave".to_owned()], 1),
+        "a namespace without a display name matches by name"
+    );
+    assert_eq!(listed(None, "corp").await, (Vec::new(), 0));
+    assert_eq!(
+        listed(Some(bob()), "ÉLODIE").await,
+        (vec!["bob".to_owned()], 1)
+    );
+    assert_eq!(
+        listed(Some(bob()), "acme").await,
+        (Vec::new(), 0),
+        "the name filter and the prefix both apply"
+    );
+
+    let Some(NamespaceWrite::Written(cleared)) = set(alice(), None).await else {
+        panic!("alice exists");
+    };
+    assert_eq!(cleared.display_name, None);
+    assert_eq!(cleared.exceptions, exceptions);
+    assert_eq!(listed(None, "acme").await, (vec!["carol".to_owned()], 1));
+    store
+        .delete_namespace(&acme(), &namespace("carol"), later(T0, 2))
+        .await
+        .expect("delete_namespace");
+    assert_eq!(
+        set(namespace("carol"), Some("Renamed")).await,
+        Some(NamespaceWrite::Deleting)
+    );
+    assert_eq!(
+        store
+            .namespace_display_names(&acme())
+            .await
+            .expect("namespace_display_names"),
+        [
+            (bob(), display("Élodie Martin")),
+            (namespace("carol"), display("acme labs")),
+        ],
+        "a namespace being erased keeps its display name until it is dropped"
+    );
+    assert_eq!(
+        store
+            .namespace_display_names(&tenant("other"))
+            .await
+            .expect("namespace_display_names"),
+        [(namespace("erin"), display("Acme Other"))]
+    );
 }
 
 pub async fn an_erased_namespace_takes_no_run_and_is_dropped_once_empty<S: JournalStore>(

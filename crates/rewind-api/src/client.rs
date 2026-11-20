@@ -24,9 +24,9 @@ use crate::events::{Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
 use crate::namespaces::{
     CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
-    NamespaceListQuery, NamespaceName, NamespaceQuery, PutCeiling, PutNamespace,
-    PutNamespaceDefaults, QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token, TokenKey,
-    TokenKeyList,
+    NamespaceListQuery, NamespaceName, NamespaceNames, NamespacePatch, NamespaceQuery, PutCeiling,
+    PutNamespace, PutNamespaceDefaults, QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token,
+    TokenKey, TokenKeyList,
 };
 use crate::organization::{
     CreateInvitation, CreateOrganization, Identity, Invitation, InvitationList, MemberList,
@@ -753,6 +753,18 @@ impl Client {
         self.json(request).await
     }
 
+    /// `PATCH /v1/namespaces/{name}`: changes what the patch holds of an existing namespace.
+    pub async fn patch_namespace(
+        &self,
+        name: &NamespaceName,
+        patch: &NamespacePatch,
+    ) -> Result<NamespaceDetail, Error> {
+        let request = self
+            .request(Method::PATCH, routes::NAMESPACE, &[name.as_str()])?
+            .json(patch);
+        self.json(request).await
+    }
+
     /// `DELETE /v1/namespaces/{name}`: the erasure goes on in the background.
     pub async fn delete_namespace(&self, name: &NamespaceName) -> Result<(), Error> {
         let request = self.request(Method::DELETE, routes::NAMESPACE, &[name.as_str()])?;
@@ -793,6 +805,13 @@ impl Client {
         let request = self
             .request(Method::PUT, routes::NAMESPACE_DEFAULTS, &[])?
             .json(defaults);
+        self.json(request).await
+    }
+
+    /// `GET /v1/organization/namespace-names`: the display names of the organization's
+    /// namespaces.
+    pub async fn namespace_names(&self) -> Result<NamespaceNames, Error> {
+        let request = self.request(Method::GET, routes::NAMESPACE_NAMES, &[])?;
         self.json(request).await
     }
 

@@ -2944,6 +2944,13 @@
               "null"
             ]
           },
+          "displayName": {
+            "description": "The customer's label for the end user, shown beside the name, which stays its key.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "exceptions": {
             "$ref": "#/components/schemas/Quotas",
             "description": "The namespace's exceptions to the defaults."
@@ -3050,6 +3057,23 @@
         ],
         "type": "object"
       },
+      "NamespaceDisplayName": {
+        "description": "A namespace's display name.",
+        "properties": {
+          "displayName": {
+            "example": "Acme Corp",
+            "type": "string"
+          },
+          "name": {
+            "$ref": "#/components/schemas/NamespaceName"
+          }
+        },
+        "required": [
+          "name",
+          "displayName"
+        ],
+        "type": "object"
+      },
       "NamespaceList": {
         "description": "`GET /v1/namespaces`: a page of namespaces.",
         "properties": {
@@ -3089,6 +3113,36 @@
         "example": "user_2fQ81",
         "pattern": "^[A-Za-z0-9._:@-]{1,128}$",
         "type": "string"
+      },
+      "NamespaceNames": {
+        "description": "`GET /v1/organization/namespace-names`: every namespace of the organization that has a\ndisplay name, by name. Not paged.",
+        "properties": {
+          "namespaces": {
+            "items": {
+              "$ref": "#/components/schemas/NamespaceDisplayName"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespaces"
+        ],
+        "type": "object"
+      },
+      "NamespacePatch": {
+        "additionalProperties": false,
+        "description": "`PATCH /v1/namespaces/{name}`: a JSON merge patch (RFC 7396) of the namespace, which must\nexist. What is absent stays.",
+        "properties": {
+          "displayName": {
+            "description": "The customer's label for the end user (`Acme Corp`), shown beside the name, which stays\nits key everywhere. Trimmed; at most 128 characters, none of them a control character;\nnot unique. `null` or `\"\"` removes it.",
+            "example": "Acme Corp",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
       },
       "OAuthError": {
         "description": "An OAuth error (RFC 6749, section 5.2; RFC 7591, section 3.2.2), answered as\n`application/json` with `Cache-Control: no-store`.",
@@ -7634,10 +7688,10 @@
         ],
         "responses": {
           "302": {
-            "description": "To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through.",
+            "description": "To the dashboard: `/`, or `/?auth_error=<code>` when the sign-in did not go through.",
             "headers": {
               "Location": {
-                "description": "`/#/`, or `/?auth_error=<code>#/`.",
+                "description": "`/`, or `/?auth_error=<code>`.",
                 "schema": {
                   "type": "string"
                 }
@@ -8602,7 +8656,7 @@
             "description": "To the consent page, or back to the client with an error.",
             "headers": {
               "Location": {
-                "description": "`{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`.",
+                "description": "`{dashboard}/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`.",
                 "schema": {
                   "type": "string"
                 }
@@ -9707,7 +9761,7 @@
         "operationId": "listNamespaces",
         "parameters": [
           {
-            "description": "Names starting with this.",
+            "description": "Names starting with this, or display names starting with it case aside.",
             "in": "query",
             "name": "prefix",
             "required": false,
@@ -10046,6 +10100,126 @@
           }
         },
         "summary": "Read a namespace",
+        "tags": [
+          "namespaces"
+        ]
+      },
+      "patch": {
+        "description": "A JSON merge patch of an existing namespace: `displayName` sets the label shown beside its\nname, which stays its key; `null` or `\"\"` removes it; what is absent stays. Never creates\nthe namespace. Requires `namespaces:write`.",
+        "operationId": "patchNamespace",
+        "parameters": [
+          {
+            "description": "The namespace.",
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NamespacePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceDetail"
+                }
+              }
+            },
+            "description": "The namespace as it now is."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such namespace."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The namespace is being erased (`namespace-deleting`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Change a namespace",
         "tags": [
           "namespaces"
         ]
@@ -11900,6 +12074,89 @@
           }
         },
         "summary": "Set the default limits",
+        "tags": [
+          "namespaces"
+        ]
+      }
+    },
+    "/v1/organization/namespace-names": {
+      "get": {
+        "description": "Every namespace of the organization that has a display name, with it, by name: what a\nclient loads once to show the display names beside the names. Not paged. Requires\n`namespaces:read`.",
+        "operationId": "listNamespaceNames",
+        "parameters": [
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamespaceNames"
+                }
+              }
+            },
+            "description": "The display names."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "List the display names",
         "tags": [
           "namespaces"
         ]

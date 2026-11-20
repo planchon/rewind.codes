@@ -21,8 +21,8 @@ Every key starts with the tenant, and what belongs to an end user names its name
 
 ```
 tenants    (id PK, data_key, quotas, namespace_defaults, retention)   -- data_key encrypted by the master key
-namespaces (tenant, name, quotas, tokens_revoked_before, created_at, last_active_at, deleting_since)
-                                                           PK (tenant, name)
+namespaces (tenant, name, display_name, quotas, tokens_revoked_before, created_at, last_active_at,
+            deleting_since)                                PK (tenant, name)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
 tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created_by, created_at,
             revoked_at)                                    index (tenant, namespace)
@@ -247,6 +247,12 @@ Bob's, whatever script its model writes.
   and `@`, case-sensitive. `*` is not a name: it stands for the tenant in `usage` and
   `quota_alerts`. A namespace's name appears in webhooks, the dashboard and the service's logs,
   so an opaque id is better than an email.
+- **Display name.** The customer's label for the end user (`Acme Corp`), optional, set and
+  removed with `PATCH /v1/namespaces/{name}`. Trimmed; at most 128 characters, none of them a
+  control character; not unique. The dashboard, the CLI and the agent tools show it beside the
+  name wherever it is set, and `GET /v1/namespaces?prefix=` finds a namespace by its start, case
+  aside. The name stays the key everywhere: paths, `namespace:` in queries, `Rewind-Namespace`,
+  tokens and webhooks.
 - **Created at first use**: when a token is minted for it, when a signed token naming it is first
   used, or when a run is created in it, with the tenant's default limits. `PUT
   /v1/namespaces/{name}` creates it ahead, or sets its exceptions.

@@ -12,6 +12,7 @@ import type { Expectations, Test, TestSignal, TestWorld, Workflow } from "../../
 import { Digest, ProblemView, RunId, Time } from "../../components/bits";
 import { CodeView } from "../../components/CodeView";
 import { JsonCard, JsonDialog, JsonPeek } from "../../components/JsonPeek";
+import { NamespaceName } from "../../components/NamespaceName";
 import { StatusBadge } from "../../components/Status";
 import {
   expectedTimes,
@@ -314,7 +315,7 @@ function Run({ test, versions }: { test: Test; versions: readonly Workflow[] }) 
                 <RunId id={origin.run} />
               </Link>{" "}
               <span className="dim">of the namespace</span>{" "}
-              <span className="mono">{origin.namespace}</span>
+              <NamespaceName name={origin.namespace} />
               <span className="dim">, which ran</span>{" "}
               {version ? (
                 <Link className="mono" to={workflowPath(version.name, version.version)}>

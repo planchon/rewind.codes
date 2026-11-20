@@ -2,11 +2,13 @@
 // outcome, the tools it called and the labels it ran with. Searched with the query bar of the
 // runs, which reads labels and one tool here, what `GET /v1/scripts` filters by, and one
 // namespace, sent as `Rewind-Namespace`: the scripts of one end user, counted over their runs.
+import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
 import { useRunStats, useScripts } from "../api/queries";
-import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../api/types";
+import { RUN_STATUSES, type RunCounts, type ScriptPage, type ScriptSummary } from "../api/types";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
+import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
@@ -152,6 +154,70 @@ function ScriptRow({
 }
 
 /**
+ * The table of scripts, shared by Scripts and a namespace's page: each script's runs by outcome,
+ * its tools, its labels, when it last ran. `scope` is the term its links to the runs add.
+ */
+export function ScriptTable({
+  query,
+  scope,
+  onPickLabel,
+  onPickTool,
+  empty = "No script matches this search.",
+}: {
+  query: UseInfiniteQueryResult<InfiniteData<ScriptPage>>;
+  scope: string;
+  onPickLabel: (pair: string) => void;
+  onPickTool: (tool: string) => void;
+  empty?: string;
+}) {
+  if (query.isPending) return <Loading>Loading scripts…</Loading>;
+  if (query.isError)
+    return <ProblemView error={query.error} title="The scripts could not be read" />;
+  const list = query.data.pages.flatMap((p) => p.scripts);
+  return (
+    <div className="table-wrap">
+      <table className="grid">
+        <thead>
+          <tr>
+            <th>Script</th>
+            <th className="right">Runs</th>
+            <th>Outcomes</th>
+            <th>Tools</th>
+            <th>Labels</th>
+            <th>Last run</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((s) => (
+            <ScriptRow
+              key={s.digest}
+              script={s}
+              scope={scope}
+              onPickLabel={onPickLabel}
+              onPickTool={onPickTool}
+            />
+          ))}
+        </tbody>
+      </table>
+      {list.length === 0 && <Empty>{empty}</Empty>}
+      {query.hasNextPage && (
+        <div className="list-foot">
+          <span className="num">{formatCount(list.length)} scripts shown</span>
+          <button
+            type="button"
+            className="btn small"
+            disabled={query.isFetchingNextPage}
+            onClick={() => void query.fetchNextPage()}
+          >
+            {query.isFetchingNextPage ? "Loading…" : "Load more"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * What the bar suggests: the namespaces, labels and tools of the last 30 days' runs, and the
  * namespaces whose name starts with what is typed.
  */
@@ -184,15 +250,14 @@ export function ScriptsView() {
   const addTerm = (term: string) => setQ(withTerm(q, term));
   const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
 
-  const list = scripts.data?.pages.flatMap((p) => p.scripts) ?? [];
   return (
     <div className="page">
       <PageHeader title="Scripts" />
       <p className="page-intro">
         {search.namespace ? (
           <>
-            The sources the runs of <span className="mono">{search.namespace}</span> executed, the
-            most recently run first; their runs are that end user's.
+            The sources the runs of <NamespaceName name={search.namespace} /> executed, the most
+            recently run first; their runs are that end user's.
           </>
         ) : (
           "Every distinct source executed, the most recently run first."
@@ -210,62 +275,25 @@ export function ScriptsView() {
       />
       {search.fault ? (
         <Empty>Fix the query to see the scripts: the term at fault is underlined above.</Empty>
-      ) : scripts.isPending ? (
-        <Loading>Loading scripts…</Loading>
-      ) : scripts.isError ? (
-        <ProblemView error={scripts.error} title="The scripts could not be read" />
       ) : (
-        <div className="table-wrap">
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>Script</th>
-                <th className="right">Runs</th>
-                <th>Outcomes</th>
-                <th>Tools</th>
-                <th>Labels</th>
-                <th>Last run</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((s) => (
-                <ScriptRow
-                  key={s.digest}
-                  script={s}
-                  scope={scope}
-                  onPickLabel={(pair) => {
-                    const at = pair.indexOf(":");
-                    addTerm(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
-                  }}
-                  onPickTool={(tool) =>
-                    setQ(
-                      joinQuery(
-                        ...splitTerms(q)
-                          .filter((t) => !(t.kind === "field" && t.field === "tool"))
-                          .map((t) => t.raw),
-                        fieldTerm("tool", tool),
-                      ),
-                    )
-                  }
-                />
-              ))}
-            </tbody>
-          </table>
-          {list.length === 0 && <Empty>No script matches this search.</Empty>}
-          {scripts.hasNextPage && (
-            <div className="list-foot">
-              <span className="num">{formatCount(list.length)} scripts shown</span>
-              <button
-                type="button"
-                className="btn small"
-                disabled={scripts.isFetchingNextPage}
-                onClick={() => void scripts.fetchNextPage()}
-              >
-                {scripts.isFetchingNextPage ? "Loading…" : "Load more"}
-              </button>
-            </div>
-          )}
-        </div>
+        <ScriptTable
+          query={scripts}
+          scope={scope}
+          onPickLabel={(pair) => {
+            const at = pair.indexOf(":");
+            addTerm(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
+          }}
+          onPickTool={(tool) =>
+            setQ(
+              joinQuery(
+                ...splitTerms(q)
+                  .filter((t) => !(t.kind === "field" && t.field === "tool"))
+                  .map((t) => t.raw),
+                fieldTerm("tool", tool),
+              ),
+            )
+          }
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { keepRoute, restoreRoute } from "../../app/pendingRoute";
+import { adoptHashRoute, keepRoute, restoreRoute } from "../../app/pendingRoute";
 import { CLAUDE_CALLBACK, CLAUDE_CODE, consentRequest } from "../../mocks/connections";
 import { createWorld, type World } from "../../mocks/fixtures";
 import { NOW, renderApp, signedIn } from "../../test/app";
@@ -186,38 +186,61 @@ describe("the consent", () => {
     const user = userEvent.setup();
     const assign = vi.fn();
     const world = createWorld({ now: NOW, workos: true });
-    const address = "/#/connect/authorize?request=abc123";
+    const address = "/connect/authorize?request=abc123";
     window.history.replaceState(null, "", address);
-    renderApp("/connect/authorize?request=abc123", { world, assign });
+    renderApp(address, { world, assign });
     await user.click(await screen.findByRole("button", { name: /continue with github/i }));
     expect(assign).toHaveBeenCalledWith(`${window.location.origin}/auth/github`);
 
-    // GitHub's callback lands on `/#/`: the app puts the consent back before routing.
-    window.history.replaceState(null, "", "/#/");
+    // GitHub's callback lands on `/`: the app puts the consent back before routing.
+    window.history.replaceState(null, "", "/");
     restoreRoute();
-    expect(`${window.location.pathname}${window.location.hash}`).toBe(address);
+    expect(`${window.location.pathname}${window.location.search}`).toBe(address);
     // Once only.
-    window.history.replaceState(null, "", "/#/");
+    window.history.replaceState(null, "", "/");
     restoreRoute();
-    expect(window.location.hash).toBe("#/");
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("keeps what the callback says when it puts the route back", () => {
+    window.history.replaceState(null, "", "/connect/authorize?request=abc");
+    keepRoute();
+    window.history.replaceState(null, "", "/?auth_error=state_mismatch");
+    restoreRoute();
+    expect(`${window.location.pathname}${window.location.search}`).toBe(
+      "/connect/authorize?request=abc&auth_error=state_mismatch",
+    );
   });
 
   it("forgets a route kept too long ago, and never replaces a deep link", () => {
-    window.history.replaceState(null, "", "/#/connect/authorize?request=old");
+    window.history.replaceState(null, "", "/connect/authorize?request=old");
     keepRoute();
-    window.history.replaceState(null, "", "/#/");
+    window.history.replaceState(null, "", "/");
     restoreRoute(Date.now() + 16 * 60_000);
-    expect(window.location.hash).toBe("#/");
+    expect(window.location.pathname).toBe("/");
 
-    window.history.replaceState(null, "", "/#/connect/authorize?request=x");
+    window.history.replaceState(null, "", "/connect/authorize?request=x");
     keepRoute();
-    window.history.replaceState(null, "", "/#/runs/abc");
+    window.history.replaceState(null, "", "/runs/abc");
     restoreRoute();
-    expect(window.location.hash).toBe("#/runs/abc");
+    expect(window.location.pathname).toBe("/runs/abc");
+  });
+
+  it("reads a link of an earlier version, its route in the fragment, as the path it meant", () => {
+    window.history.replaceState(null, "", "/#/runs/abc?step=3");
+    adoptHashRoute();
+    expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+      "/runs/abc?step=3",
+    );
+    window.history.replaceState(null, "", "/?auth_error=provider_error#/");
+    adoptHashRoute();
+    expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(
+      "/?auth_error=provider_error",
+    );
   });
 
   it("sends a member without organization through the onboarding first, telling them why", async () => {
-    window.history.replaceState(null, "", "/#/connect/authorize?request=abc");
+    window.history.replaceState(null, "", "/connect/authorize?request=abc");
     const world = signedIn("margaret@example.net");
     renderApp("/connect/authorize?request=abc", { world });
     expect(await screen.findByRole("note")).toHaveTextContent(/claude is waiting for your answer/i);

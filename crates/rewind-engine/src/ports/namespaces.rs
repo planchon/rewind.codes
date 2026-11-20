@@ -68,6 +68,74 @@ impl fmt::Display for NamespaceName {
     }
 }
 
+/// A namespace's display name: the customer's label for its end user (`Acme Corp`), shown
+/// beside its name, which stays the key. Without surrounding whitespace, 1 to 128 characters,
+/// none of them a control character; not unique.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DisplayName(String);
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "invalid display name {0:?}: expected at most 128 characters, none of them a control character"
+)]
+pub struct InvalidDisplayName(pub String);
+
+impl DisplayName {
+    /// In characters (Unicode scalar values).
+    pub const MAX_CHARS: usize = 128;
+
+    /// A display name as stored: already trimmed and not empty.
+    pub fn new(text: impl Into<String>) -> Result<Self, InvalidDisplayName> {
+        let text = text.into();
+        let valid = !text.is_empty()
+            && text.trim() == text
+            && text.chars().count() <= Self::MAX_CHARS
+            && !text.chars().any(char::is_control);
+        if valid {
+            Ok(Self(text))
+        } else {
+            Err(InvalidDisplayName(text))
+        }
+    }
+
+    /// A display name as given: trimmed of surrounding whitespace; `None` when nothing is left.
+    pub fn parse(text: &str) -> Result<Option<Self>, InvalidDisplayName> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        Self::new(trimmed)
+            .map(Some)
+            .map_err(|_| InvalidDisplayName(text.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Its [`fold`](Self::fold): what the prefix of `list_namespaces`, folded too, matches.
+    pub fn key(&self) -> String {
+        Self::fold(&self.0)
+    }
+
+    /// Whether it starts with `prefix`, case aside.
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.key().starts_with(&Self::fold(prefix))
+    }
+
+    /// `text` lowercase, character by character, so that the fold of a prefix is a prefix of
+    /// the fold (unlike [`str::to_lowercase`], whose final sigma depends on what follows).
+    pub fn fold(text: &str) -> String {
+        text.chars().flat_map(char::to_lowercase).collect()
+    }
+}
+
+impl fmt::Display for DisplayName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Six limits, each optional: an absent one does not limit. The same shape serves a tenant's
 /// defaults for its namespaces, a namespace's exceptions, and the tenant's ceiling.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -342,6 +410,8 @@ impl fmt::Display for Day {
 pub struct Namespace {
     pub tenant: TenantId,
     pub name: NamespaceName,
+    /// The customer's label for it, if any.
+    pub display_name: Option<DisplayName>,
     /// Its exceptions to the tenant's defaults.
     pub exceptions: Quotas,
     /// Signed tokens of the namespace issued before this are refused.
@@ -359,6 +429,7 @@ impl Namespace {
         Self {
             tenant,
             name,
+            display_name: None,
             exceptions: Quotas::default(),
             tokens_revoked_before: None,
             created_at: now,
@@ -443,7 +514,10 @@ pub struct NamespaceCursor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespaceFilter {
     pub tenant: TenantId,
-    /// Names starting with this.
+    /// This namespace alone.
+    pub name: Option<NamespaceName>,
+    /// Names starting with this, or display names starting with it case aside
+    /// ([`DisplayName::starts_with`]).
     pub prefix: Option<String>,
     /// Only those that used at least this many percent of one of their counted limits
     /// (`cpu_per_month`, `active_runs`, `runs_per_month`, `scripts`) in `month`.
@@ -539,7 +613,7 @@ pub struct QuotaAlert {
     pub sent_at: Option<Timestamp>,
 }
 
-/// What `put_namespace` did.
+/// What `put_namespace` and `set_namespace_display_name` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamespaceWrite {
     /// The namespace as stored now.
@@ -582,6 +656,32 @@ mod tests {
                 Err(InvalidNamespace(invalid.to_owned()))
             );
         }
+    }
+
+    #[test]
+    fn display_names_are_trimmed_labels() {
+        let parsed = |text: &str| DisplayName::parse(text).map(|name| name.map(|n| n.0));
+        assert_eq!(parsed("  Acme Corp "), Ok(Some("Acme Corp".to_owned())));
+        assert_eq!(
+            parsed("Élodie & Co · 🦀"),
+            Ok(Some("Élodie & Co · 🦀".to_owned()))
+        );
+        assert_eq!(parsed(&"é".repeat(128)), Ok(Some("é".repeat(128))));
+        assert_eq!(parsed(""), Ok(None));
+        assert_eq!(parsed(" \t\n "), Ok(None));
+        for invalid in [&"x".repeat(129), "a\nb", "a\u{7}b", "tab\there"] {
+            assert_eq!(
+                DisplayName::parse(invalid),
+                Err(InvalidDisplayName(invalid.to_owned()))
+            );
+        }
+        assert!(DisplayName::new(" padded").is_err());
+        assert!(DisplayName::new("").is_err());
+        let name = DisplayName::new("ÉLODIE Σ").unwrap();
+        assert_eq!(name.key(), "élodie σ");
+        assert!(name.starts_with("élo"));
+        assert!(name.starts_with("ÉLODIE Σ"));
+        assert!(!name.starts_with("lodie"));
     }
 
     #[test]

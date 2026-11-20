@@ -2740,17 +2740,49 @@ table.grid tr.row-defaults > * {
   font-weight: var(--weight-medium);
 }
 
-.ns-grid {
+/* A namespace's page: two columns that stack their panels each, so a tall chart leaves no hole
+   beside it; then its runs and its scripts across the page. */
+.ns-columns {
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 12px;
   align-items: start;
 }
 
+.ns-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
 @media (max-width: 960px) {
-  .ns-grid {
+  .ns-columns {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.ns-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ns-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ns-section-head h2 {
+  margin: 0;
+  font-size: var(--text-heading);
+  font-weight: var(--weight-title);
+}
+
+.ns-section-head a {
+  font-size: var(--text-body);
 }
 
 .quota-kv {

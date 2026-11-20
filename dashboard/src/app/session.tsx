@@ -99,7 +99,7 @@ function readInvitationToken(): string | null {
 
 /**
  * The reason a sign-in with GitHub failed, which `/auth/callback` puts in the address
- * (`/?auth_error=…#/`), as a sentence for the sign-in page. Read once, then taken out of the
+ * (`/?auth_error=…`), as a sentence for the sign-in page. Read once, then taken out of the
  * address.
  */
 const AUTH_ERROR_PARAM = "auth_error";

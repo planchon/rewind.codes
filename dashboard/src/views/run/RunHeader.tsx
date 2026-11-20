@@ -7,6 +7,7 @@ import type { JournalState } from "../../api/queries";
 import type { Run, Waiting } from "../../api/types";
 import { useApi } from "../../app/session";
 import { Ago, CopyButton, Digest, LabelList, RunId, useNow } from "../../components/bits";
+import { NamespaceName } from "../../components/NamespaceName";
 import { MockTag, OutcomeBadge, QuarantineTag, StatusBadge } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
@@ -144,7 +145,7 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
             to={queryLink("/observability", fieldTerm("namespace", run.namespace))}
             title="The end user the run acts for: their runs"
           >
-            {run.namespace}
+            <NamespaceName name={run.namespace} />
           </Link>
         </dd>
       </div>

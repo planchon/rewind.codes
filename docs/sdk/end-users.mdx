@@ -94,6 +94,13 @@ await rewind.namespaces.put("user_chen", { exceptions: { activeRuns: 20, runsPer
 await rewind.namespaces.put("user_erin", { exceptions: { activeRuns: 0 } }); // blocked
 ```
 
+Give an end user a display name, which the dashboard shows instead of the id (the id stays in paths, queries, tokens
+and webhooks); `null` removes it:
+
+```ts
+await rewind.namespaces.rename("user_2fQ81", "Acme Corp");
+```
+
 | Quota | Counts | Over it |
 | --- | --- | --- |
 | `activeRuns` | Runs not yet ended | Refused |

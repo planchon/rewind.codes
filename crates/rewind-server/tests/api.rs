@@ -978,6 +978,56 @@ async fn the_server_serves_its_dashboard_and_says_what_it_is() {
         .await
         .unwrap();
     assert_eq!(missing.status(), 404);
+
+    // A route of the dashboard is a path: the app's page, which reads the route from the URL.
+    for route in [
+        "/runs/abc",
+        "/namespaces/alice",
+        "/namespaces/team.alpha",
+        "/connect/authorize?request=x",
+    ] {
+        let page = reqwest::get(format!("{}{route}", server.url))
+            .await
+            .unwrap();
+        assert_eq!(page.status(), 200, "{route}");
+        assert_eq!(page.headers()["cache-control"], "no-cache", "{route}");
+        assert_eq!(
+            page.headers()["content-type"],
+            "text/html; charset=utf-8",
+            "{route}"
+        );
+        assert!(page.text().await.unwrap().contains("<div id=\"root\">"));
+    }
+    let head = reqwest::Client::new()
+        .head(format!("{}/overview", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(head.status(), 200);
+    for path in [
+        "/v1/nope",
+        "/auth/nope",
+        "/oauth/nope",
+        "/.well-known/nope",
+        "/hooks",
+        "/assets/missing.js",
+        "/favicon.ico",
+    ] {
+        let missing = reqwest::get(format!("{}{path}", server.url)).await.unwrap();
+        assert_eq!(missing.status(), 404, "{path}");
+        assert_eq!(
+            missing.headers()["content-type"],
+            "application/problem+json",
+            "{path}"
+        );
+    }
+    let posted = reqwest::Client::new()
+        .post(format!("{}/runs/abc", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status(), 404, "a route is read, never posted to");
+
     assert_eq!(
         problem(server.admin.stop_server().await.unwrap_err()).kind(),
         Some(ProblemType::Forbidden),

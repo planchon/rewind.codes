@@ -15,10 +15,10 @@ use std::time::Duration;
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
-    CreateRun, Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, NewRun,
-    QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention, Tenant,
-    TenantId, Threshold, Usage, UsageDelta, UsageOf,
+    CreateRun, Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace,
+    NamespaceFilter, NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite,
+    NewRun, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention,
+    Tenant, TenantId, Threshold, Usage, UsageDelta, UsageOf,
 };
 use sqlx::PgConnection;
 use sqlx::postgres::PgRow;
@@ -93,6 +93,11 @@ fn millis(duration: Duration) -> u64 {
 fn name_of(text: String) -> Result<NamespaceName, Error> {
     NamespaceName::new(text.clone())
         .map_err(|_| Error::Corrupt(format!("invalid namespace {text:?}")))
+}
+
+fn display_name_of(text: String) -> Result<DisplayName, Error> {
+    DisplayName::new(text.clone())
+        .map_err(|_| Error::Corrupt(format!("invalid display name {text:?}")))
 }
 
 // -------------------------------------------------------------------------------------------
@@ -191,7 +196,8 @@ async fn tenant_or_default(conn: &mut PgConnection, id: &TenantId) -> Result<Ten
 
 fn namespace_columns() -> String {
     format!(
-        "tenant, name, {}, tokens_revoked_before, created_at, last_active_at, deleting_since",
+        "tenant, name, {}, tokens_revoked_before, created_at, last_active_at, deleting_since, \
+         display_name",
         quota_columns("")
     )
 }
@@ -200,6 +206,7 @@ fn namespace_from_row(row: &PgRow) -> Result<Namespace, Error> {
     Ok(Namespace {
         tenant: row.tenant(0)?,
         name: name_of(row.text(1)?)?,
+        display_name: row.opt_text(12)?.map(display_name_of).transpose()?,
         exceptions: quotas_from_row(row, 2)?,
         tokens_revoked_before: row.opt_ts(8)?,
         created_at: row.ts(9)?,
@@ -292,6 +299,58 @@ pub(crate) async fn put_namespace(
         exceptions: exceptions.clone(),
         ..namespace
     }))
+}
+
+pub(crate) async fn set_display_name(
+    conn: &mut PgConnection,
+    tenant_id: &TenantId,
+    name: &NamespaceName,
+    display_name: Option<&DisplayName>,
+) -> Result<Option<NamespaceWrite>, Error> {
+    let row = sqlx::query(&format!(
+        "SELECT {} FROM namespaces WHERE tenant = $1 AND name = $2 FOR UPDATE",
+        namespace_columns()
+    ))
+    .bind(tenant(tenant_id))
+    .bind(name.as_str())
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let namespace = namespace_from_row(&row)?;
+    if namespace.deleting_since.is_some() {
+        return Ok(Some(NamespaceWrite::Deleting));
+    }
+    sqlx::query(
+        "UPDATE namespaces SET display_name = $3, display_key = $4 WHERE tenant = $1 AND name = $2",
+    )
+    .bind(tenant(tenant_id))
+    .bind(name.as_str())
+    .bind(display_name.map(DisplayName::as_str))
+    .bind(display_name.map(DisplayName::key))
+    .execute(&mut *conn)
+    .await?;
+    Ok(Some(NamespaceWrite::Written(Namespace {
+        display_name: display_name.cloned(),
+        ..namespace
+    })))
+}
+
+pub(crate) async fn display_names(
+    conn: &mut PgConnection,
+    tenant_id: &TenantId,
+) -> Result<Vec<(NamespaceName, DisplayName)>, Error> {
+    let rows = sqlx::query(
+        "SELECT name, display_name FROM namespaces \
+         WHERE tenant = $1 AND display_name IS NOT NULL ORDER BY name",
+    )
+    .bind(tenant(tenant_id))
+    .fetch_all(&mut *conn)
+    .await?;
+    rows.iter()
+        .map(|row| Ok((name_of(row.text(0)?)?, display_name_of(row.text(1)?)?)))
+        .collect()
 }
 
 pub(crate) async fn revoke_namespace_tokens(
@@ -1089,13 +1148,15 @@ pub(crate) async fn list_namespaces(
          s AS (SELECT namespace, count(*) AS kept FROM namespace_scripts \
                WHERE tenant = $1 GROUP BY namespace), \
          j AS (SELECT n.tenant, n.name, {exceptions}, n.tokens_revoked_before, n.created_at, \
-                      n.last_active_at, n.deleting_since, {limits}, \
+                      n.last_active_at, n.deleting_since, n.display_name, {limits}, \
                       COALESCE(u.cpu, 0) AS cpu, COALESCE(u.runs, 0) AS runs, \
                       COALESCE(a.active, 0) AS active, COALESCE(s.kept, 0) AS kept \
                FROM namespaces n LEFT JOIN t ON true \
                LEFT JOIN u ON u.namespace = n.name LEFT JOIN a ON a.namespace = n.name \
                LEFT JOIN s ON s.namespace = n.name \
-               WHERE n.tenant = $1 AND ($4::text IS NULL OR starts_with(n.name, $4))), \
+               WHERE n.tenant = $1 AND ($10::text IS NULL OR n.name = $10) \
+               AND ($4::text IS NULL OR starts_with(n.name, $4) \
+                    OR starts_with(n.display_key, $11))), \
          k AS (SELECT j.*, CASE $5 WHEN 'cpu' THEN cpu WHEN 'runs' THEN runs \
                                    WHEN 'scripts' THEN kept ELSE 0 END AS key FROM j), \
          f AS (SELECT * FROM k \
@@ -1106,7 +1167,7 @@ pub(crate) async fn list_namespaces(
                OR (l_scripts > 0 AND kept::numeric * 100 >= l_scripts::numeric * $6)), \
          c AS (SELECT count(*)::bigint AS total FROM f) \
          SELECT p.tenant, p.name, {plain}, p.tokens_revoked_before, p.created_at, \
-                p.last_active_at, p.deleting_since, p.l_cpu, p.l_active, p.l_runs, p.l_scripts, \
+                p.last_active_at, p.deleting_since, p.display_name, p.l_cpu, p.l_active, p.l_runs, p.l_scripts, \
                 p.l_ttl, p.l_lines, p.cpu, p.runs, p.active, p.kept, p.key, c.total \
          FROM c LEFT JOIN LATERAL ( \
              SELECT * FROM f \
@@ -1127,11 +1188,13 @@ pub(crate) async fn list_namespaces(
         .bind(filter.after.as_ref().map(|after| int(after.key)))
         .bind(filter.after.as_ref().map(|after| after.name.as_str()))
         .bind(limit(filter.limit))
+        .bind(filter.name.as_ref().map(NamespaceName::as_str))
+        .bind(filter.prefix.as_deref().map(DisplayName::fold))
         .fetch_all(&mut *conn)
         .await?;
     // One row with the total alone when the page is empty: its namespace columns are null.
     let total = match rows.first() {
-        Some(row) => row.u64(23)?,
+        Some(row) => row.u64(24)?,
         None => 0,
     };
     let mut namespaces = Vec::with_capacity(rows.len());
@@ -1141,12 +1204,12 @@ pub(crate) async fn list_namespaces(
         }
         namespaces.push(NamespaceUsage {
             namespace: namespace_from_row(row)?,
-            limits: quotas_from_row(row, 12)?,
+            limits: quotas_from_row(row, 13)?,
             usage: Usage {
-                cpu: row.duration(18)?,
-                runs_started: row.u64(19)?,
-                active_runs: row.u64(20)?,
-                scripts: row.u64(21)?,
+                cpu: row.duration(19)?,
+                runs_started: row.u64(20)?,
+                active_runs: row.u64(21)?,
+                scripts: row.u64(22)?,
                 days: Vec::new(),
             },
         });

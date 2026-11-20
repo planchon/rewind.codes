@@ -137,6 +137,24 @@ export class Namespaces {
   }
 
   /**
+   * Gives the end user a display name (`"Acme Corp"`), which the dashboard, the CLI and the agent tools show beside or
+   * instead of its id; `null` or `""` removes it. The id never changes: paths, queries, tokens and webhooks keep it.
+   * The namespace must exist (`not-found` otherwise).
+   */
+  async rename(name: string, displayName: string | null, options: RequestOptions = {}): Promise<NamespaceDetail> {
+    checkNamespaceName(name);
+    return this.transport.send(
+      () =>
+        this.transport.api.PATCH("/v1/namespaces/{name}", {
+          params: { path: { name } },
+          body: { displayName },
+          signal: options.signal,
+        }),
+      { retry: true, signal: options.signal },
+    );
+  }
+
+  /**
    * Erases the end user, in the background: the namespace takes no run and no token from now on
    * (`namespace-deleting`), its tokens are revoked and its active runs cancelled, then its runs, credentials, use and
    * alerts are erased. The tenant's own use keeps what the namespace consumed.

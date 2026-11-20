@@ -257,7 +257,7 @@ export function accessHandlers(world: World) {
       access.oauth = null;
       access.session = null;
       if (oauth && state === oauth.state) signIn(access, access.githubEmail, oauth.invitationToken);
-      return redirect("/#/");
+      return redirect("/");
     }),
 
     // Who calls, the catalog, the onboarding.

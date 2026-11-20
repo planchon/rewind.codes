@@ -44,7 +44,14 @@ describe("the Namespaces view", () => {
   it("shows the ceiling, the defaults, then the namespaces using the most CPU", async () => {
     const { requested } = renderApp("/namespaces");
     await listed();
-    expect(names().slice(0, 5)).toEqual(["Organization", "Defaults", "bob", "chen", "dana"]);
+    // chen has a display name: the views show it, its id on hover.
+    expect(names().slice(0, 5)).toEqual([
+      "Organization",
+      "Defaults",
+      "bob",
+      "Chen Logistics",
+      "dana",
+    ]);
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("order") === "cpu")).toBe(
       true,
     );
@@ -82,9 +89,29 @@ describe("the Namespaces view", () => {
       "level-warning",
     );
     // chen pays: its exceptions lift the defaults.
-    expect(within(row("chen")).getByRole("img", { name: /^Runs this month/ })).toHaveAccessibleName(
-      "Runs this month: 4,120, of 20,000, 20%",
+    expect(
+      within(row("Chen Logistics")).getByRole("img", { name: /^Runs this month/ }),
+    ).toHaveAccessibleName("Runs this month: 4,120, of 20,000, 20%");
+  });
+
+  it("finds a namespace by the start of its display name, whatever the case", async () => {
+    const user = userEvent.setup();
+    const { requested } = renderApp("/namespaces");
+    await listed();
+    const bar = screen.getByRole("combobox", { name: "Query" });
+    await user.type(bar, "acme");
+    // Suggested with its display name beside its id.
+    expect(
+      await screen.findByRole("option", { name: /user_7Kd02.*Acme Corp/ }),
+    ).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.clear(bar);
+    await user.type(bar, "acme{Enter}");
+    await waitFor(() => expect(names().slice(2)).toEqual(["Acme Corp"]));
+    expect(requested("/v1/namespaces").some((u) => u.searchParams.get("prefix") === "acme")).toBe(
+      true,
     );
+    expect(row("Acme Corp").querySelector("a")).toHaveAttribute("href", "/namespaces/user_7Kd02");
   });
 
   it("shows an end user the customer blocked", async () => {
@@ -102,7 +129,7 @@ describe("the Namespaces view", () => {
     await listed();
 
     await user.click(screen.getByRole("button", { name: "Runs" }));
-    await waitFor(() => expect(names()[2]).toBe("chen"));
+    await waitFor(() => expect(names()[2]).toBe("Chen Logistics"));
     expect(search(router).get("order")).toBe("runs");
     expect(screen.getByRole("columnheader", { name: "Runs this month ↓" })).toHaveAttribute(
       "aria-sort",
@@ -123,8 +150,9 @@ describe("the Namespaces view", () => {
     await user.click(screen.getByRole("button", { name: "Clear the query" }));
     await waitFor(() => expect(search(router).get("q")).toBeNull());
     await user.click(screen.getByRole("button", { name: /At 80% or more/ }));
-    // By runs this month: bob, then user_7Kd02 at 83% of hers, then dana at 84% of her CPU.
-    await waitFor(() => expect(names().slice(2)).toEqual(["bob", "user_7Kd02", "dana"]));
+    // By runs this month: bob, then user_7Kd02 (Acme Corp) at 83% of hers, then dana at 84% of her
+    // CPU.
+    await waitFor(() => expect(names().slice(2)).toEqual(["bob", "Acme Corp", "dana"]));
     expect(requested("/v1/namespaces").some((u) => u.searchParams.get("above") === "0.8")).toBe(
       true,
     );
@@ -210,19 +238,93 @@ describe("a namespace's page", () => {
     expect(within(alerts).getAllByText(/webhook sent/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("tokens")).toHaveTextContent("3");
     expect(screen.getByText("none: the defaults apply")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "See its runs" })).toHaveAttribute(
-      "href",
-      "/observability?q=namespace%3Abob",
+    const runs = screen.getByRole("link", { name: "Open in Observability →" });
+    expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
+      /^namespace:bob started:\S+\.\.\S+$/,
     );
-    expect(screen.getByRole("link", { name: "See its scripts" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Open in Scripts →" })).toHaveAttribute(
       "href",
       "/scripts?q=namespace%3Abob",
     );
   });
 
+  it("shows how its runs went this month, then its runs and its scripts", async () => {
+    const { requested, callsTo } = renderApp("/namespaces/bob");
+    await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
+    const figures = await screen.findByRole("region", { name: /^Runs in / });
+    expect(within(figures).getByText("Runs started")).toBeInTheDocument();
+    expect(within(figures).getByText("Completed")).toBeInTheDocument();
+    expect(within(figures).getByText("Duration p95")).toBeInTheDocument();
+    // The statistics are of its runs, over the month, by day.
+    await waitFor(() =>
+      expect(
+        requested("/v1/runs/stats").some(
+          (u) =>
+            u.searchParams.get("q") === "namespace:bob" && u.searchParams.get("bucket") === "1d",
+        ),
+      ).toBe(true),
+    );
+    expect(screen.getByRole("region", { name: "What fails most" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Tools its runs call" })).toBeInTheDocument();
+    const runs = screen.getByRole("region", { name: "Its runs" });
+    await waitFor(() => expect(within(runs).getAllByRole("row").length).toBeGreaterThan(1));
+    const scripts = screen.getByRole("region", { name: "Its scripts" });
+    await waitFor(() => expect(within(scripts).getAllByRole("row").length).toBeGreaterThan(1));
+    expect(callsTo("/v1/scripts").at(-1)?.headers.get("Rewind-Namespace")).toBe("bob");
+  });
+
+  it("shows its display name, its id on hover, and renames it", async () => {
+    const user = userEvent.setup();
+    const { callsTo } = renderApp("/namespaces/chen");
+    await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
+    const title = screen.getByRole("heading", { level: 1 });
+    expect(title).toHaveTextContent("Chen Logistics");
+    // The id stays one hover away, and under the title.
+    await user.hover(within(title).getByText("Chen Logistics"));
+    const tip = await screen.findByText("Namespace", { selector: ".ns-tip-label" });
+    expect(tip.parentElement).toHaveTextContent("Namespace chen");
+    expect(screen.getByText("id").parentElement).toHaveTextContent("id chen");
+
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const form = screen.getByRole("form", { name: "Rename Chen Logistics" });
+    const field = within(form).getByLabelText("Display name");
+    await user.clear(field);
+    await user.type(field, "  Chen & Sons  ");
+    await user.click(within(form).getByRole("button", { name: "Save the name" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const [patch] = callsTo("/v1/namespaces/chen", "PATCH");
+    expect(JSON.parse((await patch?.body) ?? "")).toEqual({ displayName: "Chen & Sons" });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Chen & Sons"),
+    );
+
+    // Emptied, the name is removed and the views show the id again.
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const again = screen.getByRole("form", { name: "Rename Chen & Sons" });
+    await user.clear(within(again).getByLabelText("Display name"));
+    await user.click(within(again).getByRole("button", { name: "Remove the name" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const second = callsTo("/v1/namespaces/chen", "PATCH")[1];
+    expect(JSON.parse((await second?.body) ?? "")).toEqual({ displayName: null });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("chen"),
+    );
+  });
+
+  it("gives its actions in the header one size", async () => {
+    renderApp("/namespaces/bob");
+    await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
+    for (const name of ["Rename", "Edit its limits", "Revoke its tokens", "Erase…"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveClass("btn");
+      expect(button).not.toHaveClass("small");
+      expect(button.querySelector("svg")).not.toBeNull();
+    }
+  });
+
   it("lists its exceptions with the defaults they replace", async () => {
     renderApp("/namespaces/chen");
-    await screen.findByRole("img", { name: /^Cumulative CPU time of chen/ });
+    await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
     expect(screen.getByText(/Runs per month:/).closest("li")).toHaveTextContent(
       "Runs per month: 20,000 (default 3,000)",
     );
@@ -299,7 +401,8 @@ describe("a namespace's page", () => {
     // A reader sees, and changes nothing.
     renderApp("/namespaces/bob", { world: graceWith(["runs:read", "namespaces:read"]) });
     await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
-    expect(screen.getByRole("link", { name: "See its runs" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open in Observability →" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Edit its limits" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Revoke its tokens" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Erase…" })).toBeNull();

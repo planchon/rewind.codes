@@ -10,7 +10,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::Error;
@@ -201,6 +201,9 @@ pub struct DayUsage {
 #[serde(rename_all = "camelCase")]
 pub struct Namespace {
     pub name: NamespaceName,
+    /// The customer's label for the end user, shown beside the name, which stays its key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
     /// The limits that apply: per quota, the namespace's exception, else the tenant's default.
     pub limits: Quotas,
     /// The namespace's exceptions to the defaults.
@@ -232,7 +235,7 @@ pub enum NamespaceOrder {
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct NamespaceListQuery {
-    /// Names starting with this.
+    /// Names starting with this, or display names starting with it case aside.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>,
     /// Only the namespaces that used at least this share of one of their limits this month:
@@ -302,6 +305,58 @@ pub struct NamespaceDetail {
 pub struct PutNamespace {
     #[serde(default)]
     pub exceptions: Quotas,
+}
+
+/// `PATCH /v1/namespaces/{name}`: a JSON merge patch (RFC 7396) of the namespace, which must
+/// exist. What is absent stays.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamespacePatch {
+    /// The customer's label for the end user (`Acme Corp`), shown beside the name, which stays
+    /// its key everywhere. Trimmed; at most 128 characters, none of them a control character;
+    /// not unique. `null` or `""` removes it.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>, example = "Acme Corp")]
+    pub display_name: Option<Option<String>>,
+}
+
+impl NamespacePatch {
+    /// Sets the display name, or removes it with `None`.
+    pub fn display_name(display_name: Option<String>) -> Self {
+        Self {
+            display_name: Some(display_name),
+        }
+    }
+}
+
+/// A field of a merge patch that is present: `Some(None)` when it is `null`.
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// A namespace's display name.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NamespaceDisplayName {
+    pub name: NamespaceName,
+    #[schema(example = "Acme Corp")]
+    pub display_name: String,
+}
+
+/// `GET /v1/organization/namespace-names`: every namespace of the organization that has a
+/// display name, by name. Not paged.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NamespaceNames {
+    pub namespaces: Vec<NamespaceDisplayName>,
 }
 
 /// `GET /v1/organization/namespace-defaults`: the limits of every namespace without an
@@ -539,6 +594,29 @@ mod tests {
         assert_eq!(
             serde_json::to_value(QuotaKind::CpuPerMonth).unwrap(),
             json!("cpu_per_month")
+        );
+    }
+
+    #[test]
+    fn a_patch_tells_a_display_name_removed_from_one_left() {
+        let patch = |value| serde_json::from_value::<NamespacePatch>(value).unwrap();
+        assert_eq!(patch(json!({})).display_name, None);
+        assert_eq!(
+            patch(json!({ "displayName": null })).display_name,
+            Some(None)
+        );
+        assert_eq!(
+            patch(json!({ "displayName": "Acme Corp" })).display_name,
+            Some(Some("Acme Corp".to_owned()))
+        );
+        assert!(serde_json::from_value::<NamespacePatch>(json!({ "name": "x" })).is_err());
+        assert_eq!(
+            serde_json::to_value(NamespacePatch::display_name(None)).unwrap(),
+            json!({ "displayName": null })
+        );
+        assert_eq!(
+            serde_json::to_value(NamespacePatch::default()).unwrap(),
+            json!({})
         );
     }
 

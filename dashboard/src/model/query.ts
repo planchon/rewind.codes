@@ -288,6 +288,8 @@ export interface Suggestion {
   partial?: boolean;
   /** Written as is: a pattern or a comparison, never quoted. */
   raw?: boolean;
+  /** Another text it is found by as it is typed: a namespace's display name. */
+  also?: string;
 }
 
 /** A value a field takes that the facets do not count: the namespaces, read from their list. */
@@ -296,6 +298,8 @@ export interface FieldValue {
   /** Runs with this value. */
   count?: number;
   detail?: string;
+  /** Another text it is found by as it is typed: a namespace's display name. */
+  also?: string;
 }
 
 /** Values to suggest per field, beside those of the facets. */
@@ -326,10 +330,20 @@ function fieldValues(
   facets: Facets | undefined,
   values: FieldValues | undefined,
 ): Suggestion[] {
-  const known = facetValuesOf(field, facets);
-  const seen = new Set(known.map((s) => s.insert));
-  const given = (values?.[field] ?? []).filter((v) => !seen.has(v.value)).map(givenValue);
-  return [...known, ...given];
+  const given = new Map((values?.[field] ?? []).map((v) => [v.value, v]));
+  // A value the facets count keeps what the given one says of it (a display name).
+  const known = facetValuesOf(field, facets).map((s) => {
+    const more = given.get(s.insert);
+    given.delete(s.insert);
+    return more
+      ? {
+          ...s,
+          ...(more.detail ? { detail: more.detail } : {}),
+          ...(more.also ? { also: more.also } : {}),
+        }
+      : s;
+  });
+  return [...known, ...[...given.values()].map(givenValue)];
 }
 
 function givenValue(v: FieldValue): Suggestion {
@@ -338,7 +352,17 @@ function givenValue(v: FieldValue): Suggestion {
     label: v.value,
     ...(v.count !== undefined ? { count: v.count } : {}),
     ...(v.detail ? { detail: v.detail } : {}),
+    ...(v.also ? { also: v.also } : {}),
   };
+}
+
+/** Whether what is typed starts the suggestion's value, its label or its other text. */
+function found(s: Suggestion, typed: string): boolean {
+  return (
+    startsWith(s.insert, typed) ||
+    startsWith(s.label, typed) ||
+    (s.also !== undefined && startsWith(s.also, typed))
+  );
 }
 
 /** The values of a field the grammar or the facets know. */
@@ -471,7 +495,7 @@ export function suggest(
     const field = typed.slice(0, colon);
     const { kept, typed: value } = before(typed.slice(colon + 1));
     items = fieldValues(field, facets, values)
-      .filter((s) => startsWith(s.insert, value) || startsWith(s.label, value))
+      .filter((s) => found(s, value))
       .map((s) => ({
         ...s,
         insert: `${field}:${kept ? `${kept},` : ""}${s.raw ? s.insert : quoteValue(s.insert)}`,
@@ -482,8 +506,9 @@ export function suggest(
     const texts = typed.startsWith("@")
       ? []
       : (values?.[TEXT_VALUES] ?? [])
-          .filter((v) => typed !== "" && startsWith(v.value, typed))
-          .map((v) => ({ ...givenValue(v), insert: quoteValue(v.value) }));
+          .map(givenValue)
+          .filter((s) => typed !== "" && found(s, typed))
+          .map((s) => ({ ...s, insert: quoteValue(s.insert) }));
     const keys = (language.labels ? (facets?.labels ?? []) : [])
       .filter((l) => startsWith(l.key, name))
       .map((l) => ({

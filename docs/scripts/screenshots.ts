@@ -38,19 +38,19 @@ async function settle(page: Page, ms = 900): Promise<void> {
   await page.waitForTimeout(ms);
 }
 
-async function go(page: Page, hash: string): Promise<void> {
-  await page.goto(new URL(`#${hash}`, BASE).toString());
+async function go(page: Page, route: string): Promise<void> {
+  await page.goto(new URL(route, BASE).toString());
   await settle(page);
 }
 
 /** Opens a run of the triage agent waiting for its approval, from Observability's waiting view. */
 async function openWaitingRun(page: Page, section = ""): Promise<void> {
   await go(page, "/observability?q=%40agent%3Atriage%20waiting%3Asignal");
-  await page.locator("a[href*='#/runs/']").first().click();
+  await page.locator("a[href^='/runs/']").first().click();
   await settle(page, 1500);
   if (section !== "") {
     const url = new URL(page.url());
-    url.hash = url.hash.replace(/(#\/runs\/[^/?]+)(\/[^?]*)?/, `$1/${section}`);
+    url.pathname = url.pathname.replace(/^(\/runs\/[^/]+)(\/.*)?$/, `$1/${section}`);
     await page.goto(url.toString());
     await settle(page, 1200);
   }
@@ -92,10 +92,10 @@ const SHOTS: Shot[] = [
     name: "run-started",
     async open(page) {
       await go(page, "/observability?q=%22rewind%3Aworkflows%22");
-      await page.locator("a[href*='#/runs/']").first().click();
+      await page.locator("a[href^='/runs/']").first().click();
       await settle(page, 1500);
       const url = new URL(page.url());
-      url.hash = url.hash.replace(/(#\/runs\/[^/?]+)(\/[^?]*)?/, "$1/started");
+      url.pathname = url.pathname.replace(/^(\/runs\/[^/]+)(\/.*)?$/, "$1/started");
       await page.goto(url.toString());
       await settle(page, 1200);
     },

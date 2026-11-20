@@ -5,6 +5,7 @@ import { Link, useNavigate } from "react-router";
 import type { RunPage, RunSummary } from "../api/types";
 import { useRunLinkState } from "../app/runLinks";
 import { Ago, Digest, Empty, Loading, ProblemView, RunId, useNow } from "../components/bits";
+import { NamespaceName, useNamespaceLabel } from "../components/NamespaceName";
 import { ForkTag, QuarantineTag, StatusBadge } from "../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../model/format";
 import { fieldTerm, queryLink } from "../model/query";
@@ -45,6 +46,7 @@ export function RunTable({
   const navigate = useNavigate();
   const linkState = useRunLinkState();
   const now = useNow(5_000);
+  const label = useNamespaceLabel();
 
   if (query.isPending) return <Loading>Loading runs…</Loading>;
   if (query.isError) return <ProblemView error={query.error} title="The runs could not be read" />;
@@ -116,13 +118,15 @@ export function RunTable({
                     <button
                       type="button"
                       className="link-btn ns-cell"
-                      title={`Only runs of ${run.namespace}`}
+                      title={`Only runs of ${label(run.namespace) ?? run.namespace}`}
                       onClick={() => onPickNamespace(run.namespace)}
                     >
-                      {run.namespace}
+                      <NamespaceName name={run.namespace} />
                     </button>
                   ) : (
-                    <span className="ns-cell">{run.namespace}</span>
+                    <span className="ns-cell">
+                      <NamespaceName name={run.namespace} />
+                    </span>
                   )}
                 </td>
               )}

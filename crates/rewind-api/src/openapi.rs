@@ -119,10 +119,12 @@ use crate::webhooks::{
         operations::list_namespaces,
         operations::get_namespace,
         operations::put_namespace,
+        operations::patch_namespace,
         operations::delete_namespace,
         operations::set_namespace_credentials,
         operations::get_namespace_defaults,
         operations::put_namespace_defaults,
+        operations::list_namespace_names,
         operations::list_quota_alerts,
         operations::create_token,
         operations::revoke_namespace_tokens,
@@ -515,8 +517,9 @@ mod operations {
     use crate::events::{Entry, EventsQuery, StreamEvent};
     use crate::namespaces::{
         CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
-        NamespaceListQuery, NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults,
-        QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token, TokenKey, TokenKeyList,
+        NamespaceListQuery, NamespaceNames, NamespacePatch, NamespaceQuery, PutCeiling,
+        PutNamespace, PutNamespaceDefaults, QuotaAlertList, QuotaAlertQuery, RevokedTokens, Token,
+        TokenKey, TokenKeyList,
     };
     use crate::oauth::{
         AuthorizationServerMetadata, AuthorizeQuery, ClientMetadata, OAuthError,
@@ -1459,6 +1462,23 @@ mod operations {
     )]
     pub(super) fn put_namespace() {}
 
+    /// Change a namespace
+    ///
+    /// A JSON merge patch of an existing namespace: `displayName` sets the label shown beside its
+    /// name, which stays its key; `null` or `""` removes it; what is absent stays. Never creates
+    /// the namespace. Requires `namespaces:write`.
+    #[utoipa::path(
+        patch, path = "/v1/namespaces/{name}", tag = "namespaces", operation_id = "patchNamespace",
+        params(("name" = String, Path, description = "The namespace.")),
+        request_body = NamespacePatch,
+        responses(
+            (status = 200, description = "The namespace as it now is.", body = NamespaceDetail),
+            (status = 404, description = "No such namespace.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn patch_namespace() {}
+
     /// Erase a namespace
     ///
     /// An end user who leaves: revokes the namespace's tokens, cancels its active runs, then
@@ -1511,6 +1531,17 @@ mod operations {
         responses((status = 200, description = "Changed.", body = NamespaceDefaults))
     )]
     pub(super) fn put_namespace_defaults() {}
+
+    /// List the display names
+    ///
+    /// Every namespace of the organization that has a display name, with it, by name: what a
+    /// client loads once to show the display names beside the names. Not paged. Requires
+    /// `namespaces:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/namespace-names", tag = "namespaces", operation_id = "listNamespaceNames",
+        responses((status = 200, description = "The display names.", body = NamespaceNames))
+    )]
+    pub(super) fn list_namespace_names() {}
 
     /// List the quota alerts
     ///
@@ -1793,8 +1824,8 @@ mod operations {
         security(()),
         params(Callback),
         responses(
-            (status = 302, description = "To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through.", headers(
-                ("Location" = String, description = "`/#/`, or `/?auth_error=<code>#/`."),
+            (status = 302, description = "To the dashboard: `/`, or `/?auth_error=<code>` when the sign-in did not go through.", headers(
+                ("Location" = String, description = "`/`, or `/?auth_error=<code>`."),
                 ("Set-Cookie" = String, description = "`rewind_session` when signed in or at a step; `rewind_oauth` cleared."),
             )),
         )
@@ -1927,7 +1958,7 @@ mod operations {
         params(AuthorizeQuery),
         responses(
             (status = 302, description = "To the consent page, or back to the client with an error.", headers(
-                ("Location" = String, description = "`{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`."),
+                ("Location" = String, description = "`{dashboard}/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`."),
             )),
             (status = 400, description = "An unknown client, a redirect URI it does not list, or no client or redirect URI at all (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
             (status = 404, description = "This server has no OAuth (`not-found`).", body = Problem, content_type = "application/problem+json"),

@@ -147,10 +147,10 @@ test.describe("criterion 7: the dashboard", () => {
     await page.goto(`${server.url}/`);
     await page.getByPlaceholder("rewind_sk_…").fill(readerKey);
     await page.getByRole("button", { name: "Continue" }).click();
-    await expect(page).toHaveURL(/#\/overview/);
+    await expect(page).toHaveURL(/^[^#]*\/overview$/);
     await expect(page.getByRole("link", { name: /Waiting now\s*1/ })).toBeVisible();
     await page.getByRole("navigation", { name: "Views" }).getByRole("link", { name: "Observability" }).click();
-    await expect(page).toHaveURL(/#\/observability/);
+    await expect(page).toHaveURL(/^[^#]*\/observability/);
     await expect.poll(shown(page)).toEqual([...Object.values(runs), waiter].map((r) => r.id).sort());
 
     // By label.
@@ -188,7 +188,7 @@ test.describe("criterion 7: the dashboard", () => {
     await search(page, "@team:billing tool:crm.lookup");
     await expect.poll(shown(page)).toEqual([runs.triage.id]);
     await page.locator("table.grid tbody tr a.row-link").first().click();
-    await expect(page).toHaveURL(new RegExp(`#/runs/${runs.triage.id}`));
+    await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.triage.id}`));
 
     // Its source, each line with what it caused.
     const source = page.getByRole("region", { name: "Source" });
@@ -241,23 +241,25 @@ test.describe("criterion 7: the dashboard", () => {
     await expect(watches).toContainText("not assigned yet");
 
     // Waiting: the run waiting for the signal, on its line.
-    await page.goto(`${server.url}/#/observability/waiting`);
+    await page.goto(`${server.url}/observability/waiting`);
     const waiting = page.locator("table.grid tbody tr", { has: page.locator(`.run-id[title="${waiter.id}"]`) });
     await expect(waiting).toContainText('signal "go-ahead"');
     await expect(waiting).toContainText('const go = await signal<{ go: boolean }>("go-ahead");');
     await expect(page.getByRole("tab", { name: /Signals/ })).toContainText("1");
 
     // Failures: the deadlock is a group, which opens its runs.
-    await page.goto(`${server.url}/#/observability/failures`);
+    await page.goto(`${server.url}/observability/failures`);
     const group = page.locator("table.grid tbody tr", { hasText: "DeadlockError" }).first();
     await expect(group).toBeVisible();
     await expect(group).toContainText(runs.stuck.id.slice(0, 8));
     await group.locator("td").first().getByRole("link").click();
-    await expect(page).toHaveURL(/#\/observability\?q=fingerprint/);
+    await expect(page).toHaveURL(/^[^#]*\/observability\?q=fingerprint/);
     await expect.poll(shown(page)).toEqual([runs.stuck.id]);
 
-    // A failed run: the call that failed, on its line, and the error.
+    // A failed run: the call that failed, on its line, and the error. Opened from a link of an
+    // earlier version, its route in the fragment: the app reads it as the path it meant.
     await page.goto(`${server.url}/#/runs/${runs.charge.id}`);
+    await expect(page).toHaveURL(new RegExp(`^[^#]*/runs/${runs.charge.id}$`));
     const failed = page.getByRole("region", { name: "Source" });
     await expect(failed.locator(".code-text .code-row").nth(3)).toContainText("payments.charge({ amount: 100 })");
     await expect(failed.locator(".code-notes .code-row").nth(3)).toContainText("payments.charge");

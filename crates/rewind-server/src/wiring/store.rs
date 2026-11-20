@@ -39,7 +39,7 @@ use rewind_engine::ports::{
     OAuthCode, OpenedOrganization, Rotation, UserId,
 };
 use rewind_engine::ports::{
-    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
     NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Token, TokenKey, Usage,
     UsageDelta, UsageOf,
 };
@@ -702,6 +702,22 @@ impl JournalStore for Store {
         name: &NamespaceName,
     ) -> Result<Option<Namespace>, StoreError> {
         journal!(self, store => store.get_namespace(tenant, name).await)
+    }
+
+    async fn set_namespace_display_name(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        display_name: Option<&DisplayName>,
+    ) -> Result<Option<NamespaceWrite>, StoreError> {
+        journal!(self, store => store.set_namespace_display_name(tenant, name, display_name).await)
+    }
+
+    async fn namespace_display_names(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<(NamespaceName, DisplayName)>, StoreError> {
+        journal!(self, store => store.namespace_display_names(tenant).await)
     }
 
     async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {

@@ -20,7 +20,7 @@ use crate::ports::{
     deferred_timeout_failure,
 };
 use crate::ports::{
-    Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
+    Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter,
     NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert,
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta,
     UsageOf,
@@ -2243,6 +2243,38 @@ impl JournalStore for MemoryJournal {
             .cloned())
     }
 
+    async fn set_namespace_display_name(
+        &self,
+        tenant: &TenantId,
+        name: &NamespaceName,
+        display_name: Option<&DisplayName>,
+    ) -> Result<Option<NamespaceWrite>, StoreError> {
+        let mut state = self.lock()?;
+        let Some(namespace) = state.namespaces.get_mut(&(tenant.clone(), name.clone())) else {
+            return Ok(None);
+        };
+        if namespace.deleting_since.is_some() {
+            return Ok(Some(NamespaceWrite::Deleting));
+        }
+        namespace.display_name = display_name.cloned();
+        Ok(Some(NamespaceWrite::Written(namespace.clone())))
+    }
+
+    async fn namespace_display_names(
+        &self,
+        tenant: &TenantId,
+    ) -> Result<Vec<(NamespaceName, DisplayName)>, StoreError> {
+        Ok(self
+            .lock()?
+            .namespaces
+            .iter()
+            .filter(|((of, _), _)| of == tenant)
+            .filter_map(|((_, name), namespace)| {
+                Some((name.clone(), namespace.display_name.clone()?))
+            })
+            .collect())
+    }
+
     async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {
         let state = self.lock()?;
         let key = |usage: &Usage| match filter.order {
@@ -2254,12 +2286,16 @@ impl JournalStore for MemoryJournal {
         let mut listed: Vec<(u64, NamespaceUsage)> = state
             .namespaces
             .iter()
-            .filter(|((tenant, name), _)| {
+            .filter(|((tenant, name), namespace)| {
                 *tenant == filter.tenant
-                    && filter
-                        .prefix
-                        .as_deref()
-                        .is_none_or(|prefix| name.as_str().starts_with(prefix))
+                    && filter.name.as_ref().is_none_or(|only| only == name)
+                    && filter.prefix.as_deref().is_none_or(|prefix| {
+                        name.as_str().starts_with(prefix)
+                            || namespace
+                                .display_name
+                                .as_ref()
+                                .is_some_and(|display| display.starts_with(prefix))
+                    })
             })
             .map(|((tenant, name), namespace)| {
                 let usage = state.usage_of(tenant, Some(name), filter.month, false);

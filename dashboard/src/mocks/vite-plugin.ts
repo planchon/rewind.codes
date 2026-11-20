@@ -44,7 +44,7 @@ export function mockApi(): Plugin {
           ))
             log(`[mock] invitation for ${inv.email}: /?invitation_token=${inv.token}`);
           for (const id of world.connections.requests.keys())
-            log(`[mock] Claude asks for access: /#/connect/authorize?request=${id}`);
+            log(`[mock] Claude asks for access: /connect/authorize?request=${id}`);
         }
         return createHandlers(world) as unknown[];
       };

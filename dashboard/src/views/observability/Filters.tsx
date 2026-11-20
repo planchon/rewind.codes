@@ -6,6 +6,7 @@ import { useState } from "react";
 import { useNamespaceSuggestions, useSettled } from "../../api/namespaces";
 import type { Facets, FacetValue } from "../../api/types";
 import { useAccess } from "../../app/access";
+import { useNamespaceLabel } from "../../components/NamespaceName";
 import type { RangeKey } from "../../model/filters";
 import { formatCount, shortDigest } from "../../model/format";
 import {
@@ -97,7 +98,12 @@ function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) {
                 }}
               >
                 <Checkbox state={null} />
-                <span className="filter-value">{n.name}</span>
+                <span
+                  className="filter-value"
+                  title={n.displayName ? `Namespace ${n.name}` : undefined}
+                >
+                  {n.displayName ?? n.name}
+                </span>
                 <span className="filter-count">{formatCount(n.usage.runsStarted)}</span>
               </button>
             </li>
@@ -148,9 +154,9 @@ function FilterGroup({
               className={`filter-row${r.state ? ` ${r.state}` : ""}`}
               aria-pressed={r.state === "include"}
               aria-label={`${group.title} ${shown}${r.runs !== null ? `, ${r.runs} runs` : ""}${r.state ? `, ${r.state === "include" ? "asked for" : "excluded"}` : ""}`}
-              title={
+              title={`${
                 r.state ? STATE_WORD[r.state] : `Only runs with ${shown}; click again to exclude`
-              }
+              }${shown !== r.value && group.field === "namespace" ? ` (namespace ${r.value})` : ""}`}
               onClick={() => onToggle(group.field, r.value)}
             >
               <Checkbox state={r.state} />
@@ -178,6 +184,7 @@ export function FilterGroups({
   onToggle: (field: string, value: string) => void;
 }) {
   const access = useAccess();
+  const label = useNamespaceLabel();
   const groups: Group[] = [
     { field: "status", title: "Status", values: facets?.statuses ?? [], dot: true, open: true },
     {
@@ -185,6 +192,7 @@ export function FilterGroups({
       title: "Namespace",
       values: facets?.namespaces ?? [],
       open: true,
+      show: (name: string) => label(name) ?? name,
       ...(access.can("namespaces:read") ? { search: "namespace" as const } : {}),
     },
     ...(facets?.labels ?? []).slice(0, 6).map((l, i) => ({

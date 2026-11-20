@@ -400,6 +400,13 @@ pub(crate) enum NamespacesCommand {
         #[arg(long, value_name = "YYYY-MM")]
         month: Option<String>,
     },
+    /// Gives a namespace a display name, shown beside its name, which stays its key; without
+    /// one, removes it.
+    Rename {
+        name: String,
+        /// The display name, such as "Acme Corp": at most 128 characters.
+        display_name: Option<String>,
+    },
     /// Sets a namespace's exceptions to the default limits, or the defaults with --defaults,
     /// and prints the limits. Without a limit to set, prints them.
     Quotas(QuotasArgs),
@@ -409,7 +416,8 @@ pub(crate) enum NamespacesCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct NamespacesListArgs {
-    /// Only the namespaces whose name starts with this.
+    /// Only the namespaces whose name starts with this, or whose display name does, case
+    /// aside.
     #[arg(long)]
     pub(crate) prefix: Option<String>,
     /// Only those that used at least this share of one of their limits: 0.8 for 80 %.

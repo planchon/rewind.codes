@@ -25,6 +25,8 @@ export interface DayUse {
 
 export interface MockNamespace {
   name: string;
+  /** The name the organization gave it, shown instead of its id. */
+  displayName: string | null;
   createdAt: number;
   exceptions: Quotas;
   lastActiveAt: number;
@@ -78,6 +80,7 @@ function monthStart(month: string): number {
 export function newNamespace(name: string, createdAt: number): MockNamespace {
   return {
     name,
+    displayName: null,
     createdAt,
     exceptions: {},
     lastActiveAt: createdAt,
@@ -143,6 +146,7 @@ export function namespaceDto(world: NamespaceWorld, ns: MockNamespace, month: st
     limits: limitsOf(world, ns),
     usage: usageOf(ns, month),
   };
+  if (ns.displayName !== null) dto.displayName = ns.displayName;
   if (ns.deletingSince !== null) dto.deletingSince = iso(ns.deletingSince);
   return dto;
 }
@@ -290,6 +294,7 @@ function recordAlerts(
 
 interface Story {
   name: string;
+  displayName?: string;
   createdDaysAgo: number;
   exceptions?: Quotas;
   /** This month's totals, up to today. */
@@ -323,6 +328,7 @@ const STORIES: Story[] = [
   {
     // Pays for more: its exceptions lift the defaults.
     name: "chen",
+    displayName: "Chen Logistics",
     createdDaysAgo: 120,
     exceptions: { runsPerMonth: 20_000, cpuPerMonth: "10h", scripts: 2_000 },
     cpuMs: 2 * HOUR + 45 * MINUTE,
@@ -380,6 +386,7 @@ const STORIES: Story[] = [
   },
   {
     name: "user_2fQ81",
+    displayName: "Northwind Travel",
     createdDaysAgo: 18,
     cpuMs: 14 * MINUTE,
     runs: 160,
@@ -390,6 +397,7 @@ const STORIES: Story[] = [
   },
   {
     name: "user_7Kd02",
+    displayName: "Acme Corp",
     createdDaysAgo: 9,
     cpuMs: 22 * MINUTE,
     runs: 2_480,
@@ -451,6 +459,7 @@ export function createNamespaceWorld({
   for (const s of STORIES) {
     const ns = add(s.name, now - s.createdDaysAgo * DAY, now - s.lastActiveAgoMs);
     if (s.exceptions) ns.exceptions = s.exceptions;
+    if (s.displayName) ns.displayName = s.displayName;
     ns.activeRuns = s.activeRuns;
     ns.scripts = s.scripts;
     ns.tokens = s.tokens;

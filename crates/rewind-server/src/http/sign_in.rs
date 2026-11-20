@@ -57,7 +57,7 @@ const REFRESH_BEFORE: Duration = Duration::from_secs(60);
 const USER_AGENT_LIMIT: usize = 512;
 
 /// Where the browser goes after the callback: the dashboard.
-const DASHBOARD: &str = "/#/";
+const DASHBOARD: &str = "/";
 
 /// Real time: tokens expire in the world's time, even on a server in virtual time.
 fn now() -> Timestamp {
@@ -601,7 +601,7 @@ impl CallbackFailure {
 }
 
 /// `GET /auth/callback`: checks `state`, exchanges the code, keeps the outcome in the session
-/// cookie, and sends the browser to the dashboard: `/#/`, or `/?auth_error=<code>#/` when the
+/// cookie, and sends the browser to the dashboard: `/`, or `/?auth_error=<code>` when the
 /// sign-in did not go through. A failure leaves the session cookie as it was, so a forged
 /// callback cannot sign anyone in or out; the GitHub sign-in in progress is over either way.
 pub(super) async fn callback(
@@ -654,7 +654,7 @@ pub(super) async fn callback(
             ));
             DASHBOARD.to_owned()
         }
-        Err(failure) => format!("/?auth_error={}#/", failure.code()),
+        Err(failure) => format!("{DASHBOARD}?auth_error={}", failure.code()),
     };
     let mut response = respond(StatusCode::FOUND, None, &cookies);
     response.headers_mut().insert(

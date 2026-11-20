@@ -1,5 +1,5 @@
 // The consent of an MCP client (archi/07, "MCP and OAuth"): `/oauth/authorize` sends the browser
-// to `#/connect/authorize?request=…`, signed in or not (the sign-in comes back to this address).
+// to `/connect/authorize?request=…`, signed in or not (the sign-in comes back to this address).
 // The person ticks the organizations the client may open, gives each an access within their own
 // role, keeps or unticks the labels of what it starts, and allows or denies; the browser then
 // goes back to the client. A page of its own, outside the dashboard's frame, as a sign-in is.

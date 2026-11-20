@@ -73,6 +73,7 @@ pub const NAMESPACE_CREDENTIALS: &str = "/v1/namespaces/{name}/toolsets/{id}/cre
 pub const NAMESPACE_TOKENS: &str = "/v1/namespaces/{name}/tokens";
 pub const TOKEN: &str = "/v1/tokens/{id}";
 pub const NAMESPACE_DEFAULTS: &str = "/v1/organization/namespace-defaults";
+pub const NAMESPACE_NAMES: &str = "/v1/organization/namespace-names";
 pub const QUOTA_ALERTS: &str = "/v1/organization/quota-alerts";
 pub const TOKEN_KEYS: &str = "/v1/organization/token-keys";
 pub const TOKEN_KEY: &str = "/v1/organization/token-keys/{kid}";
@@ -112,7 +113,7 @@ pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server"
 pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 103] = [
+pub const OPERATIONS: [(&str, &str); 105] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -178,10 +179,12 @@ pub const OPERATIONS: [(&str, &str); 103] = [
     ("GET", NAMESPACES),
     ("GET", NAMESPACE),
     ("PUT", NAMESPACE),
+    ("PATCH", NAMESPACE),
     ("DELETE", NAMESPACE),
     ("PUT", NAMESPACE_CREDENTIALS),
     ("GET", NAMESPACE_DEFAULTS),
     ("PUT", NAMESPACE_DEFAULTS),
+    ("GET", NAMESPACE_NAMES),
     ("GET", QUOTA_ALERTS),
     ("POST", NAMESPACE_TOKENS),
     ("DELETE", NAMESPACE_TOKENS),

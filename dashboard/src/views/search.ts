@@ -110,7 +110,8 @@ function useNamespaceLookup(typed: string | null) {
     () =>
       (found.data?.namespaces ?? []).map((ns) => ({
         value: ns.name,
-        detail: `${formatCount(ns.usage.runsStarted)} runs this month`,
+        detail: `${ns.displayName ? `${ns.displayName} · ` : ""}${formatCount(ns.usage.runsStarted)} runs this month`,
+        ...(ns.displayName ? { also: ns.displayName } : {}),
       })),
     [found.data],
   );

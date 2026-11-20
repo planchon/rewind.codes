@@ -2006,6 +2006,30 @@ button.label:hover {
   color: var(--ink);
 }
 
+/* A namespace's display name, with the id it stands for on hover (components/NamespaceName.tsx). */
+.ns-display {
+  text-decoration: underline dotted color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 3px;
+}
+
+.ns-tip-positioner {
+  z-index: 90;
+}
+
+.ns-tip {
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-menu);
+  color: var(--ink);
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
+
+.ns-tip-label {
+  color: var(--ink-3);
+}
+
 .tooltip .tt-title {
   font-weight: var(--weight-medium);
   margin-bottom: 4px;

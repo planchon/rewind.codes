@@ -13,6 +13,12 @@ A namespace's name is your own id for the end user: 1 to 128 ASCII letters, digi
 Prefer an opaque id (`user_2fQ81`) to an email: names appear in webhooks, the dashboard and logs. A namespace is
 created at its first use.
 
+To recognize who is who, give a namespace a **display name** (`Acme Corp`): `PATCH /v1/namespaces/{name}` with
+`{ "displayName": "Acme Corp" }`, or `rewind namespaces rename user_2fQ81 "Acme Corp"`. The dashboard, the CLI and
+the agent tools show it beside the name, and a search by prefix finds it, case aside. The name stays the key
+everywhere: in paths, queries (`namespace:user_2fQ81`), the `Rewind-Namespace` header, tokens and webhooks. A display
+name holds up to 128 characters and need not be unique; `null` or `""` removes it.
+
 ## Two ways to reach a namespace
 
 ```mermaid

@@ -18,6 +18,7 @@ import { useAccess } from "../../app/access";
 import { useApi } from "../../app/session";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
 import { FormDialog } from "../../components/FormDialog";
+import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
 import { QueryBar } from "../../components/QueryBar";
 import { legacyNamespacesQuery, NAMESPACES_LANGUAGE, namespacesSearch } from "../../model/filters";
@@ -331,8 +332,8 @@ function Namespaces() {
               {(folded ? [] : rows).map((ns) => (
                 <tr key={ns.name} className={`child-row${ns.deletingSince ? " dimmed" : ""}`}>
                   <th scope="row">
-                    <Link to={namespacePath(ns.name)} className="ns-title mono">
-                      {ns.name}
+                    <Link to={namespacePath(ns.name)} className="ns-title">
+                      <NamespaceName name={ns.name} displayName={ns.displayName ?? null} />
                     </Link>
                     <RowNote ns={ns} alert={worstAlert(byNamespace.get(ns.name) ?? [])} />
                   </th>
@@ -393,8 +394,8 @@ function Namespaces() {
               <li key={`${a.namespace ?? "*"}-${a.quota}-${a.threshold}`}>
                 <AlertChip alert={a} />
                 {a.namespace ? (
-                  <Link to={namespacePath(a.namespace)} className="mono">
-                    {a.namespace}
+                  <Link to={namespacePath(a.namespace)}>
+                    <NamespaceName name={a.namespace} />
                   </Link>
                 ) : (
                   <span>{organization}</span>

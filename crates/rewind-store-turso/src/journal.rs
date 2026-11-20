@@ -21,7 +21,7 @@ use rewind_engine::ports::{
     deferred_timeout_failure,
 };
 use rewind_engine::ports::{
-    DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
+    DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
     NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
 use turso::{Connection, Row, Value};
@@ -3036,6 +3036,28 @@ impl JournalStore for TursoStore {
     ) -> Result<Option<Namespace>, StoreError> {
         let connection = self.connection().await?;
         Ok(namespaces::get_namespace(&connection, tenant_id, name).await?)
+    }
+
+    async fn set_namespace_display_name(
+        &self,
+        tenant_id: &TenantId,
+        name: &NamespaceName,
+        display_name: Option<&DisplayName>,
+    ) -> Result<Option<NamespaceWrite>, StoreError> {
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            Ok(namespaces::set_display_name(connection, tenant_id, name, display_name).await?)
+        })
+        .await
+    }
+
+    async fn namespace_display_names(
+        &self,
+        tenant_id: &TenantId,
+    ) -> Result<Vec<(NamespaceName, DisplayName)>, StoreError> {
+        let connection = self.connection().await?;
+        Ok(namespaces::display_names(&connection, tenant_id).await?)
     }
 
     async fn list_namespaces(&self, filter: &NamespaceFilter) -> Result<NamespacePage, StoreError> {

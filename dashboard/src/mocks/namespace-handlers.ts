@@ -1,7 +1,13 @@
 // The mocked namespaces endpoints of `/v1` (archi/07, "HTTP API /v1"), and the header
 // `Rewind-Namespace`, which narrows a key's or a member's reads to one namespace.
 import { HttpResponse, http } from "msw";
-import type { NamespaceOrder, PutNamespace, PutNamespaceDefaults, Quotas } from "../api/types";
+import type {
+  NamespaceOrder,
+  NamespacePatch,
+  PutNamespace,
+  PutNamespaceDefaults,
+  Quotas,
+} from "../api/types";
 import { durationMs, isMonth, monthOf, namespaceNameProblem } from "../model/quotas";
 import type { Caller } from "./access";
 import { guard, json } from "./access-handlers";
@@ -131,6 +137,7 @@ export function namespaceHandlers(world: World, now: () => number) {
       if (!(Number.isInteger(limit) && limit > 0))
         return problem(400, "invalid-request", "limit: expected a whole number from 1 to 500.");
       const prefix = q.get("prefix") ?? "";
+      const folded = prefix.toLowerCase();
       const namespaces = namespacesOf(world, caller);
       const key = (name: string): number => {
         const ns = namespaces.namespaces.get(name);
@@ -142,7 +149,8 @@ export function namespaceHandlers(world: World, now: () => number) {
       const listed = [...namespaces.namespaces.values()]
         .filter(
           (ns) =>
-            ns.name.startsWith(prefix) &&
+            (ns.name.startsWith(prefix) ||
+              (ns.displayName ?? "").toLowerCase().startsWith(folded)) &&
             (scope === null || ns.name === scope) &&
             (above === null || highest(namespaces, ns, month) >= above),
         )
@@ -192,6 +200,47 @@ export function namespaceHandlers(world: World, now: () => number) {
       }
       ns.exceptions = cleanQuotas(body.exceptions);
       return HttpResponse.json(detailDto(found.namespaces, ns, monthOf(now())));
+    }),
+
+    http.patch("*/v1/namespaces/:name", async ({ request, params }) => {
+      const name = String(params.name);
+      const found = reach(request, name, "namespaces:write");
+      if (found instanceof Response) return found;
+      if (!found.ns) return noNamespace(name);
+      const body = await json<NamespacePatch>(request);
+      if (body instanceof Response) return body;
+      const unknown = Object.keys(body).filter((k) => k !== "displayName");
+      if (unknown.length > 0)
+        return problem(400, "invalid-request", `${unknown[0]}: not a field of a namespace patch.`);
+      if (found.ns.deletingSince != null)
+        return problem(
+          409,
+          "namespace-deleting",
+          `The namespace ${name} is being erased: it takes no change.`,
+        );
+      if ("displayName" in body) {
+        const value = body.displayName;
+        if (value !== null && value !== undefined && typeof value !== "string")
+          return problem(400, "invalid-request", "displayName: expected a string or null.");
+        const trimmed = (value ?? "").trim();
+        if ([...trimmed].length > 128 || /\p{Cc}/u.test(trimmed))
+          return problem(
+            400,
+            "invalid-request",
+            "displayName: at most 128 characters, without control characters.",
+          );
+        found.ns.displayName = trimmed === "" ? null : trimmed;
+      }
+      return HttpResponse.json(detailDto(found.namespaces, found.ns, monthOf(now())));
+    }),
+
+    http.get("*/v1/organization/namespace-names", ({ request }) => {
+      const caller = guard(world, request, "namespaces:read");
+      if (caller instanceof Response) return caller;
+      const names = [...namespacesOf(world, caller).namespaces.values()]
+        .flatMap((ns) => (ns.displayName ? [{ name: ns.name, displayName: ns.displayName }] : []))
+        .sort((a, b) => (a.name < b.name ? -1 : 1));
+      return HttpResponse.json({ namespaces: names });
     }),
 
     http.delete("*/v1/namespaces/:name", ({ request, params }) => {

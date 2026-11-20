@@ -1176,7 +1176,8 @@ pub fn describe_orgs(organizations: &[OrganizationView<'_>]) -> String {
     lines.join("\n")
 }
 
-/// `list_namespaces`: a page of namespaces, the most active first.
+/// `list_namespaces`: a page of namespaces, the most active first, each with its display name
+/// beside its name.
 pub fn describe_namespaces(
     list: &rewind_api::namespaces::NamespaceList,
     prefix: Option<&str>,
@@ -1208,8 +1209,12 @@ pub fn describe_namespaces(
         if namespace.deleting_since.is_some() {
             parts.push("being erased: it takes no run".to_owned());
         }
+        let shown = match &namespace.display_name {
+            Some(display) => format!(" ({})", quoted(display)),
+            None => String::new(),
+        };
         lines.push(format!(
-            "- {}: {}",
+            "- {}{shown}: {}",
             namespace.name.as_str(),
             parts.join(", ")
         ));
@@ -1221,7 +1226,18 @@ pub fn describe_namespaces(
                 .map_or(0, |shown| list.total.saturating_sub(shown))
         ));
     }
-    lines.push("Give one as `namespace` to check_script, test_script and run_script.".to_owned());
+    lines.push(
+        if list
+            .namespaces
+            .iter()
+            .any(|namespace| namespace.display_name.is_some())
+        {
+            "Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."
+        } else {
+            "Give one as `namespace` to check_script, test_script and run_script."
+        }
+        .to_owned(),
+    );
     lines.join("\n")
 }
 
@@ -1549,6 +1565,38 @@ mod tests {
             "All 2 tests passed.\nPASS \"a\"\nPASS \"b\""
         );
         assert_eq!(describe_test_results(&[], &limits), "No test ran.");
+    }
+
+    #[test]
+    fn namespaces_show_their_display_name_beside_their_name() {
+        let list: rewind_api::namespaces::NamespaceList = serde_json::from_value(json!({
+            "month": "2026-11",
+            "total": 2,
+            "namespaces": [
+                {
+                    "name": "user_2fQ81", "displayName": "Acme Corp",
+                    "limits": {}, "exceptions": {},
+                    "usage": { "cpu": "1s", "activeRuns": 0, "runsStarted": 1, "scripts": 1 },
+                    "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-18T10:00:00Z"
+                },
+                {
+                    "name": "user_9xZ", "limits": {}, "exceptions": {},
+                    "usage": { "cpu": "0s", "activeRuns": 0, "runsStarted": 0, "scripts": 0 },
+                    "createdAt": "2026-11-01T00:00:00Z", "lastActiveAt": "2026-11-01T00:00:00Z"
+                }
+            ]
+        }))
+        .unwrap();
+        let text = describe_namespaces(&list, Some("acme"));
+        assert!(
+            text.contains("\n- user_2fQ81 (\"Acme Corp\"): 1 run this month"),
+            "{text}"
+        );
+        assert!(text.contains("\n- user_9xZ: 0 runs this month"), "{text}");
+        assert!(
+            text.ends_with("Give one's name, not its display name in parentheses, as `namespace` to check_script, test_script and run_script."),
+            "{text}"
+        );
     }
 
     #[test]

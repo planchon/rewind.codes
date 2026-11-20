@@ -129,6 +129,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             routes::NAMESPACE,
             get(namespaces::get)
                 .put(namespaces::put)
+                .patch(namespaces::patch)
                 .delete(namespaces::delete),
         )
         .route(routes::NAMESPACE_CREDENTIALS, put(namespaces::credentials))
@@ -136,6 +137,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             routes::NAMESPACE_DEFAULTS,
             get(namespaces::defaults).put(namespaces::put_defaults),
         )
+        .route(routes::NAMESPACE_NAMES, get(namespaces::names))
         .route(routes::QUOTA_ALERTS, get(namespaces::alerts))
         .route(routes::ORGANIZATION_QUOTAS, put(namespaces::put_ceiling))
         .route(

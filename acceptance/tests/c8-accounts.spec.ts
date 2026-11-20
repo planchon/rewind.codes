@@ -166,9 +166,9 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       await create.getByLabel("Name").fill(organizationName);
       await create.getByRole("button", { name: "Create", exact: true }).click();
       // The session moved onto the new organization: its owner reads its runs.
-      await expect(page).toHaveURL(/#\/overview/);
+      await expect(page).toHaveURL(/^[^#]*\/overview$/);
       await openOrganization(page);
-      await expect(page).toHaveURL(/#\/organization\/members/);
+      await expect(page).toHaveURL(/^[^#]*\/organization\/members/);
       await expect(page.getByRole("region", { name: "Organization" })).toContainText(organizationName);
       await expect(page.getByRole("heading", { level: 1, name: "Members" })).toBeVisible();
       organization = (await page.locator(".org-card .digest").textContent())?.trim() ?? "";
@@ -256,7 +256,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
       await expect
         .poll(async () => ((await call(server, key, "GET", "/v1/runs?q=%40suite%3Ac8")).body.runs as unknown[]).length)
         .toBe(1);
-      await page.goto(`${origin}/#/runs`);
+      await page.goto(`${origin}/runs`);
       await expect(page.locator(`table.grid tbody tr .run-id[title="${started.id}"]`)).toBeVisible();
     });
 
@@ -286,7 +286,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
         await enter.getByLabel("Code", { exact: true }).fill(code);
         // In the organization at once, as a reader: the runs, and of the organization what reading
         // members and roles shows.
-        await expect(other).toHaveURL(/#\/overview/);
+        await expect(other).toHaveURL(/^[^#]*\/overview$/);
         expect(other.url()).not.toContain("invitation_token");
         expect(await workos.invitationState(invitation.id)).toBe("accepted");
         await openOrganization(other);
@@ -312,7 +312,7 @@ test.describe("criterion 8: accounts, organizations and access", () => {
     });
 
     await test.step("the owner sees the invitee as a reader, and the invitation accepted", async () => {
-      await page.goto(`${origin}/#/organization/members`);
+      await page.goto(`${origin}/organization/members`);
       const row = page.locator("table.grid tbody tr", { hasText: invitee });
       await expect(row.locator(".tag", { hasText: /^reader$/ })).toBeVisible();
       await openSection(page, "Invitations");

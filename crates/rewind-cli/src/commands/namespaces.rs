@@ -1,10 +1,11 @@
-//! `rewind namespaces list|show|quotas|delete`: the end users of the tenant, their limits and
-//! their use (`archi/06-storage-and-scale.md`, "Namespaces", "Quotas"). These commands span
+//! `rewind namespaces list|show|rename|quotas|delete`: the end users of the tenant, their
+//! display names, their limits and their use (`archi/06-storage-and-scale.md`, "Namespaces", "Quotas"). These commands span
 //! namespaces: they are bound to one only when `--namespace` names it.
 
 use rewind_api::namespaces::{
-    NamespaceDefaults, NamespaceDetail, NamespaceList, NamespaceListQuery, NamespaceName,
-    NamespaceQuery, PutNamespace, PutNamespaceDefaults, QuotaUsage, Quotas,
+    Namespace, NamespaceDefaults, NamespaceDetail, NamespaceList, NamespaceListQuery,
+    NamespaceName, NamespacePatch, NamespaceQuery, PutNamespace, PutNamespaceDefaults, QuotaUsage,
+    Quotas,
 };
 use serde_json::json;
 
@@ -32,6 +33,22 @@ pub(super) async fn namespaces(
                 console.print_json(&detail)?;
             } else {
                 console.text(&show(&detail));
+            }
+            Ok(Exit::Success)
+        }
+        NamespacesCommand::Rename { name, display_name } => {
+            let name = parse(&name)?;
+            let client = server.unbound_client().await?;
+            let detail = client
+                .patch_namespace(&name, &NamespacePatch::display_name(display_name))
+                .await?;
+            if console.json() {
+                console.print_json(&detail)?;
+            } else {
+                console.line(match &detail.namespace.display_name {
+                    Some(display) => format!("namespace {name} is shown as {display:?}"),
+                    None => format!("namespace {name} has no display name"),
+                });
             }
             Ok(Exit::Success)
         }
@@ -150,6 +167,14 @@ fn against<T: ToString>(used: impl ToString, limit: Option<T>) -> String {
     }
 }
 
+/// Its name, then its display name quoted: `user_2fQ81 "Acme Corp"`.
+fn named(namespace: &Namespace) -> String {
+    match &namespace.display_name {
+        Some(display) => format!("{} {display:?}", namespace.name),
+        None => namespace.name.to_string(),
+    }
+}
+
 fn listing(page: &NamespaceList) -> String {
     if page.namespaces.is_empty() {
         return format!("no namespace for {}\n", page.month);
@@ -165,7 +190,7 @@ fn listing(page: &NamespaceList) -> String {
     for namespace in &page.namespaces {
         let limits = &namespace.limits;
         let usage = &namespace.usage;
-        let mut name = namespace.name.to_string();
+        let mut name = named(namespace);
         if namespace.deleting_since.is_some() {
             name.push_str(" (erasing)");
         }
@@ -237,7 +262,9 @@ fn show(detail: &NamespaceDetail) -> String {
     let namespace = &detail.namespace;
     let mut text = format!(
         "namespace {}: created {}, last active {}\n",
-        namespace.name, namespace.created_at, namespace.last_active_at
+        named(namespace),
+        namespace.created_at,
+        namespace.last_active_at
     );
     if let Some(since) = namespace.deleting_since {
         text.push_str(&format!("being erased since {since}\n"));
@@ -306,7 +333,6 @@ fn show_defaults(defaults: &NamespaceDefaults) -> String {
 #[cfg(test)]
 mod tests {
     use rewind_api::common::Timestamp;
-    use rewind_api::namespaces::Namespace;
 
     use super::*;
 
@@ -320,6 +346,7 @@ mod tests {
             month: "2026-11".into(),
             namespaces: vec![Namespace {
                 name: "alice".parse().unwrap(),
+                display_name: Some("Acme Corp".into()),
                 limits: Quotas {
                     active_runs: Some(10),
                     cpu_per_month: Some("2h".parse().unwrap()),
@@ -341,7 +368,7 @@ mod tests {
         };
         let text = listing(&page);
         assert!(text.starts_with("2026-11 · 12 namespaces\nNAME"), "{text}");
-        assert!(text.contains("alice (erasing)"), "{text}");
+        assert!(text.contains("alice \"Acme Corp\" (erasing)"), "{text}");
         assert!(text.contains("30m/2h"), "{text}");
         assert!(text.contains("3/10"), "{text}");
         assert!(text.contains(" 12 "), "{text}");

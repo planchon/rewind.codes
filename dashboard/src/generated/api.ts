@@ -589,7 +589,13 @@ export interface paths {
         delete: operations["deleteNamespace"];
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Change a namespace
+         * @description A JSON merge patch of an existing namespace: `displayName` sets the label shown beside its
+         *     name, which stays its key; `null` or `""` removes it; what is absent stays. Never creates
+         *     the namespace. Requires `namespaces:write`.
+         */
+        patch: operations["patchNamespace"];
         trace?: never;
     };
     "/v1/namespaces/{name}/tokens": {
@@ -876,6 +882,28 @@ export interface paths {
          * @description Requires `namespaces:write`.
          */
         put: operations["putNamespaceDefaults"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/organization/namespace-names": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the display names
+         * @description Every namespace of the organization that has a display name, with it, by name: what a
+         *     client loads once to show the display names beside the names. Not paged. Requires
+         *     `namespaces:read`.
+         */
+        get: operations["listNamespaceNames"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -3159,6 +3187,8 @@ export interface components {
              * @description Set while the namespace is being erased: it takes no run and no token.
              */
             deletingSince?: string | null;
+            /** @description The customer's label for the end user, shown beside the name, which stays its key. */
+            displayName?: string | null;
             /** @description The namespace's exceptions to the defaults. */
             exceptions: components["schemas"]["Quotas"];
             /**
@@ -3205,6 +3235,12 @@ export interface components {
              */
             tokensRevokedBefore?: string | null;
         };
+        /** @description A namespace's display name. */
+        NamespaceDisplayName: {
+            /** @example Acme Corp */
+            displayName: string;
+            name: components["schemas"]["NamespaceName"];
+        };
         /** @description `GET /v1/namespaces`: a page of namespaces. */
         NamespaceList: {
             /** @description The month whose use is listed, `2026-11`. */
@@ -3225,6 +3261,26 @@ export interface components {
          * @example user_2fQ81
          */
         NamespaceName: string;
+        /**
+         * @description `GET /v1/organization/namespace-names`: every namespace of the organization that has a
+         *     display name, by name. Not paged.
+         */
+        NamespaceNames: {
+            namespaces: components["schemas"]["NamespaceDisplayName"][];
+        };
+        /**
+         * @description `PATCH /v1/namespaces/{name}`: a JSON merge patch (RFC 7396) of the namespace, which must
+         *     exist. What is absent stays.
+         */
+        NamespacePatch: {
+            /**
+             * @description The customer's label for the end user (`Acme Corp`), shown beside the name, which stays
+             *     its key everywhere. Trimmed; at most 128 characters, none of them a control character;
+             *     not unique. `null` or `""` removes it.
+             * @example Acme Corp
+             */
+            displayName?: string | null;
+        };
         /**
          * @description An OAuth error (RFC 6749, section 5.2; RFC 7591, section 3.2.2), answered as
          *     `application/json` with `Cache-Control: no-store`.
@@ -4983,10 +5039,10 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description To the dashboard: `/#/`, or `/?auth_error=<code>#/` when the sign-in did not go through. */
+            /** @description To the dashboard: `/`, or `/?auth_error=<code>` when the sign-in did not go through. */
             302: {
                 headers: {
-                    /** @description `/#/`, or `/?auth_error=<code>#/`. */
+                    /** @description `/`, or `/?auth_error=<code>`. */
                     Location?: string;
                     /** @description `rewind_session` when signed in or at a step; `rewind_oauth` cleared. */
                     "Set-Cookie"?: string;
@@ -5718,7 +5774,7 @@ export interface operations {
             /** @description To the consent page, or back to the client with an error. */
             302: {
                 headers: {
-                    /** @description `{dashboard}/#/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`. */
+                    /** @description `{dashboard}/connect/authorize?request=…`, or the client's redirect URI with `error` and `state`. */
                     Location?: string;
                     [name: string]: unknown;
                 };
@@ -6616,7 +6672,7 @@ export interface operations {
     listNamespaces: {
         parameters: {
             query?: {
-                /** @description Names starting with this. */
+                /** @description Names starting with this, or display names starting with it case aside. */
                 prefix?: string;
                 /**
                  * @description Only the namespaces that used at least this share of one of their limits this month:
@@ -6914,6 +6970,99 @@ export interface operations {
             };
             /** @description No such namespace. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    patchNamespace: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NamespacePatch"];
+            };
+        };
+        responses: {
+            /** @description The namespace as it now is. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceDetail"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such namespace. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The namespace is being erased (`namespace-deleting`). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8295,6 +8444,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NamespaceDefaults"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listNamespaceNames: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The display names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NamespaceNames"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */

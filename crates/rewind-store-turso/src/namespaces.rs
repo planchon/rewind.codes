@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use rewind_core::{Digest, Timestamp};
 use rewind_engine::ports::{
-    CreateRun, Day, DayUsage, DeleteNamespace, DropNamespace, Month, Namespace, NamespaceFilter,
-    NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, NewRun,
-    QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention, Tenant,
-    TenantId, Threshold, Usage, UsageDelta, UsageOf,
+    CreateRun, Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace,
+    NamespaceFilter, NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite,
+    NewRun, QuotaAlert, QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Retention,
+    Tenant, TenantId, Threshold, Usage, UsageDelta, UsageOf,
 };
 use turso::{Connection, Row, Value};
 
@@ -153,9 +153,15 @@ async fn tenant_or_default(connection: &Connection, id: &TenantId) -> Result<Ten
 
 fn namespace_columns() -> String {
     format!(
-        "tenant, name, {}, tokens_revoked_before, created_at, last_active_at, deleting_since",
+        "tenant, name, {}, tokens_revoked_before, created_at, last_active_at, deleting_since, \
+         display_name",
         quota_columns("")
     )
+}
+
+fn display_name_of(text: String) -> Result<DisplayName, Error> {
+    DisplayName::new(text.clone())
+        .map_err(|_| Error::Corrupt(format!("invalid display name {text:?}")))
 }
 
 fn namespace_from_row(row: &Row) -> Result<Namespace, Error> {
@@ -164,6 +170,7 @@ fn namespace_from_row(row: &Row) -> Result<Namespace, Error> {
         tenant: row.tenant(0)?,
         name: NamespaceName::new(name.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {name:?}")))?,
+        display_name: row.opt_text(12)?.map(display_name_of).transpose()?,
         exceptions: quotas_from_row(row, 2)?,
         tokens_revoked_before: row.opt_ts(8)?,
         created_at: row.ts(9)?,
@@ -235,6 +242,57 @@ pub(crate) async fn put_namespace(
         exceptions: exceptions.clone(),
         ..namespace
     }))
+}
+
+pub(crate) async fn set_display_name(
+    connection: &Connection,
+    tenant_id: &TenantId,
+    name: &NamespaceName,
+    display_name: Option<&DisplayName>,
+) -> Result<Option<NamespaceWrite>, Error> {
+    let Some(namespace) = get_namespace(connection, tenant_id, name).await? else {
+        return Ok(None);
+    };
+    if namespace.deleting_since.is_some() {
+        return Ok(Some(NamespaceWrite::Deleting));
+    }
+    sql::execute(
+        connection,
+        "UPDATE namespaces SET display_name = ? WHERE tenant = ? AND name = ?",
+        vec![
+            sql::opt_text(display_name.map(DisplayName::as_str)),
+            tenant(tenant_id),
+            text(name.as_str()),
+        ],
+    )
+    .await?;
+    Ok(Some(NamespaceWrite::Written(Namespace {
+        display_name: display_name.cloned(),
+        ..namespace
+    })))
+}
+
+pub(crate) async fn display_names(
+    connection: &Connection,
+    tenant_id: &TenantId,
+) -> Result<Vec<(NamespaceName, DisplayName)>, Error> {
+    sql::query(
+        connection,
+        "SELECT name, display_name FROM namespaces \
+         WHERE tenant = ? AND display_name IS NOT NULL ORDER BY name",
+        vec![tenant(tenant_id)],
+    )
+    .await?
+    .iter()
+    .map(|row| {
+        let name = row.text(0)?;
+        Ok((
+            NamespaceName::new(name.clone())
+                .map_err(|_| Error::Corrupt(format!("invalid namespace {name:?}")))?,
+            display_name_of(row.text(1)?)?,
+        ))
+    })
+    .collect()
 }
 
 pub(crate) async fn revoke_namespace_tokens(
@@ -1020,11 +1078,18 @@ pub(crate) async fn list_namespaces(
     for row in &rows {
         let namespace = namespace_from_row(row)?;
         let name = namespace.name.as_str();
-        if filter
-            .prefix
-            .as_deref()
-            .is_some_and(|prefix| !name.starts_with(prefix))
-        {
+        let matches = filter
+            .name
+            .as_ref()
+            .is_none_or(|only| *only == namespace.name)
+            && filter.prefix.as_deref().is_none_or(|prefix| {
+                name.starts_with(prefix)
+                    || namespace
+                        .display_name
+                        .as_ref()
+                        .is_some_and(|display| display.starts_with(prefix))
+            });
+        if !matches {
             continue;
         }
         let (cpu, runs_started) = used.get(name).copied().unwrap_or_default();
