@@ -25,21 +25,23 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, Interruption, JsonValue, Lifecycle, Next,
-    NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted, RunStatus, Script, Seq,
-    ToolFailure, ToolFailureKind, Toolset,
+    Attachments, Command, Completion, Event, HistoryEntry, Interruption, JsonValue, Lifecycle,
+    Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted, RunStatus, Script,
+    Seq, ToolFailure, ToolFailureKind, Toolset,
 };
 
 use crate::activation::{Batch, Grace, abort_reason};
 use crate::adapters::StaticTypeChecker;
+use crate::attachments::AttachRights;
 use crate::engine::{
     Engine, EngineError, StartError, idempotency_key, refuse_nul_in_metadata, type_check,
 };
 use crate::payloads;
 use crate::ports::{
     BlobStore, Clock, CompiledScript, CreateRun, Created, Emitted, Entropy, ForkParent,
-    JournalStore, NewRun, RunMetadata, RunRecord, RunRef, ScriptExecutor, ScriptInstance,
-    SecretStore, StartScript, StoreError, ToolDispatcher, TraceContext, TypeChecker, WebhookSender,
+    JournalStore, NamespaceName, NewRun, RunMetadata, RunRecord, RunRef, ScriptExecutor,
+    ScriptInstance, SecretStore, StartScript, StoreError, TenantId, ToolDispatcher, TraceContext,
+    TypeChecker, WebhookSender,
 };
 use crate::replay::{Heartbeat, NoHeartbeat};
 use crate::text;
@@ -61,6 +63,11 @@ pub struct ForkRun {
     pub trace_context: Option<TraceContext>,
     /// A retried request with the same key returns the same fork.
     pub idempotency_key: Option<String>,
+    /// The fork's attachments; the parent's when `None`. Either way they are checked against
+    /// `attach`: the script is new code (`archi/04-tools.md`, "Secrets").
+    pub secrets: Option<Attachments>,
+    /// What the caller may attach.
+    pub attach: AttachRights,
 }
 
 impl ForkRun {
@@ -74,6 +81,8 @@ impl ForkRun {
             labels: None,
             trace_context: None,
             idempotency_key: None,
+            secrets: None,
+            attach: AttachRights::NamespaceOnly,
         }
     }
 }
@@ -263,10 +272,25 @@ where
             workflow: None,
             started_by: None,
             scope: record.metadata.scope.clone(),
+            secrets: request
+                .secrets
+                .clone()
+                .unwrap_or_else(|| record.metadata.secrets.clone()),
         };
         refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref()).map_err(refused)?;
         let stored = self.toolset(&parent.tenant, record.toolset).await?;
         let toolset = stored.toolset;
+        if !metadata.secrets.is_empty() || toolset.taking_secrets().next().is_some() {
+            self.check_fork_attachments(
+                &request.attach,
+                &parent.tenant,
+                &record.namespace,
+                &metadata.secrets,
+                &toolset,
+            )
+            .await
+            .map_err(ForkError::Start)?;
+        }
         let compiled = self
             .executor
             .compile(&request.script, &toolset)
@@ -391,6 +415,28 @@ where
 
     /// The first activation of a fork: follows the parent's history, then delivers the
     /// outcomes of the inherited calls. Returns the fork's instance.
+    /// Refuses a fork whose attachments, the parent's or its own, do not fit its script and
+    /// toolset, or that the caller may not attach: the script is new code, so even the parent's
+    /// are checked against the caller (`archi/04-tools.md`, "Secrets").
+    #[expect(
+        clippy::todo,
+        reason = "the engine-server workstream checks the attachments"
+    )]
+    async fn check_fork_attachments(
+        &self,
+        attach: &AttachRights,
+        tenant: &TenantId,
+        namespace: &NamespaceName,
+        secrets: &Attachments,
+        toolset: &Toolset,
+    ) -> Result<(), StartError> {
+        let _ = (attach, tenant, namespace, secrets, toolset);
+        todo!(
+            "engine-server: check a fork's attachments as a start's, against the caller's \
+             AttachRights; refuse with StartError::SecretRequired"
+        )
+    }
+
     pub(crate) async fn start_fork<H: Heartbeat>(
         &self,
         batch: &mut Batch<'_>,

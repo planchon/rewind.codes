@@ -6,8 +6,8 @@
 //!      │ reject ▲  ▲  ▲     ▲   next_attempt_at,      │ │ │ the claim expires:       ▲
 //!      ▼        │  │  │     │   a concurrency slot    │ │ │ claimed again,           │
 //!    done       │  │  │     └──── retry (backoff) ────┘ │ │ attempt + 1              │
-//!               │  │  └── approve, credentials ───┐   │ │                          │
-//!               │  │      renewed (resume_parked) │   │ └─► deferred ── complete, ─┤
+//!               │  │  └── approve, the secret ────┐   │ │                          │
+//!               │  │      put again (resume_parked)│  │ └─► deferred ── complete, ─┤
 //!               │  │                           parked ◄─┘   (a token)   fail,      │
 //!               │  │                              │ reject              timeout    │
 //!               │  │                              └────────────────────────────────┤
@@ -25,6 +25,7 @@ use rewind_core::{
 };
 
 use crate::ports::namespaces::NamespaceName;
+use crate::ports::secrets::SecretId;
 use crate::ports::tenancy::{RunRef, TenantId, TenantScope};
 
 /// A tool task: the call `seq` of a run.
@@ -66,7 +67,7 @@ pub enum TaskState {
     Claimed { owner: String, until: Timestamp },
     /// The handler answers later, with the token of its claim, before `until`.
     Deferred { until: Timestamp },
-    /// Waits for the harness after a schema change or a refusal of the credentials.
+    /// Waits for the harness after a schema change, a refused call or a missing secret.
     Parked(ParkReason),
 }
 
@@ -90,14 +91,36 @@ pub struct ParkReason {
     pub message: String,
 }
 
+/// Stored as `schema_changed`, `credentials_refused` and `secret_missing`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ParkKind {
     /// The tool's current schema no longer matches the call (`tool.schema_changed`). Approved,
     /// the call is sent against the new schema: the task's `schema_change_approved` is set.
     SchemaChanged,
-    /// The server refused the credentials (`credentials.expired`). Renewed credentials make the
-    /// task ready again.
-    CredentialsExpired,
+    /// The server answered 401 to the attached secret or to the signature
+    /// (`credentials.expired`, reason `refused`). The secret put again, or the harness's
+    /// approval, makes the task ready again.
+    CredentialsRefused,
+    /// The secret the run attached for the server no longer exists: parked by the engine before
+    /// anything was sent (`credentials.expired`, reason `missing`). The secret put again makes
+    /// the task ready again.
+    SecretMissing,
+}
+
+impl ParkKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParkKind::SchemaChanged => "schema_changed",
+            ParkKind::CredentialsRefused => "credentials_refused",
+            ParkKind::SecretMissing => "secret_missing",
+        }
+    }
+
+    /// Whether putting the secret the call reads again makes the task ready: a refusal or a
+    /// missing secret (`archi/04-tools.md`, "Secrets").
+    pub fn resumed_by_secret(self) -> bool {
+        matches!(self, ParkKind::CredentialsRefused | ParkKind::SecretMissing)
+    }
 }
 
 /// A task as the store keeps it.
@@ -175,20 +198,42 @@ pub enum TaskUpdate {
     InvalidState(TaskState),
 }
 
-/// The tasks `resume_parked` makes ready again, once credentials were renewed.
+/// The tasks `resume_parked` makes ready again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParkedScope {
-    /// The run's credentials were renewed.
-    Run(RunRef),
-    /// The toolset's credentials were renewed: every run of the tenant with this toolset.
-    Toolset { tenant: TenantId, toolset: Digest },
-    /// An end user's credentials for a toolset were renewed: every run of the namespace with
-    /// this toolset.
-    Namespace {
-        tenant: TenantId,
-        namespace: NamespaceName,
-        toolset: Digest,
-    },
+    /// A secret was put again: the tasks parked by
+    /// [`CredentialsRefused`](ParkKind::CredentialsRefused) or
+    /// [`SecretMissing`](ParkKind::SecretMissing) whose run attaches it for the task's server or
+    /// API: `org/<name>` for an organization's secret, in every namespace; `ns/<name>` for a
+    /// namespace's, in the runs of that namespace only.
+    Secret { tenant: TenantId, secret: SecretId },
+}
+
+/// What reads a secret (`archi/04-tools.md`, "Secrets": who reads what), as
+/// `secret_usage` answers it before a deletion.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SecretUsage {
+    /// The active runs that attach it, oldest first, at most the `limit` given.
+    pub active_runs: Vec<RunRef>,
+    /// How many active runs attach it, all of them.
+    pub active_total: u64,
+    /// Those of the active runs with a call to a server or an API it serves that is parked or
+    /// not yet sent, oldest first, at most the `limit` given.
+    pub waiting_runs: Vec<RunRef>,
+    /// How many of them, all of them.
+    pub waiting_total: u64,
+    /// The latest version of each workflow of the tenant that attaches it, by workflow name. A
+    /// version attaching `ns/<name>` counts for the secret `<name>` of every namespace.
+    pub versions: Vec<WorkflowAttaching>,
+}
+
+/// The latest version of a workflow, which attaches a secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkflowAttaching {
+    pub name: String,
+    pub version: Digest,
+    /// The servers and APIs it attaches the secret for, sorted.
+    pub servers: Vec<String>,
 }
 
 /// The failure a deferred task ends with when no answer came before its deadline. Every store

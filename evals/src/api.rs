@@ -657,8 +657,8 @@ impl Api for World {
                  scripts start workflows from rewind:workflows",
             ));
         }
-        if start.credentials.is_some() {
-            return Err(invalid("the evals' world takes no credentials"));
+        if !start.secrets.is_empty() {
+            return Err(invalid("the evals' world attaches no secrets"));
         }
         let labels = self.within(start.labels.0.clone())?;
         let stored = self.stored_toolset(start.toolset.as_deref()).await?;
@@ -1036,8 +1036,10 @@ impl Api for World {
                  with base",
             ));
         }
-        if toolset.credentials.is_some() {
-            return Err(invalid("the evals' world takes no credentials"));
+        if !toolset.secrets.is_empty() || !toolset.apis.is_empty() {
+            return Err(invalid(
+                "the evals' world takes no secrets and no APIs: its servers are MCP servers",
+            ));
         }
         let base = self.stored_toolset(Some(base)).await?.toolset;
         let mut pinned: BTreeMap<String, rewind_core::PinnedWorkflow> = base
@@ -1144,6 +1146,10 @@ impl Api for World {
                     toolset,
                     schemas,
                     labels: self.labels.clone(),
+                    secrets: Default::default(),
+                    attach: rewind_engine::attachments::AttachRights::Organization {
+                        labels: Default::default(),
+                    },
                     declarations: WorkflowDeclarations {
                         signals: generated.signals,
                         entry: generated.entry,

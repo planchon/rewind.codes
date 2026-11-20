@@ -45,7 +45,7 @@ pub type EvalEngine = Engine<
     MemoryJournal,
     MemoryBlobs,
     V8Executor,
-    RoutingDispatcher<McpDispatcher, Unrouted, Unrouted>,
+    RoutingDispatcher<McpDispatcher, Unrouted, Unrouted, Unrouted>,
     SharedClock,
     SeededEntropy,
     MemorySecrets,
@@ -251,7 +251,7 @@ impl World {
                 journal: MemoryJournal::new(),
                 blobs: MemoryBlobs::new(),
                 executor,
-                dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted),
+                dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted, Unrouted),
                 clock: clock.clone(),
                 entropy: SeededEntropy::new(1),
                 secrets: MemorySecrets::new(),
@@ -373,7 +373,6 @@ impl World {
                     ..RunMetadata::default()
                 },
                 idempotency_key: None,
-                credentials: None,
             })
             .await
             .map_err(|error: StartError| refused(error.to_string()))?;

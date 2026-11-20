@@ -1,5 +1,5 @@
 //! Runs: start, list, state, trace, entries, signals, cancellation, forks, export, quarantine,
-//! credentials and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
+//! the secrets they attach and erasure (`archi/03-execution.md`, `archi/07-code-architecture.md`).
 
 use std::sync::Arc;
 
@@ -17,8 +17,10 @@ use rewind_api::runs::{
     TraceQuery,
 };
 use rewind_core::{
-    Command, Event, JournalDocument, Lifecycle, Matching, RunMode, Script, canonical_json,
+    Attachments, Command, Event, JournalDocument, Lifecycle, Matching, RunMode, Script, SecretRef,
+    canonical_json,
 };
+use rewind_engine::attachments::AttachRights;
 use rewind_engine::ports::{
     Enqueued, FailureWindow, JournalStore, ReadModel, RunMetadata, RunRecord, StatsWindow,
     TraceContext,
@@ -47,15 +49,23 @@ pub(super) async fn start(
     let labels = caller.within(request.labels.0)?;
     let trace_context = trace_context(request.traceparent, request.tracestate)?;
     let input = request.input;
+    let secrets = attachments(&request.secrets)?;
     let metadata = RunMetadata {
         labels,
         trace_context,
         // What the run's scripts reach: the runs carrying the key's labels.
         scope: caller.labels.clone(),
+        secrets,
         ..RunMetadata::default()
     };
     let created = match request.workflow {
         Some(reference) => {
+            if !request.secrets.is_empty() {
+                return Err(ApiError::invalid(
+                    "secrets: a run of a workflow reads the secrets its version attaches; give \
+                     none",
+                ));
+            }
             if !request.script.is_empty() || request.toolset.is_some() {
                 return Err(ApiError::invalid(
                     "give either a workflow, or a script and its toolset: a run of a workflow                      executes the workflow's script with its toolset",
@@ -72,7 +82,6 @@ pub(super) async fn start(
                     ttl: request.ttl.map(|ttl| ttl.get()),
                     metadata,
                     idempotency_key: key,
-                    credentials: request.credentials.map(toolsets::secrets),
                 })
                 .await?
         }
@@ -92,7 +101,7 @@ pub(super) async fn start(
                 ttl: request.ttl.map(|ttl| ttl.get()),
                 metadata,
                 idempotency_key: key,
-                credentials: request.credentials.map(toolsets::secrets),
+                attach: attach_rights(&caller),
             };
             if request.check == Some(false) {
                 app.engine.start_run(start).await?
@@ -481,6 +490,8 @@ pub(super) async fn fork(
         labels,
         trace_context: trace_context(request.traceparent, request.tracestate)?,
         idempotency_key: key,
+        secrets: request.secrets.as_ref().map(attachments).transpose()?,
+        attach: attach_rights(&caller),
     };
     let created = if request.check == Some(false) {
         app.engine.fork(fork).await?
@@ -600,21 +611,30 @@ fn not_quarantined(id: &str) -> ApiError {
     )
 }
 
-/// `PUT /v1/runs/{id}/credentials`.
-pub(super) async fn credentials(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Path(id): Path<String>,
-    Body(credentials): Body<rewind_api::toolsets::Credentials>,
-) -> Result<StatusCode, ApiError> {
-    caller.require(Permission::CredentialsWrite)?;
-    let record = app.run(&caller, &id).await?;
-    app.engine
-        .set_run_credentials(&record.run, &toolsets::secrets(credentials))
-        .await?;
-    app.record_tasks(&record.run).await;
-    app.wake.bump();
-    Ok(StatusCode::NO_CONTENT)
+/// The attachments of a request (`org/<name>`, `ns/<name>`, by server or API), read.
+pub(crate) fn attachments(
+    secrets: &rewind_api::secrets::Attachments,
+) -> Result<Attachments, ApiError> {
+    secrets
+        .iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(secret)
+                .map_err(|error| ApiError::invalid(format!("secrets.{server}: {error}")))?;
+            Ok((server.clone(), secret))
+        })
+        .collect()
+}
+
+/// What the caller may attach (`archi/06-storage-and-scale.md`, "What the caller may do"): its
+/// namespace's secrets always; the organization's carrying its labels with `secrets:use`.
+pub(crate) fn attach_rights(caller: &Caller) -> AttachRights {
+    if caller.require(Permission::SecretsUse).is_ok() {
+        AttachRights::Organization {
+            labels: caller.labels.clone(),
+        }
+    } else {
+        AttachRights::NamespaceOnly
+    }
 }
 
 /// What ended a run: the name of the script's error, or the kind of the abort.

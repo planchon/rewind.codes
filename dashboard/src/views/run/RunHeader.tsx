@@ -287,8 +287,10 @@ function waitingHint(w: Waiting): string | null {
     return `Approve: POST /v1/tasks/${w.taskId}/approve · reject: …/reject`;
   if (w.kind === "tool_call" && w.parked === "schema_changed")
     return `The tool no longer matches its pinned schema: approve or reject task ${w.taskId}, fork or cancel the run.`;
-  if (w.kind === "tool_call" && w.parked === "credentials_expired")
-    return "The server refused the credentials: renew them with PUT /v1/runs/{id}/credentials.";
+  if (w.kind === "tool_call" && w.parked === "credentials_refused")
+    return "The server refused the call: put the secret the run attached again, or approve the call once the server accepts the key.";
+  if (w.kind === "tool_call" && w.parked === "secret_missing")
+    return "The secret the run attached no longer exists: put it again.";
   if (w.kind === "signal" && endedRunOf(w.name) !== null) return null;
   if (w.kind === "signal") return `Send it: POST /v1/runs/{id}/signals/${w.name}`;
   return null;

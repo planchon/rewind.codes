@@ -15,7 +15,7 @@ use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
 use rewind_engine::ports::{
-    CompiledScript, Credentials, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
+    CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
     ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
 use rewind_engine::{Adapters, Engine, EngineConfig, StartRun};
@@ -335,10 +335,10 @@ impl ScriptInstance for FakeInstance {
 // -------------------------------------------------------------------------------------------
 // Dispatcher
 
-type Handler = dyn Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync;
-type Calls = Arc<Mutex<Vec<(ToolCall, Option<Credentials>)>>>;
+type Handler = dyn Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync;
+type Calls = Arc<Mutex<Vec<(ToolCall, CallAuth)>>>;
 
-/// Answers with a handler and records every call, with the credentials it was given.
+/// Answers with a handler and records every call, with the authentication it was given.
 #[derive(Clone)]
 pub struct RecordingDispatcher {
     handler: Arc<Handler>,
@@ -362,10 +362,10 @@ impl RecordingDispatcher {
         })
     }
 
-    /// Answers with whatever the handler says, given the call and its credentials: transient
+    /// Answers with whatever the handler says, given the call and its authentication: transient
     /// failures, deferrals, parked calls.
     pub fn dispatching(
-        handler: impl Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync + 'static,
+        handler: impl Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync + 'static,
     ) -> Self {
         Self {
             handler: Arc::new(handler),
@@ -383,20 +383,17 @@ impl RecordingDispatcher {
         calls.iter().map(|(call, _)| call.clone()).collect()
     }
 
-    /// The credentials each call was dispatched with, in order.
-    pub fn credentials(&self) -> Vec<Option<Credentials>> {
+    /// The authentication each call was dispatched with, in order.
+    pub fn auth(&self) -> Vec<CallAuth> {
         let calls = self.calls.lock().unwrap();
-        calls
-            .iter()
-            .map(|(_, credentials)| credentials.clone())
-            .collect()
+        calls.iter().map(|(_, auth)| auth.clone()).collect()
     }
 }
 
 impl ToolDispatcher for RecordingDispatcher {
-    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
-        let outcome = (self.handler)(&call, credentials.as_ref());
-        self.calls.lock().unwrap().push((call, credentials));
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+        let outcome = (self.handler)(&call, &auth);
+        self.calls.lock().unwrap().push((call, auth));
         outcome
     }
 }

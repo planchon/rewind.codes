@@ -96,6 +96,10 @@ struct Inner {
     /// The one connection. Every call holds it for its whole duration: calls never interleave
     /// inside a transaction.
     connection: Mutex<Connection>,
+    #[expect(
+        dead_code,
+        reason = "the stores workstream's SecretStore seals with it"
+    )]
     master_key: MasterKey,
 }
 

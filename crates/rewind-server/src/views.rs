@@ -347,6 +347,12 @@ impl Views<'_> {
             // Only live runs are stored: mock runs live in memory (`POST /v1/test`).
             mode: started.map_or(RunMode::Live, |started| started.mode.into()),
             labels: Labels::from(record.metadata.labels.clone()),
+            secrets: record
+                .metadata
+                .secrets
+                .iter()
+                .map(|(server, secret)| (server.to_owned(), secret.to_string()))
+                .collect(),
             trace_id: trace.to_string(),
             parent: record.metadata.parent.map(|parent| ForkParent {
                 run: parent.run.to_string(),
@@ -469,7 +475,8 @@ impl Views<'_> {
                     TaskState::Parked,
                     Some(match reason.kind {
                         ParkKind::SchemaChanged => ParkedReason::SchemaChanged,
-                        ParkKind::CredentialsExpired => ParkedReason::CredentialsExpired,
+                        ParkKind::CredentialsRefused => ParkedReason::CredentialsRefused,
+                        ParkKind::SecretMissing => ParkedReason::SecretMissing,
                     }),
                 ),
             };

@@ -36,7 +36,7 @@ use rewind_core::{
 };
 use rewind_engine::adapters::VirtualClock;
 use rewind_engine::mock::Mocks as Answering;
-use rewind_engine::ports::{Clock, Credentials, Dispatched, Emitted, ToolCall, ToolDispatcher};
+use rewind_engine::ports::{CallAuth, Clock, Dispatched, Emitted, ToolCall, ToolDispatcher};
 use rewind_engine::testing::{MockLoadError, MockLoader};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
@@ -153,7 +153,7 @@ impl TsMocks {
 impl ToolDispatcher for TsMocks {
     /// The handler's result or failure. A tool without a handler fails with `unavailable`, for
     /// good: retrying would not make one appear.
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         let tool = call.tool.name.clone();
         if !self.handles(&tool) {
             return failed(

@@ -381,6 +381,10 @@ async fn save_workflow(world: &World, workflow: &SetupWorkflow) -> Result<(), St
                 toolset: toolset.digest(),
                 schemas,
                 labels: world.labels.clone(),
+                secrets: Default::default(),
+                attach: rewind_engine::attachments::AttachRights::Organization {
+                    labels: Default::default(),
+                },
                 declarations: WorkflowDeclarations {
                     signals: generated.signals,
                     entry: generated.entry,

@@ -18,12 +18,13 @@
 //! - a **cassette** (mocks recorded from a run, replayed by `rewind test`):
 //!   `{"v":1,"matching":"sequential","calls":[…],"signals":[…]}`, one call or signal per line;
 //! - a **pinned toolset** (the `toolsets` table): `{"servers":[…],"tools":[…],"v":1}`, with
-//!   `"workflows":[…]` when it pins workflows, in its canonical form, so that its bytes hash to
-//!   the toolset's digest;
+//!   `"apis":[…]` when it calls APIs, a server's or an API's `"auth":{…}` when its calls carry a
+//!   secret or a signature, and `"workflows":[…]` when it pins workflows, in its canonical form,
+//!   so that its bytes hash to the toolset's digest;
 //! - a **workflow version** (the `workflows` table): `{"name":…,"schemas":{…},"script":…,
 //!   "toolset":…,"v":1}`, with its suite (`parent`, `tests`, `retired`, `updated`) when it has
-//!   one and `"labels":{…}` when it was saved under a grant limited to labels, in its canonical
-//!   form, so that its bytes hash to the version;
+//!   one, `"labels":{…}` when it was saved under a grant limited to labels and `"secrets":{…}`
+//!   when it attaches secrets, in its canonical form, so that its bytes hash to the version;
 //! - a **test** (a blob of the `BlobStore`): `{"name":…,"world":{…},"expect":{…},"v":1}`, in
 //!   its canonical form, so that its bytes hash to the test's digest.
 //!

@@ -3,7 +3,7 @@
 //!
 //! | Route | Dispatcher | What it does |
 //! | --- | --- | --- |
-//! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the toolset), calls with the idempotency key and the trace context in `_meta`, credentials injected into the transport, the execution timeout, the schema check before each call |
+//! | MCP tools | [`McpDispatcher`] | An MCP client (`rmcp`), over streamable HTTP or stdio: discovery (`tools/list`, pinned by the toolset), calls with the idempotency key and the trace context in `_meta`, the attached secret or the signature in the transport, the execution timeout, the schema check before each call |
 //! | Built-ins | [`HttpTool`] | `http`, with the egress rules: allow-list, one DNS resolution, private and metadata addresses refused, a connection to the checked address, redirects checked again, bounded responses. `webhook` is answered by the engine |
 //!
 //! A composition root plugs them into the engine's `RoutingDispatcher` (`mcp` and `builtins`).
@@ -11,13 +11,13 @@
 //! tenant says: the server's lifecycle webhooks, and the MCP servers of a deployed server
 //! ([`McpEgress`]), where the operator may let some internal hosts through
 //! ([`InternalAllowList`]).
-//! The dispatchers never write to the journal; credentials go only into the transport, never
-//! into a result, a failure or a log.
+//! The dispatchers never write to the journal; a secret goes only into the transport, never into
+//! a result, a failure or a log.
 //!
 //! What becomes of an attempt:
 //!
 //! ```text
-//! connection (pooled by tenant, server and credentials) ── 401 ──► Park(credentials_expired)
+//! connection (pooled by tenant, server and secrets) ── 401 ──► Park(credentials_refused)
 //!   │   only where McpConfig::egress lets it go           ├ unreachable ──► Transient
 //!   │                                                     └ address refused ──► Failed
 //!   ▼ unless approved after a schema change: the server's current tool
@@ -35,8 +35,7 @@ use std::time::Duration;
 
 use rewind_core::{McpServer, Tool, ToolFailureKind, ToolRoute};
 use rewind_engine::ports::{
-    Credentials, Dispatched, ParkKind, ParkReason, ServerCredentials, TenantId, ToolCall,
-    ToolDispatcher,
+    CallAuth, Dispatched, ParkKind, ParkReason, TenantId, ToolCall, ToolDispatcher,
 };
 use rmcp::model::{CallToolRequestParams, JsonObject, MetaObject, RequestMetaObject};
 use serde_json::Value;
@@ -48,6 +47,7 @@ mod result;
 mod schema;
 mod transport;
 
+pub use connection::TransportSecrets;
 pub use http::{
     Egress, HttpConfig, HttpTool, InternalAllowList, NameResolver, Resolving, SystemResolver,
     http_input_schema, http_output_schema, http_tool,
@@ -127,7 +127,7 @@ pub enum McpError {
     /// The server could not be reached or started, or its connection closed.
     #[error("{message}")]
     Unreachable { server: String, message: String },
-    /// The server refused the credentials (HTTP 401).
+    /// The server refused the secret or the signature (HTTP 401).
     #[error("{message}")]
     Unauthorized { server: String, message: String },
     /// The server did not answer in time.
@@ -183,11 +183,11 @@ impl McpDispatcher {
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        credentials: Option<&ServerCredentials>,
+        secrets: Option<&TransportSecrets>,
     ) -> Result<Vec<Tool>, McpError> {
         let lease = self
             .pool
-            .connection(tenant, server, credentials)
+            .connection(tenant, server, secrets)
             .await
             .map_err(|failure| failure.into_error(&server.name))?;
         let timeout = self.pool.config().connect_timeout;
@@ -224,11 +224,11 @@ impl McpDispatcher {
         &self,
         call: &ToolCall,
         server: &McpServer,
-        credentials: Option<&ServerCredentials>,
+        secrets: Option<&TransportSecrets>,
     ) -> Dispatched {
         let lease = match self
             .pool
-            .connection(&call.run.tenant, server, credentials)
+            .connection(&call.run.tenant, server, secrets)
             .await
         {
             Ok(lease) => lease,
@@ -284,7 +284,7 @@ impl McpDispatcher {
 }
 
 impl ToolDispatcher for McpDispatcher {
-    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
         let ToolRoute::Mcp { server: name } = &call.tool.route else {
             return Failure::permanent(
                 ToolFailureKind::Unavailable,
@@ -301,8 +301,8 @@ impl ToolDispatcher for McpDispatcher {
             )
             .into_dispatched();
         };
-        let credentials = credentials.and_then(|mut credentials| credentials.servers.remove(name));
-        let attempt = self.attempt(&call, server, credentials.as_ref());
+        let secrets = transport_secrets(server, auth);
+        let attempt = self.attempt(&call, server, secrets.as_ref());
         let dispatched = match call.tool.policy.execution_timeout {
             Some(timeout) => match tokio::time::timeout(timeout, attempt).await {
                 Ok(dispatched) => dispatched,
@@ -320,6 +320,28 @@ impl ToolDispatcher for McpDispatcher {
             "MCP call"
         );
         dispatched
+    }
+}
+
+/// What the call's authentication puts into the transport: nothing for a server without `auth`;
+/// the attached secret in the header or the variable the server's `auth` names; for a signed
+/// call, a JWT in `Authorization: Bearer` on each HTTP request of the session
+/// (`archi/04-tools.md`, "Signed calls").
+#[expect(
+    clippy::todo,
+    reason = "the outbound workstream puts secrets and signatures in MCP"
+)]
+fn transport_secrets(server: &McpServer, auth: CallAuth) -> Option<TransportSecrets> {
+    match auth {
+        CallAuth::None => None,
+        CallAuth::Secret { .. } | CallAuth::Signed { .. } => {
+            let _ = server;
+            todo!(
+                "outbound: the attached secret in the header (format, encoding) or variable of \
+                 the server's auth; a JWT signed per HTTP request of the session, through \
+                 rewind-outbound"
+            )
+        }
     }
 }
 

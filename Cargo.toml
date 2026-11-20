@@ -20,6 +20,8 @@ rewind-engine = { path = "crates/rewind-engine" }
 rewind-format = { path = "crates/rewind-format" }
 rewind-mcp = { path = "crates/rewind-mcp" }
 rewind-mcp-server = { path = "crates/rewind-mcp-server" }
+rewind-openapi = { path = "crates/rewind-openapi" }
+rewind-outbound = { path = "crates/rewind-outbound" }
 rewind-otel = { path = "crates/rewind-otel" }
 rewind-runtime = { path = "crates/rewind-runtime" }
 rewind-server = { path = "crates/rewind-server" }
@@ -28,7 +30,8 @@ rewind-store-turso = { path = "crates/rewind-store-turso" }
 rewind-workos = { path = "crates/rewind-workos" }
 rewind-cli = { path = "crates/rewind-cli" }
 
-# The RSA keys rewind-workos's tests sign access tokens with: the crypto `workos` already builds.
+# The RSA keys rewind-workos's tests sign access tokens with, and the Ed25519 signing keys of the
+# memory SecretStore: the crypto `workos` and rustls already build.
 aws-lc-rs = "1"
 axum = "0.8"
 base64 = "0.23"

@@ -63,6 +63,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         epoch: 1,
         mode: RunMode::Live,
         labels: Labels::new(),
+        secrets: Default::default(),
         trace_id: "0".repeat(32),
         parent: None,
         workflow: None,
@@ -397,12 +398,14 @@ async fn create_toolset(
     axum::Json(Toolset {
         id: TOOLSET_ID.into(),
         servers: Vec::new(),
+        apis: Vec::new(),
         tools: Vec::new(),
         workflows: Vec::new(),
         declarations: Declarations {
             dts: "declare module \"rewind:tools\" {}\n".into(),
             prompt: String::new(),
         },
+        skipped: Vec::new(),
     })
     .into_response()
 }

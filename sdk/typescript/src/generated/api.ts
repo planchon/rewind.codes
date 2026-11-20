@@ -383,6 +383,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organizations/{tenant}/jwks.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The organization's public keys
+         * @description A JSON Web Key Set: the current signing key and those retired less than 24 hours ago,
+         *     as the servers that receive signed calls check them (`verifyRewindCall`). Without
+         *     authentication; `Cache-Control: max-age=300`.
+         */
+        get: operations["getJwks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/api-keys": {
         parameters: {
             query?: never;
@@ -584,7 +606,7 @@ export interface paths {
         /**
          * Erase a namespace
          * @description An end user who leaves: revokes the namespace's tokens, cancels its active runs, then
-         *     erases in the background its runs, credentials and use. Requires `namespaces:write`.
+         *     erases in the background its runs, secrets and use. Requires `namespaces:write`.
          */
         delete: operations["deleteNamespace"];
         options?: never;
@@ -596,6 +618,75 @@ export interface paths {
          *     the namespace. Requires `namespaces:write`.
          */
         patch: operations["patchNamespace"];
+        trace?: never;
+    };
+    "/v1/namespaces/{name}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an end user's secrets
+         * @description The secrets of the namespace, as `GET /v1/secrets` lists the organization's. Requires
+         *     `secrets:read`.
+         */
+        get: operations["listNamespaceSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{name}/secrets/{secret}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put an end user's secret
+         * @description Creates or replaces the secret `secret` of the namespace, read by its runs that attach
+         *     `ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a
+         *     refusal or a missing secret in the namespace's runs that attach it are ready again.
+         *     Refused to a grant or a token limited to labels. Requires `secrets:write`.
+         */
+        put: operations["putNamespaceSecret"];
+        post?: never;
+        /**
+         * Delete an end user's secret
+         * @description As `DELETE /v1/secrets/{name}`, for the namespace's secret. Requires `secrets:write`.
+         */
+        delete: operations["deleteNamespaceSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/namespaces/{name}/secrets/{secret}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What reads an end user's secret
+         * @description As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the
+         *     workflows whose latest version attaches `ns/<secret>`. Requires `secrets:read`.
+         */
+        get: operations["getNamespaceSecretUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/namespaces/{name}/tokens": {
@@ -619,27 +710,6 @@ export interface paths {
          * @description Its opaque tokens, and the signed tokens issued before now. Requires `tokens:write`.
          */
         delete: operations["revokeNamespaceTokens"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespaces/{name}/toolsets/{id}/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * Set or renew an end user's credentials for a toolset
-         * @description A call of a run of the namespace uses the run's credentials if it has some, else these,
-         *     else the toolset's. Requires `credentials:write`.
-         */
-        put: operations["setNamespaceCredentials"];
-        post?: never;
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -932,6 +1002,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/organization/signing-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the signing keys
+         * @description The organization's Ed25519 keys that sign the calls of servers whose `auth` is `rewind`:
+         *     the current one and those retired less than 24 hours ago, with the JWT's issuer and the
+         *     URL of the public keys. Requires `secrets:read`.
+         */
+        get: operations["listSigningKeys"];
+        put?: never;
+        /**
+         * Replace the signing key
+         * @description A new key signs from now; the old one stops signing and stays published 24 hours.
+         *     Requires `organization:write`.
+         */
+        post: operations["rotateSigningKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/organization/token-keys": {
         parameters: {
             query?: never;
@@ -1208,23 +1305,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/runs/{id}/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set or renew the run's credentials */
-        put: operations["setRunCredentials"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/runs/{id}/entries/{idx}": {
         parameters: {
             query?: never;
@@ -1408,6 +1488,79 @@ export interface paths {
         };
         /** One script's source */
         get: operations["getScript"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the organization's secrets
+         * @description The organization's secrets the caller sees (those carrying its labels): each one's name,
+         *     labels, who wrote it and when, its reads per day over 30 days and its last read; never a
+         *     value. Requires `secrets:read`.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put an organization's secret
+         * @description Creates or replaces it, with its labels (a grant limited to labels gives it its own).
+         *     The calls parked by a refusal or a missing secret in the runs that attach it are ready
+         *     again, sent with the same idempotency key. Refused to an end user's token. Requires
+         *     `secrets:write`.
+         */
+        put: operations["putSecret"];
+        post?: never;
+        /**
+         * Delete an organization's secret
+         * @description The next call of a run that attaches it is parked (`credentials.expired`, reason
+         *     `missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires
+         *     `secrets:write`.
+         */
+        delete: operations["deleteSecret"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/secrets/{name}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What reads an organization's secret
+         * @description The active runs that attach it, those of them waiting on a call it serves, the
+         *     workflows whose latest version attaches it, its reads per day and its last read.
+         *     Requires `secrets:read`.
+         */
+        get: operations["getSecretUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1725,28 +1878,14 @@ export interface paths {
         put?: never;
         /**
          * Register and pin a toolset
-         * @description Connects to the MCP servers, lists their tools, pins their schemas and policies, and
-         *     returns the toolset with its declarations, for the model's prompt. Content-addressed:
-         *     registering the same toolset again returns it (200).
+         * @description Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents
+         *     (one tool per operation), pins their schemas, policies and `auth`, and returns the
+         *     toolset with its declarations, for the model's prompt, and the API operations it left
+         *     out. Content-addressed: registering the same toolset again returns it (200). `secrets`
+         *     attaches organization's secrets to list the tools of an MCP server that needs one
+         *     (`secrets:use`). Requires `toolsets:write`.
          */
         post: operations["createToolset"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/toolsets/{id}/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set or renew the toolset's credentials */
-        put: operations["setToolsetCredentials"];
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2081,6 +2220,44 @@ export interface components {
          * @enum {string}
          */
         Access: "read" | "run";
+        /**
+         * @description An API described by an OpenAPI 3.0 or 3.1 document (`archi/04-tools.md`, "API tools"). Each
+         *     operation is a tool: its input the path, query and header parameters by name and the JSON
+         *     body under `body`; its output the schema of its first `2xx` JSON response.
+         */
+        Api: {
+            auth?: components["schemas"]["Auth"] | null;
+            /**
+             * @description Where the calls go: the document's first `servers[]` when absent. `https`, or `http` on
+             *     the embedded server.
+             */
+            baseUrl?: string | null;
+            /**
+             * Format: int32
+             * @description Its calls in flight on each worker. 8 by default.
+             */
+            concurrency?: number | null;
+            /** @description The namespace of its tools in `rewind:tools`, an identifier as a server's name is. */
+            name: string;
+            /**
+             * @description Its OpenAPI document in JSON, or the URL it is read from once, at registration (at most
+             *     2 MiB, through the egress checks). The document is pinned and never read again.
+             */
+            openapi: components["schemas"]["OpenApiDocument"];
+            /**
+             * @description The `operationId`s to keep, for an API too large for the prompt. Every operation when
+             *     absent.
+             */
+            operations?: string[] | null;
+            /**
+             * @description Policies of its tools, by operation name. An operation not listed gets the default of
+             *     its method: `retry` for `GET`, `HEAD`, `OPTIONS`, `PUT` and `DELETE`; `at_most_once`
+             *     for `POST` and `PATCH` unless it declares an `Idempotency-Key` header.
+             */
+            policies?: {
+                [key: string]: components["schemas"]["ToolPolicy"];
+            };
+        };
         /** @description An API key, without its secret but in the answer to its creation. */
         ApiKey: {
             /** @description The allowed labels of the key's grant. */
@@ -2109,6 +2286,54 @@ export interface components {
         /** @description `GET /v1/api-keys`: the tenant's keys, revoked ones included, oldest first. */
         ApiKeyList: {
             keys: components["schemas"]["ApiKey"][];
+        };
+        /** @description An API of a toolset, as pinned. */
+        ApiSummary: {
+            auth?: components["schemas"]["Auth"] | null;
+            baseUrl: string;
+            name: string;
+            /**
+             * Format: int32
+             * @description How many tools it has.
+             */
+            tools: number;
+        };
+        /**
+         * @description One attachment that refused a start, a fork or a save, with what the caller may attach for
+         *     that server instead.
+         */
+        AttachmentProblem: {
+            /** @description The secrets the caller may attach for that server, `org/<name>` and `ns/<name>`. */
+            attachable?: string[];
+            problem: components["schemas"]["AttachmentProblemKind"];
+            /** @description The secret attached, as the request named it. */
+            secret?: string | null;
+            /** @description The MCP server or API. */
+            server: string;
+        };
+        /**
+         * @description Why an attachment refused a start, a fork or a save (`secret-required`).
+         * @enum {string}
+         */
+        AttachmentProblemKind: "missing" | "takes_none" | "unknown" | "forbidden";
+        /**
+         * @description How the calls to an MCP server or an API prove who calls (`archi/04-tools.md`,
+         *     "Authenticating calls"). Part of the pinned toolset; never a value.
+         */
+        Auth: {
+            /** @enum {string} */
+            type: "none";
+        } | {
+            /** @enum {string} */
+            type: "rewind";
+        } | {
+            encoding?: components["schemas"]["SecretEncoding"] | null;
+            env?: string | null;
+            /** @description `Bearer {secret}`; the value alone when absent. */
+            format?: string | null;
+            header?: string | null;
+            /** @enum {string} */
+            type: "secret";
         };
         /** @description `GET /auth/config`: how to sign in on this server. */
         AuthConfig: {
@@ -2166,6 +2391,9 @@ export interface components {
             scopes_supported: string[];
             token_endpoint: string;
             token_endpoint_auth_methods_supported: string[];
+        };
+        BTreeMap: {
+            [key: string]: string;
         };
         /** @description How many times a tool call was sent. */
         CallAttempts: {
@@ -2448,10 +2676,21 @@ export interface components {
             permissions?: components["schemas"]["Permission"][] | null;
         };
         /**
-         * @description `POST /v1/toolsets`: MCP servers, host tools and the `http` tool, with a policy per tool.
-         *     Registering connects to the MCP servers, lists their tools and pins their schemas. The
-         *     toolset is content-addressed: registering the same toolset twice gives the same id.
+         * @description `POST /v1/toolsets`: MCP servers, APIs, host tools and the `http` tool, with a policy per
+         *     tool. Registering connects to the MCP servers and lists their tools, reads the APIs' OpenAPI
+         *     documents, and pins their schemas. The toolset is content-addressed: registering the same
+         *     toolset twice gives the same id. It holds no secret: a run attaches its secrets when it
+         *     starts.
          * @example {
+         *       "apis": [
+         *         {
+         *           "auth": {
+         *             "type": "rewind"
+         *           },
+         *           "name": "crm",
+         *           "openapi": "https://api.example.com/openapi.json"
+         *         }
+         *       ],
          *       "host": [
          *         {
          *           "description": "Ask the end user a question and return their answer.",
@@ -2474,6 +2713,11 @@ export interface components {
          *       ],
          *       "mcp": [
          *         {
+         *           "auth": {
+         *             "format": "Bearer {secret}",
+         *             "header": "Authorization",
+         *             "type": "secret"
+         *           },
          *           "name": "github",
          *           "url": "https://mcp.example.com/github"
          *         }
@@ -2482,12 +2726,16 @@ export interface components {
          */
         CreateToolset: {
             /**
+             * @description APIs described by OpenAPI documents: one tool per operation, named
+             *     `<api>.<operationId>`, called by Rewind.
+             */
+            apis?: components["schemas"]["Api"][];
+            /**
              * @description Derives the toolset from a registered one: its servers, tools and workflows are kept as
              *     pinned, without listing the servers again; `workflows` adds workflows or pins them again.
              *     `mcp`, `host` and `http` must then be empty.
              */
             base?: string | null;
-            credentials?: components["schemas"]["Credentials"] | null;
             /**
              * @description Host tools: functions of the harness, executed by its SDK worker (`GET /v1/tasks`). A
              *     name `group.tool` puts the tool in the `group` namespace of `rewind:tools`.
@@ -2496,6 +2744,12 @@ export interface components {
             http?: components["schemas"]["HttpTool"] | null;
             /** @description MCP servers. Their tools are called by Rewind and named `<server>.<tool>`. */
             mcp?: components["schemas"]["McpServer"][];
+            /**
+             * @description The organization's secrets that list the tools of the MCP servers whose `auth` takes one,
+             *     by server: `{ "github": "org/github" }`. Only `org/` secrets; no run keeps them, and they
+             *     are not part of the toolset's id. Requires `secrets:use`.
+             */
+            secrets?: components["schemas"]["BTreeMap"];
             /**
              * @description The workflows its scripts may start, from `rewind:workflows`: `triage` pins the latest
              *     version, `triage@<version>` one version. The versions are pinned: the toolset's scripts
@@ -2573,6 +2827,12 @@ export interface components {
             /** @description The TypeScript source: a single ES module whose default export is the entry point. */
             script: string;
             /**
+             * @description The secrets its runs attach, by MCP server or API (`org/<name>`, `ns/<name>`), part of
+             *     the version: checked against the saver's rights now (an `ns/` secret by its name only),
+             *     and read by its runs without checking the caller's again (`secret-required`).
+             */
+            secrets?: components["schemas"]["BTreeMap"];
+            /**
              * @description The signals its runs accept, by name, each with the JSON Schema of its payload. Names
              *     starting with `rewind:` are reserved.
              */
@@ -2588,36 +2848,43 @@ export interface components {
             update?: components["schemas"]["TestUpdate"][];
         };
         /**
-         * @description `PUT /v1/toolsets/{id}/credentials` and `PUT /v1/runs/{id}/credentials`: secrets injected
-         *     into the MCP transport at call time. They never enter the journal, the isolate, a cassette
-         *     or OpenTelemetry; a call uses the run's credentials if it has some, else the toolset's.
-         *     Setting them replaces the previous ones, and makes ready again the calls parked by
-         *     `credentials.expired`.
-         */
-        Credentials: {
-            /** @description By MCP server name. */
-            servers: {
-                [key: string]: components["schemas"]["ServerCredentials"];
-            };
-        };
-        /**
-         * @description A call parked because the server refused the credentials. Renew them with
-         *     `PUT /v1/runs/{id}/credentials` or `PUT /v1/toolsets/{id}/credentials`: the call is then
+         * @description A call parked because its server refused the secret or the signature (`refused`), or
+         *     because the secret the run attached no longer exists (`missing`, nothing was sent). Put the
+         *     secret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,
+         *     for a refused signature, approve the call once the server accepts the key: the call is then
          *     sent again with the same idempotency key.
          */
         CredentialsExpired: {
             labels: components["schemas"]["Labels"];
-            /** @description What the server answered. */
+            /** @description What the server answered, or which secret is missing. */
             message: string;
             namespace: components["schemas"]["NamespaceName"];
+            reason: components["schemas"]["CredentialsExpiredReason"];
             runId: string;
+            /**
+             * @description The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
+             *     absent for a signed call.
+             */
+            secret?: string | null;
             /** Format: int32 */
             seq: number;
-            /** @description The tool's MCP server. */
+            /** @description The tool's MCP server or API. */
             server?: string | null;
             taskId: string;
             tool: string;
             toolset: string;
+        };
+        /**
+         * @description Why a call waits in `credentials.expired`.
+         * @enum {string}
+         */
+        CredentialsExpiredReason: "refused" | "missing";
+        /** @description The reads of a secret on one day (UTC). */
+        DailyReads: {
+            /** @description `2026-11-20`. */
+            day: string;
+            /** Format: int64 */
+            reads: number;
         };
         /** @description One UTC day of use. */
         DayUsage: {
@@ -2970,6 +3237,7 @@ export interface components {
             labels?: components["schemas"]["Labels"] | null;
             /** @description The corrected TypeScript source. */
             script: string;
+            secrets?: components["schemas"]["BTreeMap"] | null;
             traceparent?: string | null;
             tracestate?: string | null;
             ttl?: components["schemas"]["Duration"] | null;
@@ -3068,6 +3336,27 @@ export interface components {
         };
         /** @enum {string} */
         InvitationState: "pending" | "accepted" | "expired" | "revoked";
+        /** @description An Ed25519 public key (RFC 8037). */
+        Jwk: {
+            /** @description `EdDSA`. */
+            alg: string;
+            /** @description `Ed25519`. */
+            crv: string;
+            kid: string;
+            /** @description `OKP`. */
+            kty: string;
+            /** @description `sig`. */
+            use: string;
+            /** @description The public key, in base64url without padding. */
+            x: string;
+        };
+        /**
+         * @description `GET /organizations/{tenant}/jwks.json`: the organization's public keys, as a JSON Web Key
+         *     Set (RFC 7517), served without authentication.
+         */
+        Jwks: {
+            keys: components["schemas"]["Jwk"][];
+        };
         LabelFacet: {
             key: string;
             /**
@@ -3083,6 +3372,13 @@ export interface components {
          */
         Labels: {
             [key: string]: string;
+        };
+        /** @description The last read of a secret: by which run, of which namespace, when. */
+        LastRead: {
+            /** Format: date-time */
+            at: string;
+            namespace: components["schemas"]["NamespaceName"];
+            run: string;
         };
         Latency: {
             /** Format: int64 */
@@ -3140,9 +3436,13 @@ export interface components {
          */
         McpServer: {
             args?: string[];
+            auth?: components["schemas"]["Auth"] | null;
             /** @description The program of a stdio server. */
             command?: string | null;
-            /** @description Environment of a stdio server that is not secret. Secrets go in credentials. */
+            /**
+             * @description Environment of a stdio server that is not secret. A secret goes in the variable its
+             *     `auth` names.
+             */
             env?: {
                 [key: string]: string;
             };
@@ -3299,6 +3599,8 @@ export interface components {
          * @enum {string}
          */
         OnInterruption: "retry" | "at_most_once";
+        /** @description An OpenAPI document, or where to read it. */
+        OpenApiDocument: string | Record<string, unknown>;
         /** @description An organization to open, with its access and labels. */
         OpenOrganization: {
             access: components["schemas"]["Access"];
@@ -3330,7 +3632,7 @@ export interface components {
          * @description Why a task is parked.
          * @enum {string}
          */
-        ParkedReason: "schema_changed" | "credentials_expired";
+        ParkedReason: "schema_changed" | "credentials_refused" | "secret_missing";
         /**
          * @description A JSON value carried by a run (its input and output, tool arguments and results, signal
          *     payloads), identified by the SHA-256 of its canonical JSON (RFC 8785).
@@ -3355,7 +3657,7 @@ export interface components {
          * @description A kind of action. Every endpoint requires one; a role is a set of them.
          * @enum {string}
          */
-        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "credentials:write" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
+        Permission: "runs:read" | "runs:start" | "runs:control" | "runs:quarantine" | "runs:delete" | "toolsets:read" | "toolsets:write" | "secrets:read" | "secrets:write" | "secrets:use" | "tasks:work" | "tasks:approve" | "subscriptions:read" | "subscriptions:write" | "members:read" | "members:invite" | "members:manage" | "roles:read" | "roles:write" | "api_keys:read" | "api_keys:write" | "organization:write" | "namespaces:read" | "namespaces:write" | "tokens:write";
         /** @description A permission of the catalog, with what it lets the caller do. */
         PermissionInfo: {
             description: string;
@@ -3424,6 +3726,8 @@ export interface components {
             /** Format: int64 */
             used?: number;
         } & {
+            /** @description With `secret-required`: each attachment at fault, with what the caller may attach. */
+            attachments?: components["schemas"]["AttachmentProblem"][];
             /** @description What went wrong in this request, and what to do instead. Written for a model. */
             detail: string;
             /** @description With `invalid-script`: why the script was refused, with locations in `script.ts`. */
@@ -3478,6 +3782,27 @@ export interface components {
         PutRole: {
             description?: string;
             permissions: components["schemas"]["Permission"][];
+        };
+        /**
+         * @description `PUT /v1/secrets/{name}` and `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or
+         *     replaces a secret. Replacing it makes ready the calls a refusal or a missing secret parked in
+         *     the runs that attach it, sent again with the same idempotency key.
+         * @example {
+         *       "labels": {
+         *         "env": "prod"
+         *       },
+         *       "value": "ghp_…"
+         *     }
+         */
+        PutSecret: {
+            /**
+             * @description An organization's secret's labels: a grant limited to labels sees, writes and attaches
+             *     only the secrets carrying them, and the secrets it writes take them. A namespace's secret
+             *     takes none (`invalid-request`).
+             */
+            labels?: components["schemas"]["Labels"];
+            /** @description The value: a string of at most 16 KiB. Written, never read back. */
+            value: string;
         };
         /** @description Why a run is quarantined (`archi/03-execution.md`, "Non-determinism and quarantine"). */
         Quarantine: {
@@ -3736,7 +4061,7 @@ export interface components {
          * @description Who calls the tool (`archi/04-tools.md`, "Routes").
          * @enum {string}
          */
-        Route: "mcp" | "host" | "builtin";
+        Route: "mcp" | "api" | "host" | "builtin";
         /** @description A failure a rule answers with. */
         RuleError: {
             data?: unknown;
@@ -3786,6 +4111,11 @@ export interface components {
             quarantine?: components["schemas"]["Quarantine"] | null;
             /** @description Digest of the TypeScript source (`GET /v1/scripts/{digest}`). */
             script: string;
+            /**
+             * @description The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):
+             *     names, never values.
+             */
+            secrets?: components["schemas"]["BTreeMap"];
             startedBy?: components["schemas"]["StartedBy"] | null;
             status: components["schemas"]["RunStatus"];
             /** @description Digest of the pinned toolset. */
@@ -4003,6 +4333,75 @@ export interface components {
             /** @description The tools its runs called. */
             tools: string[];
         };
+        /** @description A secret, as listed: its metadata, never its value. */
+        Secret: {
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * @description Who wrote it first: a principal (`user:…`, `key:…`, `connection:…`) or an end user's
+             *     token (`token:<namespace>`).
+             */
+            createdBy: string;
+            /** @description An organization's secret's labels; none for a namespace's. */
+            labels?: components["schemas"]["Labels"];
+            lastRead?: components["schemas"]["LastRead"] | null;
+            /** @description 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter. */
+            name: string;
+            namespace?: components["schemas"]["NamespaceName"] | null;
+            /** @description Its reads per day over the last 30 days, oldest first; a day without a read is left out. */
+            reads: components["schemas"]["DailyReads"][];
+            /** @description How an attachment names it: `org/zendesk`, `ns/github`. */
+            reference: string;
+            scope: components["schemas"]["SecretScope"];
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description Who wrote it last. */
+            updatedBy: string;
+        };
+        /**
+         * @description How a secret is written into a header's `format`.
+         * @enum {string}
+         */
+        SecretEncoding: "plain" | "base64";
+        /**
+         * @description `GET /v1/secrets`, `GET /v1/namespaces/{name}/secrets`: the secrets the caller sees, sorted
+         *     by name.
+         */
+        SecretList: {
+            secrets: components["schemas"]["Secret"][];
+        };
+        /**
+         * @description Whose secret.
+         * @enum {string}
+         */
+        SecretScope: "org" | "ns";
+        /**
+         * @description `GET /v1/secrets/{name}/usage`, `GET /v1/namespaces/{name}/secrets/{secret}/usage`: what
+         *     reads a secret, what deleting it would stop.
+         */
+        SecretUsage: {
+            /** @description The active runs that attach it, oldest first, at most 100. */
+            activeRuns: string[];
+            /**
+             * Format: int64
+             * @description How many active runs attach it.
+             */
+            activeTotal: number;
+            /** @description The secret, with its reads and its last read. */
+            secret: components["schemas"]["Secret"];
+            /**
+             * @description Those of them with a call to a server it serves that is parked or not yet sent, at most
+             *     100.
+             */
+            waitingRuns: string[];
+            /** Format: int64 */
+            waitingTotal: number;
+            /**
+             * @description The workflows whose latest version attaches it. A version attaching `ns/<name>` counts
+             *     for the secret `<name>` of every namespace.
+             */
+            workflows: components["schemas"]["WorkflowAttaching"][];
+        };
         SeriesBucket: {
             /**
              * Format: date-time
@@ -4010,16 +4409,6 @@ export interface components {
              */
             at: string;
             statuses: components["schemas"]["StatusCounts"];
-        };
-        ServerCredentials: {
-            /** @description Environment variables of a stdio server. */
-            env?: {
-                [key: string]: string;
-            };
-            /** @description HTTP headers sent to a streamable HTTP server, such as `Authorization`. */
-            headers?: {
-                [key: string]: string;
-            };
         };
         /**
          * @description `GET /v1/server`: what this server is. Every response also carries the `Rewind-Version`
@@ -4046,6 +4435,7 @@ export interface components {
         /** @enum {string} */
         ServerRole: "api" | "worker";
         ServerSummary: {
+            auth?: components["schemas"]["Auth"] | null;
             name: string;
             /**
              * Format: int32
@@ -4104,6 +4494,45 @@ export interface components {
             /** @description The namespace. */
             sub: components["schemas"]["NamespaceName"];
         };
+        /** @description One of the organization's signing keys (`archi/04-tools.md`, "Signed calls"): Ed25519. */
+        SigningKey: {
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * @description The key's id, in the `kid` of the JWTs it signs: the first 8 bytes of the SHA-256 of
+             *     the public key, in hex.
+             */
+            kid: string;
+            /**
+             * Format: date-time
+             * @description When it stopped signing: it stays published 24 hours longer.
+             */
+            retiredAt?: string | null;
+        };
+        /**
+         * @description `GET /v1/organization/signing-keys`: the current key and those retired less than 24 hours
+         *     ago, newest first, and where their public keys are.
+         */
+        SigningKeyList: {
+            /**
+             * @description The JWT's issuer, `{public-url}/organizations/{tenant}`: what `verifyRewindCall` is
+             *     given as `issuer`.
+             */
+            issuer: string;
+            /** @description `{issuer}/jwks.json`. */
+            jwksUrl: string;
+            keys: components["schemas"]["SigningKey"][];
+        };
+        /** @description An operation of an API that registering left out, and why. */
+        SkippedOperation: {
+            api: string;
+            /** @description `post`, as the document writes it. */
+            method: string;
+            operationId?: string | null;
+            path: string;
+            /** @description Written for the harness developer: `its body is application/xml`. */
+            reason: string;
+        };
         SkippedRun: {
             reason: string;
             run: string;
@@ -4123,6 +4552,9 @@ export interface components {
          *         "conversation": "c-42"
          *       },
          *       "script": "import { github } from \"rewind:tools\";\nexport default async function main(input: { repo: string }) {\n  return (await github.list_issues({ repo: input.repo })).length;\n}\n",
+         *       "secrets": {
+         *         "github": "ns/github"
+         *       },
          *       "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
          *       "wait": "30s"
          *     }
@@ -4130,7 +4562,6 @@ export interface components {
         StartRun: {
             /** @description Type-check the script before starting it. `true` by default. */
             check?: boolean | null;
-            credentials?: components["schemas"]["Credentials"] | null;
             /** @description The input of `main`. `{}` when absent. */
             input?: unknown;
             /**
@@ -4143,6 +4574,14 @@ export interface components {
              *     Without it, `workflow` names what the run executes.
              */
             script?: string;
+            /**
+             * @description The secrets the run reads, by MCP server or API: `{ "github": "ns/github", "zendesk":
+             *     "org/zendesk" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).
+             *     Required for each server the script imports whose `auth` takes a secret; checked against
+             *     the caller's rights (`secret-required`). A run of a `workflow` gives none: its version's
+             *     are read.
+             */
+            secrets?: components["schemas"]["BTreeMap"];
             /** @description The toolset the script imports from `rewind:tools`. Without one, `rewind:tools` is empty. */
             toolset?: string | null;
             /**
@@ -4541,6 +4980,8 @@ export interface components {
         };
         /** @description A pinned tool. */
         Tool: {
+            /** @description The API, for an API tool. */
+            api?: string | null;
             description: string;
             inputSchema: Record<string, unknown>;
             /** @description As scripts call it: `github.list_issues`, `ask_user`, `http`. */
@@ -4673,10 +5114,17 @@ export interface components {
         };
         /** @description A registered toolset, as pinned. */
         Toolset: {
+            /** @description Its APIs, sorted by name. */
+            apis?: components["schemas"]["ApiSummary"][];
             declarations: components["schemas"]["Declarations"];
             /** @description The digest of the pinned toolset (SHA-256, lowercase hex). Runs record it. */
             id: string;
             servers: components["schemas"]["ServerSummary"][];
+            /**
+             * @description The operations of its APIs left out at registration: a body other than JSON, a cookie
+             *     parameter. Only in the answer of the registration.
+             */
+            skipped?: components["schemas"]["SkippedOperation"][];
             /** @description Every tool a script of this toolset can call, sorted by name. */
             tools: components["schemas"]["Tool"][];
             /** @description The workflows its scripts may start, sorted by name. */
@@ -4688,6 +5136,8 @@ export interface components {
         };
         /** @description A registered toolset, without its schemas and declarations. */
         ToolsetSummary: {
+            /** @description Its APIs, sorted by name. */
+            apis?: components["schemas"]["ApiSummary"][];
             id: string;
             servers: components["schemas"]["ServerSummary"][];
             /** @description The names of its tools, sorted. */
@@ -4881,6 +5331,8 @@ export interface components {
             retired?: components["schemas"]["RetiredTest"][];
             /** @description Digest of its script (`GET /v1/scripts/{digest}`). */
             script: string;
+            /** @description The secrets its runs attach, part of the version. */
+            secrets?: components["schemas"]["BTreeMap"];
             signals: Record<string, unknown>;
             /** @description Its suite: the tests it passed when it was saved, by name. */
             tests?: components["schemas"]["SuiteTest"][];
@@ -4891,6 +5343,14 @@ export interface components {
              * @description The digest of the version (SHA-256, lowercase hex). `name@<version>` names it, as do its
              *     first 12 digits.
              */
+            version: string;
+        };
+        /** @description The latest version of a workflow, which attaches a secret. */
+        WorkflowAttaching: {
+            name: string;
+            /** @description The servers and APIs it attaches the secret for. */
+            servers: string[];
+            /** @description The version (SHA-256, lowercase hex). */
             version: string;
         };
         /**
@@ -5956,6 +6416,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OAuthError"];
+                };
+            };
+        };
+    };
+    getJwks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The tenant (the organization's id). */
+                tenant: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The public keys. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Jwks"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such organization. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
                 };
             };
         };
@@ -7090,6 +7609,334 @@ export interface operations {
             };
         };
     };
+    listNamespaceSecrets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The namespace. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The secrets, sorted by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putNamespaceSecret: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The namespace. */
+                name: string;
+                /** @description The secret's name. */
+                secret: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutSecret"];
+            };
+        };
+        responses: {
+            /** @description Replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Secret"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Secret"];
+                };
+            };
+            /** @description An invalid name, labels, or a value above 16 KiB (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller may not write it: a grant or a token limited to labels. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The namespace is being erased (`namespace-deleting`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteNamespaceSecret: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The namespace. */
+                name: string;
+                /** @description The secret's name. */
+                secret: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such secret. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getNamespaceSecretUsage: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The namespace. */
+                name: string;
+                /** @description The secret's name. */
+                secret: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What reads it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretUsage"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such secret. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     createToken: {
         parameters: {
             query?: never;
@@ -7226,90 +8073,6 @@ export interface operations {
                 };
             };
             /** @description No such namespace. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    setNamespaceCredentials: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The namespace. */
-                name: string;
-                /** @description The toolset's id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Credentials"];
-            };
-        };
-        responses: {
-            /** @description Stored. Calls parked by `credentials.expired` are ready again. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such toolset. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -8585,6 +9348,142 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QuotaAlertList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listSigningKeys: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The keys, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeyList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    rotateSigningKey: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new key. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKey"];
                 };
             };
             /** @description The request is malformed (`invalid-request`). */
@@ -10071,99 +10970,6 @@ export interface operations {
             };
         };
     };
-    setRunCredentials: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The run id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Credentials"];
-            };
-        };
-        responses: {
-            /** @description Stored. The run's calls parked by `credentials.expired` are ready again. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such run. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The run has ended (`run-ended`). */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
     getRunEntry: {
         parameters: {
             query?: never;
@@ -11063,6 +11869,316 @@ export interface operations {
                 };
             };
             /** @description No such script. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The secrets, sorted by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretList"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    putSecret: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The secret's name: 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutSecret"];
+            };
+        };
+        responses: {
+            /** @description Replaced. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Secret"];
+                };
+            };
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Secret"];
+                };
+            };
+            /** @description An invalid name, or a value above 16 KiB (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller may not write it: an end user's token, or labels outside its grant's. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    deleteSecret: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The secret's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such secret. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    getSecretUsage: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path: {
+                /** @description The secret's name. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description What reads it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretUsage"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such secret. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -12512,7 +13628,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description Refused: an invalid schema, a duplicate name, a transport this server does not allow (`invalid-toolset`). */
+            /** @description Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-toolset`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -12530,90 +13646,8 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description An MCP server cannot be reached (`toolset-unavailable`). */
+            /** @description An MCP server or an OpenAPI document's URL cannot be reached (`toolset-unavailable`). */
             502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    setToolsetCredentials: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The toolset's id. */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Credentials"];
-            };
-        };
-        responses: {
-            /** @description Stored. Calls parked by `credentials.expired` are ready again. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No such toolset. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
                 headers: {
                     [name: string]: unknown;
                 };

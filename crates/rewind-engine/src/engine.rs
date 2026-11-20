@@ -12,14 +12,15 @@ use rewind_core::{
 };
 
 use crate::adapters::StaticTypeChecker;
+use crate::attachments::{AttachRights, AttachmentProblem};
 use crate::cache::{CacheConfig, InstanceCache};
 use crate::payloads::{self, PayloadTiers};
 use crate::ports::{
-    Activation, BlobError, BlobStore, CheckerError, Clock, CreateRun, Created, Credentials,
-    Diagnostic, Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun,
-    QuarantineKind, RunFilter, RunMetadata, RunRecord, RunRef, ScriptExecutor, SecretError,
-    SecretOwner, SecretStore, Severity, StoreError, StoredScript, StoredToolset, TaskFilter,
-    TenantId, TenantScope, ToolDeclarations, ToolDispatcher, Trigger, TypeChecker, WebhookSender,
+    Activation, BlobError, BlobStore, CheckerError, Clock, CreateRun, Created, Diagnostic,
+    Enqueued, Entropy, ExecutorError, InvalidScript, JournalStore, NewRun, QuarantineKind,
+    RunFilter, RunMetadata, RunRecord, RunRef, ScriptExecutor, SecretError, SecretStore, Severity,
+    StoreError, StoredScript, StoredToolset, TaskFilter, TenantId, TenantScope, ToolDeclarations,
+    ToolDispatcher, Trigger, TypeChecker, WebhookSender,
 };
 use crate::ports::{NamespaceName, QuotaExceeded, Tenant, limits as namespace_limits};
 use crate::quotas::CpuMeter;
@@ -125,7 +126,7 @@ pub struct Adapters<J, B, X, D, C, E, S, W> {
     pub dispatcher: D,
     pub clock: C,
     pub entropy: E,
-    /// Credentials, resolved when a tool call is dispatched.
+    /// The secrets runs attach, read when a call is dispatched, and the tenants' signing keys.
     pub secrets: S,
     /// Webhooks about tool tasks that wait for the harness (`tool.schema_changed`,
     /// `credentials.expired`).
@@ -170,17 +171,18 @@ pub struct StartRun {
     pub mode: RunMode,
     /// The run's TTL; [`EngineConfig::default_ttl`] when `None`.
     pub ttl: Option<Duration>,
+    /// Its `secrets` are the request's attachments (`archi/04-tools.md`, "Secrets"), checked
+    /// against the toolset, the secrets that exist and `attach`.
     pub metadata: RunMetadata,
     /// A retried request with the same key returns the same run instead of starting another.
     pub idempotency_key: Option<String>,
-    /// The run's own credentials, stored before the run exists so that its first call uses
-    /// them. They override the toolset's.
-    pub credentials: Option<Credentials>,
+    /// What the caller may attach.
+    pub attach: AttachRights,
 }
 
 impl StartRun {
     /// A live run of the tenant `local`, in its namespace `local`, with no declarations, TTL,
-    /// metadata, idempotency key or credentials.
+    /// metadata, idempotency key nor attachment.
     pub fn new(script: Script, toolset: Toolset, input: JsonValue) -> Self {
         Self {
             tenant: TenantId::local(),
@@ -194,7 +196,7 @@ impl StartRun {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
-            credentials: None,
+            attach: AttachRights::NamespaceOnly,
         }
     }
 }
@@ -211,7 +213,6 @@ pub(crate) struct NewRunRequest {
     pub(crate) ttl: Duration,
     pub(crate) metadata: RunMetadata,
     pub(crate) idempotency_key: Option<String>,
-    pub(crate) credentials: Option<Credentials>,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -250,6 +251,11 @@ pub enum StartError {
     /// No such workflow version in the tenant.
     #[error("workflow version {0} not found")]
     WorkflowNotFound(String),
+    /// An attachment is missing, takes no secret, names a secret that does not exist or one the
+    /// caller may not attach (`archi/04-tools.md`, "Secrets"): 422 `secret-required`, whose
+    /// message lists the secrets the caller may attach for each server.
+    #[error("{}", attachment_problems(.0))]
+    SecretRequired(Vec<AttachmentProblem>),
     /// The input does not match the workflow's input schema.
     #[error("{0}")]
     InvalidInput(String),
@@ -516,6 +522,10 @@ where
             });
         }
         bounds.check_lines(&request.script)?;
+        if !request.metadata.secrets.is_empty() || request.toolset.taking_secrets().next().is_some()
+        {
+            self.check_attachments(&request).await?;
+        }
         let input = Payload::Value(request.input);
         let size = payloads::value_size(&input).unwrap_or_default();
         if size > self.config.limits.max_payload_bytes {
@@ -554,23 +564,31 @@ where
             ttl,
             metadata: request.metadata,
             idempotency_key: request.idempotency_key,
-            credentials: request.credentials,
         })
         .await
     }
 
-    /// Creates a run of a stored script and toolset, with its own credentials if it has some,
-    /// once the request is checked.
+    /// Refuses a start whose attachments do not fit (`archi/04-tools.md`, "Secrets"): a server
+    /// or an API the script imports whose `auth` takes a secret and has none attached; an
+    /// attachment for a server that takes none; a secret that does not exist (an `ns/` one in
+    /// the run's namespace); one `request.attach` does not allow.
+    #[expect(
+        clippy::todo,
+        reason = "the engine-server workstream checks the attachments"
+    )]
+    async fn check_attachments(&self, request: &StartRun) -> Result<(), StartError> {
+        let _ = request;
+        todo!(
+            "engine-server: check the attachments against the script's imports, the toolset's \
+             auth, the SecretStore and AttachRights; refuse with StartError::SecretRequired"
+        )
+    }
+
+    /// Creates a run of a stored script and toolset, once the request is checked. Its
+    /// attachments are in its metadata.
     pub(crate) async fn create(&self, request: NewRunRequest) -> Result<Created, StartError> {
         let now = self.clock.now();
         let run_ref = RunRef::new(request.tenant, self.entropy.run_id());
-        // Stored before the run exists: a worker may dispatch its first call at once.
-        let owner = SecretOwner::Run(run_ref.id);
-        if let Some(credentials) = &request.credentials {
-            self.secrets
-                .put(&run_ref.tenant, &owner, credentials)
-                .await?;
-        }
         let run = NewRun {
             run: run_ref.clone(),
             namespace: request.namespace,
@@ -587,21 +605,12 @@ where
             created_at: now,
         };
         let created = self.journal.create_run(run, request.idempotency_key).await;
-        let created = match created {
-            Ok(CreateRun::Created(created)) if created.created => created,
-            // The run was not created: no run owns the credentials stored for it.
-            other => {
-                if request.credentials.is_some() {
-                    self.secrets.delete(&run_ref.tenant, &owner).await?;
-                }
-                match other? {
-                    CreateRun::Created(existing) => existing,
-                    CreateRun::QuotaExceeded(exceeded) => {
-                        return Err(StartError::QuotaExceeded(exceeded));
-                    }
-                    CreateRun::NamespaceDeleting => return Err(StartError::NamespaceDeleting),
-                }
+        let created = match created? {
+            CreateRun::Created(created) => created,
+            CreateRun::QuotaExceeded(exceeded) => {
+                return Err(StartError::QuotaExceeded(exceeded));
             }
+            CreateRun::NamespaceDeleting => return Err(StartError::NamespaceDeleting),
         };
         tracing::debug!(run = %created.run, created = created.created, "run started");
         Ok(created)
@@ -900,6 +909,11 @@ pub(crate) async fn type_check<K: TypeChecker>(
 }
 
 /// The first error of a refused check, for the message of [`StartError::TypeErrors`].
+fn attachment_problems(problems: &[AttachmentProblem]) -> String {
+    let problems: Vec<String> = problems.iter().map(ToString::to_string).collect();
+    problems.join("; ")
+}
+
 fn first_error(diagnostics: &[Diagnostic]) -> String {
     diagnostics
         .iter()

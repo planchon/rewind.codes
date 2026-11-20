@@ -5,7 +5,10 @@
 //! - [`RunState`]: the state of a run, a pure function of its history.
 //! - [`ReplayCursor`]: the determinism check (`archi/03-execution.md`, "Replay").
 //! - [`Script`] and [`Toolset`]: the immutable, content-addressed inputs of a run. The toolset
-//!   is pinned: its servers, and for each tool its route, schemas and policy.
+//!   is pinned: its servers and APIs with how each authenticates ([`ToolAuth`]), and for each
+//!   tool its route, schemas and policy.
+//! - [`SecretRef`] and [`Attachments`]: the secrets a run or a workflow version attaches, by
+//!   name, never by value (`archi/04-tools.md`, "Secrets").
 //! - [`JournalDocument`]: a run's journal with its script and toolset, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
 //! - [`Shape`]: the type of a tool's results, as observed in journals.
@@ -30,6 +33,7 @@ mod ids;
 mod journal;
 mod payload;
 mod replay;
+mod secret;
 mod shape;
 mod state;
 mod test;
@@ -51,6 +55,11 @@ pub use ids::{Epoch, RunId, Seed, Seq};
 pub use journal::{JournalDocument, JournalError};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};
+pub use secret::{
+    Attachments, InvalidSecretName, InvalidSecretRef, MAX_SECRET_VALUE_BYTES, RESERVED_HEADERS,
+    SECRET_PLACEHOLDER, SecretEncoding, SecretName, SecretPlacement, SecretRef, SecretScope,
+    ToolAuth,
+};
 pub use shape::{Field, Shape};
 pub use state::{AwaitedSignal, RunOutcome, RunState, RunStatus};
 pub use test::{
@@ -60,8 +69,8 @@ pub use test::{
 };
 pub use time::{DurationError, Timestamp, parse_duration};
 pub use toolset::{
-    Builtin, Interruption, McpServer, McpTransport, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute,
-    Toolset, ToolsetError,
+    Api, ApiOperation, ApiParameter, Builtin, HttpMethod, Interruption, McpServer, McpTransport,
+    ParameterLocation, RESERVED_WORDS, Tool, ToolPolicy, ToolRoute, Toolset, ToolsetError,
 };
 pub use workflow::{
     ERASED_TEST_REASON, InvalidWorkflow, PinnedWorkflow, RESERVED_SIGNAL_PREFIX, RetiredTest,

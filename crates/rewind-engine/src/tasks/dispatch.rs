@@ -1,18 +1,21 @@
-//! The tasks Rewind calls itself: MCP tools and built-ins, and every tool in mock mode
+//! The tasks Rewind calls itself: MCP tools, API tools and built-ins, and every tool in mock mode
 //! (`archi/04-tools.md`, "Tool task lifecycle").
 //!
 //! ```text
 //! claim ──► interrupted before? ── at_most_once, or too many attempts ──► done: outcome_unknown
 //!   │
-//!   ▼ prepare: the pinned tool, its args, the run's or the toolset's credentials (MCP only)
-//!   │           (a failure here puts the task back with backoff: the call was not sent)
+//!   ▼ prepare: the pinned tool, its args, its server's or API's auth resolved: the secret the
+//!   │           run attached, or the tenant's signing key (a failure here puts the task back
+//!   │           with backoff: the call was not sent; a secret that no longer exists parks it,
+//!   │           secret_missing)
 //!   ▼ dispatch, the claim heartbeated meanwhile (or, in the engine, the `webhook` built-in and
 //!   │  the workflows' built-ins)
 //!   │
 //!   ├─ Result, Failed ──────────────────────────────────────────────► done
 //!   ├─ Transient ── retry and attempts left ── ready after backoff; else done with the failure
 //!   ├─ Deferred ─── until the execution timeout, bounded by the run's deadline
-//!   └─ Park ─────── parked, then tool.schema_changed / credentials.expired to subscriptions
+//!   └─ Park ─────── parked, then tool.schema_changed / credentials.expired (refused, missing)
+//!                   to subscriptions
 //! ```
 
 use std::time::Duration;
@@ -20,7 +23,7 @@ use std::time::Duration;
 use tracing::Instrument as _;
 
 use rewind_core::{
-    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp,
+    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp, ToolAuth,
     ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
 };
 use serde_json::json;
@@ -29,10 +32,10 @@ use super::InFlight;
 use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
-    BlobStore, ClaimedTask, Clock, Credentials, Dispatched, Entropy, JournalStore, ParkKind,
-    ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskPhase, TaskProgress, TaskToken,
-    TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind,
-    WebhookSender,
+    BlobStore, CallAuth, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched, Entropy,
+    JournalStore, ParkKind, ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskPhase,
+    TaskProgress, TaskToken, TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext,
+    WebhookEvent, WebhookEventKind, WebhookSender,
 };
 use crate::{metrics, payloads, text};
 
@@ -40,7 +43,9 @@ use crate::{metrics, payloads, text};
 struct Prepared {
     record: RunRecord,
     call: ToolCall,
-    credentials: Option<Credentials>,
+    /// How the call proves who calls; `None` when the secret the run attached for its server no
+    /// longer exists: the call is parked (`secret_missing`) instead of sent.
+    auth: Option<CallAuth>,
     /// The engine answers the call itself, or turns the dispatcher's answer into its own.
     served: Option<Served>,
 }
@@ -127,9 +132,21 @@ where
         let Prepared {
             record,
             call,
-            credentials,
+            auth,
             served,
         } = prepared;
+        let Some(auth) = auth else {
+            let reason = ParkReason {
+                kind: ParkKind::SecretMissing,
+                message: format!(
+                    "the secret the run attached for {} no longer exists: put it again",
+                    call.tool.route.server().unwrap_or(&call.tool.name)
+                ),
+            };
+            return self
+                .settle(&task, &token, &record, Dispatched::Park(reason))
+                .await;
+        };
         // The attempt span: a child of the tool call span, through the call's trace context.
         let attempt = tracing::info_span!(
             "tool_attempt",
@@ -166,12 +183,12 @@ where
             };
             let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
             if matches!(served, Some(Served::MockStart)) {
-                let answered = self.dispatcher.dispatch(call.clone(), credentials).await;
+                let answered = self.dispatcher.dispatch(call.clone(), auth).await;
                 let (dispatched, end) = self.mock_start(answered);
                 mock_end = end;
                 return dispatched;
             }
-            self.dispatcher.dispatch(call, credentials).await
+            self.dispatcher.dispatch(call, auth).await
         }
         .instrument(attempt.clone())
         .await;
@@ -375,7 +392,7 @@ where
     // ---------------------------------------------------------------------------------------
     // The dispatched path
 
-    /// The call as the dispatcher receives it, with its credentials. `None` when the run has
+    /// The call as the dispatcher receives it, with its authentication. `None` when the run has
     /// ended.
     async fn prepare(
         &self,
@@ -399,20 +416,24 @@ where
                     run_id: run.id,
                     tool: task.tool.clone(),
                 })?;
-        let (server, credentials) = match &tool.route {
-            ToolRoute::Mcp { server } => (
-                stored.toolset.server(server).cloned(),
-                self.secrets
-                    .resolve(&run.tenant, run.id, &record.namespace, task.toolset)
-                    .await?,
-            ),
+        let (server, api) = match &tool.route {
+            ToolRoute::Mcp { server } => (stored.toolset.server(server).cloned(), None),
+            ToolRoute::Api { api } => (None, stored.toolset.api(api).cloned()),
             ToolRoute::Builtin(_) | ToolRoute::Host { .. } => (None, None),
         };
+        let auth = server
+            .as_ref()
+            .map(|server| server.auth.clone())
+            .or_else(|| api.as_ref().map(|api| api.auth.clone()))
+            .unwrap_or_default();
         let call = ToolCall {
             run: run.clone(),
+            namespace: record.namespace.clone(),
+            labels: record.metadata.labels.clone(),
             seq: task.task.seq,
             tool,
             server,
+            api,
             args: self.task_args(task).await?,
             idempotency_key: self.task_key(&record, task).await?,
             attempt: task.attempt,
@@ -421,12 +442,42 @@ where
             trace_context: self.call_trace_context(&record, task.task.seq),
         };
         let served = self.served(task, &call).await?;
+        let auth = self.call_auth(&record, &call, &auth).await?;
         Ok(Some(Prepared {
             record,
             call,
-            credentials,
+            auth,
             served,
         }))
+    }
+
+    /// How a call proves who calls, from its server's or API's `auth` (`archi/04-tools.md`,
+    /// "Authenticating calls"): nothing; the secret the run attached for the server, read in the
+    /// run's namespace and counted (`None` when it no longer exists: the call is parked); or the
+    /// tenant's signing key with the claims of the call (`iss` from the public URL, `sub` the
+    /// namespace, the labels, the run, the tool, the idempotency key and the attempt). Nothing
+    /// falls back on another secret.
+    #[expect(
+        clippy::todo,
+        reason = "the engine-server workstream resolves secrets and keys"
+    )]
+    async fn call_auth(
+        &self,
+        record: &RunRecord,
+        call: &ToolCall,
+        auth: &ToolAuth,
+    ) -> Result<Option<CallAuth>, EngineError> {
+        match auth {
+            ToolAuth::None => Ok(Some(CallAuth::None)),
+            ToolAuth::Secret(_) | ToolAuth::Rewind => {
+                let _ = (record, call);
+                todo!(
+                    "engine-server: read the secret record.metadata.secrets attaches for the \
+                     server (SecretId::resolve in the run's namespace, SecretStore::read), or \
+                     sign with SecretStore::signing_key and CallClaims"
+                )
+            }
+        }
     }
 
     /// Whether the engine serves the call itself: the `webhook` built-in and the workflows'
@@ -569,11 +620,25 @@ where
         reason: ParkReason,
     ) -> Result<(), EngineError> {
         let (seq, tool, message) = (task.task.seq, task.tool.clone(), reason.message);
+        let credentials_expired = |reason| WebhookEventKind::CredentialsExpired {
+            seq,
+            tool: tool.clone(),
+            message: message.clone(),
+            reason,
+            secret: task
+                .route
+                .server()
+                .and_then(|server| record.metadata.secrets.get(server))
+                .cloned(),
+        };
         let kind = match reason.kind {
-            ParkKind::SchemaChanged => WebhookEventKind::ToolSchemaChanged { seq, tool, message },
-            ParkKind::CredentialsExpired => {
-                WebhookEventKind::CredentialsExpired { seq, tool, message }
-            }
+            ParkKind::SchemaChanged => WebhookEventKind::ToolSchemaChanged {
+                seq,
+                tool: tool.clone(),
+                message: message.clone(),
+            },
+            ParkKind::CredentialsRefused => credentials_expired(CredentialsExpiredReason::Refused),
+            ParkKind::SecretMissing => credentials_expired(CredentialsExpiredReason::Missing),
         };
         let run = &task.task.run;
         let event = WebhookEvent {

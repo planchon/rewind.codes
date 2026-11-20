@@ -1,4 +1,4 @@
-//! The tool tasks' use cases: policies and backoff, claims and heartbeats, credentials, parked
+//! The tool tasks' use cases: policies and backoff, claims and heartbeats, refused calls, parked
 //! tasks and their webhooks, approvals, the host-tool worker, the `webhook` built-in, tenants.
 
 #![allow(clippy::unwrap_used)]
@@ -15,9 +15,9 @@ use rewind_core::{
     Toolset,
 };
 use rewind_engine::ports::{
-    Clock, Credentials, Delivery, Dispatched, JournalStore, NamespaceName, ParkKind, ParkReason,
-    RunRef, Secret, ServerCredentials, Subscription, TaskFilter, TaskRef, TaskState, Tenant,
-    TenantId, TenantScope, ToolCall, ToolDispatcher, VirtualTime, WebhookEventKind,
+    CallAuth, Clock, CredentialsExpiredReason, Delivery, Dispatched, JournalStore, ParkKind,
+    ParkReason, RunRef, Secret, Subscription, TaskFilter, TaskRef, TaskState, Tenant, TenantId,
+    TenantScope, ToolCall, ToolDispatcher, VirtualTime, WebhookEventKind,
 };
 use rewind_engine::{
     Backoff, DriveOptions, Engine, EngineConfig, EngineError, HostClaim, HostFailure, StartError,
@@ -79,29 +79,6 @@ fn toolset(policy: impl Fn(&mut ToolPolicy)) -> Toolset {
 
 fn calling(tool: &str, toolset: Toolset) -> StartRun {
     StartRun::new(Script::new("caller"), toolset, json!({ "tool": tool }))
-}
-
-fn bearer(token: &str) -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([(
-                    "Authorization".to_owned(),
-                    Secret::new(format!("Bearer {token}")),
-                )]),
-                env: BTreeMap::new(),
-            },
-        )]),
-    }
-}
-
-fn authorization(credentials: &Option<Credentials>) -> Option<String> {
-    credentials.as_ref().map(|credentials| {
-        credentials.servers["github"].headers["Authorization"]
-            .expose()
-            .to_owned()
-    })
 }
 
 fn failure(kind: ToolFailureKind, message: &str) -> ToolFailure {
@@ -357,7 +334,7 @@ struct Gate {
 }
 
 impl ToolDispatcher for Gate {
-    async fn dispatch(&self, _call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, _call: ToolCall, _auth: CallAuth) -> Dispatched {
         *self.calls.lock().unwrap() += 1;
         self.open.notified().await;
         Dispatched::Result(json!("late"))
@@ -426,58 +403,19 @@ async fn the_engine_heartbeats_its_claims_until_their_execution_timeout() {
 }
 
 // -------------------------------------------------------------------------------------------
-// Credentials and parked tasks
+// Refused calls and parked tasks
+//
+// How a call's secret is read, a missing secret parks it, and a secret put again resumes it, is
+// the engine-server workstream's (`archi/09-roadmap.md`): their tests come with it.
 
-#[tokio::test]
-async fn credentials_are_resolved_at_dispatch_and_never_journaled() {
-    let dispatcher = RecordingDispatcher::echo();
-    let engine = engine(caller(), dispatcher.clone());
-    let tools = toolset(|_| {});
-    let tenant = TenantId::local();
-
-    // The first run has its own credentials; the second uses the toolset's.
-    let mut own = calling(ISSUE, tools.clone());
-    own.credentials = Some(bearer("run-token"));
-    let own = engine.start_run(own).await.unwrap().run;
-    engine
-        .set_toolset_credentials(&tenant, tools.digest(), &bearer("toolset-token"))
-        .await
-        .unwrap();
-    let shared = engine
-        .start_run(calling(ISSUE, tools.clone()))
-        .await
-        .unwrap()
-        .run;
-    let host = engine
-        .start_run(calling("ask_user", tools.clone()))
-        .await
-        .unwrap()
-        .run;
-    drive(&engine).await;
-
-    let by_run: BTreeMap<_, _> = dispatcher
-        .calls()
-        .into_iter()
-        .map(|call| call.run.id)
-        .zip(dispatcher.credentials().iter().map(authorization))
-        .collect();
-    assert_eq!(by_run[&own.id].as_deref(), Some("Bearer run-token"));
-    assert_eq!(by_run[&shared.id].as_deref(), Some("Bearer toolset-token"));
-    assert_eq!(by_run[&host.id], None, "only MCP calls get credentials");
-    for run in [&own, &shared] {
-        let history = format!("{:?}", engine.export_history(run).await.unwrap());
-        assert!(!history.contains("run-token") && !history.contains("toolset-token"));
-    }
-}
-
-/// Answers 401 unless the call carries the renewed token.
-fn expiring() -> RecordingDispatcher {
-    RecordingDispatcher::dispatching(|call, credentials| {
-        if authorization(&credentials.cloned()).as_deref() == Some("Bearer renewed") {
+/// Answers 401 to the first attempt of each call, then answers.
+fn refusing_once() -> RecordingDispatcher {
+    RecordingDispatcher::dispatching(|call, _| {
+        if call.attempt > 1 {
             Dispatched::Result(json!({ "attempt": call.attempt, "key": call.idempotency_key }))
         } else {
             Dispatched::Park(ParkReason {
-                kind: ParkKind::CredentialsExpired,
+                kind: ParkKind::CredentialsRefused,
                 message: format!("{} answered 401", call.tool.name),
             })
         }
@@ -485,12 +423,11 @@ fn expiring() -> RecordingDispatcher {
 }
 
 #[tokio::test]
-async fn a_401_parks_the_call_until_the_run_s_credentials_are_renewed() {
-    let dispatcher = expiring();
+async fn a_401_parks_the_call_until_the_harness_approves_it() {
+    let dispatcher = refusing_once();
     let engine = engine(caller(), dispatcher.clone());
     let mut request = calling(ISSUE, toolset(|_| {}));
     request.metadata.labels = BTreeMap::from([("agent".to_owned(), "triage".to_owned())]);
-    request.credentials = Some(bearer("expired"));
     let run = engine.start_run(request).await.unwrap().run;
     subscribe(&engine, BTreeMap::new()).await;
     subscribe(
@@ -503,7 +440,7 @@ async fn a_401_parks_the_call_until_the_run_s_credentials_are_renewed() {
     assert!(matches!(
         task_state(&engine, &run).await,
         TaskState::Parked(ParkReason {
-            kind: ParkKind::CredentialsExpired,
+            kind: ParkKind::CredentialsRefused,
             ..
         })
     ));
@@ -524,119 +461,28 @@ async fn a_401_parks_the_call_until_the_run_s_credentials_are_renewed() {
             seq: Seq(1),
             tool: ISSUE.into(),
             message: "github.get_issue answered 401".into(),
+            reason: CredentialsExpiredReason::Refused,
+            secret: None,
         }
     );
 
-    // Renewed, the call is sent again with the same key and the new credentials.
-    assert_eq!(
-        engine
-            .set_run_credentials(&run, &bearer("renewed"))
-            .await
-            .unwrap(),
-        1
-    );
+    // Approved once the server accepts the key again, the call is sent with the same key.
+    engine
+        .approve_task(&TaskRef {
+            run: run.clone(),
+            seq: Seq(1),
+        })
+        .await
+        .unwrap();
     drive(&engine).await;
     assert_eq!(
         output(&engine, &run).await,
         json!({ "result": { "attempt": 2, "key": format!("{}/1", run.id) } })
     );
-    let sent: Vec<_> = dispatcher.credentials().iter().map(authorization).collect();
     assert_eq!(
-        sent,
-        [
-            Some("Bearer expired".to_owned()),
-            Some("Bearer renewed".to_owned())
-        ]
-    );
-}
-
-#[tokio::test]
-async fn renewed_toolset_credentials_resume_the_runs_of_the_toolset() {
-    let dispatcher = expiring();
-    let engine = engine(caller(), dispatcher.clone());
-    let tools = toolset(|_| {});
-    let first = engine
-        .start_run(calling(ISSUE, tools.clone()))
-        .await
-        .unwrap()
-        .run;
-    let second = engine
-        .start_run(calling(ISSUE, tools.clone()))
-        .await
-        .unwrap()
-        .run;
-    drive(&engine).await;
-    assert_eq!(
-        engine
-            .set_toolset_credentials(&TenantId::local(), tools.digest(), &bearer("renewed"))
-            .await
-            .unwrap(),
-        2
-    );
-    drive(&engine).await;
-    for run in [first, second] {
-        assert_eq!(output(&engine, &run).await["result"]["attempt"], json!(2));
-    }
-    assert_eq!(
-        engine
-            .set_toolset_credentials(&TenantId::local(), Toolset::empty().digest(), &bearer("x"))
-            .await,
-        Err(EngineError::ToolsetNotFound(Toolset::empty().digest()))
-    );
-}
-
-#[tokio::test]
-async fn renewed_namespace_credentials_resume_the_runs_of_the_namespace_only() {
-    let dispatcher = expiring();
-    let engine = engine(caller(), dispatcher.clone());
-    let tools = toolset(|_| {});
-    let in_namespace = |name: &str| {
-        let mut request = calling(ISSUE, tools.clone());
-        request.namespace = NamespaceName::new(name).unwrap();
-        request
-    };
-    let alice = engine.start_run(in_namespace("alice")).await.unwrap().run;
-    let bob = engine.start_run(in_namespace("bob")).await.unwrap().run;
-    drive(&engine).await;
-    assert!(matches!(
-        task_state(&engine, &alice).await,
-        TaskState::Parked(_)
-    ));
-
-    // Alice's credentials for the toolset: her call goes on, Bob's stays parked.
-    assert_eq!(
-        engine
-            .set_namespace_credentials(
-                &TenantId::local(),
-                &NamespaceName::new("alice").unwrap(),
-                tools.digest(),
-                &bearer("renewed"),
-            )
-            .await
-            .unwrap(),
-        1
-    );
-    drive(&engine).await;
-    assert_eq!(output(&engine, &alice).await["result"]["attempt"], json!(2));
-    assert!(!status(&engine, &bob).await.is_terminal());
-    assert!(matches!(
-        task_state(&engine, &bob).await,
-        TaskState::Parked(_)
-    ));
-    assert_eq!(
-        authorization(dispatcher.credentials().last().unwrap()).as_deref(),
-        Some("Bearer renewed")
-    );
-    assert_eq!(
-        engine
-            .set_namespace_credentials(
-                &TenantId::local(),
-                &NamespaceName::new("alice").unwrap(),
-                Toolset::empty().digest(),
-                &bearer("x"),
-            )
-            .await,
-        Err(EngineError::ToolsetNotFound(Toolset::empty().digest()))
+        dispatcher.auth(),
+        [CallAuth::None, CallAuth::None],
+        "a server without auth gets nothing"
     );
 }
 
@@ -1230,37 +1076,6 @@ async fn a_start_above_the_tenants_quota_is_refused() {
     drive(&engine).await;
     assert_eq!(status(&engine, &first).await, RunStatus::Completed);
     engine.start_run(request()).await.unwrap();
-}
-
-#[tokio::test]
-async fn credentials_given_at_start_are_kept_only_for_a_new_run() {
-    let dispatcher = RecordingDispatcher::echo();
-    let engine = engine(caller(), dispatcher.clone());
-    let mut request = calling(ISSUE, toolset(|_| {}));
-    request.idempotency_key = Some("tool-call-1".into());
-    request.credentials = Some(bearer("first"));
-    let run = engine.start_run(request.clone()).await.unwrap();
-    assert!(run.created);
-    request.credentials = Some(bearer("retried"));
-    let again = engine.start_run(request).await.unwrap();
-    assert!(!again.created);
-    assert_eq!(again.run, run.run);
-    drive(&engine).await;
-    assert_eq!(
-        authorization(&dispatcher.credentials()[0]).as_deref(),
-        Some("Bearer first"),
-        "a retried start does not replace the run's credentials"
-    );
-
-    assert_eq!(
-        engine.set_run_credentials(&run.run, &bearer("late")).await,
-        Err(EngineError::RunEnded(run.run.id))
-    );
-    let unknown = RunRef::new(TenantId::local(), rewind_core::RunId::from_u128(9));
-    assert_eq!(
-        engine.set_run_credentials(&unknown, &bearer("x")).await,
-        Err(EngineError::RunNotFound(unknown.id))
-    );
 }
 
 // -------------------------------------------------------------------------------------------

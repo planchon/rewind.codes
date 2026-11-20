@@ -5,13 +5,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use rewind_core::SecretName;
 use rewind_core::{
     Digest, Epoch, Event, HistoryEntry, Lifecycle, RunId, RunMode, RunStarted, RunStatus, Seed,
     Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use rewind_engine::ports::{
-    Activation, CreateRun, Credentials, JournalStore, NewRun, NewToolTask, RunMetadata, RunRef,
-    Secret, SecretError, SecretOwner, SecretStore, ServerCredentials, TaskFilter, TenantId,
+    Activation, CreateRun, JournalStore, NamespaceName, NewRun, NewSecret, NewToolTask,
+    RunMetadata, RunRef, Secret, SecretError, SecretId, SecretReader, SecretStore, TaskFilter,
+    TenantId,
 };
 use rewind_store_turso::{Error, MasterKey, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
@@ -209,18 +211,19 @@ async fn settings_live_in_meta() {
     );
 }
 
-fn credentials() -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([(
-                    "Authorization".to_owned(),
-                    Secret::new("Bearer ghp_plaintext_token"),
-                )]),
-                env: BTreeMap::new(),
-            },
-        )]),
+fn github_token() -> NewSecret {
+    NewSecret {
+        id: SecretId::organization(SecretName::new("github").expect("valid")),
+        value: Secret::new("ghp_plaintext_token"),
+        labels: BTreeMap::new(),
+        by: "user:ada".into(),
+    }
+}
+
+fn reader() -> SecretReader {
+    SecretReader {
+        run: RunId::from_u128(1),
+        namespace: NamespaceName::migrated(),
     }
 }
 
@@ -228,13 +231,17 @@ fn credentials() -> Credentials {
 async fn secrets_are_encrypted_at_rest() {
     let dir = TempDir::new().expect("temporary directory");
     let path = dir.path().join("journal.db");
-    let owner = SecretOwner::Toolset(Digest::of(b"toolset"));
+    let secret = github_token();
     {
         let store = open(&path).await;
         store
-            .put(&TenantId::local(), &owner, &credentials())
+            .put(&TenantId::local(), &secret, T0)
             .await
             .expect("put");
+        store
+            .signing_key(&TenantId::local(), T0)
+            .await
+            .expect("signing_key");
     }
 
     // Neither the database nor its write-ahead log holds the secret in clear.
@@ -249,15 +256,10 @@ async fn secrets_are_encrypted_at_rest() {
     let store = open(&path).await;
     assert_eq!(
         store
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(1),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"toolset")
-            )
+            .read(&TenantId::local(), &secret.id, &reader(), T0)
             .await
-            .expect("resolve"),
-        Some(credentials())
+            .expect("read"),
+        Some(secret.value.clone())
     );
 
     // Another master key reads nothing.
@@ -267,14 +269,9 @@ async fn secrets_are_encrypted_at_rest() {
         .expect("open");
     assert!(matches!(
         stranger
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(1),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"toolset")
-            )
+            .read(&TenantId::local(), &secret.id, &reader(), T0)
             .await,
-        Err(SecretError::Crypto(_))
+        Err(SecretError::Crypto(_) | SecretError::UnknownMasterKey(_))
     ));
 }
 

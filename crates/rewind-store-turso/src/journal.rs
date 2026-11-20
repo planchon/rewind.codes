@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
-    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    Attachments, CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId,
+    RunStatus, Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
     end_signal_name,
 };
 use rewind_engine::ports::{
@@ -14,9 +14,9 @@ use rewind_engine::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, RunWorkflow, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
+    RunRecord, RunRef, RunWorkflow, SecretId, SecretUsage, StartedBy, StoreError, StoredScript,
+    StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
+    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
     TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
     deferred_timeout_failure,
 };
@@ -141,6 +141,8 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
                 })
                 .transpose()?,
             scope: decode_labels(&row.text(31)?)?,
+            // The `runs.secrets` column is the stores workstream's: no run attaches any yet.
+            secrets: Attachments::new(),
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -1037,6 +1039,9 @@ impl JournalStore for TursoStore {
                 Err(refused) => return Ok(refused),
             };
             let metadata = &run.metadata;
+            if !metadata.secrets.is_empty() {
+                keep_attachments(&metadata.secrets);
+            }
             let trace = metadata.trace_context.as_ref();
             let workflow = metadata.workflow.as_ref();
             let started_by = metadata.started_by;
@@ -2247,41 +2252,37 @@ impl JournalStore for TursoStore {
         .await
     }
 
+    #[expect(
+        clippy::todo,
+        reason = "the stores workstream resumes the calls by secret"
+    )]
     async fn resume_parked(
         &self,
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
-        let connection = self.connection().await?;
-        let (runs, mut params) = match scope {
-            ParkedScope::Run(run) => (
-                "SELECT id FROM runs WHERE tenant = ? AND id = ?",
-                vec![tenant(&run.tenant), run_id(run.id)],
-            ),
-            ParkedScope::Toolset {
-                tenant: owner,
-                toolset,
-            } => (
-                "SELECT id FROM runs WHERE tenant = ? AND toolset = ?",
-                vec![tenant(owner), digest(*toolset)],
-            ),
-            ParkedScope::Namespace {
-                tenant: owner,
-                namespace,
-                toolset,
-            } => (
-                "SELECT id FROM runs WHERE tenant = ? AND namespace = ? AND toolset = ?",
-                vec![tenant(owner), text(namespace.as_str()), digest(*toolset)],
-            ),
-        };
-        params.splice(0..0, [ts(now), ts(now)]);
-        let query = format!(
-            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = ?, due_at = ?, \
-             parked_kind = NULL, parked_reason = NULL \
-             WHERE state = 'parked' AND parked_kind = 'credentials_expired' AND run_id IN ({runs})"
-        );
-        let resumed = sql::execute(&connection, &query, params).await?;
-        Ok(usize::try_from(resumed).unwrap_or(usize::MAX))
+        let _ = (scope, now);
+        todo!(
+            "stores: make ready the tasks parked by credentials_refused or secret_missing whose \
+             run's runs.secrets attaches the secret for the task's server"
+        )
+    }
+
+    #[expect(
+        clippy::todo,
+        reason = "the stores workstream answers what reads a secret"
+    )]
+    async fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        limit: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        let _ = (tenant, secret, limit);
+        todo!(
+            "stores: the active runs whose runs.secrets attaches the secret, those waiting on a \
+             call it serves, the latest workflow versions attaching it"
+        )
     }
 
     async fn expire_deferred_tool_tasks(
@@ -3249,4 +3250,14 @@ impl JournalStore for TursoStore {
         })
         .await
     }
+}
+
+/// Keeps a run's attachments in `runs.secrets`.
+#[expect(
+    clippy::todo,
+    reason = "the stores workstream adds the runs.secrets column"
+)]
+fn keep_attachments(secrets: &Attachments) {
+    let _ = secrets;
+    todo!("stores: write the run's attachments to runs.secrets, and read them back in get_run")
 }

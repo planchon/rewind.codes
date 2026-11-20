@@ -1,5 +1,5 @@
-//! Runs: start, state, list, trace, signals, cancellation, forks, journal export, quarantine,
-//! credentials, deletion (`archi/01-product.md`, `archi/03-execution.md`).
+//! Runs: start with the secrets they attach, state, list, trace, signals, cancellation, forks,
+//! journal export, quarantine, deletion (`archi/01-product.md`, `archi/03-execution.md`).
 //!
 //! The journal entries and the event stream of a run are in [`crate::events`].
 
@@ -16,8 +16,8 @@ use crate::common::{
 };
 use crate::namespaces::NamespaceName;
 pub use crate::query::WaitKind;
+use crate::secrets::Attachments;
 use crate::tasks::{ParkedReason, TaskState};
-use crate::toolsets::Credentials;
 use crate::workflows::{RunWorkflow, StartedBy};
 
 /// `POST /v1/runs`: starts a run. The script is compiled, checked and type-checked first; a
@@ -32,7 +32,8 @@ use crate::workflows::{RunWorkflow, StartedBy};
     "toolset": "9f2c4e1a07b3d5f8a1c2e3b4d5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4",
     "input": { "repo": "acme/api" },
     "wait": "30s",
-    "labels": { "agent": "triage", "conversation": "c-42" }
+    "labels": { "agent": "triage", "conversation": "c-42" },
+    "secrets": { "github": "ns/github" }
 }))]
 pub struct StartRun {
     /// The TypeScript source: a single ES module whose default export is the entry point.
@@ -71,9 +72,13 @@ pub struct StartRun {
     /// Type-check the script before starting it. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
-    /// Credentials of this run, set before its first call (as `PUT /v1/runs/{id}/credentials`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<Credentials>,
+    /// The secrets the run reads, by MCP server or API: `{ "github": "ns/github", "zendesk":
+    /// "org/zendesk" }` (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's).
+    /// Required for each server the script imports whose `auth` takes a secret; checked against
+    /// the caller's rights (`secret-required`). A run of a `workflow` gives none: its version's
+    /// are read.
+    #[serde(default, skip_serializing_if = "Attachments::is_empty")]
+    pub secrets: Attachments,
 }
 
 impl StartRun {
@@ -89,7 +94,7 @@ impl StartRun {
             tracestate: None,
             ttl: None,
             check: None,
-            credentials: None,
+            secrets: Attachments::new(),
         }
     }
 }
@@ -119,6 +124,10 @@ pub struct Run {
     pub epoch: u32,
     pub mode: RunMode,
     pub labels: Labels,
+    /// The secrets it attached at start, by MCP server or API (`org/<name>`, `ns/<name>`):
+    /// names, never values.
+    #[serde(default, skip_serializing_if = "Attachments::is_empty")]
+    pub secrets: Attachments,
     /// The OpenTelemetry trace the run belongs to: the caller's if it gave a `traceparent`,
     /// else derived from the run id. 32 hex digits.
     pub trace_id: String,
@@ -736,6 +745,10 @@ pub struct ForkRun {
     /// Type-check the corrected script first. `true` by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<bool>,
+    /// The fork's attachments, as `POST /v1/runs` takes them. The parent's when absent. Either
+    /// way they are checked against the caller: the script is new code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<Attachments>,
 }
 
 impl ForkRun {
@@ -750,6 +763,7 @@ impl ForkRun {
             tracestate: None,
             ttl: None,
             check: None,
+            secrets: None,
         }
     }
 }

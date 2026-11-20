@@ -14,10 +14,10 @@ use crate::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
-    ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    SecretId, SecretUsage, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
+    TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId,
+    TenantScope, TestRecord, ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget,
+    WebhookToken, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter,
@@ -1720,29 +1720,22 @@ impl JournalStore for MemoryJournal {
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
+        let ParkedScope::Secret { tenant, secret } = scope;
         let mut state = self.lock()?;
         let mut resumed = 0;
         for run in state.runs.values_mut() {
-            let in_scope = match scope {
-                ParkedScope::Run(target) => run.record.run == *target,
-                ParkedScope::Toolset { tenant, toolset } => {
-                    run.record.run.tenant == *tenant && run.record.toolset == *toolset
-                }
-                ParkedScope::Namespace {
-                    tenant,
-                    namespace,
-                    toolset,
-                } => {
-                    run.record.run.tenant == *tenant
-                        && run.record.namespace == *namespace
-                        && run.record.toolset == *toolset
-                }
-            };
-            if !in_scope {
+            if run.record.run.tenant != *tenant {
                 continue;
             }
+            let (attached, namespace) = (&run.record.metadata.secrets, &run.record.namespace);
             for task in run.tasks.values_mut() {
-                if matches!(&task.state, TaskState::Parked(reason) if reason.kind == ParkKind::CredentialsExpired)
+                let reads_it = task
+                    .route
+                    .server()
+                    .and_then(|server| attached.get(server))
+                    .is_some_and(|attached| SecretId::resolve(attached, namespace) == *secret);
+                if reads_it
+                    && matches!(&task.state, TaskState::Parked(reason) if reason.kind.resumed_by_secret())
                 {
                     task.state = TaskState::Ready {
                         next_attempt_at: now,
@@ -1752,6 +1745,23 @@ impl JournalStore for MemoryJournal {
             }
         }
         Ok(resumed)
+    }
+
+    #[expect(
+        clippy::todo,
+        reason = "the engine-server workstream answers what reads a secret"
+    )]
+    async fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        limit: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        let _ = (tenant, secret, limit);
+        todo!(
+            "engine-server: the active runs whose metadata attaches the secret, those waiting on \
+             a call to a server it serves, the latest versions attaching it"
+        )
     }
 
     async fn expire_deferred_tool_tasks(

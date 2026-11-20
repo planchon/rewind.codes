@@ -35,8 +35,12 @@ pub enum Permission {
     ToolsetsRead,
     #[serde(rename = "toolsets:write")]
     ToolsetsWrite,
-    #[serde(rename = "credentials:write")]
-    CredentialsWrite,
+    #[serde(rename = "secrets:read")]
+    SecretsRead,
+    #[serde(rename = "secrets:write")]
+    SecretsWrite,
+    #[serde(rename = "secrets:use")]
+    SecretsUse,
     #[serde(rename = "tasks:work")]
     TasksWork,
     #[serde(rename = "tasks:approve")]
@@ -71,7 +75,7 @@ pub enum Permission {
 
 impl Permission {
     /// The catalog, in the order of `archi/06-storage-and-scale.md`.
-    pub const ALL: [Permission; 23] = [
+    pub const ALL: [Permission; 25] = [
         Permission::RunsRead,
         Permission::RunsStart,
         Permission::RunsControl,
@@ -79,7 +83,9 @@ impl Permission {
         Permission::RunsDelete,
         Permission::ToolsetsRead,
         Permission::ToolsetsWrite,
-        Permission::CredentialsWrite,
+        Permission::SecretsRead,
+        Permission::SecretsWrite,
+        Permission::SecretsUse,
         Permission::TasksWork,
         Permission::TasksApprove,
         Permission::SubscriptionsRead,
@@ -99,14 +105,16 @@ impl Permission {
 
     /// The permissions an end user's token may hold: those that act within one namespace
     /// (`archi/06-storage-and-scale.md`, "What the caller may do").
-    pub const TOKEN: [Permission; 9] = [
+    pub const TOKEN: [Permission; 11] = [
         Permission::RunsRead,
         Permission::RunsStart,
         Permission::RunsControl,
         Permission::RunsQuarantine,
         Permission::RunsDelete,
         Permission::ToolsetsRead,
-        Permission::CredentialsWrite,
+        Permission::SecretsRead,
+        Permission::SecretsWrite,
+        Permission::SecretsUse,
         Permission::TasksWork,
         Permission::TasksApprove,
     ];
@@ -134,7 +142,9 @@ impl Permission {
             Permission::RunsDelete => "runs:delete",
             Permission::ToolsetsRead => "toolsets:read",
             Permission::ToolsetsWrite => "toolsets:write",
-            Permission::CredentialsWrite => "credentials:write",
+            Permission::SecretsRead => "secrets:read",
+            Permission::SecretsWrite => "secrets:write",
+            Permission::SecretsUse => "secrets:use",
             Permission::TasksWork => "tasks:work",
             Permission::TasksApprove => "tasks:approve",
             Permission::SubscriptionsRead => "subscriptions:read",
@@ -176,10 +186,12 @@ impl Permission {
                 "List toolsets and workflows, read their declarations and search their tools."
             }
             Permission::ToolsetsWrite => "Register a toolset, and save a workflow.",
-            Permission::CredentialsWrite => {
-                "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or \
-                 of a run."
+            Permission::SecretsRead => {
+                "List the secrets of the organization and of the namespaces, their metadata and \
+                 usage, never a value; read the signing keys' ids."
             }
+            Permission::SecretsWrite => "Put and delete secrets.",
+            Permission::SecretsUse => "Attach an organization's secret to a run or a workflow.",
             Permission::TasksWork => {
                 "Claim host-tool tasks, and heartbeat, defer, complete or fail them."
             }
@@ -251,7 +263,7 @@ pub const OPERATOR: &str = "operator";
 /// set another.
 pub const DEFAULT_ROLE: BuiltInRole = BuiltInRole::Reader;
 
-const HARNESS: [Permission; 17] = [
+const HARNESS: [Permission; 19] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
@@ -259,7 +271,9 @@ const HARNESS: [Permission; 17] = [
     Permission::RunsDelete,
     Permission::ToolsetsRead,
     Permission::ToolsetsWrite,
-    Permission::CredentialsWrite,
+    Permission::SecretsRead,
+    Permission::SecretsWrite,
+    Permission::SecretsUse,
     Permission::TasksWork,
     Permission::TasksApprove,
     Permission::SubscriptionsRead,
@@ -273,9 +287,10 @@ const HARNESS: [Permission; 17] = [
 
 const WORKER: [Permission; 1] = [Permission::TasksWork];
 
-const READER: [Permission; 6] = [
+const READER: [Permission; 7] = [
     Permission::RunsRead,
     Permission::ToolsetsRead,
+    Permission::SecretsRead,
     Permission::SubscriptionsRead,
     Permission::MembersRead,
     Permission::RolesRead,
@@ -307,7 +322,7 @@ impl BuiltInRole {
         match self {
             BuiltInRole::Owner => "Every permission: administers the organization.",
             BuiltInRole::Harness => {
-                "Runs, toolsets, credentials, tasks and subscriptions, and reading the members \
+                "Runs, toolsets, secrets, tasks and subscriptions, and reading the members \
                  and roles: a harness and its agent tools."
             }
             BuiltInRole::Worker => "Only the host-tool tasks: a harness's SDK worker.",
@@ -542,9 +557,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_catalog_has_twenty_three_permissions_written_once() {
+    fn the_catalog_has_twenty_five_permissions_written_once() {
         let names: BTreeSet<&str> = Permission::ALL.iter().map(|p| p.as_str()).collect();
-        assert_eq!(names.len(), 23);
+        assert_eq!(names.len(), 25);
         for permission in Permission::ALL {
             assert_eq!(Permission::parse(permission.as_str()), Some(permission));
             assert_eq!(
@@ -558,7 +573,11 @@ mod tests {
             Ok(Permission::ApiKeysWrite)
         );
         assert!("runs:everything".parse::<Permission>().is_err());
-        assert_eq!(PermissionList::catalog().permissions.len(), 23);
+        assert_eq!(PermissionList::catalog().permissions.len(), 25);
+        assert!(
+            "credentials:write".parse::<Permission>().is_err(),
+            "replaced by the secrets' permissions"
+        );
     }
 
     fn names(permissions: &[Permission]) -> Vec<&'static str> {
@@ -579,7 +598,9 @@ mod tests {
                 "runs:delete",
                 "toolsets:read",
                 "toolsets:write",
-                "credentials:write",
+                "secrets:read",
+                "secrets:write",
+                "secrets:use",
                 "tasks:work",
                 "tasks:approve",
                 "subscriptions:read",
@@ -597,6 +618,7 @@ mod tests {
             [
                 "runs:read",
                 "toolsets:read",
+                "secrets:read",
                 "subscriptions:read",
                 "members:read",
                 "roles:read",
@@ -625,6 +647,7 @@ mod tests {
         match permission {
             Permission::RunsRead
             | Permission::ToolsetsRead
+            | Permission::SecretsRead
             | Permission::SubscriptionsRead
             | Permission::MembersRead
             | Permission::RolesRead
@@ -634,7 +657,8 @@ mod tests {
             | Permission::RunsQuarantine
             | Permission::RunsDelete
             | Permission::ToolsetsWrite
-            | Permission::CredentialsWrite
+            | Permission::SecretsWrite
+            | Permission::SecretsUse
             | Permission::TasksApprove
             | Permission::SubscriptionsWrite
             | Permission::NamespacesWrite
@@ -683,7 +707,9 @@ mod tests {
                 "runs:quarantine",
                 "runs:delete",
                 "toolsets:read",
-                "credentials:write",
+                "secrets:read",
+                "secrets:write",
+                "secrets:use",
                 "tasks:work",
                 "tasks:approve",
             ]

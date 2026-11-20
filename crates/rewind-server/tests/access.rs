@@ -16,7 +16,7 @@ use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, ScriptFilter};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
-use rewind_api::toolsets::{CreateToolset, Credentials, HostTool};
+use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::workflows::WorkflowQuery;
 use rewind_api::{Client, Problem, ProblemType};
 use rewind_core::Timestamp;
@@ -75,7 +75,6 @@ fn create(tenant: Option<&str>, name: &str, role: &str, labels: &[(&str, &str)])
 enum Call {
     ListToolsets,
     CreateToolset,
-    SetToolsetCredentials,
     ListWorkflows,
     Check,
     ListRuns,
@@ -83,7 +82,6 @@ enum Call {
     CancelRun,
     ReleaseRun,
     GiveUpRun,
-    SetRunCredentials,
     DeleteRun,
     Heartbeat,
     ApproveTask,
@@ -95,10 +93,9 @@ enum Call {
     RevokeApiKey,
 }
 
-const CALLS: [Call; 20] = [
+const CALLS: [Call; 18] = [
     Call::ListToolsets,
     Call::CreateToolset,
-    Call::SetToolsetCredentials,
     Call::ListWorkflows,
     Call::Check,
     Call::ListRuns,
@@ -106,7 +103,6 @@ const CALLS: [Call; 20] = [
     Call::CancelRun,
     Call::ReleaseRun,
     Call::GiveUpRun,
-    Call::SetRunCredentials,
     Call::DeleteRun,
     Call::Heartbeat,
     Call::ApproveTask,
@@ -135,7 +131,6 @@ impl Call {
         match self {
             Call::ListToolsets | Call::ListWorkflows => Permission::ToolsetsRead,
             Call::CreateToolset => Permission::ToolsetsWrite,
-            Call::SetToolsetCredentials | Call::SetRunCredentials => Permission::CredentialsWrite,
             Call::Check | Call::ForkRun => Permission::RunsStart,
             Call::ListRuns | Call::ListScripts | Call::ToolStats => Permission::RunsRead,
             Call::CancelRun => Permission::RunsControl,
@@ -153,17 +148,9 @@ impl Call {
     /// Sends the request. Allowed, each answers without changing anything that matters here:
     /// unknown ids are not found, and the empty toolset is registered once.
     async fn on(self, client: &Client) -> (u16, String) {
-        let credentials = Credentials {
-            servers: BTreeMap::new(),
-        };
         match self {
             Call::ListToolsets => outcome(client.list_toolsets().await),
             Call::CreateToolset => outcome(client.create_toolset(&CreateToolset::default()).await),
-            Call::SetToolsetCredentials => outcome(
-                client
-                    .set_toolset_credentials("unknown", &credentials)
-                    .await,
-            ),
             Call::ListWorkflows => outcome(client.list_workflows(&WorkflowQuery::default()).await),
             Call::Check => outcome(
                 client
@@ -186,9 +173,6 @@ impl Call {
             Call::CancelRun => outcome(client.cancel_run(UNKNOWN_RUN, &CancelRun::default()).await),
             Call::ReleaseRun => outcome(client.release_run(UNKNOWN_RUN).await),
             Call::GiveUpRun => outcome(client.give_up_run(UNKNOWN_RUN).await),
-            Call::SetRunCredentials => {
-                outcome(client.set_run_credentials(UNKNOWN_RUN, &credentials).await)
-            }
             Call::DeleteRun => outcome(client.delete_run(UNKNOWN_RUN).await),
             Call::Heartbeat => outcome(client.heartbeat_task("unknown").await),
             Call::ApproveTask => outcome(client.approve_task("unknown").await),

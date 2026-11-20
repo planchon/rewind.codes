@@ -33,6 +33,7 @@ pub(super) async fn toolsets(
                 for tool in &toolset.tools {
                     let route = match tool.route {
                         Route::Mcp => format!("mcp {}", tool.server.as_deref().unwrap_or("")),
+                        Route::Api => format!("api {}", tool.api.as_deref().unwrap_or("")),
                         Route::Host => "host".to_owned(),
                         Route::Builtin => "built-in".to_owned(),
                     };

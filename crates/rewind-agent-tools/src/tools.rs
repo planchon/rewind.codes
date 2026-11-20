@@ -522,6 +522,9 @@ impl<A: Api> Session<'_, A> {
             tests: from_values::<TestInput>(tests.unwrap_or_default())?,
             update: from_values::<TestUpdate>(update.unwrap_or_default())?,
             retire: from_values::<TestRetirement>(retire.unwrap_or_default())?,
+            // `save_workflow`'s `secrets` argument is the engine-server workstream's
+            // (`archi/09-roadmap.md`): the version attaches none until then.
+            secrets: Default::default(),
         };
         match self.api.create_workflow(&request).await {
             Ok(workflow) => Ok(Ok(workflow)),

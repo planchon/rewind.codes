@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use rewind_core::{Digest, Epoch, RunId, RunStarted, RunStatus, Timestamp};
+use rewind_core::{Attachments, Digest, Epoch, RunId, RunStarted, RunStatus, Timestamp};
 
 use super::workflows::{RunWorkflow, StartedBy};
 use crate::ports::namespaces::{NamespaceName, QuotaExceeded};
@@ -30,6 +30,10 @@ pub struct RunMetadata {
     /// that started the first run of its tree, inherited by every run it starts. Empty: any run
     /// of the tenant.
     pub scope: BTreeMap<String, String>,
+    /// The secrets the run attached at start, by server or API: the request's, a fork's parent's
+    /// unless the fork gave its own, a workflow version's (`archi/04-tools.md`, "Secrets"). Its
+    /// calls read these and no other. Names, never values: the `runs.secrets` column.
+    pub secrets: Attachments,
 }
 
 /// The run a fork was started from. The fork's first activation copies the parent's history

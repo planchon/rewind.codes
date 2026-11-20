@@ -284,6 +284,10 @@ pub(crate) trait Columns {
         TenantId::new(id).map_err(|err| Error::Corrupt(err.to_string()))
     }
 
+    #[expect(
+        dead_code,
+        reason = "the stores workstream's SecretStore reads sealed values"
+    )]
     fn blob(&self, index: usize) -> Result<Vec<u8>, Error> {
         match self.column(index)? {
             Value::Blob(bytes) => Ok(bytes),

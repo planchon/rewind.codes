@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rewind_core::{JsonValue, ToolFailure, ToolFailureKind};
 
-use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
 
 /// Answers every call to a tool with the same response: the static responses of mock mode,
 /// as the CLI reads them from `rewind.tools.json`.
@@ -73,7 +73,7 @@ impl StaticDispatcher {
 impl ToolDispatcher for StaticDispatcher {
     /// The tool's response, or its failure. A tool without a response fails with
     /// `unavailable`, for good: retrying would not make one appear.
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match self.respond(&call.tool.name) {
             Ok(result) => Dispatched::Result(result),
             Err(failure) => Dispatched::Failed(failure),

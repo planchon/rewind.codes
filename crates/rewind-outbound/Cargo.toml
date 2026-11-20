@@ -1,0 +1,17 @@
+[package]
+name = "rewind-outbound"
+description = "What leaves Rewind for a tenant's servers: the egress checks, the HTTP client built on them, and the JWT signing of signed calls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Adapter support: among internal crates, rewind-outbound depends only on rewind-core
+# (archi/07-code-architecture.md, "Dependency rules"). The tool dispatchers (rewind-mcp,
+# rewind-openapi) and the server's webhooks use it.
+[dependencies]
+rewind-core.workspace = true
+
+[lints]
+workspace = true

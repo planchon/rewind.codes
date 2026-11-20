@@ -47,9 +47,9 @@ use rewind_engine::adapters::{
     VirtualClock,
 };
 use rewind_engine::ports::{
-    Credentials, Entropy, JournalStore, RunFilter, RunRef, ScriptExecutor, Secret,
-    ServerCredentials, TaskFilter, TaskRef, TaskState, TenantId, TenantScope, ToolDeclarations,
-    VirtualTime, WorkflowDeclarations,
+    Entropy, JournalStore, NewSecret, ParkKind, RunFilter, RunRef, ScriptExecutor, Secret,
+    SecretId, TaskFilter, TaskRef, TaskState, TenantId, TenantScope, ToolDeclarations, VirtualTime,
+    WorkflowDeclarations,
 };
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
 use rewind_engine::{
@@ -630,6 +630,10 @@ async fn register_workflows(case: &Case, engine: &CorpusEngine) -> Result<(), St
                     toolset: toolset.digest(),
                     schemas: workflow.schemas().clone(),
                     labels: BTreeMap::new(),
+                    secrets: workflow.secrets().clone(),
+                    attach: rewind_engine::attachments::AttachRights::Organization {
+                        labels: BTreeMap::new(),
+                    },
                     declarations: WorkflowDeclarations::default(),
                     suite: rewind_engine::suites::SuiteChanges::default(),
                 },
@@ -692,24 +696,55 @@ where
                     .map_err(fail)?;
             }
             Step::Credentials(servers) => {
-                let servers = servers
-                    .iter()
-                    .map(|(server, headers)| {
-                        let headers = headers
-                            .iter()
-                            .map(|(name, value)| (name.clone(), Secret::new(value.clone())))
-                            .collect();
-                        let env = BTreeMap::new();
-                        (server.clone(), ServerCredentials { headers, env })
-                    })
-                    .collect();
-                engine
-                    .set_run_credentials(&run, &Credentials { servers })
-                    .await
-                    .map_err(fail)?;
+                for (server, headers) in servers {
+                    let value = headers.values().next().cloned().unwrap_or_default();
+                    accept_again(engine, &run, server, value).await?;
+                }
             }
         }
         drive(false).await?;
+    }
+    Ok(())
+}
+
+/// The harness makes `server` accept the run's calls again (`archi/04-tools.md`, "Secrets"):
+/// it puts the secret the run attached for the server again, with `value`, which makes ready
+/// the calls a refusal or a missing secret parked; for a server whose run attaches no secret
+/// (a refused signature), it approves the refused calls.
+async fn accept_again(
+    engine: &CorpusEngine,
+    run: &RunRef,
+    server: &str,
+    value: String,
+) -> Result<(), String> {
+    let fail = |err: rewind_engine::EngineError| err.to_string();
+    let record = engine
+        .get_run(run)
+        .await
+        .map_err(fail)?
+        .ok_or_else(|| format!("run {} not found", run.id))?;
+    if let Some(attached) = record.metadata.secrets.get(server) {
+        let secret = NewSecret {
+            id: SecretId::resolve(attached, &record.namespace),
+            value: Secret::new(value),
+            labels: BTreeMap::new(),
+            by: "user:harness".into(),
+        };
+        engine
+            .put_secret(&run.tenant, &secret)
+            .await
+            .map_err(fail)?;
+        return Ok(());
+    }
+    let tasks = engine.tool_tasks(run).await.map_err(fail)?;
+    // The tools of `server`: an MCP server's, or, in mock mode, a group of the scenario named
+    // as the server.
+    let refused = tasks.into_iter().filter(|task| {
+        task.tool.split_once('.').map(|(namespace, _)| namespace) == Some(server)
+            && matches!(&task.state, TaskState::Parked(reason) if reason.kind == ParkKind::CredentialsRefused)
+    });
+    for task in refused {
+        engine.approve_task(&task.task).await.map_err(fail)?;
     }
     Ok(())
 }

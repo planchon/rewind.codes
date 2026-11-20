@@ -23,11 +23,11 @@ pub const CONNECTION_PREFIX: &str = "cn_";
 )]
 #[serde(rename_all = "snake_case")]
 pub enum Access {
-    /// `runs:read`, `toolsets:read`, `namespaces:read`: follow runs, read toolsets and
-    /// namespaces.
+    /// `runs:read`, `toolsets:read`, `namespaces:read`, `secrets:read`: follow runs, read
+    /// toolsets, namespaces and the names of secrets.
     Read,
-    /// `read`, and `runs:start` and `runs:control`: check, test and start scripts, signal and
-    /// cancel runs.
+    /// `read`, and `runs:start`, `runs:control` and `secrets:use`: check, test and start
+    /// scripts with the secrets they attach, signal and cancel runs.
     Run,
 }
 
@@ -50,18 +50,21 @@ impl Access {
     }
 }
 
-const READ: [Permission; 3] = [
+const READ: [Permission; 4] = [
     Permission::RunsRead,
     Permission::ToolsetsRead,
     Permission::NamespacesRead,
+    Permission::SecretsRead,
 ];
 
-const RUN: [Permission; 5] = [
+const RUN: [Permission; 7] = [
     Permission::RunsRead,
     Permission::RunsStart,
     Permission::RunsControl,
     Permission::ToolsetsRead,
     Permission::NamespacesRead,
+    Permission::SecretsRead,
+    Permission::SecretsUse,
 ];
 
 /// How a client made itself known to Rewind.
@@ -297,7 +300,7 @@ mod tests {
         );
         assert_eq!(
             Access::Run.permissions().len(),
-            Access::Read.permissions().len() + 2
+            Access::Read.permissions().len() + 3
         );
     }
 }

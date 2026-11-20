@@ -1,8 +1,8 @@
 //! Connections to MCP servers, kept open between calls.
 //!
 //! A connection belongs to one tenant, one server (as pinned: its transport) and one set of
-//! credentials: credentials are injected into the transport (HTTP headers, or the environment of
-//! a stdio process), so other credentials need another connection. Calls share a connection
+//! [`TransportSecrets`]: the secret a run attached is injected into the transport (an HTTP
+//! header, or the environment of a stdio process), so another secret needs another connection. Calls share a connection
 //! concurrently; the store already bounds the calls in flight per server and worker.
 //!
 //! A connection unused for [`McpConfig::idle_timeout`] is closed when the pool is next used, as
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderName, HeaderValue};
 use rewind_core::{McpServer, McpTransport, ToolFailureKind, canonical_json};
-use rewind_engine::ports::{ServerCredentials, TenantId};
+use rewind_engine::ports::{Secret, TenantId};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     PaginatedRequestParams,
@@ -50,7 +50,26 @@ pub(crate) const MAX_TOOL_PAGES: usize = 100;
 /// Tools of one server read at most.
 pub(crate) const MAX_TOOLS: usize = 10_000;
 
-/// The open connections, by tenant, server and credentials.
+/// What goes into a connection's transport to prove who calls: HTTP headers of a streamable
+/// HTTP server, variables of a stdio server's process. Built from the secret a run attached and
+/// the server's `auth` (`archi/04-tools.md`, "Authenticating calls"). Never printed: `Debug`
+/// shows the names only.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct TransportSecrets {
+    pub headers: BTreeMap<String, Secret>,
+    pub env: BTreeMap<String, Secret>,
+}
+
+impl std::fmt::Debug for TransportSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportSecrets")
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("env", &self.env.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+/// The open connections, by tenant, server and secrets.
 #[derive(Debug)]
 pub(crate) struct Pool {
     config: McpConfig,
@@ -100,7 +119,7 @@ impl Pool {
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        credentials: Option<&ServerCredentials>,
+        credentials: Option<&TransportSecrets>,
     ) -> Result<Lease<'_>, Failure> {
         let key = Key::new(tenant, server, credentials);
         // A connection found closed is replaced once.
@@ -210,7 +229,7 @@ impl Pool {
 }
 
 impl Key {
-    fn new(tenant: &TenantId, server: &McpServer, credentials: Option<&ServerCredentials>) -> Self {
+    fn new(tenant: &TenantId, server: &McpServer, credentials: Option<&TransportSecrets>) -> Self {
         let transport = match &server.transport {
             McpTransport::Http { url } => json!({ "http": url }),
             McpTransport::Stdio { command, args, env } => {
@@ -392,7 +411,7 @@ impl ClientHandler for Handler {
 /// Opens a session with the server, its credentials injected into the transport.
 async fn connect(
     server: &McpServer,
-    credentials: Option<&ServerCredentials>,
+    credentials: Option<&TransportSecrets>,
     config: &McpConfig,
 ) -> Result<Connection, Failure> {
     let changed = Arc::new(AtomicBool::new(false));
@@ -466,7 +485,7 @@ async fn connect(
 /// The HTTP headers of the credentials, marked sensitive.
 fn headers(
     server: &str,
-    credentials: Option<&ServerCredentials>,
+    credentials: Option<&TransportSecrets>,
 ) -> Result<HashMap<HeaderName, HeaderValue>, Failure> {
     let mut headers = HashMap::new();
     let Some(credentials) = credentials else {
@@ -490,8 +509,6 @@ fn headers(
 
 #[cfg(test)]
 mod tests {
-    use rewind_engine::ports::Secret;
-
     use super::*;
 
     #[test]
@@ -502,7 +519,7 @@ mod tests {
                 url: "https://mcp.example.com".into(),
             },
         );
-        let credentials = ServerCredentials {
+        let credentials = TransportSecrets {
             headers: BTreeMap::from([("authorization".into(), Secret::new("Bearer 1234"))]),
             env: BTreeMap::new(),
         };

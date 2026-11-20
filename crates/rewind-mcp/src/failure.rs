@@ -1,10 +1,10 @@
 //! What went wrong talking to an MCP server, sorted the way the engine needs it
-//! (`archi/04-tools.md`, "Tool task lifecycle"): refused credentials park the call, transient
-//! failures are retried under `retry`, the others fail the call for good.
+//! (`archi/04-tools.md`, "Tool task lifecycle"): a refused secret or signature parks the call,
+//! transient failures are retried under `retry`, the others fail the call for good.
 //!
 //! | What happened | Outcome |
 //! | --- | --- |
-//! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_expired` |
+//! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_refused` |
 //! | The server cannot be reached, the connection or the process closed, HTTP 429 or 5xx, JSON-RPC internal error (-32603), a session that could not be recovered | transient: `unavailable` |
 //! | No answer within the execution timeout | transient: `timeout` |
 //! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, another HTTP 4xx, a command that does not exist | failed |
@@ -49,7 +49,7 @@ const WITHHELD: &str = "the answer of an internal server is not quoted";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Failure {
-    /// The server refused the credentials (HTTP 401).
+    /// The server refused the secret or the signature (HTTP 401).
     Unauthorized(String),
     /// Worth retrying: nothing says the server will refuse again.
     Transient(ToolFailure),
@@ -74,7 +74,7 @@ impl Failure {
     pub(crate) fn into_dispatched(self) -> Dispatched {
         match self {
             Failure::Unauthorized(message) => Dispatched::Park(ParkReason {
-                kind: ParkKind::CredentialsExpired,
+                kind: ParkKind::CredentialsRefused,
                 message,
             }),
             Failure::Transient(failure) => Dispatched::Transient(failure),

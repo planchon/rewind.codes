@@ -16,7 +16,7 @@ use rewind_engine::adapters::{
     VirtualClock,
 };
 use rewind_engine::ports::{
-    Credentials, Dispatched, JournalStore, RunRef, TenantId, ToolCall, ToolDeclarations,
+    CallAuth, Dispatched, JournalStore, RunRef, TenantId, ToolCall, ToolDeclarations,
     ToolDispatcher, WorkflowDeclarations,
 };
 use rewind_engine::{
@@ -34,7 +34,7 @@ type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
 struct Tools(Arc<Handler>);
 
 impl ToolDispatcher for Tools {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match (self.0)(&call) {
             Ok(result) => Dispatched::Result(result),
             Err(failure) => Dispatched::Failed(failure),
@@ -147,6 +147,8 @@ async fn harness_with(
                 toolset: child_toolset.digest(),
                 schemas: schemas(),
                 labels: BTreeMap::new(),
+                secrets: Default::default(),
+                attach: Default::default(),
                 declarations: WorkflowDeclarations::default(),
                 suite: rewind_engine::suites::SuiteChanges::default(),
             },

@@ -1,22 +1,23 @@
 //! What the harness decides for a task that waits for it (`archi/04-tools.md`, "Tool task
-//! lifecycle", "Credentials", "When a toolset changes during a run"):
+//! lifecycle", "Secrets", "When a toolset changes during a run"):
 //!
 //! | The task | The harness | Use case |
 //! | --- | --- | --- |
 //! | `approval` (the `approval` policy) | lets the call go | `approve_task` |
 //! | `parked` by a schema change | continues against the new schema | `approve_task` |
-//! | `parked` by a 401 | renews the credentials | `set_run_credentials`, `set_namespace_credentials`, `set_toolset_credentials` |
+//! | `parked` by a 401 (`credentials_refused`) | puts the secret again, or approves once the server accepts the key | `put_secret`, `approve_task` |
+//! | `parked` by a missing secret (`secret_missing`) | puts the secret again | `put_secret` |
 //! | any of them | refuses: the call fails with a `ToolError` | `reject_task` |
 //!
 //! Cancelling the run, or forking it with a corrected script, are the other ways out.
 
-use rewind_core::{Digest, ToolFailure, ToolFailureKind};
+use rewind_core::{ToolFailure, ToolFailureKind};
 
 use crate::engine::{Engine, EngineError};
 use crate::ports::{
-    BlobStore, Clock, Credentials, Entropy, JournalStore, NamespaceName, ParkedScope, RunRef,
-    ScriptExecutor, SecretOwner, SecretStore, TaskRef, TaskUpdate, TenantId, ToolDispatcher,
-    ToolTask, WebhookSender,
+    BlobStore, Clock, Entropy, JournalStore, NewSecret, ParkedScope, PutSecret, RunRef,
+    ScriptExecutor, SecretId, SecretStore, TaskRef, TaskUpdate, TenantId, ToolDispatcher, ToolTask,
+    WebhookSender,
 };
 
 /// The message of a rejection without one.
@@ -62,105 +63,34 @@ where
         waiting(task, update)
     }
 
-    /// Sets or renews the credentials of a toolset, used by every run of the toolset without
-    /// credentials of its own. The calls parked by `credentials.expired` in those runs are
-    /// ready again, and sent with the same idempotency key. Returns how many.
-    /// Gives a toolset derived from `base` (`POST /v1/toolsets` with `base`) the credentials of
-    /// `base`, unless it has its own. Returns whether it copied them.
-    pub async fn inherit_toolset_credentials(
+    /// Creates or replaces a secret (`PUT /v1/secrets/{name}`, `PUT
+    /// /v1/namespaces/{name}/secrets/{secret}`), then makes ready the calls parked by a refusal
+    /// or a missing secret in the runs that attach it, sent again with the same idempotency key
+    /// (`archi/04-tools.md`, "Secrets"). Returns what was written and how many calls are ready
+    /// again.
+    pub async fn put_secret(
         &self,
         tenant: &TenantId,
-        base: Digest,
-        derived: Digest,
+        secret: &NewSecret,
+    ) -> Result<(PutSecret, usize), EngineError> {
+        let now = self.clock.now();
+        let put = self.secrets.put(tenant, secret, now).await?;
+        let scope = ParkedScope::Secret {
+            tenant: tenant.clone(),
+            secret: secret.id.clone(),
+        };
+        let resumed = self.journal.resume_parked(&scope, now).await?;
+        Ok((put, resumed))
+    }
+
+    /// Deletes a secret: the next call of a run that attaches it is parked
+    /// (`credentials.expired`, reason `missing`). Returns whether it existed.
+    pub async fn delete_secret(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
     ) -> Result<bool, EngineError> {
-        if base == derived {
-            return Ok(false);
-        }
-        // No run has the nil id, and no namespace is named `*`: what resolves is a toolset's
-        // own credentials.
-        let no_run = rewind_core::RunId::from_u128(0);
-        let no_namespace = NamespaceName::none();
-        if self
-            .secrets
-            .resolve(tenant, no_run, &no_namespace, derived)
-            .await?
-            .is_some()
-        {
-            return Ok(false);
-        }
-        let Some(credentials) = self
-            .secrets
-            .resolve(tenant, no_run, &no_namespace, base)
-            .await?
-        else {
-            return Ok(false);
-        };
-        self.secrets
-            .put(tenant, &SecretOwner::Toolset(derived), &credentials)
-            .await?;
-        Ok(true)
-    }
-
-    pub async fn set_toolset_credentials(
-        &self,
-        tenant: &TenantId,
-        toolset: Digest,
-        credentials: &Credentials,
-    ) -> Result<usize, EngineError> {
-        self.toolset(tenant, toolset).await?;
-        self.secrets
-            .put(tenant, &SecretOwner::Toolset(toolset), credentials)
-            .await?;
-        let scope = ParkedScope::Toolset {
-            tenant: tenant.clone(),
-            toolset,
-        };
-        Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)
-    }
-
-    /// Sets or renews an end user's credentials for a toolset: those of the namespace, used by
-    /// every run of the namespace with this toolset and without credentials of its own, before
-    /// the toolset's (`archi/04-tools.md`, "Credentials"). The calls parked by
-    /// `credentials.expired` in those runs are ready again, and sent with the same idempotency
-    /// key. Returns how many.
-    pub async fn set_namespace_credentials(
-        &self,
-        tenant: &TenantId,
-        namespace: &NamespaceName,
-        toolset: Digest,
-        credentials: &Credentials,
-    ) -> Result<usize, EngineError> {
-        self.toolset(tenant, toolset).await?;
-        let owner = SecretOwner::Namespace {
-            namespace: namespace.clone(),
-            toolset,
-        };
-        self.secrets.put(tenant, &owner, credentials).await?;
-        let scope = ParkedScope::Namespace {
-            tenant: tenant.clone(),
-            namespace: namespace.clone(),
-            toolset,
-        };
-        Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)
-    }
-
-    /// Sets or renews a run's own credentials, which override its toolset's. The run's calls
-    /// parked by `credentials.expired` are ready again, and sent with the same idempotency key.
-    /// Returns how many.
-    pub async fn set_run_credentials(
-        &self,
-        run: &RunRef,
-        credentials: &Credentials,
-    ) -> Result<usize, EngineError> {
-        let record = self.run_record(run).await?;
-        if record.status.is_terminal() {
-            return Err(EngineError::RunEnded(run.id));
-        }
-        self.secrets
-            .put(&run.tenant, &SecretOwner::Run(run.id), credentials)
-            .await?;
-        let scope = ParkedScope::Run(run.clone());
-        Ok(self.journal.resume_parked(&scope, self.clock.now()).await?)
+        Ok(self.secrets.delete(tenant, secret).await?)
     }
 
     /// The run's tool tasks, by seq: the calls in flight and the ones that wait, for the

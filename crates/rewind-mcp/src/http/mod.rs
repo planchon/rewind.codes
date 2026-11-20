@@ -28,7 +28,7 @@ use std::time::Duration;
 use reqwest::header::{self, HeaderName};
 use reqwest::{Method, StatusCode};
 use rewind_core::{Builtin, Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use rewind_engine::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
 use url::Url;
 
 pub use egress::{Egress, InternalAllowList, NameResolver, Resolving, SystemResolver};
@@ -218,7 +218,7 @@ impl HttpTool {
 }
 
 impl ToolDispatcher for HttpTool {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match &call.tool.route {
             ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
                 let request = match wire::request(&call.args) {

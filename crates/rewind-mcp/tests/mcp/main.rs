@@ -21,10 +21,12 @@ use rewind_core::{
     McpServer, McpTransport, RunId, Seq, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset,
 };
 use rewind_engine::ports::{
-    Credentials, Dispatched, ParkKind, RunRef, Secret, ServerCredentials, TaskToken, TenantId,
-    ToolCall, ToolDispatcher, TraceContext,
+    CallAuth, Dispatched, NamespaceName, ParkKind, RunRef, Secret, TaskToken, TenantId, ToolCall,
+    ToolDispatcher, TraceContext,
 };
-use rewind_mcp::{IDEMPOTENCY_KEY_META, McpConfig, McpDispatcher, McpEgress, McpError};
+use rewind_mcp::{
+    IDEMPOTENCY_KEY_META, McpConfig, McpDispatcher, McpEgress, McpError, TransportSecrets,
+};
 use serde_json::{Value, json};
 
 fn main() -> std::process::ExitCode {
@@ -51,12 +53,12 @@ fn main() -> std::process::ExitCode {
         ),
         test("errors_are_mapped", errors_are_mapped()),
         test(
-            "credentials_go_in_the_headers_and_a_401_parks",
-            credentials_go_in_the_headers_and_a_401_parks(false),
+            "headers_reach_the_server_and_a_401_parks",
+            headers_reach_the_server_and_a_401_parks(false),
         ),
         test(
             "a_401_with_a_challenge_parks_too",
-            credentials_go_in_the_headers_and_a_401_parks(true),
+            headers_reach_the_server_and_a_401_parks(true),
         ),
         test(
             "the_execution_timeout_cancels_the_call",
@@ -75,8 +77,8 @@ fn main() -> std::process::ExitCode {
             an_unreachable_server_is_transient(),
         ),
         test(
-            "stdio_server_with_credentials_in_its_environment",
-            stdio_server_with_credentials_in_its_environment(),
+            "a_stdio_server_gets_its_own_environment_only",
+            a_stdio_server_gets_its_own_environment_only(),
         ),
         test(
             "a_missing_stdio_command_fails_for_good",
@@ -172,10 +174,10 @@ fn tenant() -> TenantId {
 async fn pin(
     dispatcher: &McpDispatcher,
     server: &McpServer,
-    credentials: Option<&ServerCredentials>,
+    secrets: Option<&TransportSecrets>,
 ) -> BTreeMap<String, Tool> {
     dispatcher
-        .list_tools(&tenant(), server, credentials)
+        .list_tools(&tenant(), server, secrets)
         .await
         .unwrap()
         .into_iter()
@@ -188,9 +190,12 @@ fn call(server: &McpServer, tool: &Tool, args: Value) -> ToolCall {
     ToolCall {
         idempotency_key: format!("{}/3", run.id),
         run,
+        namespace: NamespaceName::new("alice").unwrap(),
+        labels: BTreeMap::new(),
         seq: Seq(3),
         tool: tool.clone(),
         server: Some(server.clone()),
+        api: None,
         args,
         attempt: 1,
         schema_change_approved: false,
@@ -199,18 +204,14 @@ fn call(server: &McpServer, tool: &Tool, args: Value) -> ToolCall {
     }
 }
 
-fn bearer(token: &str) -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "fx".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([(
-                    "Authorization".to_owned(),
-                    Secret::new(format!("Bearer {token}")),
-                )]),
-                env: BTreeMap::new(),
-            },
+/// The headers a secret attached as `Authorization: Bearer {secret}` puts in the transport.
+fn bearer(token: &str) -> TransportSecrets {
+    TransportSecrets {
+        headers: BTreeMap::from([(
+            "Authorization".to_owned(),
+            Secret::new(format!("Bearer {token}")),
         )]),
+        env: BTreeMap::new(),
     }
 }
 
@@ -310,7 +311,7 @@ async fn a_tool_list_without_end_is_refused() {
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), None)
+            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
@@ -328,7 +329,10 @@ async fn content_and_structured_results() {
 
     let lookup = result(
         dispatcher
-            .dispatch(call(&mcp, &tools["lookup"], json!({ "id": "c-7" })), None)
+            .dispatch(
+                call(&mcp, &tools["lookup"], json!({ "id": "c-7" })),
+                CallAuth::None,
+            )
             .await,
     );
     assert_eq!(lookup["content"][0]["type"], "text");
@@ -339,7 +343,7 @@ async fn content_and_structured_results() {
         dispatcher
             .dispatch(
                 call(&mcp, &tools["get_issue"], json!({ "number": 4 })),
-                None,
+                CallAuth::None,
             )
             .await,
     );
@@ -359,7 +363,7 @@ async fn idempotency_key_and_trace_context_in_meta() {
         tracestate: Some("vendor=1".into()),
     });
     let expected_key = meta_call.idempotency_key.clone();
-    result(dispatcher.dispatch(meta_call, None).await);
+    result(dispatcher.dispatch(meta_call, CallAuth::None).await);
     let recorded = fixture.state().calls.last().cloned().unwrap();
     assert_eq!(recorded.name, "meta");
     assert_eq!(recorded.arguments, json!({}));
@@ -383,7 +387,7 @@ async fn errors_are_mapped() {
 
     let fail = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["fail"], json!({})), None)
+            .dispatch(call(&mcp, &tools["fail"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(fail.kind, ToolFailureKind::Error);
@@ -391,7 +395,7 @@ async fn errors_are_mapped() {
 
     let invalid = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["invalid"], json!({})), None)
+            .dispatch(call(&mcp, &tools["invalid"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(invalid.kind, ToolFailureKind::Error);
@@ -400,14 +404,14 @@ async fn errors_are_mapped() {
 
     let internal = transient(
         dispatcher
-            .dispatch(call(&mcp, &tools["internal"], json!({})), None)
+            .dispatch(call(&mcp, &tools["internal"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(internal.kind, ToolFailureKind::Unavailable);
 
     let not_an_object = failed(
         dispatcher
-            .dispatch(call(&mcp, &tools["lookup"], json!([1])), None)
+            .dispatch(call(&mcp, &tools["lookup"], json!([1])), CallAuth::None)
             .await,
     );
     assert_eq!(
@@ -416,7 +420,9 @@ async fn errors_are_mapped() {
     );
 }
 
-async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
+/// How a call's secret or signature reaches the transport is the outbound workstream's
+/// (`archi/09-roadmap.md`); the transport's headers and a refusal are checked here.
+async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
     let auth = Auth {
         challenge,
         ..Auth::default()
@@ -427,7 +433,7 @@ async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
     let dispatcher = open();
     let mcp = http_server(&server.url);
 
-    // Without credentials, discovery is refused.
+    // Without its header, discovery is refused.
     let refused = dispatcher
         .list_tools(&tenant(), &mcp, None)
         .await
@@ -437,30 +443,14 @@ async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
         "{refused:?}"
     );
 
-    let first = bearer("first");
-    let tools = pin(&dispatcher, &mcp, first.servers.get("fx")).await;
+    let tools = pin(&dispatcher, &mcp, Some(&bearer("first"))).await;
     let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
-    result(
-        dispatcher
-            .dispatch(lookup.clone(), Some(first.clone()))
-            .await,
-    );
 
-    // Without credentials, a call is parked.
-    let Dispatched::Park(parked) = dispatcher.dispatch(lookup.clone(), None).await else {
-        panic!("a call without credentials is parked");
-    };
-    assert_eq!(parked.kind, ParkKind::CredentialsExpired);
-
-    // The token expires on the server: the open session's next call is parked too.
-    *auth.token.lock().unwrap() = Some("second".into());
-    let Dispatched::Park(parked) = dispatcher
-        .dispatch(lookup.clone(), Some(first.clone()))
-        .await
-    else {
+    // Without its header, a call is parked.
+    let Dispatched::Park(parked) = dispatcher.dispatch(lookup, CallAuth::None).await else {
         panic!("a call refused with a 401 is parked");
     };
-    assert_eq!(parked.kind, ParkKind::CredentialsExpired);
+    assert_eq!(parked.kind, ParkKind::CredentialsRefused);
     assert!(
         parked
             .message
@@ -470,11 +460,8 @@ async fn credentials_go_in_the_headers_and_a_401_parks(challenge: bool) {
     );
     assert!(
         !parked.message.contains("first"),
-        "the message never holds the credentials"
+        "the message never holds the secret"
     );
-
-    // Renewed credentials: the call goes through, on a new session.
-    result(dispatcher.dispatch(lookup, Some(bearer("second"))).await);
 }
 
 async fn the_execution_timeout_cancels_the_call() {
@@ -488,7 +475,7 @@ async fn the_execution_timeout_cancels_the_call() {
     let started = Instant::now();
     let timed_out = transient(
         dispatcher
-            .dispatch(call(&mcp, &slow, json!({ "ms": 10_000 })), None)
+            .dispatch(call(&mcp, &slow, json!({ "ms": 10_000 })), CallAuth::None)
             .await,
     );
     assert_eq!(timed_out.kind, ToolFailureKind::Timeout);
@@ -524,7 +511,7 @@ async fn a_schema_change_parks_the_call() {
         json!({ "type": "object", "properties": { "id": { "type": "string" }, "fields": { "type": "array" } }, "required": ["id"] }),
         None,
     );
-    result(dispatcher.dispatch(lookup.clone(), None).await);
+    result(dispatcher.dispatch(lookup.clone(), CallAuth::None).await);
 
     // A new required property: the call no longer fits, and waits for the harness.
     fixture.state().tools[0] = fixture::tool(
@@ -533,7 +520,7 @@ async fn a_schema_change_parks_the_call() {
         json!({ "type": "object", "properties": { "id": { "type": "string" }, "tenant": { "type": "string" } }, "required": ["id", "tenant"] }),
         None,
     );
-    let Dispatched::Park(parked) = dispatcher.dispatch(lookup.clone(), None).await else {
+    let Dispatched::Park(parked) = dispatcher.dispatch(lookup.clone(), CallAuth::None).await else {
         panic!("a call that no longer fits is parked");
     };
     assert_eq!(parked.kind, ParkKind::SchemaChanged);
@@ -549,7 +536,7 @@ async fn a_schema_change_parks_the_call() {
     // Approved by the harness: sent against the new schema without checking it again.
     let mut approved = lookup.clone();
     approved.schema_change_approved = true;
-    result(dispatcher.dispatch(approved, None).await);
+    result(dispatcher.dispatch(approved, CallAuth::None).await);
     assert_eq!(fixture.state().calls.len(), calls + 1);
 
     // A changed output schema, and a removed tool.
@@ -562,7 +549,7 @@ async fn a_schema_change_parks_the_call() {
     let Dispatched::Park(parked) = dispatcher
         .dispatch(
             call(&mcp, &tools["get_issue"], json!({ "number": 1 })),
-            None,
+            CallAuth::None,
         )
         .await
     else {
@@ -574,7 +561,7 @@ async fn a_schema_change_parks_the_call() {
         parked.message
     );
     fixture.state().tools.remove(0);
-    let Dispatched::Park(parked) = dispatcher.dispatch(lookup, None).await else {
+    let Dispatched::Park(parked) = dispatcher.dispatch(lookup, CallAuth::None).await else {
         panic!("a removed tool parks the call");
     };
     assert_eq!(
@@ -594,7 +581,7 @@ async fn connections_are_shared_and_replaced() {
 
     // Concurrent calls share the session discovery opened.
     let calls: Vec<_> = (0..4)
-        .map(|_| dispatcher.dispatch(lookup.clone(), None))
+        .map(|_| dispatcher.dispatch(lookup.clone(), CallAuth::None))
         .collect();
     for dispatched in futures_util::future::join_all(calls).await {
         result(dispatched);
@@ -602,19 +589,15 @@ async fn connections_are_shared_and_replaced() {
     assert_eq!(fixture.state().sessions, 1);
     assert_eq!(dispatcher.open_connections(), 1);
 
-    // Other credentials, another session.
-    result(
-        dispatcher
-            .dispatch(lookup.clone(), Some(bearer("other")))
-            .await,
-    );
+    // Other secrets, another session.
+    pin(&dispatcher, &mcp, Some(&bearer("other"))).await;
     assert_eq!(fixture.state().sessions, 2);
     assert_eq!(dispatcher.open_connections(), 2);
 
     // Closed, then opened again on demand.
     dispatcher.close();
     assert_eq!(dispatcher.open_connections(), 0);
-    result(dispatcher.dispatch(lookup, None).await);
+    result(dispatcher.dispatch(lookup, CallAuth::None).await);
     assert_eq!(fixture.state().sessions, 3);
 }
 
@@ -642,7 +625,7 @@ async fn an_unreachable_server_is_transient() {
     );
     let unreachable = transient(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), None)
+            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(unreachable.kind, ToolFailureKind::Unavailable);
@@ -653,7 +636,7 @@ async fn an_unreachable_server_is_transient() {
     );
 }
 
-async fn stdio_server_with_credentials_in_its_environment() {
+async fn a_stdio_server_gets_its_own_environment_only() {
     // A variable of the dispatcher's own environment (cargo sets it for tests), which a stdio
     // server must not inherit.
     assert!(
@@ -662,34 +645,22 @@ async fn stdio_server_with_credentials_in_its_environment() {
     );
     let dispatcher = McpDispatcher::default();
     let mcp = stdio_server(&[("MODE", "test")]);
-    let credentials = Credentials {
-        servers: BTreeMap::from([(
-            "fx".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::new(),
-                env: BTreeMap::from([("FIXTURE_TOKEN".to_owned(), Secret::new("t0k3n"))]),
-            },
-        )]),
-    };
-    let tools = pin(&dispatcher, &mcp, credentials.servers.get("fx")).await;
+    let tools = pin(&dispatcher, &mcp, None).await;
     assert_eq!(tools.len(), 8);
     let env = result(
         dispatcher
-            .dispatch(
-                call(&mcp, &tools["env"], json!({})),
-                Some(credentials.clone()),
-            )
+            .dispatch(call(&mcp, &tools["env"], json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(
         text_json(&env),
-        json!({ "token": "t0k3n", "manifest_dir": null, "path": true })
+        json!({ "token": null, "manifest_dir": null, "path": true })
     );
     let issue = result(
         dispatcher
             .dispatch(
                 call(&mcp, &tools["get_issue"], json!({ "number": 9 })),
-                Some(credentials),
+                CallAuth::None,
             )
             .await,
     );
@@ -716,7 +687,7 @@ async fn a_missing_stdio_command_fails_for_good() {
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &tool, json!({})), None)
+            .dispatch(call(&mcp, &tool, json!({})), CallAuth::None)
             .await,
     );
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
@@ -755,7 +726,7 @@ async fn reference_server(command_line: Option<String>) {
         dispatcher
             .dispatch(
                 call(&mcp, echo, json!({ "message": "hello from Rewind" })),
-                None,
+                CallAuth::None,
             )
             .await,
     );

@@ -8,10 +8,11 @@ mod support;
 use std::collections::BTreeMap;
 
 use rewind_core::{
-    Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, RunMode, RunStatus,
-    Script, Seq, Toolset, WorkflowSchemas, end_signal_name, ended_run,
+    Attachments, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, RunMode,
+    RunStatus, Script, Seq, Toolset, WorkflowSchemas, end_signal_name, ended_run,
 };
 use rewind_engine::adapters::StaticTypeChecker;
+use rewind_engine::attachments::AttachRights;
 use rewind_engine::ports::{
     Delivery, Diagnostic, DiagnosticSource, Enqueued, JournalStore, NamespaceName, RunMetadata,
     RunRef, Severity, StartedBy, StoredWorkflow, TenantId, ToolDeclarations, WorkflowDeclarations,
@@ -211,6 +212,8 @@ fn register(name: &str, schemas: WorkflowSchemas) -> RegisterWorkflow {
         toolset: child_toolset().digest(),
         schemas,
         labels: BTreeMap::new(),
+        secrets: Attachments::new(),
+        attach: AttachRights::NamespaceOnly,
         declarations: WorkflowDeclarations::default(),
         suite: SuiteChanges::default(),
     }
@@ -358,7 +361,6 @@ async fn signals_to_a_run_of_a_workflow_are_checked_against_its_version() {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
-            credentials: None,
         })
         .await
         .unwrap()
@@ -449,7 +451,6 @@ async fn a_start_is_refused_when_its_input_does_not_match() {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
-            credentials: None,
         })
         .await
         .unwrap_err();
@@ -467,7 +468,6 @@ async fn a_start_is_refused_when_its_input_does_not_match() {
                 ttl: None,
                 metadata: RunMetadata::default(),
                 idempotency_key: None,
-                credentials: None,
             })
             .await,
         Err(StartError::WorkflowNotFound(_))
@@ -557,7 +557,6 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
             ttl: None,
             metadata,
             idempotency_key: None,
-            credentials: None,
         }
     };
     let visible = engine.start_workflow(in_scope(&scope)).await.unwrap().run;
@@ -665,7 +664,6 @@ async fn a_run_reaches_the_runs_of_its_own_end_user_only() {
             ttl: None,
             metadata: RunMetadata::default(),
             idempotency_key: None,
-            credentials: None,
         })
         .await
         .unwrap()
@@ -788,60 +786,5 @@ async fn a_fork_receives_the_end_of_the_runs_its_copied_history_started() {
             .unwrap()
             .run,
         parent.id
-    );
-}
-
-#[tokio::test]
-async fn a_derived_toolset_takes_the_credentials_of_its_base() {
-    use rewind_engine::ports::{Credentials, Secret, SecretStore, ServerCredentials};
-
-    let (engine, _, derived) = registered().await;
-    let base = child_toolset();
-    let tenant = TenantId::local();
-    let credentials = Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([("Authorization".to_owned(), Secret::new("Bearer t"))]),
-                env: BTreeMap::new(),
-            },
-        )]),
-    };
-    engine
-        .set_toolset_credentials(&tenant, base.digest(), &credentials)
-        .await
-        .unwrap();
-    engine
-        .journal()
-        .put_toolset(&tenant, &derived, &ToolDeclarations::default())
-        .await
-        .unwrap();
-    assert!(
-        engine
-            .inherit_toolset_credentials(&tenant, base.digest(), derived.digest())
-            .await
-            .unwrap()
-    );
-    let no_run = rewind_core::RunId::from_u128(0);
-    assert_eq!(
-        engine
-            .secrets()
-            .resolve(&tenant, no_run, &local(), derived.digest())
-            .await
-            .unwrap(),
-        Some(credentials)
-    );
-    // A toolset that has credentials of its own keeps them; a toolset is not its own base.
-    assert!(
-        !engine
-            .inherit_toolset_credentials(&tenant, base.digest(), derived.digest())
-            .await
-            .unwrap()
-    );
-    assert!(
-        !engine
-            .inherit_toolset_credentials(&tenant, base.digest(), base.digest())
-            .await
-            .unwrap()
     );
 }

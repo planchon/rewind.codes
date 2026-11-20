@@ -12,7 +12,7 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rewind_core::{Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::ToolDispatcher;
+use rewind_engine::ports::{CallAuth, ToolDispatcher};
 use rewind_mcp::{
     InternalAllowList, McpConfig, McpDispatcher, McpEgress, McpError, NameResolver, Resolving,
 };
@@ -155,7 +155,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &lookup, json!({ "id": "c-1" })), None)
+            .dispatch(call(&mcp, &lookup, json!({ "id": "c-1" })), CallAuth::None)
             .await,
     );
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
@@ -193,7 +193,7 @@ pub(crate) async fn an_allowed_internal_server_is_reached() {
     let lookup = tools.iter().find(|tool| tool.name == "fx.lookup").unwrap();
     result(
         dispatcher
-            .dispatch(call(&mcp, lookup, json!({ "id": "c-1" })), None)
+            .dispatch(call(&mcp, lookup, json!({ "id": "c-1" })), CallAuth::None)
             .await,
     );
 

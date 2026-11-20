@@ -18,21 +18,22 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rewind_core::{
-    Completion, Digest, Epoch, HistoryEntry, RunId, Script, Seq, Shape, Timestamp, ToolFailure,
+    Completion, Digest, Epoch, HistoryEntry, Script, Seq, Shape, Timestamp, ToolFailure,
     ToolOutcome, Toolset,
 };
 use rewind_engine::adapters::{MemoryAccess, MemoryJournal, MemoryReadModel, MemorySecrets};
 use rewind_engine::ports::{
-    AccessStore, AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun,
-    Credentials, Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer,
-    FeedItem, Grant, GrantClaim, GrantDeletion, GrantWrite, InboxItem, JournalStore, Lease, NewRun,
-    ParkReason, ParkedScope, PayloadRecord, Principal, ProjectedRun, QuarantineKind,
-    QuarantineNote, ReadModel, ReadModelError, Role, RoleDeletion, RunFilter, RunOrder, RunQuery,
-    RunRecord, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
-    SearchCursor, SecretError, SecretOwner, SecretStore, StatsWindow, StoreError, StoredScript,
-    StoredToolset, Subscription, TaskFilter, TaskProgress, TaskRef, TaskToken, TaskUpdate, Tenant,
-    TenantId, TenantScope, ToolDeclarations, ToolStats, ToolStatsFilter, ToolTask, WebhookTarget,
-    WebhookToken,
+    AccessStore, AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun, Day,
+    Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer, FeedItem, Grant,
+    GrantClaim, GrantDeletion, GrantWrite, InboxItem, JournalStore, Lease, MasterKeyId, NewRun,
+    NewSecret, ParkReason, ParkedScope, PayloadRecord, Principal, ProjectedRun, PublicKey,
+    PutSecret, QuarantineKind, QuarantineNote, ReadModel, ReadModelError, Role, RoleDeletion,
+    RunFilter, RunOrder, RunQuery, RunRecord, RunRef, RunSnapshot, RunStats, RunSummary,
+    ScriptFilter, ScriptSummary, SearchCursor, Secret, SecretError, SecretId, SecretMeta,
+    SecretNamespace, SecretReader, SecretStore, SecretUsage, SigningKey, StatsWindow, StoreError,
+    StoredScript, StoredToolset, Subscription, TaskFilter, TaskProgress, TaskRef, TaskToken,
+    TaskUpdate, Tenant, TenantId, TenantScope, ToolDeclarations, ToolStats, ToolStatsFilter,
+    ToolTask, WebhookTarget, WebhookToken,
 };
 use rewind_engine::ports::{
     ClientKind, CodeRedemption, Connection, ConnectionToken, NewConnection, NewToken, OAuthClient,
@@ -517,6 +518,15 @@ impl JournalStore for Store {
         now: Timestamp,
     ) -> Result<usize, StoreError> {
         journal!(self, store => store.resume_parked(scope, now).await)
+    }
+
+    async fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        limit: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        journal!(self, store => store.secret_usage(tenant, secret, limit).await)
     }
 
     async fn expire_deferred_tool_tasks(
@@ -1148,24 +1158,43 @@ impl SecretStore for Store {
     async fn put(
         &self,
         tenant: &TenantId,
-        owner: &SecretOwner,
-        credentials: &Credentials,
-    ) -> Result<(), SecretError> {
-        secrets!(self, store => store.put(tenant, owner, credentials).await)
+        secret: &NewSecret,
+        now: Timestamp,
+    ) -> Result<PutSecret, SecretError> {
+        secrets!(self, store => store.put(tenant, secret, now).await)
     }
 
-    async fn resolve(
+    async fn list(
         &self,
         tenant: &TenantId,
-        run: RunId,
-        namespace: &NamespaceName,
-        toolset: Digest,
-    ) -> Result<Option<Credentials>, SecretError> {
-        secrets!(self, store => store.resolve(tenant, run, namespace, toolset).await)
+        namespace: &SecretNamespace,
+        labels: &BTreeMap<String, String>,
+        since: Day,
+    ) -> Result<Vec<SecretMeta>, SecretError> {
+        secrets!(self, store => store.list(tenant, namespace, labels, since).await)
     }
 
-    async fn delete(&self, tenant: &TenantId, owner: &SecretOwner) -> Result<bool, SecretError> {
-        secrets!(self, store => store.delete(tenant, owner).await)
+    async fn meta(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        since: Day,
+    ) -> Result<Option<SecretMeta>, SecretError> {
+        secrets!(self, store => store.meta(tenant, secret, since).await)
+    }
+
+    async fn read(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        reader: &SecretReader,
+        now: Timestamp,
+    ) -> Result<Option<Secret>, SecretError> {
+        secrets!(self, store => store.read(tenant, secret, reader, now).await)
+    }
+
+    async fn delete(&self, tenant: &TenantId, secret: &SecretId) -> Result<bool, SecretError> {
+        secrets!(self, store => SecretStore::delete(store, tenant, secret).await)
     }
 
     async fn delete_namespace(
@@ -1174,5 +1203,37 @@ impl SecretStore for Store {
         namespace: &NamespaceName,
     ) -> Result<usize, SecretError> {
         secrets!(self, store => SecretStore::delete_namespace(store, tenant, namespace).await)
+    }
+
+    async fn signing_key(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<SigningKey, SecretError> {
+        secrets!(self, store => store.signing_key(tenant, now).await)
+    }
+
+    async fn rotate_signing_key(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<SigningKey, SecretError> {
+        secrets!(self, store => store.rotate_signing_key(tenant, now).await)
+    }
+
+    async fn public_keys(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<Vec<PublicKey>, SecretError> {
+        secrets!(self, store => store.public_keys(tenant, now).await)
+    }
+
+    async fn master_keys_in_use(&self) -> Result<Vec<MasterKeyId>, SecretError> {
+        secrets!(self, store => store.master_keys_in_use().await)
+    }
+
+    async fn rewrap_data_keys(&self) -> Result<usize, SecretError> {
+        secrets!(self, store => store.rewrap_data_keys().await)
     }
 }

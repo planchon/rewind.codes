@@ -31,7 +31,7 @@ use rewind_api::reading::ToolStatsFilter;
 use rewind_api::runs::{CancelRun, ForkRun, RunFilter, StartRun};
 use rewind_api::scripts::{CheckRequest, TestRequest};
 use rewind_api::tasks::TaskQuery;
-use rewind_api::toolsets::{CreateToolset, Credentials, HostTool};
+use rewind_api::toolsets::{CreateToolset, HostTool};
 use rewind_api::{Client, Problem, ProblemType};
 use serde_json::{Value, json};
 use support::{ADMIN_KEY, TestServer, eventually, wait};
@@ -376,15 +376,7 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
         (403, Some(ProblemType::Forbidden)),
         "a token never reads the namespaces"
     );
-    assert_eq!(
-        refused(
-            alice
-                .set_toolset_credentials(&hers.toolset, &Credentials::default())
-                .await
-        ),
-        (403, Some(ProblemType::Forbidden)),
-        "nor holds the permission of a toolset's credentials"
-    );
+    let _ = &hers;
     server.stop().await;
 }
 
@@ -1605,7 +1597,7 @@ async fn namespaces_take_a_display_name() {
     server.stop().await;
 }
 
-/// Erasing a namespace answers 202: it takes no run, no token and no credentials any more, its
+/// Erasing a namespace answers 202: it takes no run, no token and no secret any more, its
 /// tokens are refused and its active runs cancelled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_erased_namespace_takes_nothing_more() {
@@ -1647,11 +1639,6 @@ async fn an_erased_namespace_takes_nothing_more() {
             .await
             .map(|_| ()),
     );
-    deleting(
-        customer
-            .set_namespace_credentials(&ns("alice"), &run.toolset, &Credentials::default())
-            .await,
-    );
     let detail = customer
         .get_namespace(&ns("alice"), &NamespaceQuery::default())
         .await
@@ -1661,57 +1648,6 @@ async fn an_erased_namespace_takes_nothing_more() {
     assert_eq!(
         refused(customer.delete_namespace(&ns("nobody")).await),
         (404, Some(ProblemType::NotFound))
-    );
-    server.stop().await;
-}
-
-/// An end user's credentials for a toolset: the customer sets any namespace's, a token its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn credentials_are_set_per_end_user() {
-    let server = TestServer::in_memory(&[]).await;
-    let customer = server.tenant_key("acme", "harness").await;
-    let run = customer
-        .with_namespace(ns("alice"))
-        .start_run(&StartRun::new(SHORT), None)
-        .await
-        .unwrap();
-    customer
-        .set_namespace_credentials(&ns("alice"), &run.toolset, &Credentials::default())
-        .await
-        .unwrap();
-    assert_eq!(
-        refused(
-            customer
-                .set_namespace_credentials(&ns("alice"), &"ab".repeat(32), &Credentials::default())
-                .await
-        ),
-        (404, Some(ProblemType::NotFound))
-    );
-    let writer = CreateToken {
-        permissions: Some(vec![Permission::CredentialsWrite]),
-        ..CreateToken::default()
-    };
-    let alice = server.bare(&token(&customer, "alice", &writer).await);
-    alice
-        .set_namespace_credentials(&ns("alice"), &run.toolset, &Credentials::default())
-        .await
-        .unwrap();
-    assert_eq!(
-        refused(
-            alice
-                .set_namespace_credentials(&ns("bob"), &run.toolset, &Credentials::default())
-                .await
-        ),
-        (404, Some(ProblemType::NotFound))
-    );
-    let reader = server.tenant_key("acme", "reader").await;
-    assert_eq!(
-        refused(
-            reader
-                .set_namespace_credentials(&ns("alice"), &run.toolset, &Credentials::default())
-                .await
-        ),
-        (403, Some(ProblemType::Forbidden))
     );
     server.stop().await;
 }

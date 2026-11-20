@@ -1,0 +1,18 @@
+[package]
+name = "rewind-openapi"
+description = "API tools of Rewind: OpenAPI 3.0 and 3.1 documents read into pinned tools, and the ToolDispatcher of the api route."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# An adapter: it depends on rewind-core and rewind-engine, and, as a tool dispatcher, on
+# rewind-outbound (archi/07-code-architecture.md, "Dependency rules").
+[dependencies]
+rewind-core.workspace = true
+rewind-engine.workspace = true
+rewind-outbound.workspace = true
+
+[lints]
+workspace = true

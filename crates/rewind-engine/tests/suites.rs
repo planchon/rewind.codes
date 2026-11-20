@@ -79,6 +79,8 @@ fn save(script: &str, suite: SuiteChanges) -> RegisterWorkflow {
         toolset: toolset().digest(),
         schemas: schemas(),
         labels: BTreeMap::new(),
+        secrets: Default::default(),
+        attach: Default::default(),
         declarations: WorkflowDeclarations::default(),
         suite,
     }

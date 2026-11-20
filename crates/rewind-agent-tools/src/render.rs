@@ -339,9 +339,13 @@ fn describe_waiting(waiting: &Waiting) -> String {
             match state {
                 TaskState::Approval => format!("{call}: it waits for the harness's approval"),
                 TaskState::Parked => {
-                    if *parked == Some(ParkedReason::CredentialsExpired) {
+                    if *parked == Some(ParkedReason::CredentialsRefused) {
                         format!(
                             "{call}: parked, the server refused the credentials; the harness must renew them"
+                        )
+                    } else if *parked == Some(ParkedReason::SecretMissing) {
+                        format!(
+                            "{call}: parked, the secret the run attached no longer exists; the harness must put it again"
                         )
                     } else {
                         format!(

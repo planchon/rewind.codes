@@ -174,7 +174,9 @@ pub enum Step {
         #[serde(default)]
         message: Option<String>,
     },
-    /// The harness renews the run's credentials: headers by MCP server.
+    /// The harness makes these MCP servers accept the run's calls again, the value by server (a
+    /// map of one header, as the corpus wrote it when runs had credentials): it puts the secret
+    /// the run attached for the server again, or approves the calls the server refused.
     Credentials(BTreeMap<String, BTreeMap<String, String>>),
 }
 

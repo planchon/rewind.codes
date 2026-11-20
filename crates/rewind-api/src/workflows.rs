@@ -63,6 +63,11 @@ pub struct CreateWorkflow {
     /// Inherited tests dropped, with a reason: they are deprecated.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub retire: Vec<TestRetirement>,
+    /// The secrets its runs attach, by MCP server or API (`org/<name>`, `ns/<name>`), part of
+    /// the version: checked against the saver's rights now (an `ns/` secret by its name only),
+    /// and read by its runs without checking the caller's again (`secret-required`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: crate::secrets::Attachments,
 }
 
 /// An inherited test replaced: by a whole new test, which takes its name, or by itself with a
@@ -187,6 +192,9 @@ pub struct Workflow {
     /// The labels of the key that saved it, part of the version: a key limited to labels only
     /// sees the workflows carrying them. Empty for a version saved tenant-wide.
     pub labels: Labels,
+    /// The secrets its runs attach, part of the version.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: crate::secrets::Attachments,
     pub created_at: Timestamp,
     /// How a script that starts it sees it: its declaration in `rewind:workflows`, and its line
     /// of the prompt rendering.

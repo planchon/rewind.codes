@@ -410,7 +410,7 @@ pub(crate) enum NamespacesCommand {
     /// Sets a namespace's exceptions to the default limits, or the defaults with --defaults,
     /// and prints the limits. Without a limit to set, prints them.
     Quotas(QuotasArgs),
-    /// Erases a namespace in the background: the end user's tokens, runs, credentials and use.
+    /// Erases a namespace in the background: the end user's tokens, runs, secrets and use.
     Delete { name: String },
 }
 

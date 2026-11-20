@@ -5,6 +5,7 @@
 //! | Route | Dispatcher |
 //! | --- | --- |
 //! | MCP tools | `rewind-mcp`'s `McpDispatcher`: stdio and streamable HTTP, connections pooled; HTTP servers only where the configuration's `McpEgress` lets it go |
+//! | API tools | `Unrouted` until `rewind-openapi`'s `ApiDispatcher` (the outbound workstream, `archi/09-roadmap.md`) |
 //! | Built-ins | `rewind-mcp`'s `HttpTool` for `http`, with its egress rules; `webhook` is answered by the engine |
 //! | Host tools | none: the harness's worker claims them (`GET /v1/tasks`) |
 //!
@@ -15,13 +16,13 @@ use std::collections::BTreeMap;
 
 use rewind_core::{Builtin, McpServer, Shape, Tool, ToolRoute, Toolset};
 use rewind_engine::adapters::{RoutingDispatcher, Unrouted};
-use rewind_engine::ports::{ServerCredentials, TenantId};
-use rewind_mcp::{HttpConfig, HttpTool, McpConfig, McpDispatcher, McpEgress};
+use rewind_engine::ports::TenantId;
+use rewind_mcp::{HttpConfig, HttpTool, McpConfig, McpDispatcher, McpEgress, TransportSecrets};
 
 /// The dispatcher of the routes Rewind calls itself.
-pub(crate) type Dispatcher = RoutingDispatcher<McpDispatcher, HttpTool, Unrouted>;
+pub(crate) type Dispatcher = RoutingDispatcher<McpDispatcher, Unrouted, HttpTool, Unrouted>;
 
-/// Why the tools of an MCP server could not be listed: unreachable, credentials refused, too
+/// Why the tools of an MCP server could not be listed: unreachable, refused (401), too
 /// slow, or an answer that is not a tool list. The message names the server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DiscoveryError(pub(crate) String);
@@ -47,7 +48,7 @@ impl Tools {
     }
 
     pub(crate) fn dispatcher(&self) -> Dispatcher {
-        RoutingDispatcher::new(self.mcp.clone(), self.http.clone(), Unrouted)
+        RoutingDispatcher::new(self.mcp.clone(), Unrouted, self.http.clone(), Unrouted)
     }
 
     /// The tools of an MCP server, as a toolset pins them.
@@ -55,10 +56,10 @@ impl Tools {
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        credentials: Option<&ServerCredentials>,
+        secrets: Option<&TransportSecrets>,
     ) -> Result<Vec<Tool>, DiscoveryError> {
         self.mcp
-            .list_tools(tenant, server, credentials)
+            .list_tools(tenant, server, secrets)
             .await
             .map_err(|error| DiscoveryError(error.to_string()))
     }

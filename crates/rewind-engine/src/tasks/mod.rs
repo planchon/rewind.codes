@@ -1,5 +1,5 @@
 //! The tool tasks' use cases (`archi/04-tools.md`, "Tool task lifecycle", "Policies",
-//! "Credentials", "When a toolset changes during a run").
+//! "Authenticating calls", "When a toolset changes during a run").
 //!
 //! Each `schedule_tool_call` an activation commits becomes a tool task in the store. Attempts,
 //! backoff, claims, approvals and tokens live in the task; the journal only gets the final
@@ -7,10 +7,10 @@
 //!
 //! | Who | Use cases |
 //! | --- | --- |
-//! | The engine's dispatcher loop: MCP tools and built-ins (every tool in mock mode) | `claim_tool_tasks`, `run_tool_task`, `heartbeat_tool_claims`, `expire_deferred_tool_tasks` |
+//! | The engine's dispatcher loop: MCP tools, API tools and built-ins (every tool in mock mode) | `claim_tool_tasks`, `run_tool_task`, `heartbeat_tool_claims`, `expire_deferred_tool_tasks` |
 //! | The harness's SDK worker, for host tools (`/v1/tasks`) | `claim_host_tasks`, `heartbeat_task`, `defer_task`, `complete_task`, `fail_task` |
 //! | The worker role's scheduler, for host tools whose worker died | `fail_interrupted_host_tasks` |
-//! | The harness, for a task that waits for it | `approve_task`, `reject_task`, `set_toolset_credentials`, `set_run_credentials` |
+//! | The harness, for a task that waits for it | `approve_task`, `reject_task`, `put_secret` |
 //!
 //! ```text
 //!              approve_task                 claim                 answered, failed for good
@@ -20,7 +20,8 @@
 //!    done                     │ │ └── (retry, backoff) ──┘ │ │ │ attempt + 1 up to 5 (retry),
 //!                             │ │                          │ │ │ else done, outcome_unknown
 //!          approve_task,      │ └──── parked ◄─────────────┘ │ └──► deferred ── complete, fail,
-//!          renewed credentials│         │ schema changed, 401│        (token)    late ──► done
+//!          put_secret         │         │ schema changed, 401│        (token)    late ──► done
+//!                             │         │ secret missing     │
 //!                             │         └── reject_task ──► done
 //! ```
 //!
@@ -32,12 +33,16 @@
 //! - **Claims and heartbeats.** A claim lasts the tool's heartbeat timeout. The harness's
 //!   worker renews it with `heartbeat_task`; the engine renews the claims of the calls it is
 //!   dispatching with `heartbeat_tool_claims`, until their execution timeout.
-//! - **Credentials** are resolved through the `SecretStore` when an MCP call is dispatched (the
-//!   run's, else the toolset's) and handed to the dispatcher only: never to the journal.
-//! - **Parked tasks.** A schema change or a 401 parks the task and sends `tool.schema_changed`
-//!   or `credentials.expired` to the tenant's subscriptions. Approved after a schema change, the
-//!   call goes on against the new schema; renewed credentials make it ready again; rejected, it
-//!   fails with a `ToolError`.
+//! - **Authentication** is resolved when an MCP or API call is dispatched, from its server's
+//!   `auth`: the secret the run attached, read from the `SecretStore` in the run's namespace, or
+//!   the tenant's signing key. It is handed to the dispatcher only ([`CallAuth`]): never to the
+//!   journal.
+//! - **Parked tasks.** A schema change, a 401 or a missing secret parks the task and sends
+//!   `tool.schema_changed` or `credentials.expired` (reason `refused` or `missing`) to the
+//!   tenant's subscriptions. Approved after a schema change, the call goes on against the new
+//!   schema; the secret put again makes it ready again; rejected, it fails with a `ToolError`.
+//!
+//! [`CallAuth`]: crate::ports::CallAuth
 //! - **Tenants.** Every use case is scoped by the tenant: a token or a task of another tenant
 //!   is treated as gone.
 

@@ -140,7 +140,8 @@ pub enum TaskState {
     Claimed,
     /// A host tool's handler will answer later.
     Deferred,
-    /// Waits for the harness: the tool's schema changed, or its credentials were refused.
+    /// Waits for the harness: the tool's schema changed, its server refused the call, or the
+    /// secret the run attached no longer exists.
     Parked,
     /// Its outcome is in the run's inbox.
     Done,
@@ -153,6 +154,11 @@ pub enum ParkedReason {
     /// The server's schema of the tool no longer matches the pinned one (webhook
     /// `tool.schema_changed`): approve to continue against the new schema, or reject.
     SchemaChanged,
-    /// The server answered 401 (webhook `credentials.expired`): renew the credentials.
-    CredentialsExpired,
+    /// The server answered 401 to the secret or to the signature (webhook
+    /// `credentials.expired`, reason `refused`): put the secret again, or approve once the
+    /// server accepts the key.
+    CredentialsRefused,
+    /// The secret the run attached no longer exists (webhook `credentials.expired`, reason
+    /// `missing`): put it again.
+    SecretMissing,
 }

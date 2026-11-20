@@ -58,7 +58,6 @@ use crate::webhooks::{
         operations::list_toolsets,
         operations::get_toolset_declarations,
         operations::search_tools,
-        operations::set_toolset_credentials,
         operations::create_workflow,
         operations::list_workflows,
         operations::get_workflow_versions,
@@ -83,7 +82,6 @@ use crate::webhooks::{
         operations::export_run_journal,
         operations::release_run,
         operations::give_up_run,
-        operations::set_run_credentials,
         operations::claim_tasks,
         operations::heartbeat_task,
         operations::defer_task,
@@ -121,7 +119,6 @@ use crate::webhooks::{
         operations::put_namespace,
         operations::patch_namespace,
         operations::delete_namespace,
-        operations::set_namespace_credentials,
         operations::get_namespace_defaults,
         operations::put_namespace_defaults,
         operations::list_namespace_names,
@@ -133,6 +130,17 @@ use crate::webhooks::{
         operations::create_token_key,
         operations::delete_token_key,
         operations::put_ceiling,
+        operations::list_secrets,
+        operations::put_secret,
+        operations::delete_secret,
+        operations::get_secret_usage,
+        operations::list_namespace_secrets,
+        operations::put_namespace_secret,
+        operations::delete_namespace_secret,
+        operations::get_namespace_secret_usage,
+        operations::list_signing_keys,
+        operations::rotate_signing_key,
+        operations::get_jwks,
         operations::list_connections,
         operations::update_connection,
         operations::revoke_connection,
@@ -174,7 +182,7 @@ use crate::webhooks::{
     modifiers(&Conventions),
     security(("bearer" = [])),
     tags(
-        (name = "toolsets", description = "Register and pin toolsets; their declarations and credentials."),
+        (name = "toolsets", description = "Register and pin toolsets: their MCP servers, their APIs from OpenAPI documents and how each authenticates its calls; their declarations."),
         (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
@@ -183,7 +191,8 @@ use crate::webhooks::{
         (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
         (name = "access", description = "The catalog of permissions, the roles and the API keys."),
-        (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, their credentials, and their tokens."),
+        (name = "namespaces", description = "The end users of the organization: their limits, use and alerts, and their tokens."),
+        (name = "secrets", description = "Named secrets of the organization and of each namespace, written and never read back, which runs attach when they start; the organization's signing keys and their public JWKS."),
         (name = "connections", description = "People's connections: the MCP clients, Claude above all, that act for a person in the organizations they opened; and the consent that makes one."),
         (name = "server", description = "The server itself."),
         (name = "auth", description = "The dashboard's sign-in, for a browser: GitHub or a code by email, the organization picker, the waitlist."),
@@ -538,13 +547,16 @@ mod operations {
     use crate::scripts::{
         CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest,
     };
+    use crate::secrets::{
+        Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
+    };
     use crate::tasks::{
         CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
     };
     use crate::testing::{Test, TestRun};
     use crate::toolsets::{
-        CreateToolset, Credentials, DeclarationsQuery, DeclarationsText, SearchQuery,
-        ToolSearchResults, Toolset, ToolsetList,
+        CreateToolset, DeclarationsQuery, DeclarationsText, SearchQuery, ToolSearchResults,
+        Toolset, ToolsetList,
     };
     use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
     use crate::workflows::{
@@ -557,17 +569,20 @@ mod operations {
 
     /// Register and pin a toolset
     ///
-    /// Connects to the MCP servers, lists their tools, pins their schemas and policies, and
-    /// returns the toolset with its declarations, for the model's prompt. Content-addressed:
-    /// registering the same toolset again returns it (200).
+    /// Connects to the MCP servers and lists their tools, reads the APIs' OpenAPI documents
+    /// (one tool per operation), pins their schemas, policies and `auth`, and returns the
+    /// toolset with its declarations, for the model's prompt, and the API operations it left
+    /// out. Content-addressed: registering the same toolset again returns it (200). `secrets`
+    /// attaches organization's secrets to list the tools of an MCP server that needs one
+    /// (`secrets:use`). Requires `toolsets:write`.
     #[utoipa::path(
         post, path = "/v1/toolsets", tag = "toolsets", operation_id = "createToolset",
         request_body = CreateToolset,
         responses(
             (status = 201, description = "Registered.", body = Toolset),
             (status = 200, description = "Already registered.", body = Toolset),
-            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow (`invalid-toolset`).", body = Problem, content_type = "application/problem+json"),
-            (status = 502, description = "An MCP server cannot be reached (`toolset-unavailable`).", body = Problem, content_type = "application/problem+json"),
+            (status = 422, description = "Refused: an invalid schema, a duplicate name, a transport this server does not allow, an OpenAPI document or an `auth` that cannot be used (`invalid-toolset`); a secret attached for a listing that does not exist or is not the caller's (`secret-required`).", body = Problem, content_type = "application/problem+json"),
+            (status = 502, description = "An MCP server or an OpenAPI document's URL cannot be reached (`toolset-unavailable`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn create_toolset() {}
@@ -604,18 +619,6 @@ mod operations {
         )
     )]
     pub(super) fn search_tools() {}
-
-    /// Set or renew the toolset's credentials
-    #[utoipa::path(
-        put, path = "/v1/toolsets/{id}/credentials", tag = "toolsets", operation_id = "setToolsetCredentials",
-        params(("id" = String, Path, description = "The toolset's id.")),
-        request_body = Credentials,
-        responses(
-            (status = 204, description = "Stored. Calls parked by `credentials.expired` are ready again."),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
-        )
-    )]
-    pub(super) fn set_toolset_credentials() {}
 
     // ---------------------------------------------------------------------------------------
     // Workflows
@@ -977,19 +980,6 @@ mod operations {
         )
     )]
     pub(super) fn give_up_run() {}
-
-    /// Set or renew the run's credentials
-    #[utoipa::path(
-        put, path = "/v1/runs/{id}/credentials", tag = "runs", operation_id = "setRunCredentials",
-        params(("id" = String, Path, description = "The run id.")),
-        request_body = Credentials,
-        responses(
-            (status = 204, description = "Stored. The run's calls parked by `credentials.expired` are ready again."),
-            (status = 404, description = "No such run.", body = Problem, content_type = "application/problem+json"),
-            (status = 409, description = "The run has ended (`run-ended`).", body = Problem, content_type = "application/problem+json"),
-        )
-    )]
-    pub(super) fn set_run_credentials() {}
 
     // ---------------------------------------------------------------------------------------
     // Host-tool tasks
@@ -1482,7 +1472,7 @@ mod operations {
     /// Erase a namespace
     ///
     /// An end user who leaves: revokes the namespace's tokens, cancels its active runs, then
-    /// erases in the background its runs, credentials and use. Requires `namespaces:write`.
+    /// erases in the background its runs, secrets and use. Requires `namespaces:write`.
     #[utoipa::path(
         delete, path = "/v1/namespaces/{name}", tag = "namespaces", operation_id = "deleteNamespace",
         params(("name" = String, Path, description = "The namespace.")),
@@ -1492,24 +1482,6 @@ mod operations {
         )
     )]
     pub(super) fn delete_namespace() {}
-
-    /// Set or renew an end user's credentials for a toolset
-    ///
-    /// A call of a run of the namespace uses the run's credentials if it has some, else these,
-    /// else the toolset's. Requires `credentials:write`.
-    #[utoipa::path(
-        put, path = "/v1/namespaces/{name}/toolsets/{id}/credentials", tag = "namespaces", operation_id = "setNamespaceCredentials",
-        params(
-            ("name" = String, Path, description = "The namespace."),
-            ("id" = String, Path, description = "The toolset's id."),
-        ),
-        request_body = Credentials,
-        responses(
-            (status = 204, description = "Stored. Calls parked by `credentials.expired` are ready again."),
-            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
-        )
-    )]
-    pub(super) fn set_namespace_credentials() {}
 
     /// Read the default limits
     ///
@@ -1644,6 +1616,173 @@ mod operations {
         )
     )]
     pub(super) fn put_ceiling() {}
+
+    // ---------------------------------------------------------------------------------------
+    // Secrets
+
+    /// List the organization's secrets
+    ///
+    /// The organization's secrets the caller sees (those carrying its labels): each one's name,
+    /// labels, who wrote it and when, its reads per day over 30 days and its last read; never a
+    /// value. Requires `secrets:read`.
+    #[utoipa::path(
+        get, path = "/v1/secrets", tag = "secrets", operation_id = "listSecrets",
+        responses((status = 200, description = "The secrets, sorted by name.", body = SecretList))
+    )]
+    pub(super) fn list_secrets() {}
+
+    /// Put an organization's secret
+    ///
+    /// Creates or replaces it, with its labels (a grant limited to labels gives it its own).
+    /// The calls parked by a refusal or a missing secret in the runs that attach it are ready
+    /// again, sent with the same idempotency key. Refused to an end user's token. Requires
+    /// `secrets:write`.
+    #[utoipa::path(
+        put, path = "/v1/secrets/{name}", tag = "secrets", operation_id = "putSecret",
+        params(("name" = String, Path, description = "The secret's name: 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter.")),
+        request_body = PutSecret,
+        responses(
+            (status = 201, description = "Created.", body = Secret),
+            (status = 200, description = "Replaced.", body = Secret),
+            (status = 400, description = "An invalid name, or a value above 16 KiB (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller may not write it: an end user's token, or labels outside its grant's.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn put_secret() {}
+
+    /// Delete an organization's secret
+    ///
+    /// The next call of a run that attaches it is parked (`credentials.expired`, reason
+    /// `missing`). `GET /v1/secrets/{name}/usage` says first what it would stop. Requires
+    /// `secrets:write`.
+    #[utoipa::path(
+        delete, path = "/v1/secrets/{name}", tag = "secrets", operation_id = "deleteSecret",
+        params(("name" = String, Path, description = "The secret's name.")),
+        responses(
+            (status = 204, description = "Deleted."),
+            (status = 404, description = "No such secret.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn delete_secret() {}
+
+    /// What reads an organization's secret
+    ///
+    /// The active runs that attach it, those of them waiting on a call it serves, the
+    /// workflows whose latest version attaches it, its reads per day and its last read.
+    /// Requires `secrets:read`.
+    #[utoipa::path(
+        get, path = "/v1/secrets/{name}/usage", tag = "secrets", operation_id = "getSecretUsage",
+        params(("name" = String, Path, description = "The secret's name.")),
+        responses(
+            (status = 200, description = "What reads it.", body = SecretUsage),
+            (status = 404, description = "No such secret.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_secret_usage() {}
+
+    /// List an end user's secrets
+    ///
+    /// The secrets of the namespace, as `GET /v1/secrets` lists the organization's. Requires
+    /// `secrets:read`.
+    #[utoipa::path(
+        get, path = "/v1/namespaces/{name}/secrets", tag = "secrets", operation_id = "listNamespaceSecrets",
+        params(("name" = String, Path, description = "The namespace.")),
+        responses((status = 200, description = "The secrets, sorted by name.", body = SecretList))
+    )]
+    pub(super) fn list_namespace_secrets() {}
+
+    /// Put an end user's secret
+    ///
+    /// Creates or replaces the secret `secret` of the namespace, read by its runs that attach
+    /// `ns/<secret>`; a token puts its own namespace's. It takes no labels. The calls parked by a
+    /// refusal or a missing secret in the namespace's runs that attach it are ready again.
+    /// Refused to a grant or a token limited to labels. Requires `secrets:write`.
+    #[utoipa::path(
+        put, path = "/v1/namespaces/{name}/secrets/{secret}", tag = "secrets", operation_id = "putNamespaceSecret",
+        params(
+            ("name" = String, Path, description = "The namespace."),
+            ("secret" = String, Path, description = "The secret's name."),
+        ),
+        request_body = PutSecret,
+        responses(
+            (status = 201, description = "Created.", body = Secret),
+            (status = 200, description = "Replaced.", body = Secret),
+            (status = 400, description = "An invalid name, labels, or a value above 16 KiB (`invalid-request`).", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller may not write it: a grant or a token limited to labels.", body = Problem, content_type = "application/problem+json"),
+            (status = 409, description = "The namespace is being erased (`namespace-deleting`).", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn put_namespace_secret() {}
+
+    /// Delete an end user's secret
+    ///
+    /// As `DELETE /v1/secrets/{name}`, for the namespace's secret. Requires `secrets:write`.
+    #[utoipa::path(
+        delete, path = "/v1/namespaces/{name}/secrets/{secret}", tag = "secrets", operation_id = "deleteNamespaceSecret",
+        params(
+            ("name" = String, Path, description = "The namespace."),
+            ("secret" = String, Path, description = "The secret's name."),
+        ),
+        responses(
+            (status = 204, description = "Deleted."),
+            (status = 404, description = "No such secret.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn delete_namespace_secret() {}
+
+    /// What reads an end user's secret
+    ///
+    /// As `GET /v1/secrets/{name}/usage`, for the namespace's secret: its runs, and the
+    /// workflows whose latest version attaches `ns/<secret>`. Requires `secrets:read`.
+    #[utoipa::path(
+        get, path = "/v1/namespaces/{name}/secrets/{secret}/usage", tag = "secrets", operation_id = "getNamespaceSecretUsage",
+        params(
+            ("name" = String, Path, description = "The namespace."),
+            ("secret" = String, Path, description = "The secret's name."),
+        ),
+        responses(
+            (status = 200, description = "What reads it.", body = SecretUsage),
+            (status = 404, description = "No such secret.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_namespace_secret_usage() {}
+
+    /// List the signing keys
+    ///
+    /// The organization's Ed25519 keys that sign the calls of servers whose `auth` is `rewind`:
+    /// the current one and those retired less than 24 hours ago, with the JWT's issuer and the
+    /// URL of the public keys. Requires `secrets:read`.
+    #[utoipa::path(
+        get, path = "/v1/organization/signing-keys", tag = "secrets", operation_id = "listSigningKeys",
+        responses((status = 200, description = "The keys, newest first.", body = SigningKeyList))
+    )]
+    pub(super) fn list_signing_keys() {}
+
+    /// Replace the signing key
+    ///
+    /// A new key signs from now; the old one stops signing and stays published 24 hours.
+    /// Requires `organization:write`.
+    #[utoipa::path(
+        post, path = "/v1/organization/signing-keys", tag = "secrets", operation_id = "rotateSigningKey",
+        responses((status = 201, description = "The new key.", body = SigningKey))
+    )]
+    pub(super) fn rotate_signing_key() {}
+
+    /// The organization's public keys
+    ///
+    /// A JSON Web Key Set: the current signing key and those retired less than 24 hours ago,
+    /// as the servers that receive signed calls check them (`verifyRewindCall`). Without
+    /// authentication; `Cache-Control: max-age=300`.
+    #[utoipa::path(
+        get, path = "/organizations/{tenant}/jwks.json", tag = "secrets", operation_id = "getJwks",
+        params(("tenant" = String, Path, description = "The tenant (the organization's id).")),
+        security(()),
+        responses(
+            (status = 200, description = "The public keys.", body = Jwks),
+            (status = 404, description = "No such organization.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn get_jwks() {}
 
     // ---------------------------------------------------------------------------------------
     // Connections

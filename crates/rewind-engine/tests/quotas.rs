@@ -10,12 +10,12 @@ mod support;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
-use rewind_core::{RunStatus, Timestamp};
+use rewind_core::{RunStatus, SecretName, Timestamp};
 use rewind_engine::adapters::MemoryReadModel;
 use rewind_engine::ports::{
-    Clock, Credentials, Day, DeleteNamespace, Delivery, JournalStore, Month, NamespaceName,
-    QuotaKind, Quotas, RunFilter, Secret, SecretStore, Subscription, Tenant, TenantId, Threshold,
-    UsageOf, WebhookEventKind, WebhookEventType,
+    Clock, Day, DeleteNamespace, Delivery, JournalStore, Month, NamespaceName, NewSecret,
+    QuotaKind, Quotas, RunFilter, Secret, SecretId, SecretStore, Subscription, Tenant, TenantId,
+    Threshold, UsageOf, WebhookEventKind, WebhookEventType,
 };
 use rewind_engine::quotas::QuotaAlerts;
 use rewind_engine::retention::Housekeeper;
@@ -305,9 +305,13 @@ fn waiter() -> FakeExecutor {
     )
 }
 
-fn credentials() -> Credentials {
-    Credentials {
-        servers: BTreeMap::new(),
+/// The end user's GitHub token, put on their namespace.
+fn github_of(name: &str) -> NewSecret {
+    NewSecret {
+        id: SecretId::of_namespace(namespace(name), SecretName::new("github").unwrap()),
+        value: Secret::new(format!("{name}-token")),
+        labels: BTreeMap::new(),
+        by: format!("token:{name}"),
     }
 }
 
@@ -326,7 +330,6 @@ async fn an_erased_namespace_has_its_runs_cancelled_then_erased() {
         secrets: engine.secrets(),
         batch: 1,
     };
-    let toolset = request("waiter", json!({})).toolset;
     let waiting = engine
         .start_run(in_namespace("alice", "waiter"))
         .await
@@ -345,10 +348,7 @@ async fn an_erased_namespace_has_its_runs_cancelled_then_erased() {
     drive(&engine).await;
     engine.flush_usage().await.unwrap();
     for name in ["alice", "bob"] {
-        engine
-            .set_namespace_credentials(&local(), &namespace(name), toolset.digest(), &credentials())
-            .await
-            .unwrap();
+        engine.put_secret(&local(), &github_of(name)).await.unwrap();
     }
     let month = Month::of(engine.clock().now());
     let tenant_cpu = engine
@@ -409,23 +409,20 @@ async fn an_erased_namespace_has_its_runs_cancelled_then_erased() {
             .unwrap()
             .is_none()
     );
-    // Its credentials are gone; Bob's stay.
-    assert_eq!(
-        engine
-            .secrets()
-            .resolve(&local(), waiting.id, &namespace("alice"), toolset.digest())
-            .await
-            .unwrap(),
-        None
-    );
-    assert!(
-        engine
-            .secrets()
-            .resolve(&local(), bobs.id, &namespace("bob"), toolset.digest())
-            .await
-            .unwrap()
-            .is_some()
-    );
+    // Its secrets are gone; Bob's stay.
+    for (name, kept) in [("alice", false), ("bob", true)] {
+        assert_eq!(
+            engine
+                .secrets()
+                .meta(&local(), &github_of(name).id, Day(0))
+                .await
+                .unwrap()
+                .is_some(),
+            kept,
+            "{name}"
+        );
+    }
+    assert!(engine.get_run(&bobs).await.unwrap().is_some());
     // Its use is gone; the tenant's own use keeps what it consumed.
     let alice = engine
         .journal()

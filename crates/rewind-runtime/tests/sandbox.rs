@@ -15,7 +15,7 @@ use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
 use rewind_engine::ports::{
-    CompiledScript, Credentials, Dispatched, ExecutorError, RunFilter, RunRef, ScriptExecutor,
+    CallAuth, CompiledScript, Dispatched, ExecutorError, RunFilter, RunRef, ScriptExecutor,
     StartScript, TenantId, ToolCall, ToolDispatcher,
 };
 use rewind_engine::replay::ReplayEnd;
@@ -35,7 +35,7 @@ type Handler = dyn Fn(&ToolCall) -> Result<Value, ToolFailure> + Send + Sync;
 struct Tools(Arc<Handler>);
 
 impl ToolDispatcher for Tools {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match (self.0)(&call) {
             Ok(result) => Dispatched::Result(result),
             Err(failure) => Dispatched::Failed(failure),

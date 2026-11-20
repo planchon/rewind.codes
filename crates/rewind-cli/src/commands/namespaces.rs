@@ -62,7 +62,7 @@ pub(super) async fn namespaces(
             } else {
                 console.line(format!(
                     "namespace {name} is being erased: its tokens are revoked and its active runs \
-                     cancelled; its runs, credentials and use are erased in the background"
+                     cancelled; its runs, secrets and use are erased in the background"
                 ));
             }
             Ok(Exit::Success)

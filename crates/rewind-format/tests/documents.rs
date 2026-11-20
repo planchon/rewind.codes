@@ -8,11 +8,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, CallOrder, Cassette, Digest, Expectations, ExpectedCall, ExpectedError, Interruption,
-    Matching, McpServer, McpTransport, RecordedCall, RecordedSignal, RetiredTest, RunStatus, Seed,
-    SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp, Tool, ToolFailure,
-    ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule, Toolset, UpdatedTest, Workflow,
-    WorkflowSchemas, World,
+    Api, ApiOperation, ApiParameter, Builtin, CallOrder, Cassette, Digest, Expectations,
+    ExpectedCall, ExpectedError, HttpMethod, Interruption, Matching, McpServer, McpTransport,
+    ParameterLocation, RecordedCall, RecordedSignal, RetiredTest, RunStatus, SecretPlacement,
+    SecretRef, Seed, SignalWhen, Suite, SuiteTest, Test, TestOrigin, TestSignal, Timestamp, Tool,
+    ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, ToolRule, Toolset,
+    UpdatedTest, Workflow, WorkflowSchemas, World,
 };
 use rewind_format::{
     FormatError, decode_cassette, decode_test, decode_toolset, decode_workflow, encode_cassette,
@@ -31,6 +32,7 @@ fn toolset() -> Toolset {
             url: "https://mcp.example.com/github".into(),
         },
         concurrency: 4,
+        auth: ToolAuth::None,
     };
     let files = McpServer::new(
         "files",
@@ -369,6 +371,191 @@ fn the_toolset_with_workflows_fixture_decodes_and_hashes_to_its_digest() {
         toolset_with_workflows().digest()
     );
     assert!(decoded.contains("workflows.triage.signal"));
+}
+
+const TOOLSET_WITH_APIS: &str = include_str!("fixtures/toolset-apis.v1.json");
+const WORKFLOW_WITH_SECRETS: &str = include_str!("fixtures/workflow-secrets.v1.json");
+
+/// Every kind of `auth`, an API with every place of a parameter, and an API tool.
+fn toolset_with_apis() -> Toolset {
+    let mut github = McpServer::new(
+        "github",
+        McpTransport::Http {
+            url: "https://mcp.example.com/github".into(),
+        },
+    );
+    github.auth = ToolAuth::Secret(SecretPlacement::bearer());
+    let mut crm = McpServer::new(
+        "crm",
+        McpTransport::Http {
+            url: "https://crm.example.com/mcp".into(),
+        },
+    );
+    crm.auth = ToolAuth::Rewind;
+    let mut files = McpServer::new(
+        "files",
+        McpTransport::Stdio {
+            command: "mcp-files".into(),
+            args: vec![],
+            env: BTreeMap::new(),
+        },
+    );
+    files.auth = ToolAuth::Secret(SecretPlacement::Env {
+        variable: "FILES_TOKEN".into(),
+    });
+    let mut dax = Api::new("dax", "https://api.dax.example.com/v1");
+    dax.auth = ToolAuth::Rewind;
+    dax.concurrency = 4;
+    let mut zendesk = Api::new("zendesk", "https://acme.zendesk.example.com/api");
+    zendesk.auth = ToolAuth::Secret(SecretPlacement::basic());
+    let mut keyed = Api::new("weather", "https://weather.example.com");
+    keyed.auth = ToolAuth::Secret(SecretPlacement::header("X-Api-Key"));
+    let parameter = |name: &str, location| ApiParameter {
+        name: name.into(),
+        location,
+    };
+    let mut create_measure = Tool::api(
+        "dax.createMeasure",
+        "dax",
+        ApiOperation {
+            method: HttpMethod::Post,
+            path: "/projects/{project}/measures".into(),
+            parameters: vec![
+                parameter("project", ParameterLocation::Path),
+                parameter("dryRun", ParameterLocation::Query),
+                parameter("X-Request-Source", ParameterLocation::Header),
+            ],
+            body: true,
+            idempotency_key: true,
+        },
+        json!({ "type": "object", "required": ["project", "body"] }),
+    );
+    create_measure.description = Some("Create a measure.".into());
+    create_measure.output_schema = Some(json!({ "type": "object" }));
+    let get_ticket = Tool::api(
+        "zendesk.get_ticket",
+        "zendesk",
+        ApiOperation {
+            method: HttpMethod::Get,
+            path: "/tickets/{id}".into(),
+            parameters: vec![parameter("id", ParameterLocation::Path)],
+            body: false,
+            idempotency_key: false,
+        },
+        json!({ "type": "object" }),
+    );
+    let mcp = |server: &str, tool: &str| {
+        Tool::new(
+            format!("{server}.{tool}"),
+            ToolRoute::Mcp {
+                server: server.into(),
+            },
+            json!({}),
+        )
+    };
+    Toolset::from_parts(
+        [github, crm, files],
+        [dax, zendesk, keyed],
+        [
+            mcp("github", "list_issues"),
+            mcp("crm", "find_contact"),
+            mcp("files", "read"),
+            create_measure,
+            get_ticket,
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_toolset_with_apis_fixture_decodes_and_hashes_to_its_digest() {
+    let decoded = decode_toolset(TOOLSET_WITH_APIS).unwrap();
+    assert_eq!(decoded, toolset_with_apis());
+    assert_eq!(encode_toolset(&decoded), TOOLSET_WITH_APIS);
+    assert_eq!(
+        Digest::of(TOOLSET_WITH_APIS.as_bytes()),
+        toolset_with_apis().digest()
+    );
+}
+
+/// A version that attaches an end user's secret and an organization's.
+fn workflow_with_secrets() -> Workflow {
+    workflow().with_secrets(
+        [
+            ("github".to_owned(), SecretRef::parse("ns/github").unwrap()),
+            (
+                "zendesk".to_owned(),
+                SecretRef::parse("org/zendesk").unwrap(),
+            ),
+        ]
+        .into_iter()
+        .collect(),
+    )
+}
+
+#[test]
+fn the_workflow_with_secrets_fixture_decodes_re_encodes_and_hashes_to_its_version() {
+    let decoded = decode_workflow(WORKFLOW_WITH_SECRETS).unwrap();
+    assert_eq!(decoded, workflow_with_secrets());
+    assert_eq!(encode_workflow(&decoded), WORKFLOW_WITH_SECRETS);
+    assert_eq!(
+        Digest::of(WORKFLOW_WITH_SECRETS.as_bytes()),
+        workflow_with_secrets().version()
+    );
+    assert_ne!(workflow_with_secrets().version(), workflow().version());
+    for invalid in [r#""ns/github""#, r#""org/zendesk""#] {
+        for replacement in [r#""github""#, r#""user/x""#, r#""ns/GitHub""#, "1"] {
+            assert!(
+                decode_workflow(&WORKFLOW_WITH_SECRETS.replace(invalid, replacement)).is_err(),
+                "{replacement}"
+            );
+        }
+    }
+}
+
+#[test]
+fn rejects_auth_and_apis_v1_does_not_define() {
+    let server = |auth: &str| {
+        format!(
+            r#"{{"v":1,"servers":[{{"name":"s","transport":{{"type":"http","url":"https://x"}},"concurrency":1,"auth":{auth}}}],"tools":[]}}"#
+        )
+    };
+    assert!(decode_toolset(&server(r#"{"type":"rewind"}"#)).is_ok());
+    assert!(decode_toolset(&server(r#"{"type":"secret","header":"X-Key"}"#)).is_ok());
+    let api = |fields: &str| {
+        format!(
+            r#"{{"v":1,"servers":[],"apis":[{{"name":"a","concurrency":1,{fields}}}],"tools":[]}}"#
+        )
+    };
+    assert!(decode_toolset(&api(r#""base_url":"https://x""#)).is_ok());
+    let invalid = [
+        server(r#"{"type":"none"}"#),
+        server(r#"{"type":"rewind","header":"X-Key"}"#),
+        server(r#"{"type":"secret"}"#),
+        server(r#"{"type":"secret","header":"X-Key","env":"KEY"}"#),
+        server(r#"{"type":"secret","env":"KEY","format":"{secret}"}"#),
+        server(r#"{"type":"secret","header":"X-Key","encoding":"rot13"}"#),
+        server(r#"{"type":"secret","env":"KEY"}"#),
+        api(r#""baseUrl":"https://x""#),
+        api(r#""base_url":"https://x","extra":1"#),
+        api(r#""base_url":"x""#),
+        r#"{"v":1,"servers":[],"tools":[{"name":"a.b","route":{"type":"api","api":"a"},"schemas":{"input":{}},"policy":{"on_interruption":"retry","approval":false,"heartbeat_timeout_ms":60000,"concurrency":16}}]}"#.to_owned(),
+    ];
+    for json in &invalid {
+        assert!(
+            matches!(decode_toolset(json), Err(FormatError::InvalidToolset(_))),
+            "{json} must be rejected, got {:?}",
+            decode_toolset(json)
+        );
+    }
+}
+
+/// Prints the fixtures of APIs and attachments; used once to write them.
+#[test]
+#[ignore = "writes nothing: prints the fixtures for a human to review"]
+fn print_secrets_fixtures() {
+    println!("{}", encode_toolset(&toolset_with_apis()));
+    println!("{}", encode_workflow(&workflow_with_secrets()));
 }
 
 #[test]

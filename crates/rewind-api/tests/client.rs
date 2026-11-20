@@ -72,6 +72,7 @@ fn run(id: &str) -> Run {
         epoch: 1,
         mode: RunMode::Live,
         labels: Labels::from_iter([("agent", "triage")]),
+        secrets: Default::default(),
         trace_id: "0".repeat(32),
         parent: None,
         workflow: None,

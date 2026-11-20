@@ -23,8 +23,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
-    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    Attachments, CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId,
+    RunStatus, Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
     end_signal_name, starter_ended,
 };
 use rewind_engine::ports::{
@@ -32,10 +32,10 @@ use rewind_engine::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, RunWorkflow, Secret, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
-    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    RunRecord, RunRef, RunWorkflow, Secret, SecretId, SecretUsage, StartedBy, StoreError,
+    StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
+    ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
     deferred_timeout_failure,
 };
 use rewind_engine::ports::{
@@ -226,6 +226,8 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
                 })
                 .transpose()?,
             scope: decode_labels(&row.text(31)?)?,
+            // The `runs.secrets` column is the stores workstream's: no run attaches any yet.
+            secrets: Attachments::new(),
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -728,6 +730,9 @@ impl PostgresStore {
         run: &NewRun,
         idempotency_key: Option<&str>,
     ) -> Result<CreateRun, Fail> {
+        if !run.metadata.secrets.is_empty() {
+            keep_attachments(&run.metadata.secrets);
+        }
         let mut tx = self.pool.begin().await?;
         let tenant_id = &run.run.tenant;
         // The tenant's lock serializes its starts: two starts never both see the last free
@@ -1618,55 +1623,6 @@ impl PostgresStore {
         Self::finish_tasks(&mut tx, &[(task.run.id, task.seq, outcome)], now).await?;
         tx.commit().await?;
         Ok(TaskUpdate::Applied)
-    }
-
-    async fn resume_parked_once(&self, scope: &ParkedScope, now: Timestamp) -> Result<usize, Fail> {
-        let mut tx = self.pool.begin().await?;
-        let (tenant_id, toolset, run, namespace) = match scope {
-            ParkedScope::Run(run) => (&run.tenant, None, Some(uuid(run.id)), None),
-            ParkedScope::Toolset { tenant, toolset } => (tenant, Some(bytes(*toolset)), None, None),
-            ParkedScope::Namespace {
-                tenant,
-                namespace,
-                toolset,
-            } => (
-                tenant,
-                Some(bytes(*toolset)),
-                None,
-                Some(namespace.as_str()),
-            ),
-        };
-        let parked = "tenant = $1 AND ($2::bytea IS NULL OR toolset = $2) \
-                      AND ($3::uuid IS NULL OR run_id = $3) \
-                      AND ($4::text IS NULL OR run_id IN \
-                          (SELECT id FROM runs WHERE tenant = $1 AND namespace = $4)) \
-                      AND state = 'parked' AND parked_kind = 'credentials_expired'";
-        let runs: Vec<Uuid> = sqlx::query_scalar(&format!(
-            "SELECT DISTINCT run_id FROM tool_tasks WHERE {parked}"
-        ))
-        .bind(tenant(tenant_id))
-        .bind(toolset.clone())
-        .bind(run)
-        .bind(namespace)
-        .fetch_all(&mut *tx)
-        .await?;
-        if runs.is_empty() {
-            return Ok(0);
-        }
-        lock_runs(&mut tx, &runs.into_iter().collect()).await?;
-        let resumed = sqlx::query(&format!(
-            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = $5, due_at = $5, \
-                 parked_kind = NULL, parked_reason = NULL WHERE {parked}"
-        ))
-        .bind(tenant(tenant_id))
-        .bind(toolset)
-        .bind(run)
-        .bind(namespace)
-        .bind(ts(now))
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(usize::try_from(resumed.rows_affected()).unwrap_or(usize::MAX))
     }
 
     async fn expire_deferred_once(&self, now: Timestamp, max: usize) -> Result<usize, Fail> {
@@ -3267,12 +3223,37 @@ impl JournalStore for PostgresStore {
         Ok(retrying(|| self.reject_once(task, &failure, now)).await?)
     }
 
+    #[expect(
+        clippy::todo,
+        reason = "the stores workstream resumes the calls by secret"
+    )]
     async fn resume_parked(
         &self,
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
-        Ok(retrying(|| self.resume_parked_once(scope, now)).await?)
+        let _ = (scope, now);
+        todo!(
+            "stores: make ready the tasks parked by credentials_refused or secret_missing whose \
+             run's runs.secrets attaches the secret for the task's server"
+        )
+    }
+
+    #[expect(
+        clippy::todo,
+        reason = "the stores workstream answers what reads a secret"
+    )]
+    async fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        limit: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        let _ = (tenant, secret, limit);
+        todo!(
+            "stores: the active runs whose runs.secrets attaches the secret, those waiting on a \
+             call it serves, the latest workflow versions attaching it"
+        )
     }
 
     async fn expire_deferred_tool_tasks(
@@ -3929,4 +3910,14 @@ impl PostgresStore {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(not_applied(task_by_token(&mut conn, token).await?))
     }
+}
+
+/// Keeps a run's attachments in `runs.secrets`.
+#[expect(
+    clippy::todo,
+    reason = "the stores workstream adds the runs.secrets column"
+)]
+fn keep_attachments(secrets: &Attachments) {
+    let _ = secrets;
+    todo!("stores: write the run's attachments to runs.secrets, and read them back in get_run")
 }

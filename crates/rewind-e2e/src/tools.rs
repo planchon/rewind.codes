@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use rewind_core::{JsonValue, ToolFailure, ToolFailureKind};
-use rewind_engine::ports::{
-    Credentials, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher,
-};
+use rewind_engine::ports::{CallAuth, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher};
 use serde_json::Value;
 
 /// Answers tool calls from the `tools` of a scenario. A superset of `rewind.tools.json`:
@@ -17,7 +15,7 @@ use serde_json::Value;
 /// | `{"$echo": true}` | the call's arguments |
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
 /// | `{"$transient": "message", "$kind": …}` | a transient failure: retried with backoff under `retry` |
-/// | `{"$unauthorized": "message"}` | the server refuses the credentials: the call is parked until they are renewed |
+/// | `{"$unauthorized": "message"}` | the server answers 401: the call is parked (`credentials_refused`) until the secret is put again or the harness approves it |
 /// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its claim expires |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
 /// | `{"$defer": true}` | no answer: the call stays without an outcome |
@@ -163,14 +161,14 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 }
 
 impl ToolDispatcher for ScenarioTools {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match self.answer(&call.tool.name, &call.args, &call.idempotency_key) {
             Answer::Result(result) => Dispatched::Result(result),
             Answer::Deferred => Dispatched::Deferred,
             Answer::Failed(failure) => Dispatched::Failed(failure),
             Answer::Transient(failure) => Dispatched::Transient(failure),
             Answer::Unauthorized(message) => Dispatched::Park(ParkReason {
-                kind: ParkKind::CredentialsExpired,
+                kind: ParkKind::CredentialsRefused,
                 message,
             }),
             Answer::Crash => Dispatched::Failed(failure(

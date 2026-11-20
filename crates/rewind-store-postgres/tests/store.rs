@@ -15,13 +15,13 @@ use std::time::Duration;
 use futures_util::future::join_all;
 use rewind_core::{
     Annotation, Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, RunId, RunMode,
-    RunStarted, RunStatus, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
+    RunStarted, RunStatus, SecretName, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use rewind_engine::ports::{
-    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Credentials, Grant, GrantDeletion,
-    GrantWrite, JournalStore, NewRun, NewToolTask, Predicate, Principal, ProjectedRun,
-    QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery, RunRef,
-    RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials,
+    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Grant, GrantDeletion, GrantWrite,
+    JournalStore, NamespaceName, NewRun, NewSecret, NewToolTask, Predicate, Principal,
+    ProjectedRun, QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery,
+    RunRef, RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretId, SecretReader, SecretStore,
     TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait, WaitKind,
 };
 use rewind_store_postgres::{Config, Error, MasterKey, PostgresStore, SCHEMA_VERSION};
@@ -570,39 +570,40 @@ async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
     assert!(committed, "a commit with enough time succeeds");
 }
 
-fn credentials() -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([(
-                    "Authorization".to_owned(),
-                    Secret::new("Bearer ghp_plaintext_token"),
-                )]),
-                env: BTreeMap::new(),
-            },
-        )]),
+fn github_token(name: &str) -> NewSecret {
+    NewSecret {
+        id: SecretId::organization(SecretName::new(name).expect("valid")),
+        value: Secret::new("ghp_plaintext_token"),
+        labels: BTreeMap::new(),
+        by: "user:ada".into(),
+    }
+}
+
+fn reader() -> SecretReader {
+    SecretReader {
+        run: RunId::from_u128(1),
+        namespace: NamespaceName::migrated(),
     }
 }
 
 async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
     let database = postgres.create_database();
-    let owner = SecretOwner::Toolset(Digest::of(b"toolset"));
     let store = postgres.connect(&database).await;
     // Two servers storing a tenant's first secrets at once agree on its data key.
     let other = postgres.connect(&database).await;
-    let (local, credentials) = (TenantId::local(), credentials());
-    let run_owner = SecretOwner::Run(RunId::from_u128(9));
-    let (first, second) = tokio::join!(
-        store.put(&local, &owner, &credentials),
-        other.put(&local, &run_owner, &credentials),
+    let local = TenantId::local();
+    let (first, second) = (github_token("github"), github_token("linear"));
+    let (put_first, put_second) = tokio::join!(
+        store.put(&local, &first, T0),
+        other.put(&local, &second, T0),
     );
-    first.expect("put");
-    second.expect("put");
+    put_first.expect("put");
+    put_second.expect("put");
     assert_eq!(
         postgres.psql(&database, "SELECT count(*) FROM data_keys"),
         "1"
     );
+    store.signing_key(&local, T0).await.expect("signing_key");
 
     // No column holds the secret in clear.
     let clear = postgres.psql(
@@ -611,48 +612,25 @@ async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
     );
     assert_eq!(clear, "0", "a secret is stored in clear");
 
-    for reader in [&store, &other] {
-        assert_eq!(
-            reader
-                .resolve(
-                    &TenantId::local(),
-                    RunId::from_u128(1),
-                    &rewind_engine::ports::NamespaceName::migrated(),
-                    Digest::of(b"toolset")
-                )
-                .await
-                .expect("resolve"),
-            Some(credentials.clone())
-        );
+    for reader_store in [&store, &other] {
+        for secret in [&first, &second] {
+            assert_eq!(
+                reader_store
+                    .read(&local, &secret.id, &reader(), T0)
+                    .await
+                    .expect("read"),
+                Some(secret.value.clone())
+            );
+        }
     }
-    assert_eq!(
-        store
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(9),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"other")
-            )
-            .await
-            .expect("resolve"),
-        Some(credentials),
-        "the run's own credentials"
-    );
 
     // Another master key reads nothing.
     let stranger = connect(postgres, &database, MasterKey::from_bytes([4; 32]))
         .await
         .expect("connect");
     assert!(matches!(
-        stranger
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(1),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"toolset")
-            )
-            .await,
-        Err(SecretError::Crypto(_))
+        stranger.read(&local, &first.id, &reader(), T0).await,
+        Err(SecretError::Crypto(_) | SecretError::UnknownMasterKey(_))
     ));
 }
 

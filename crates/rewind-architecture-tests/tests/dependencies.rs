@@ -56,6 +56,8 @@ fn every_crate_of_the_architecture_that_exists_is_checked() {
         "rewind-api",
         "rewind-agent-tools",
         "rewind-mcp-server",
+        "rewind-outbound",
+        "rewind-openapi",
     ] {
         assert!(
             names.contains(&expected),

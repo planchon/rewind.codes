@@ -146,6 +146,10 @@ impl std::fmt::Debug for Config {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,
+    #[expect(
+        dead_code,
+        reason = "the stores workstream's SecretStore seals with it"
+    )]
     master_key: MasterKey,
 }
 

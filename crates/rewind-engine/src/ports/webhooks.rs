@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 
-use rewind_core::{Payload, RunId, RunStatus, Seq, Timestamp};
+use rewind_core::{Payload, RunId, RunStatus, SecretRef, Seq, Timestamp};
 
 #[cfg(doc)]
 use crate::ports::namespaces::QuotaAlertKey;
@@ -52,6 +52,8 @@ pub enum WebhookEventType {
     /// The run is set aside (`archi/03-execution.md`, "Non-determinism and quarantine").
     RunQuarantined,
     ToolSchemaChanged,
+    /// A call parked because its server refused the secret or the signature, or because the
+    /// secret the run attached no longer exists.
     CredentialsExpired,
     /// A namespace, or the tenant, crossed 80 % or 100 % of a limit
     /// (`archi/06-storage-and-scale.md`, "Quotas").
@@ -134,8 +136,31 @@ pub enum WebhookEventKind {
         seq: Seq,
         tool: String,
         message: String,
+        reason: CredentialsExpiredReason,
+        /// The secret the run attached for the tool's server, as attached (`org/<name>` or
+        /// `ns/<name>`); `None` for a signed call.
+        secret: Option<SecretRef>,
     },
     QuotaAlert(QuotaAlert),
+}
+
+/// Why a call waits in `credentials.expired` (`archi/04-tools.md`, "Tool task lifecycle"). The
+/// harness does the same in both cases: put the secret again, or approve the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CredentialsExpiredReason {
+    /// The server answered 401 to the secret or to the signature.
+    Refused,
+    /// The secret the run attached no longer exists: nothing was sent.
+    Missing,
+}
+
+impl CredentialsExpiredReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CredentialsExpiredReason::Refused => "refused",
+            CredentialsExpiredReason::Missing => "missing",
+        }
+    }
 }
 
 impl WebhookEventKind {

@@ -19,8 +19,9 @@ pub enum Layer {
     /// `rewind-engine`: use cases and ports.
     Application,
     /// Representations shared at the edges: the stored format (`rewind-format`), code generation
-    /// (`rewind-codegen`), the HTTP API (`rewind-api`); and what is built on the API alone: the
-    /// agent tools (`rewind-agent-tools`) and Rewind's MCP server (`rewind-mcp-server`).
+    /// (`rewind-codegen`), the HTTP API (`rewind-api`), what leaves Rewind for a tenant's servers
+    /// (`rewind-outbound`); and what is built on the API alone: the agent tools
+    /// (`rewind-agent-tools`) and Rewind's MCP server (`rewind-mcp-server`).
     AdapterSupport,
     /// Implementations of the ports.
     Adapter,
@@ -37,14 +38,15 @@ pub fn layer(name: &str) -> Option<Layer> {
     Some(match name {
         "rewind-core" => Layer::Domain,
         "rewind-engine" => Layer::Application,
-        "rewind-format" | "rewind-codegen" | "rewind-api" | "rewind-agent-tools"
-        | "rewind-mcp-server" => Layer::AdapterSupport,
+        "rewind-format" | "rewind-codegen" | "rewind-api" | "rewind-outbound"
+        | "rewind-agent-tools" | "rewind-mcp-server" => Layer::AdapterSupport,
         "rewind-runtime"
         | "rewind-store-turso"
         | "rewind-store-postgres"
         | "rewind-blob"
         | "rewind-workos"
         | "rewind-mcp"
+        | "rewind-openapi"
         | "rewind-check"
         | "rewind-otel" => Layer::Adapter,
         "rewind-cli" | "rewind-server" => Layer::CompositionRoot,
@@ -204,18 +206,21 @@ fn internal_rule(from: &str, from_layer: Layer, to: &str) -> Option<&'static str
         Layer::Adapter => {
             let allowed = match to_layer {
                 Layer::Domain | Layer::Application => true,
-                // Stores write the stored journal format.
+                // Stores write the stored journal format; the tool dispatchers send through
+                // rewind-outbound.
                 Layer::AdapterSupport => {
                     to == "rewind-format" && from.starts_with("rewind-store-")
                         || to == "rewind-codegen"
                             && matches!(from, "rewind-runtime" | "rewind-check")
+                        || to == "rewind-outbound"
+                            && matches!(from, "rewind-mcp" | "rewind-openapi")
                 }
                 Layer::Adapter | Layer::CompositionRoot | Layer::Tooling | Layer::EntryPoint => {
                     false
                 }
             };
             (!allowed).then_some(
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             )
         }
         Layer::CompositionRoot | Layer::Tooling => {
@@ -303,6 +308,16 @@ mod tests {
                 "rewind-store-turso",
                 vec![dependency("rewind-format", None)],
             ),
+            ("rewind-outbound", vec![dependency("rewind-core", None)]),
+            (
+                "rewind-openapi",
+                vec![
+                    dependency("rewind-core", None),
+                    dependency("rewind-engine", None),
+                    dependency("rewind-outbound", None),
+                ],
+            ),
+            ("rewind-mcp", vec![dependency("rewind-outbound", None)]),
             (
                 "rewind-store-postgres",
                 vec![dependency("rewind-format", None), dependency("sqlx", None)],
@@ -397,17 +412,17 @@ mod tests {
             (
                 "rewind-runtime",
                 vec![dependency("rewind-format", None)],
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (
                 "rewind-store-turso",
                 vec![dependency("rewind-blob", None)],
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (
                 "rewind-store-postgres",
                 vec![dependency("rewind-store-turso", None)],
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (
                 "rewind-engine",
@@ -453,12 +468,27 @@ mod tests {
             (
                 "rewind-mcp",
                 vec![dependency("rewind-agent-tools", None)],
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
+            ),
+            (
+                "rewind-outbound",
+                vec![dependency("rewind-engine", None)],
+                "adapter support crates depend only on rewind-core (the agent tools also on rewind-api, the MCP server also on them)",
+            ),
+            (
+                "rewind-runtime",
+                vec![dependency("rewind-outbound", None)],
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
+            ),
+            (
+                "rewind-openapi",
+                vec![dependency("rewind-mcp", None)],
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (
                 "rewind-runtime",
                 vec![dependency("rewind-api", None)],
-                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format), never on each other",
+                "adapters depend on rewind-core and rewind-engine (stores also on rewind-format, the tool dispatchers also on rewind-outbound), never on each other",
             ),
             (
                 "rewind-engine",

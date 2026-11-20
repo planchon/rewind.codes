@@ -33,8 +33,10 @@ export const DESCRIPTIONS: Record<Permission, string> = {
   "runs:delete": "Erase a run, its payloads included.",
   "toolsets:read": "List toolsets and workflows, read their declarations and search their tools.",
   "toolsets:write": "Register a toolset, and save a workflow.",
-  "credentials:write":
-    "Set the credentials of a toolset, of an end user (a namespace) for a toolset, or of a run.",
+  "secrets:read":
+    "List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids.",
+  "secrets:write": "Put and delete secrets.",
+  "secrets:use": "Attach an organization's secret to a run or a workflow.",
   "tasks:work": "Claim host-tool tasks, and heartbeat, defer, complete or fail them.",
   "tasks:approve": "Approve or reject a parked task.",
   "subscriptions:read": "List the lifecycle webhooks.",
@@ -63,7 +65,9 @@ const HARNESS: Permission[] = [
   "runs:delete",
   "toolsets:read",
   "toolsets:write",
-  "credentials:write",
+  "secrets:read",
+  "secrets:write",
+  "secrets:use",
   "tasks:work",
   "tasks:approve",
   "subscriptions:read",
@@ -86,7 +90,7 @@ export const BUILT_IN: Role[] = [
     name: "harness",
     builtIn: true,
     description:
-      "Runs, toolsets, credentials, tasks and subscriptions, and reading the members and roles: a harness and its agent tools.",
+      "Runs, toolsets, secrets, tasks and subscriptions, and reading the members and roles: a harness and its agent tools.",
     permissions: HARNESS,
   },
   {
@@ -102,6 +106,7 @@ export const BUILT_IN: Role[] = [
     permissions: [
       "runs:read",
       "toolsets:read",
+      "secrets:read",
       "subscriptions:read",
       "members:read",
       "roles:read",

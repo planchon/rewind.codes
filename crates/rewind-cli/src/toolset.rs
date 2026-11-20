@@ -2,21 +2,18 @@
 //! toolset file, or from the tools a scenario's mocks answer.
 //!
 //! A toolset file is the body of `POST /v1/toolsets` (`CreateToolset`), pinned as a server pins
-//! it: the tools of each MCP server are discovered by connecting to it (`rewind-mcp`) with the
-//! file's credentials, host tools and the `http` tool are taken as written, the `webhook`
-//! built-in is always there.
+//! it: the tools of each MCP server are discovered by connecting to it (`rewind-mcp`), each with
+//! its `auth`; host tools and the `http` tool are taken as written, the `webhook` built-in is
+//! always there.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::Path;
 
-use rewind_api::toolsets::{
-    CreateToolset, OnInterruption, ServerCredentials as ApiServerCredentials,
-    ToolPolicy as ApiPolicy,
-};
+use rewind_api::toolsets::{CreateToolset, OnInterruption, ToolPolicy as ApiPolicy};
 use rewind_core::{
-    Builtin, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
+    Builtin, Interruption, McpServer, McpTransport, Tool, ToolAuth, ToolPolicy, ToolRoute, Toolset,
 };
-use rewind_engine::ports::{Secret, ServerCredentials, TenantId};
+use rewind_engine::ports::TenantId;
 use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
 use serde_json::json;
 
@@ -35,6 +32,9 @@ pub(crate) async fn pin_file(path: &Path) -> Result<Toolset, CliError> {
 pub(crate) async fn pin(create: &CreateToolset) -> Result<Toolset, String> {
     let mut servers = Vec::new();
     let mut tools = Vec::new();
+    if !create.apis.is_empty() || !create.secrets.is_empty() {
+        apis_and_secrets(create);
+    }
     if !create.mcp.is_empty() {
         // As the embedded server: the developer's own servers, at any address.
         let discovery = McpDispatcher::new(McpConfig {
@@ -87,14 +87,17 @@ async fn discover(
                 ));
             }
         };
-        let pinned = McpServer::new(server.name.clone(), transport);
-        let credentials = create
-            .credentials
-            .as_ref()
-            .and_then(|credentials| credentials.servers.get(&server.name))
-            .map(secrets);
+        let mut pinned = McpServer::new(server.name.clone(), transport);
+        if let Some(auth) = &server.auth {
+            pinned.auth = auth
+                .to_core()
+                .map_err(|error| format!("the MCP server {:?}: {error}", server.name))?;
+        }
+        if pinned.auth != ToolAuth::None {
+            listing_auth(&pinned);
+        }
         let listed = discovery
-            .list_tools(&TenantId::local(), &pinned, credentials.as_ref())
+            .list_tools(&TenantId::local(), &pinned, None)
             .await
             .map_err(|error| format!("cannot list the tools of {:?}: {error}", server.name))?;
         if let Some(unknown) = server.policies.keys().find(|name| {
@@ -117,18 +120,28 @@ async fn discover(
     Ok(())
 }
 
-/// A server's credentials from a toolset file, as the transport takes them.
-fn secrets(credentials: &ApiServerCredentials) -> ServerCredentials {
-    let secret = |values: &BTreeMap<String, String>| {
-        values
-            .iter()
-            .map(|(name, value)| (name.clone(), Secret::new(value.clone())))
-            .collect()
-    };
-    ServerCredentials {
-        headers: secret(&credentials.headers),
-        env: secret(&credentials.env),
-    }
+/// A toolset file's APIs, read from their OpenAPI documents, and the secrets that list its
+/// servers' tools.
+#[expect(
+    clippy::todo,
+    reason = "the outbound and engine-server workstreams build them"
+)]
+fn apis_and_secrets(create: &CreateToolset) {
+    let _ = create;
+    todo!(
+        "outbound: read a toolset file's APIs (rewind-openapi) as POST /v1/toolsets does; \
+         engine-server: the CLI's secrets for the listings"
+    )
+}
+
+/// How the listing of a server's tools authenticates: its secret or a signed listing.
+#[expect(
+    clippy::todo,
+    reason = "the outbound workstream authenticates MCP listings"
+)]
+fn listing_auth(server: &McpServer) {
+    let _ = server;
+    todo!("outbound: list the tools of a server whose auth is a secret or rewind")
 }
 
 /// `list_issues` for `github.list_issues`.
@@ -204,7 +217,8 @@ mod tests {
     #[tokio::test]
     async fn host_tools_and_http_are_pinned_as_written() {
         let create = CreateToolset {
-            credentials: None,
+            secrets: std::collections::BTreeMap::new(),
+            apis: Vec::new(),
             workflows: Vec::new(),
             base: None,
             mcp: Vec::new(),

@@ -8,10 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Annotation, CancelReason, Command, Completion, Digest, Epoch, Event,
-    HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted, RunStatus, Script,
-    Seed, Seq, Suite, SuiteTest, Timestamp, ToolFailure, ToolFailureKind, ToolOutcome, ToolPolicy,
-    ToolRoute, Toolset, Workflow, WorkflowSchemas, end_signal_name,
+    AbortKind, AbortReason, Annotation, Attachments, CancelReason, Command, Completion, Digest,
+    Epoch, Event, HistoryEntry, Lifecycle, LogLevel, Payload, RunId, RunMode, RunStarted,
+    RunStatus, Script, SecretName, SecretRef, Seed, Seq, Suite, SuiteTest, Timestamp, ToolFailure,
+    ToolFailureKind, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow, WorkflowSchemas,
+    end_signal_name,
 };
 use serde_json::json;
 
@@ -21,9 +22,10 @@ use crate::ports::{
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
     Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
-    StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, TraceContext, Trigger,
-    Watched, WebhookEventType, WebhookToken, WorkflowFilter, deferred_timeout_failure,
+    SecretId, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
+    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
+    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowFilter,
+    deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DisplayName, DropNamespace, Month, NamespaceCursor, NamespaceFilter,
@@ -44,6 +46,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         scripts_and_toolsets_are_stored_by_tenant_and_digest
     );
     check!("journal", new_store(), create_run_enqueues_run_started);
+    check!("journal", new_store(), run_metadata_keeps_the_attachments);
     check!("journal", new_store(), run_ids_are_unique_across_tenants);
     check!(
         "journal",
@@ -161,7 +164,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
-        renewed_credentials_resume_parked_tasks
+        a_secret_put_again_resumes_the_calls_that_read_it
     );
     check!("journal", new_store(), claims_respect_concurrency_limits);
     check!(
@@ -283,7 +286,7 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
     check!(
         "journal",
         new_store(),
-        runs_tasks_and_parked_calls_are_filtered_by_namespace
+        runs_and_tasks_are_filtered_by_namespace
     );
     check!(
         "journal",
@@ -690,6 +693,7 @@ pub async fn create_run_enqueues_run_started<S: JournalStore>(store: &S) {
             detached: true,
         }),
         scope: BTreeMap::from([("conversation".to_owned(), "c-1".to_owned())]),
+        secrets: Attachments::new(),
     };
     let created = store
         .create_run(run.clone(), Some("call-1".into()))
@@ -2527,7 +2531,7 @@ pub async fn a_token_names_its_task<S: JournalStore>(store: &S) {
         .expect("retry");
     assert_eq!(task_of(&claimed[1].token).await, None);
     let reason = ParkReason {
-        kind: ParkKind::CredentialsExpired,
+        kind: ParkKind::CredentialsRefused,
         message: "401".into(),
     };
     store
@@ -2556,75 +2560,168 @@ pub async fn a_token_names_its_task<S: JournalStore>(store: &S) {
     assert_eq!(task_of(&TaskToken("rewind_tt_unknown".into())).await, None);
 }
 
-pub async fn renewed_credentials_resume_parked_tasks<S: JournalStore>(store: &S) {
-    let run = start_with_tasks(
+fn attachments(pairs: &[(&str, &str)]) -> Attachments {
+    pairs
+        .iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(secret).expect("the suite attaches valid secrets");
+            ((*server).to_owned(), secret)
+        })
+        .collect()
+}
+
+/// Starts a run of `namespace` attaching `secrets`, and commits these tool tasks.
+async fn start_attaching<S: JournalStore>(
+    store: &S,
+    run: RunRef,
+    namespace: &NamespaceName,
+    secrets: Attachments,
+    tasks: Vec<NewToolTask>,
+) -> RunRef {
+    let mut new = new_run_of(run.clone(), namespace, b"script", T0);
+    new.metadata.secrets = secrets;
+    store.create_run(new, None).await.expect("create_run");
+    let lease = lease_of(store, &run, T0).await;
+    let consumed = inbox_ids(store, &lease).await;
+    let mut activation = Activation::new(vec![run_started_entry()], consumed, RunStatus::Active);
+    activation.tool_calls = tasks;
+    commit(store, &lease, activation, T0).await;
+    store.release(&lease).await.expect("release");
+    run
+}
+
+fn secret_of(namespace: Option<&NamespaceName>, name: &str) -> SecretId {
+    let name = SecretName::new(name).expect("the suite uses valid secret names");
+    match namespace {
+        Some(namespace) => SecretId::of_namespace(namespace.clone(), name),
+        None => SecretId::organization(name),
+    }
+}
+
+pub async fn run_metadata_keeps_the_attachments<S: JournalStore>(store: &S) {
+    let mut run = new_run(run_ref(1));
+    run.metadata.secrets = attachments(&[("github", "ns/github"), ("zendesk", "org/zendesk")]);
+    store
+        .create_run(run.clone(), None)
+        .await
+        .expect("create_run");
+    assert_eq!(record(store, &run_ref(1)).await.metadata, run.metadata);
+    create(store, run_ref(2)).await;
+    assert!(
+        record(store, &run_ref(2)).await.metadata.secrets.is_empty(),
+        "a run without attachments"
+    );
+}
+
+pub async fn a_secret_put_again_resumes_the_calls_that_read_it<S: JournalStore>(store: &S) {
+    let github = |seq| mcp_task(seq, "github.list_issues", "github", 8);
+    let zendesk = |seq| mcp_task(seq, "zendesk.get_ticket", "zendesk", 8);
+    let alice_run = start_attaching(
         store,
         run_ref(1),
-        vec![host_task(1, "t"), host_task(2, "u")],
+        &alice(),
+        attachments(&[("github", "ns/github"), ("zendesk", "org/zendesk")]),
+        vec![github(1), zendesk(2), github(3), host_task(4, "ask_user")],
     )
     .await;
-    let other = start_with_tasks(store, run_ref(2), vec![host_task(1, "t")]).await;
+    let bob_run = start_attaching(
+        store,
+        run_ref(2),
+        &bob(),
+        attachments(&[("github", "ns/github")]),
+        vec![github(1)],
+    )
+    .await;
+    let shared_run = start_attaching(
+        store,
+        run_ref(3),
+        &alice(),
+        attachments(&[("github", "org/github")]),
+        vec![github(1)],
+    )
+    .await;
     let claimed = claim(store, "a", &TaskFilter::All, T0, 10).await;
-    assert_eq!(claimed.len(), 3);
-    let expired = ParkReason {
-        kind: ParkKind::CredentialsExpired,
-        message: "401".into(),
+    assert_eq!(claimed.len(), 6);
+    let park = |kind, message: &str| ParkReason {
+        kind,
+        message: message.into(),
     };
-    let changed = ParkReason {
-        kind: ParkKind::SchemaChanged,
-        message: "renamed".into(),
-    };
-    for (task, reason) in claimed.iter().zip([&expired, &changed, &expired]) {
+    let refused = park(ParkKind::CredentialsRefused, "401");
+    let missing = park(ParkKind::SecretMissing, "deleted");
+    let changed = park(ParkKind::SchemaChanged, "renamed");
+    for task in &claimed {
+        let reason = match (task.task.task.run.id, task.task.task.seq.0) {
+            (run, 2) if run == alice_run.id => missing.clone(),
+            (run, 3) if run == alice_run.id => changed.clone(),
+            (run, _) if run == bob_run.id => missing.clone(),
+            _ => refused.clone(),
+        };
         store
-            .park_tool_task(&task.token, reason.clone())
+            .park_tool_task(&task.token, reason)
             .await
             .expect("park");
     }
-    let at = later(T0, 10);
-    assert_eq!(
+    let states = |run: RunRef| async move {
         store
-            .resume_parked(&ParkedScope::Run(run.clone()), at)
+            .tool_tasks(&run)
             .await
-            .expect("resume"),
-        1
-    );
-    let states: Vec<TaskState> = store
-        .tool_tasks(&run)
-        .await
-        .expect("tool_tasks")
-        .into_iter()
-        .map(|t| t.state)
-        .collect();
-    assert_eq!(
-        states,
-        [
-            TaskState::Ready {
-                next_attempt_at: at
-            },
-            TaskState::Parked(changed)
-        ],
-        "a schema change is not resumed by credentials"
-    );
-    let scope = ParkedScope::Toolset {
-        tenant: acme(),
-        toolset: toolset_digest(),
+            .expect("tool_tasks")
+            .into_iter()
+            .map(|task| task.state)
+            .collect::<Vec<_>>()
     };
+    let at = later(T0, 10);
+    let ready = TaskState::Ready {
+        next_attempt_at: at,
+    };
+    let resume = |tenant: TenantId, secret: SecretId| async move {
+        store
+            .resume_parked(&ParkedScope::Secret { tenant, secret }, at)
+            .await
+            .expect("resume_parked")
+    };
+
     assert_eq!(
-        store.resume_parked(&scope, at).await.expect("resume"),
+        resume(acme(), secret_of(Some(&alice()), "github")).await,
         1,
-        "the other run, by its toolset"
+        "alice's github, for the server it is attached for"
     );
     assert_eq!(
-        store.tool_tasks(&other).await.expect("tool_tasks")[0].state,
-        TaskState::Ready {
-            next_attempt_at: at
-        }
+        states(alice_run.clone()).await,
+        [
+            ready.clone(),
+            TaskState::Parked(missing.clone()),
+            TaskState::Parked(changed.clone()),
+            TaskState::Parked(refused.clone()),
+        ],
+        "neither another server's call, nor a schema change, nor a call of no server"
     );
-    let foreign = ParkedScope::Toolset {
-        tenant: tenant("other"),
-        toolset: toolset_digest(),
-    };
-    assert_eq!(store.resume_parked(&foreign, at).await.expect("resume"), 0);
+    assert_eq!(
+        states(bob_run.clone()).await,
+        [TaskState::Parked(missing.clone())],
+        "nor bob's call, which reads bob's github"
+    );
+    assert_eq!(
+        states(shared_run.clone()).await,
+        [TaskState::Parked(refused.clone())],
+        "nor a call that reads the organization's github"
+    );
+    assert_eq!(resume(acme(), secret_of(None, "zendesk")).await, 1);
+    assert_eq!(states(alice_run).await[1], ready);
+    assert_eq!(resume(acme(), secret_of(None, "github")).await, 1);
+    assert_eq!(states(shared_run).await, std::slice::from_ref(&ready));
+    assert_eq!(
+        resume(tenant("other"), secret_of(Some(&bob()), "github")).await,
+        0,
+        "another tenant's secret"
+    );
+    assert_eq!(resume(acme(), secret_of(Some(&bob()), "github")).await, 1);
+    assert_eq!(states(bob_run).await, [ready]);
+    assert_eq!(
+        resume(acme(), secret_of(Some(&bob()), "github")).await,
+        0,
+        "nothing waits any more"
+    );
 }
 
 pub async fn claims_respect_concurrency_limits<S: JournalStore>(store: &S) {
@@ -4781,7 +4878,7 @@ pub async fn host_claims_filter_by_the_labels_of_the_run<S: JournalStore>(store:
     );
 }
 
-pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalStore>(store: &S) {
+pub async fn runs_and_tasks_are_filtered_by_namespace<S: JournalStore>(store: &S) {
     // `start_with_tasks` creates its runs in alice; bob's run is created by hand.
     start_with_tasks(store, run_ref(1), vec![host_task(1, "ask_user")]).await;
     store
@@ -4822,41 +4919,6 @@ pub async fn runs_tasks_and_parked_calls_are_filtered_by_namespace<S: JournalSto
         [run_ref(2)],
         "a worker of one namespace claims its tasks only"
     );
-    let expired = ParkReason {
-        kind: ParkKind::CredentialsExpired,
-        message: "401".into(),
-    };
-    store
-        .park_tool_task(&claimed[0].token, expired.clone())
-        .await
-        .expect("park");
-    let all = claim(store, "a", &TaskFilter::All, T0, 10).await;
-    assert_eq!(all.len(), 1, "alice's task");
-    store
-        .park_tool_task(&all[0].token, expired)
-        .await
-        .expect("park");
-    let scope = ParkedScope::Namespace {
-        tenant: acme(),
-        namespace: bob(),
-        toolset: toolset_digest(),
-    };
-    let at = later(T0, 10);
-    assert_eq!(
-        store.resume_parked(&scope, at).await.expect("resume"),
-        1,
-        "bob's call only"
-    );
-    assert_eq!(
-        store.tool_tasks(&run_ref(2)).await.expect("tool_tasks")[0].state,
-        TaskState::Ready {
-            next_attempt_at: at
-        }
-    );
-    assert!(matches!(
-        store.tool_tasks(&run_ref(1)).await.expect("tool_tasks")[0].state,
-        TaskState::Parked(_)
-    ));
 }
 
 // Workflows and watchers

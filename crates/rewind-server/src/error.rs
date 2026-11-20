@@ -95,6 +95,41 @@ impl ApiError {
             Problem::new(ProblemType::InvalidScript, detail).with_diagnostics(diagnostics),
         ))
     }
+
+    /// `secret-required`: each attachment at fault. What the caller may attach instead
+    /// (`attachable`) is the engine-server workstream's (`archi/09-roadmap.md`).
+    pub(crate) fn secret_required(
+        detail: impl Into<String>,
+        problems: &[rewind_engine::attachments::AttachmentProblem],
+    ) -> Self {
+        use rewind_api::secrets::{AttachmentProblem, AttachmentProblemKind};
+        use rewind_engine::attachments::AttachmentProblem as Problem_;
+        let mut problem = Problem::new(ProblemType::SecretRequired, detail);
+        problem.attachments = problems
+            .iter()
+            .map(|problem| {
+                let (server, kind, secret) = match problem {
+                    Problem_::Missing { server } => (server, AttachmentProblemKind::Missing, None),
+                    Problem_::TakesNone { server } => {
+                        (server, AttachmentProblemKind::TakesNone, None)
+                    }
+                    Problem_::Unknown { server, secret } => {
+                        (server, AttachmentProblemKind::Unknown, Some(secret))
+                    }
+                    Problem_::Forbidden { server, secret } => {
+                        (server, AttachmentProblemKind::Forbidden, Some(secret))
+                    }
+                };
+                AttachmentProblem {
+                    server: server.clone(),
+                    problem: kind,
+                    secret: secret.map(ToString::to_string),
+                    attachable: Vec::new(),
+                }
+            })
+            .collect();
+        Self(Box::new(problem))
+    }
 }
 
 /// When the quota a `quota-exceeded` answer reached frees: the router turns it into
@@ -292,6 +327,9 @@ impl From<StartError> for ApiError {
                 Self::not_found(format!("no workflow version {version} for this tenant"))
             }
             StartError::InvalidInput(message) => Self::new(ProblemType::InvalidInput, message),
+            StartError::SecretRequired(ref problems) => {
+                Self::secret_required(error.to_string(), problems)
+            }
             other => Self::internal(other),
         }
     }

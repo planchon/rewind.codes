@@ -1,17 +1,41 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
-use rewind_core::{Digest, RunId};
+use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair as _};
+use rewind_core::Timestamp;
 
-use crate::ports::{Credentials, NamespaceName, SecretError, SecretOwner, SecretStore, TenantId};
+use crate::ports::{
+    DailyReads, Day, LastRead, MasterKeyId, NamespaceName, NewSecret, PrivateKey, PublicKey,
+    PutSecret, RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId, SecretMeta, SecretNamespace,
+    SecretReader, SecretStore, SigningKey, TenantId,
+};
 
-type Secrets = BTreeMap<(TenantId, SecretOwner), Credentials>;
+/// A secret as kept in memory.
+#[derive(Debug, Clone)]
+struct Stored {
+    value: Secret,
+    labels: BTreeMap<String, String>,
+    created_by: String,
+    created_at: Timestamp,
+    updated_by: String,
+    updated_at: Timestamp,
+    reads: BTreeMap<Day, u64>,
+    last_read: Option<LastRead>,
+}
 
-/// `SecretStore` in memory, for engine tests and mock mode. Nothing is at rest, so nothing is
-/// encrypted. It passes the conformance suite.
+#[derive(Debug, Default)]
+struct State {
+    secrets: BTreeMap<(TenantId, SecretId), Stored>,
+    /// Each tenant's keys, oldest first. The last one signs unless it is retired.
+    keys: BTreeMap<TenantId, Vec<SigningKey>>,
+}
+
+/// `SecretStore` in memory, for engine tests, mock mode and the embedded server without a
+/// database. Nothing is at rest, so nothing is encrypted and no master key is in use. It passes
+/// the conformance suite.
 #[derive(Debug, Default)]
 pub struct MemorySecrets {
-    secrets: Mutex<Secrets>,
+    state: Mutex<State>,
 }
 
 impl MemorySecrets {
@@ -19,42 +43,163 @@ impl MemorySecrets {
         Self::default()
     }
 
-    fn lock(&self) -> Result<MutexGuard<'_, Secrets>, SecretError> {
-        self.secrets
+    fn lock(&self) -> Result<MutexGuard<'_, State>, SecretError> {
+        self.state
             .lock()
             .map_err(|_| SecretError::Backend("the memory secret store's lock is poisoned".into()))
     }
+}
+
+/// A new Ed25519 key pair, from the operating system's CSPRNG.
+fn new_signing_key(now: Timestamp) -> Result<SigningKey, SecretError> {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).map_err(|err| SecretError::Crypto(err.to_string()))?;
+    let pair = Ed25519KeyPair::from_seed_unchecked(&seed)
+        .map_err(|err| SecretError::Crypto(err.to_string()))?;
+    let key: [u8; 32] = pair
+        .public_key()
+        .as_ref()
+        .try_into()
+        .map_err(|_| SecretError::Crypto("an Ed25519 public key has 32 bytes".into()))?;
+    Ok(SigningKey {
+        public: PublicKey {
+            kid: PublicKey::kid_of(&key),
+            key,
+            created_at: now,
+            retired_at: None,
+        },
+        private: PrivateKey::from_seed(seed),
+    })
+}
+
+fn meta(id: &SecretId, stored: &Stored, since: Day) -> SecretMeta {
+    SecretMeta {
+        id: id.clone(),
+        labels: stored.labels.clone(),
+        created_by: stored.created_by.clone(),
+        created_at: stored.created_at,
+        updated_by: stored.updated_by.clone(),
+        updated_at: stored.updated_at,
+        reads: stored
+            .reads
+            .range(since..)
+            .map(|(day, reads)| DailyReads {
+                day: *day,
+                reads: *reads,
+            })
+            .collect(),
+        last_read: stored.last_read.clone(),
+    }
+}
+
+/// The current key: the newest, unless it is retired.
+fn current(keys: &[SigningKey]) -> Option<&SigningKey> {
+    keys.last().filter(|key| key.public.retired_at.is_none())
 }
 
 impl SecretStore for MemorySecrets {
     async fn put(
         &self,
         tenant: &TenantId,
-        owner: &SecretOwner,
-        credentials: &Credentials,
-    ) -> Result<(), SecretError> {
-        self.lock()?
-            .insert((tenant.clone(), owner.clone()), credentials.clone());
-        Ok(())
+        secret: &NewSecret,
+        now: Timestamp,
+    ) -> Result<PutSecret, SecretError> {
+        if matches!(secret.id.namespace, SecretNamespace::Namespace(_)) && !secret.labels.is_empty()
+        {
+            return Err(SecretError::Invalid(
+                "a namespace's secret carries no label: the namespace is its scope".into(),
+            ));
+        }
+        let mut state = self.lock()?;
+        let key = (tenant.clone(), secret.id.clone());
+        Ok(match state.secrets.get_mut(&key) {
+            Some(stored) => {
+                stored.value = secret.value.clone();
+                stored.labels = secret.labels.clone();
+                stored.updated_by = secret.by.clone();
+                stored.updated_at = now;
+                PutSecret::Replaced
+            }
+            None => {
+                state.secrets.insert(
+                    key,
+                    Stored {
+                        value: secret.value.clone(),
+                        labels: secret.labels.clone(),
+                        created_by: secret.by.clone(),
+                        created_at: now,
+                        updated_by: secret.by.clone(),
+                        updated_at: now,
+                        reads: BTreeMap::new(),
+                        last_read: None,
+                    },
+                );
+                PutSecret::Created
+            }
+        })
     }
 
-    async fn resolve(
+    async fn list(
         &self,
         tenant: &TenantId,
-        run: RunId,
-        namespace: &NamespaceName,
-        toolset: Digest,
-    ) -> Result<Option<Credentials>, SecretError> {
-        let secrets = self.lock()?;
-        let of_namespace = SecretOwner::Namespace {
-            namespace: namespace.clone(),
-            toolset,
+        namespace: &SecretNamespace,
+        labels: &BTreeMap<String, String>,
+        since: Day,
+    ) -> Result<Vec<SecretMeta>, SecretError> {
+        let state = self.lock()?;
+        Ok(state
+            .secrets
+            .iter()
+            .filter(|((of, id), stored)| {
+                of == tenant
+                    && &id.namespace == namespace
+                    && labels
+                        .iter()
+                        .all(|(key, value)| stored.labels.get(key) == Some(value))
+            })
+            .map(|((_, id), stored)| meta(id, stored, since))
+            .collect())
+    }
+
+    async fn meta(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        since: Day,
+    ) -> Result<Option<SecretMeta>, SecretError> {
+        let state = self.lock()?;
+        Ok(state
+            .secrets
+            .get(&(tenant.clone(), secret.clone()))
+            .map(|stored| meta(secret, stored, since)))
+    }
+
+    async fn read(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        reader: &SecretReader,
+        now: Timestamp,
+    ) -> Result<Option<Secret>, SecretError> {
+        let mut state = self.lock()?;
+        let Some(stored) = state.secrets.get_mut(&(tenant.clone(), secret.clone())) else {
+            return Ok(None);
         };
-        Ok(secrets
-            .get(&(tenant.clone(), SecretOwner::Run(run)))
-            .or_else(|| secrets.get(&(tenant.clone(), of_namespace)))
-            .or_else(|| secrets.get(&(tenant.clone(), SecretOwner::Toolset(toolset))))
-            .cloned())
+        *stored.reads.entry(Day::of(now)).or_default() += 1;
+        stored.last_read = Some(LastRead {
+            run: reader.run,
+            namespace: reader.namespace.clone(),
+            at: now,
+        });
+        Ok(Some(stored.value.clone()))
+    }
+
+    async fn delete(&self, tenant: &TenantId, secret: &SecretId) -> Result<bool, SecretError> {
+        Ok(self
+            .lock()?
+            .secrets
+            .remove(&(tenant.clone(), secret.clone()))
+            .is_some())
     }
 
     async fn delete_namespace(
@@ -62,19 +207,73 @@ impl SecretStore for MemorySecrets {
         tenant: &TenantId,
         namespace: &NamespaceName,
     ) -> Result<usize, SecretError> {
-        let mut secrets = self.lock()?;
-        let before = secrets.len();
-        secrets.retain(|(owner_tenant, owner), _| {
-            !(owner_tenant == tenant
-                && matches!(owner, SecretOwner::Namespace { namespace: of, .. } if of == namespace))
+        let mut state = self.lock()?;
+        let before = state.secrets.len();
+        state.secrets.retain(|(of, id), _| {
+            !(of == tenant
+                && matches!(&id.namespace, SecretNamespace::Namespace(name) if name == namespace))
         });
-        Ok(before - secrets.len())
+        Ok(before - state.secrets.len())
     }
 
-    async fn delete(&self, tenant: &TenantId, owner: &SecretOwner) -> Result<bool, SecretError> {
-        Ok(self
-            .lock()?
-            .remove(&(tenant.clone(), owner.clone()))
-            .is_some())
+    async fn signing_key(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<SigningKey, SecretError> {
+        let mut state = self.lock()?;
+        let keys = state.keys.entry(tenant.clone()).or_default();
+        if let Some(key) = current(keys) {
+            return Ok(key.clone());
+        }
+        let key = new_signing_key(now)?;
+        keys.push(key.clone());
+        Ok(key)
+    }
+
+    async fn rotate_signing_key(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<SigningKey, SecretError> {
+        let key = new_signing_key(now)?;
+        let mut state = self.lock()?;
+        let keys = state.keys.entry(tenant.clone()).or_default();
+        if let Some(last) = keys.last_mut()
+            && last.public.retired_at.is_none()
+        {
+            last.public.retired_at = Some(now);
+        }
+        keys.push(key.clone());
+        Ok(key)
+    }
+
+    async fn public_keys(
+        &self,
+        tenant: &TenantId,
+        now: Timestamp,
+    ) -> Result<Vec<PublicKey>, SecretError> {
+        let state = self.lock()?;
+        Ok(state
+            .keys
+            .get(tenant)
+            .into_iter()
+            .flatten()
+            .rev()
+            .filter(|key| {
+                key.public
+                    .retired_at
+                    .is_none_or(|retired| now < retired.saturating_add(RETIRED_KEY_PUBLISHED))
+            })
+            .map(|key| key.public.clone())
+            .collect())
+    }
+
+    async fn master_keys_in_use(&self) -> Result<Vec<MasterKeyId>, SecretError> {
+        Ok(Vec::new())
+    }
+
+    async fn rewrap_data_keys(&self) -> Result<usize, SecretError> {
+        Ok(0)
     }
 }
