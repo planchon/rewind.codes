@@ -16,12 +16,19 @@
 //! The values of `example`, `examples`, `default`, `enum`, `const` and of the extensions
 //! (`x-…`) are data, not schemas: they are copied as they are.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
 /// How deep inlined references may go before they are taken for a cycle.
 const MAX_INLINE_DEPTH: usize = 64;
+
+/// How many values one reading's schemas may expand to, references inlined. A reference used
+/// twice is inlined twice: a document of a few KB whose references fan out level after level,
+/// or a large subschema referred to many times, would otherwise expand into gigabytes on the
+/// API's process.
+pub(crate) const MAX_SCHEMA_VALUES: usize = 1_000_000;
 
 const COMPONENT_SCHEMAS: &str = "#/components/schemas/";
 
@@ -31,6 +38,8 @@ pub(crate) struct Document<'a> {
     pub(crate) root: &'a Value,
     /// OpenAPI 3.0: its schemas are converted.
     pub(crate) v30: bool,
+    /// The values this reading's schemas expanded to so far, at most [`MAX_SCHEMA_VALUES`].
+    pub(crate) values: &'a Cell<usize>,
 }
 
 /// The component schemas one tool's schema designates, converted, by name.
@@ -90,6 +99,15 @@ impl<'a> Document<'a> {
     }
 
     fn convert(&self, value: &Value, defs: &mut Defs, depth: usize) -> Result<Value, String> {
+        let values = self.values.get() + 1;
+        if values > MAX_SCHEMA_VALUES {
+            return Err(format!(
+                "its schemas expand to more than {MAX_SCHEMA_VALUES} values once their $ref are \
+                 inlined: name the schemas used several times in components.schemas, or keep \
+                 fewer operations (`operations`)"
+            ));
+        }
+        self.values.set(values);
         let Value::Object(object) = value else {
             return Ok(match value {
                 Value::Array(items) => Value::Array(
@@ -261,9 +279,11 @@ mod tests {
                 "parameters": { "Id": { "name": "id", "in": "path", "schema": { "type": "integer" } } }
             }
         });
+        let values = Cell::new(0);
         let document = Document {
             root: &root,
             v30: false,
+            values: &values,
         };
         let mut defs = Defs::default();
         let schema = document
@@ -302,9 +322,11 @@ mod tests {
     #[test]
     fn openapi_3_0_keywords_become_json_schema() {
         let root = json!({});
+        let values = Cell::new(0);
         let document = Document {
             root: &root,
             v30: true,
+            values: &values,
         };
         let mut defs = Defs::default();
         let schema = document

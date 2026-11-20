@@ -61,8 +61,28 @@ pub(crate) fn build(api: &Api, operation: &ApiOperation, args: &Value) -> Result
         rest = &after[end + 1..];
     }
     path.push_str(rest);
+    // A `.` or `..` segment would be resolved by the URL's parsing: a value `..` would send the
+    // call, with its secret or its signature, to another path than the operation's.
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err(format!(
+            "its path {path:?} has a `.` or `..` segment, which would leave the operation's path"
+        ));
+    }
     let mut url = Url::parse(&format!("{}{path}", api.base_url))
         .map_err(|error| format!("its URL {}{path} is not valid: {error}", api.base_url))?;
+    let base = Url::parse(&api.base_url)
+        .map_err(|error| format!("its base URL {} is not valid: {error}", api.base_url))?;
+    let prefix = base.path().trim_end_matches('/');
+    let under = url.path() == prefix || url.path().starts_with(&format!("{prefix}/"));
+    if url.origin() != base.origin() || !under {
+        return Err(format!(
+            "its URL {url} is not under the API's base URL {}",
+            api.base_url
+        ));
+    }
 
     let mut query = Vec::new();
     let mut headers = Vec::new();
@@ -152,6 +172,50 @@ mod tests {
             body,
             idempotency_key: false,
         }
+    }
+
+    #[test]
+    fn a_path_parameter_never_leaves_the_operation_s_path() {
+        let api = Api::new("github", "https://api.example.com/v1");
+        let branch = operation(
+            "/repos/{repo}/branches/{branch}",
+            &[
+                ("repo", ParameterLocation::Path),
+                ("branch", ParameterLocation::Path),
+            ],
+            false,
+        );
+        for dots in [".", ".."] {
+            let error = build(&api, &branch, &json!({ "repo": "acme", "branch": dots }))
+                .expect_err("a dot segment is refused");
+            assert!(error.contains("`.` or `..`"), "{error}");
+        }
+        let two = operation(
+            "/users/{a}/{b}",
+            &[
+                ("a", ParameterLocation::Path),
+                ("b", ParameterLocation::Path),
+            ],
+            false,
+        );
+        assert!(build(&api, &two, &json!({ "a": "..", "b": ".." })).is_err());
+        assert!(build(&api, &two, &json!({ "a": "..", "b": "admin" })).is_err());
+        // Dots inside a segment, or encoded, stay data.
+        let built = build(&api, &branch, &json!({ "repo": "acme", "branch": "v1..2" })).unwrap();
+        assert_eq!(
+            built.url.as_str(),
+            "https://api.example.com/v1/repos/acme/branches/v1..2"
+        );
+        let built = build(
+            &api,
+            &branch,
+            &json!({ "repo": "acme", "branch": "%2e%2e" }),
+        )
+        .unwrap();
+        assert_eq!(
+            built.url.as_str(),
+            "https://api.example.com/v1/repos/acme/branches/%252e%252e"
+        );
     }
 
     #[test]

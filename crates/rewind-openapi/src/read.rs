@@ -143,9 +143,11 @@ pub fn read(document: &Value, options: &ReadOptions) -> Result<ReadApi, ReadErro
             "its document is OpenAPI {version}: Rewind reads 3.0 and 3.1"
         )));
     }
+    let values = std::cell::Cell::new(0);
     let doc = Document {
         root: document,
         v30,
+        values: &values,
     };
     let base_url = base_url(document, options).map_err(fail)?;
 

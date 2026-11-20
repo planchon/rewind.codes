@@ -634,6 +634,25 @@ async fn a_script_reaches_only_the_runs_of_its_workflow_and_its_scope() {
             .is_some_and(|message| message.contains("its scope fixes it")),
         "{failed:?}"
     );
+
+    // A version saved without the scope's labels is not started from a scoped run: it may attach
+    // the organization's secrets of other labels.
+    let mut scoped = StartRun::new(Script::new("starter"), toolset.clone(), json!({}));
+    scoped.metadata.scope = scope.clone();
+    scoped.metadata.labels = scope.clone();
+    let run = engine.start_run(scoped).await.unwrap().run;
+    drive(&engine).await;
+    let history = engine.history(&run).await.unwrap();
+    let failed = history.iter().find_map(|entry| match &entry.event {
+        Event::Command(Command::FailRun { error }) => Some(error.message.clone()),
+        _ => None,
+    });
+    assert!(
+        failed
+            .as_deref()
+            .is_some_and(|message| message.contains("was not saved under this run's scope")),
+        "{failed:?}"
+    );
 }
 
 #[tokio::test]

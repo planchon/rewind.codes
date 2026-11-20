@@ -590,6 +590,24 @@ where
             }
             labels.insert(key, value);
         }
+        // A grant limited to labels starts only the versions saved under them, from the API as
+        // from a script: a version saved under other labels may attach the organization's
+        // secrets that carry them (`archi/03-execution.md`, "Workflows across runs").
+        let scope = &record.metadata.scope;
+        if !scope
+            .iter()
+            .all(|(key, value)| workflow.labels().get(key) == Some(value))
+        {
+            return failed(format!(
+                "the workflow version {pinned} was not saved under this run's scope ({}): a run \
+                 started under labels starts only the versions saved under them",
+                scope
+                    .iter()
+                    .map(|(key, value)| format!("{key}={value}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         // The child acts for the same end user as its parent: its namespace, with its bounds.
         let bounds = match self.namespace_bounds(tenant, &record.namespace).await {
             Ok(bounds) => bounds,

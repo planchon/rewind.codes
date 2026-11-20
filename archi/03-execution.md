@@ -393,6 +393,9 @@ without labels. Children inherit the
 scope, and their labels always include it. Versions are content-addressed, the labels of a
 grant limited to labels that saved one included ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)),
 and a toolset pins a version, so a workflow cannot start itself, or a workflow that starts it.
+A script starts a pinned version only if it was saved under its scope's labels, as its grant
+could have started it from the API: a version saved under other labels may attach the
+organization's secrets of those labels ([secrets](04-tools.md#secrets)).
 
 In mock mode, `workflows.<name>.start` is answered by the mock sources like any tool call, and
 their answer is the child's outcome: a result is its output, a failure its error. No run is

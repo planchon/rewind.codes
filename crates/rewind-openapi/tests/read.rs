@@ -397,3 +397,36 @@ fn documents_rewind_cannot_follow_are_refused() {
         "API api: its document names no servers: give its baseUrl"
     );
 }
+
+#[test]
+fn references_that_fan_out_are_refused_before_they_exhaust_memory() {
+    // Each level refers twice to the next, outside components.schemas, so each is inlined
+    // twice: 2^40 copies from a document of a few KB.
+    let mut levels = serde_json::Map::new();
+    for level in 0..40 {
+        let next = format!("#/x-levels/l{}", level + 1);
+        levels.insert(
+            format!("l{level}"),
+            json!({ "allOf": [{ "$ref": next }, { "$ref": next }] }),
+        );
+    }
+    levels.insert("l40".into(), json!({ "type": "string" }));
+    let mut root = document(
+        json!({ "/fan": { "post": {
+            "operationId": "fan",
+            "requestBody": { "content": { "application/json": {
+                "schema": { "$ref": "#/x-levels/l0" }
+            } } },
+            "responses": { "200": { "description": "ok" } }
+        } } }),
+        json!({}),
+    );
+    root["x-levels"] = Value::Object(levels);
+    let started = std::time::Instant::now();
+    let error = refused(root);
+    assert!(
+        error.contains("expand to more than 1000000 values"),
+        "{error}"
+    );
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}
