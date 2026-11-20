@@ -50,13 +50,17 @@ mod dispatch;
 mod harness;
 mod host;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rewind_core::{Digest, Timestamp};
+use rewind_core::{Digest, RunMode, Timestamp};
 
-use crate::ports::TaskToken;
+use crate::ports::{RunRef, TaskToken};
+
+/// The most runs whose mode an engine keeps in memory; past it, it forgets them all and reads
+/// each one again from its history.
+const MODES_KEPT: usize = 10_000;
 
 pub use host::{HostClaim, HostFailure, HostTask};
 
@@ -118,6 +122,9 @@ fn millis(duration: Duration) -> u64 {
 #[derive(Debug, Default)]
 pub(crate) struct ToolTasks {
     in_flight: Mutex<BTreeMap<TaskToken, InFlight>>,
+    /// The mode each run started in, from its `run_started`. It never changes, so an
+    /// authenticated call reads a run's history once on this engine, not at every attempt.
+    modes: Mutex<HashMap<RunRef, RunMode>>,
 }
 
 /// While it lives, the engine renews the claim of a call being dispatched.
@@ -178,6 +185,23 @@ impl ToolTasks {
         if let Some(call) = self.in_flight().get_mut(token) {
             call.renewed_at = now;
         }
+    }
+
+    fn modes(&self) -> MutexGuard<'_, HashMap<RunRef, RunMode>> {
+        self.modes.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The mode `run` started in, if this engine read it already.
+    fn mode(&self, run: &RunRef) -> Option<RunMode> {
+        self.modes().get(run).copied()
+    }
+
+    fn remember_mode(&self, run: &RunRef, mode: RunMode) {
+        let mut modes = self.modes();
+        if modes.len() >= MODES_KEPT {
+            modes.clear();
+        }
+        modes.insert(run.clone(), mode);
     }
 }
 

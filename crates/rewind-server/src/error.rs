@@ -96,35 +96,35 @@ impl ApiError {
         ))
     }
 
-    /// `secret-required`: each attachment at fault. What the caller may attach instead
-    /// (`attachable`) is the engine-server workstream's (`archi/09-roadmap.md`).
+    /// `secret-required`: each attachment at fault, with the secrets the caller may attach for
+    /// it instead (none for a server that takes no secret).
     pub(crate) fn secret_required(
         detail: impl Into<String>,
-        problems: &[rewind_engine::attachments::AttachmentProblem],
+        refused: &rewind_engine::attachments::RefusedAttachments,
     ) -> Self {
         use rewind_api::secrets::{AttachmentProblem, AttachmentProblemKind};
         use rewind_engine::attachments::AttachmentProblem as Problem_;
+        let attachable: Vec<String> = refused.attachable.iter().map(ToString::to_string).collect();
         let mut problem = Problem::new(ProblemType::SecretRequired, detail);
-        problem.attachments = problems
+        problem.attachments = refused
+            .problems
             .iter()
             .map(|problem| {
-                let (server, kind, secret) = match problem {
-                    Problem_::Missing { server } => (server, AttachmentProblemKind::Missing, None),
-                    Problem_::TakesNone { server } => {
-                        (server, AttachmentProblemKind::TakesNone, None)
-                    }
-                    Problem_::Unknown { server, secret } => {
-                        (server, AttachmentProblemKind::Unknown, Some(secret))
-                    }
-                    Problem_::Forbidden { server, secret } => {
-                        (server, AttachmentProblemKind::Forbidden, Some(secret))
-                    }
+                let kind = match problem {
+                    Problem_::Missing { .. } => AttachmentProblemKind::Missing,
+                    Problem_::TakesNone { .. } => AttachmentProblemKind::TakesNone,
+                    Problem_::Unknown { .. } => AttachmentProblemKind::Unknown,
+                    Problem_::Forbidden { .. } => AttachmentProblemKind::Forbidden,
                 };
                 AttachmentProblem {
-                    server: server.clone(),
+                    server: problem.server().to_owned(),
                     problem: kind,
-                    secret: secret.map(ToString::to_string),
-                    attachable: Vec::new(),
+                    secret: problem.secret().map(ToString::to_string),
+                    attachable: if kind == AttachmentProblemKind::TakesNone {
+                        Vec::new()
+                    } else {
+                        attachable.clone()
+                    },
                 }
             })
             .collect();
@@ -327,9 +327,10 @@ impl From<StartError> for ApiError {
                 Self::not_found(format!("no workflow version {version} for this tenant"))
             }
             StartError::InvalidInput(message) => Self::new(ProblemType::InvalidInput, message),
-            StartError::SecretRequired(ref problems) => {
-                Self::secret_required(error.to_string(), problems)
+            StartError::SecretRequired(ref refused) => {
+                Self::secret_required(error.to_string(), refused)
             }
+            StartError::Secret(error) => error.into(),
             other => Self::internal(other),
         }
     }

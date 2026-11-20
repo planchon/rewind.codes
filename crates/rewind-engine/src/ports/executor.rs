@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::time::Duration;
 
@@ -101,6 +102,17 @@ pub trait ScriptExecutor: Send + Sync {
     /// on the epoch nor on the toolset.
     fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript>;
 
+    /// The names a script imports from `rewind:tools`: its MCP servers, APIs and host-tool groups
+    /// by their namespace, and its host tools without a group by name. A start checks that each
+    /// server or API it imports whose `auth` takes a secret has one attached
+    /// (`archi/04-tools.md`, "Secrets"). `None` when the script may reach every one: it imports
+    /// the whole module (`import * as tools`), or the executor cannot tell, which is the
+    /// default. Called on a script [`compile`](Self::compile) accepted.
+    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        let _ = script;
+        None
+    }
+
     /// Starts an instance under `epoch` and runs `main(input)` until the script is idle.
     fn start(
         &self,
@@ -149,6 +161,10 @@ impl<X: ScriptExecutor> ScriptExecutor for &X {
 
     fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
         (**self).compile(script, toolset)
+    }
+
+    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        (**self).tool_imports(script)
     }
 
     fn start(

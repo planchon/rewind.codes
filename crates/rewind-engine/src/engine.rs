@@ -12,7 +12,7 @@ use rewind_core::{
 };
 
 use crate::adapters::StaticTypeChecker;
-use crate::attachments::{AttachRights, AttachmentProblem};
+use crate::attachments::{self, AttachRights, AttachmentCheck, RefusedAttachments};
 use crate::cache::{CacheConfig, InstanceCache};
 use crate::payloads::{self, PayloadTiers};
 use crate::ports::{
@@ -201,6 +201,17 @@ impl StartRun {
     }
 }
 
+/// A script whose attachments a start or a fork checks.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AttachedScript<'a> {
+    pub(crate) tenant: &'a TenantId,
+    pub(crate) namespace: &'a NamespaceName,
+    pub(crate) script: &'a Script,
+    pub(crate) toolset: &'a Toolset,
+    pub(crate) attachments: &'a rewind_core::Attachments,
+    pub(crate) rights: &'a AttachRights,
+}
+
 /// A run to create, its script and toolset already stored and its request checked.
 pub(crate) struct NewRunRequest {
     pub(crate) tenant: TenantId,
@@ -253,9 +264,9 @@ pub enum StartError {
     WorkflowNotFound(String),
     /// An attachment is missing, takes no secret, names a secret that does not exist or one the
     /// caller may not attach (`archi/04-tools.md`, "Secrets"): 422 `secret-required`, whose
-    /// message lists the secrets the caller may attach for each server.
-    #[error("{}", attachment_problems(.0))]
-    SecretRequired(Vec<AttachmentProblem>),
+    /// message lists the secrets the caller may attach instead.
+    #[error("{0}")]
+    SecretRequired(RefusedAttachments),
     /// The input does not match the workflow's input schema.
     #[error("{0}")]
     InvalidInput(String),
@@ -522,13 +533,6 @@ where
             });
         }
         bounds.check_lines(&request.script)?;
-        // Mock mode reads no secret: a test needs no attachment
-        // (`archi/05-testing-and-observability.md`, "Testing and mocks").
-        let attaches = !request.metadata.secrets.is_empty()
-            || request.toolset.taking_secrets().next().is_some();
-        if request.mode == RunMode::Live && attaches {
-            self.check_attachments(&request).await?;
-        }
         let input = Payload::Value(request.input);
         let size = payloads::value_size(&input).unwrap_or_default();
         if size > self.config.limits.max_payload_bytes {
@@ -546,6 +550,19 @@ where
             .executor
             .compile(&request.script, &request.toolset)
             .map_err(StartError::InvalidScript)?;
+        // Mock mode reads no secret: a test needs no attachment
+        // (`archi/05-testing-and-observability.md`, "Testing and mocks").
+        if request.mode == RunMode::Live {
+            self.check_script_attachments(AttachedScript {
+                tenant: &request.tenant,
+                namespace: &request.namespace,
+                script: &request.script,
+                toolset: &request.toolset,
+                attachments: &request.metadata.secrets,
+                rights: &request.attach,
+            })
+            .await?;
+        }
         if let Some(checker) = checker {
             type_check(checker, &request.script, &request.declarations).await?;
         }
@@ -571,20 +588,30 @@ where
         .await
     }
 
-    /// Refuses a start whose attachments do not fit (`archi/04-tools.md`, "Secrets"): a server
-    /// or an API the script imports whose `auth` takes a secret and has none attached; an
+    /// Refuses a start or a fork whose attachments do not fit (`archi/04-tools.md`, "Secrets"): a
+    /// server or an API the script imports whose `auth` takes a secret and has none attached; an
     /// attachment for a server that takes none; a secret that does not exist (an `ns/` one in
-    /// the run's namespace); one `request.attach` does not allow.
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream checks the attachments"
-    )]
-    async fn check_attachments(&self, request: &StartRun) -> Result<(), StartError> {
-        let _ = request;
-        todo!(
-            "engine-server: check the attachments against the script's imports, the toolset's \
-             auth, the SecretStore and AttachRights; refuse with StartError::SecretRequired"
-        )
+    /// the run's namespace); one `rights` does not allow. The script was compiled: its imports
+    /// are known.
+    pub(crate) async fn check_script_attachments(
+        &self,
+        attached: AttachedScript<'_>,
+    ) -> Result<(), StartError> {
+        if attached.attachments.is_empty() && attached.toolset.taking_secrets().next().is_none() {
+            return Ok(());
+        }
+        let imports = self.executor.tool_imports(attached.script);
+        let check = AttachmentCheck {
+            tenant: attached.tenant,
+            namespace: Some(attached.namespace),
+            toolset: attached.toolset,
+            imports: imports.as_ref(),
+            attachments: attached.attachments,
+            rights: attached.rights,
+        };
+        attachments::check(&self.secrets, self.clock.now(), check)
+            .await?
+            .map_err(StartError::SecretRequired)
     }
 
     /// Creates a run of a stored script and toolset, once the request is checked. Its
@@ -912,11 +939,6 @@ pub(crate) async fn type_check<K: TypeChecker>(
 }
 
 /// The first error of a refused check, for the message of [`StartError::TypeErrors`].
-fn attachment_problems(problems: &[AttachmentProblem]) -> String {
-    let problems: Vec<String> = problems.iter().map(ToString::to_string).collect();
-    problems.join("; ")
-}
-
 fn first_error(diagnostics: &[Diagnostic]) -> String {
     diagnostics
         .iter()

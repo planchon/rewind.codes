@@ -405,8 +405,8 @@ async fn the_engine_heartbeats_its_claims_until_their_execution_timeout() {
 // -------------------------------------------------------------------------------------------
 // Refused calls and parked tasks
 //
-// How a call's secret is read, a missing secret parks it, and a secret put again resumes it, is
-// the engine-server workstream's (`archi/09-roadmap.md`): their tests come with it.
+// How a call's secret is read, a missing secret parks it, and a secret put again resumes it:
+// `tests/secrets.rs`.
 
 /// Answers 401 to the first attempt of each call, then answers.
 fn refusing_once() -> RecordingDispatcher {

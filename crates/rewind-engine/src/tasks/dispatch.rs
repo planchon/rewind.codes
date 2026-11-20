@@ -23,8 +23,8 @@ use std::time::Duration;
 use tracing::Instrument as _;
 
 use rewind_core::{
-    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp, ToolAuth,
-    ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
+    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, SecretRef, SecretScope,
+    Seq, Timestamp, ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
 };
 use serde_json::json;
 
@@ -32,10 +32,10 @@ use super::InFlight;
 use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
-    BlobStore, CallAuth, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched, Entropy,
-    JournalStore, ParkKind, ParkReason, RunRecord, RunRef, ScriptExecutor, SecretStore, TaskPhase,
-    TaskProgress, TaskToken, TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext,
-    WebhookEvent, WebhookEventKind, WebhookSender,
+    BlobStore, CallAuth, CallClaims, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched,
+    Entropy, JournalStore, ParkKind, ParkReason, RunRecord, RunRef, ScriptExecutor, SecretId,
+    SecretReader, SecretStore, TaskPhase, TaskProgress, TaskToken, TaskUpdate, ToolCall,
+    ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind, WebhookSender,
 };
 use crate::{metrics, payloads, text};
 
@@ -43,11 +43,21 @@ use crate::{metrics, payloads, text};
 struct Prepared {
     record: RunRecord,
     call: ToolCall,
-    /// How the call proves who calls; `None` when the secret the run attached for its server no
-    /// longer exists: the call is parked (`secret_missing`) instead of sent.
-    auth: Option<CallAuth>,
+    /// How the call proves who calls.
+    auth: Auth,
     /// The engine answers the call itself, or turns the dispatcher's answer into its own.
     served: Option<Served>,
+}
+
+/// How a prepared call proves who calls, or why it is not sent.
+enum Auth {
+    /// Sent with this.
+    Ready(CallAuth),
+    /// The secret the run attached for the call's server no longer exists: the call is parked
+    /// (`secret_missing`) instead of sent, until the secret is put again.
+    SecretMissing { server: String, secret: SecretRef },
+    /// The call cannot prove who calls, for good: it fails without being sent.
+    Refused(ToolFailure),
 }
 
 /// A call the engine serves: it needs the store, which no dispatcher holds.
@@ -135,17 +145,32 @@ where
             auth,
             served,
         } = prepared;
-        let Some(auth) = auth else {
-            let reason = ParkReason {
-                kind: ParkKind::SecretMissing,
-                message: format!(
-                    "the secret the run attached for {} no longer exists: put it again",
-                    call.tool.route.server().unwrap_or(&call.tool.name)
-                ),
-            };
-            return self
-                .settle(&task, &token, &record, Dispatched::Park(reason))
-                .await;
+        let auth = match auth {
+            Auth::Ready(auth) => auth,
+            Auth::SecretMissing { server, secret } => {
+                let put = match secret.scope {
+                    SecretScope::Organization => format!("PUT /v1/secrets/{}", secret.name),
+                    SecretScope::Namespace => format!(
+                        "PUT /v1/namespaces/{}/secrets/{}",
+                        record.namespace, secret.name
+                    ),
+                };
+                let reason = ParkReason {
+                    kind: ParkKind::SecretMissing,
+                    message: format!(
+                        "the secret {secret} the run attached for {server} no longer exists: \
+                         put it again ({put}), and the call is sent with the same idempotency key"
+                    ),
+                };
+                return self
+                    .settle(&task, &token, &record, Dispatched::Park(reason))
+                    .await;
+            }
+            Auth::Refused(failure) => {
+                return self
+                    .settle(&task, &token, &record, Dispatched::Failed(failure))
+                    .await;
+            }
         };
         // The attempt span: a child of the tool call span, through the call's trace context.
         let attempt = tracing::info_span!(
@@ -453,48 +478,104 @@ where
 
     /// How a call proves who calls, from its server's or API's `auth` (`archi/04-tools.md`,
     /// "Authenticating calls"): nothing; the secret the run attached for the server, read in the
-    /// run's namespace and counted (`None` when it no longer exists: the call is parked); or the
-    /// tenant's signing key with the claims of the call (`iss` from the public URL, `sub` the
-    /// namespace, the labels, the run, the tool, the idempotency key and the attempt). Nothing
-    /// falls back on another secret. Mock mode reads no secret and signs nothing
+    /// run's namespace and counted; or the tenant's signing key with the claims of the call.
+    /// Nothing falls back on another secret. Mock mode reads no secret and signs nothing
     /// (`archi/05-testing-and-observability.md`): the mocks answer.
     async fn call_auth(
         &self,
         record: &RunRecord,
         call: &ToolCall,
         auth: &ToolAuth,
-    ) -> Result<Option<CallAuth>, EngineError> {
+    ) -> Result<Auth, EngineError> {
         if *auth == ToolAuth::None || self.run_mode(&call.run).await? != Some(RunMode::Live) {
-            return Ok(Some(CallAuth::None));
+            return Ok(Auth::Ready(CallAuth::None));
         }
         self.live_call_auth(record, call, auth).await
     }
 
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream resolves secrets and keys"
-    )]
     async fn live_call_auth(
         &self,
         record: &RunRecord,
         call: &ToolCall,
         auth: &ToolAuth,
-    ) -> Result<Option<CallAuth>, EngineError> {
-        let _ = (record, call, auth);
-        todo!(
-            "engine-server: read the secret record.metadata.secrets attaches for the server \
-             (SecretId::resolve in the run's namespace, SecretStore::read), or sign with \
-             SecretStore::signing_key and CallClaims"
-        )
+    ) -> Result<Auth, EngineError> {
+        let tenant = &call.run.tenant;
+        let server = call.tool.route.server().unwrap_or(&call.tool.name);
+        let refused = |message: String| {
+            Ok(Auth::Refused(ToolFailure {
+                kind: ToolFailureKind::Unavailable,
+                message,
+                data: None,
+            }))
+        };
+        match auth {
+            ToolAuth::None => Ok(Auth::Ready(CallAuth::None)),
+            ToolAuth::Secret(placement) => {
+                // Checked at start: a run that imports the server attaches a secret for it.
+                let Some(attached) = record.metadata.secrets.get(server) else {
+                    return refused(format!(
+                        "{server} needs a secret, and the run attached none for it: fork the run \
+                         with \"secrets\": {{\"{server}\": \"org/<name>\" or \"ns/<name>\"}}"
+                    ));
+                };
+                let id = SecretId::resolve(attached, &record.namespace);
+                let reader = SecretReader {
+                    run: call.run.id,
+                    namespace: record.namespace.clone(),
+                };
+                let read = self
+                    .secrets
+                    .read(tenant, &id, &reader, self.clock.now())
+                    .await?;
+                Ok(match read {
+                    Some(value) => Auth::Ready(CallAuth::Secret {
+                        value,
+                        placement: placement.clone(),
+                    }),
+                    None => Auth::SecretMissing {
+                        server: server.to_owned(),
+                        secret: attached.clone(),
+                    },
+                })
+            }
+            ToolAuth::Rewind => {
+                let Some(public_url) = &self.config.public_url else {
+                    return refused(format!(
+                        "{server} checks Rewind's signature, and this server has no public URL \
+                         where its public keys are published (--public-url)"
+                    ));
+                };
+                let key = self.secrets.signing_key(tenant, self.clock.now()).await?;
+                let claims = CallClaims {
+                    issuer: CallClaims::issuer(public_url, tenant),
+                    subject: record.namespace.clone(),
+                    labels: record.metadata.labels.clone(),
+                    run: call.run.id,
+                    tool: call.tool.name.clone(),
+                    idempotency_key: call.idempotency_key.clone(),
+                    seq: call.seq,
+                    attempt: call.attempt,
+                };
+                Ok(Auth::Ready(CallAuth::Signed { key, claims }))
+            }
+        }
     }
 
     /// The mode the run started in, from its `run_started`; `None` before its first activation.
+    /// Read once per run on this engine: it never changes.
     async fn run_mode(&self, run: &RunRef) -> Result<Option<RunMode>, EngineError> {
+        if let Some(mode) = self.tool_tasks.mode(run) {
+            return Ok(Some(mode));
+        }
         let history = self.journal.load_history(run, 0).await?;
-        Ok(history.first().and_then(|entry| match &entry.event {
+        let mode = history.first().and_then(|entry| match &entry.event {
             Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
             _ => None,
-        }))
+        });
+        if let Some(mode) = mode {
+            self.tool_tasks.remember_mode(run, mode);
+        }
+        Ok(mode)
     }
 
     /// Whether the engine serves the call itself: the `webhook` built-in and the workflows'

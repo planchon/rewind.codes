@@ -22,10 +22,10 @@ use crate::ports::{
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
     Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
-    SecretId, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
-    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
-    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    SecretId, SecretUsage, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
+    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowAttaching,
+    WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DisplayName, DropNamespace, Month, NamespaceCursor, NamespaceFilter,
@@ -294,6 +294,11 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         "journal",
         new_store(),
         a_secret_put_again_resumes_the_calls_that_read_it
+    );
+    check!(
+        "journal",
+        new_store(),
+        secret_usage_says_what_reads_a_secret
     );
 }
 
@@ -2724,6 +2729,159 @@ pub async fn a_secret_put_again_resumes_the_calls_that_read_it<S: JournalStore>(
         0,
         "nothing waits any more"
     );
+}
+
+pub async fn secret_usage_says_what_reads_a_secret<S: JournalStore>(store: &S) {
+    let github = |seq| mcp_task(seq, "github.list_issues", "github", 8);
+    let issues = |seq| mcp_task(seq, "issues.search", "issues", 8);
+    let zendesk = |seq| mcp_task(seq, "zendesk.get_ticket", "zendesk", 8);
+    // Alice's runs: one attaching her github for a server it does not call yet, one calling
+    // it under another server's name, one ended.
+    let first = start_attaching(
+        store,
+        run_ref(1),
+        &alice(),
+        attachments(&[("github", "ns/github"), ("zendesk", "org/zendesk")]),
+        vec![zendesk(1)],
+    )
+    .await;
+    let second = start_attaching(
+        store,
+        run_ref(2),
+        &alice(),
+        attachments(&[("github", "ns/github"), ("issues", "ns/github")]),
+        vec![issues(1)],
+    )
+    .await;
+    let bobs = start_attaching(
+        store,
+        run_ref(3),
+        &bob(),
+        attachments(&[("github", "ns/github")]),
+        vec![github(1)],
+    )
+    .await;
+    let shared = start_attaching(
+        store,
+        run_ref(4),
+        &alice(),
+        attachments(&[("github", "org/github")]),
+        vec![],
+    )
+    .await;
+    let ended = start_attaching(
+        store,
+        run_ref(5),
+        &alice(),
+        attachments(&[("github", "ns/github")]),
+        vec![],
+    )
+    .await;
+    let lease = lease_of(store, &ended, T0).await;
+    let done = entry(
+        1,
+        Event::Command(Command::CompleteRun {
+            output: json!(null).into(),
+        }),
+    );
+    commit(
+        store,
+        &lease,
+        Activation::new(vec![done], vec![], RunStatus::Completed),
+        T0,
+    )
+    .await;
+    store.release(&lease).await.expect("release");
+
+    // Workflows: the latest version of each counts.
+    let put = |workflow: Workflow, at: Timestamp| async move {
+        store
+            .put_workflow(&acme(), &workflow, at)
+            .await
+            .expect("put_workflow")
+    };
+    put(
+        workflow("triage", "t1").with_secrets(attachments(&[("github", "ns/github")])),
+        T0,
+    )
+    .await;
+    let triage = put(
+        workflow("triage", "t2").with_secrets(attachments(&[
+            ("github", "ns/github"),
+            ("linear", "ns/github"),
+            ("zendesk", "org/zendesk"),
+        ])),
+        later(T0, 10),
+    )
+    .await;
+    put(
+        workflow("stale", "s1").with_secrets(attachments(&[("github", "ns/github")])),
+        T0,
+    )
+    .await;
+    put(workflow("stale", "s2"), later(T0, 10)).await;
+
+    let usage = |secret: SecretId, limit: usize| async move {
+        store
+            .secret_usage(&acme(), &secret, limit)
+            .await
+            .expect("secret_usage")
+    };
+    let alices = usage(secret_of(Some(&alice()), "github"), 10).await;
+    assert_eq!(alices.active_runs, [first.clone(), second.clone()]);
+    assert_eq!(
+        alices.active_total, 2,
+        "neither bob's, nor the org's, nor an ended run"
+    );
+    assert_eq!(
+        alices.waiting_runs,
+        std::slice::from_ref(&second),
+        "a call not yet sent to a server it serves"
+    );
+    assert_eq!(alices.waiting_total, 1);
+    let attaching = |servers: &[&str]| {
+        vec![WorkflowAttaching {
+            name: "triage".into(),
+            version: triage.workflow.version(),
+            servers: servers.iter().map(|server| (*server).to_owned()).collect(),
+        }]
+    };
+    assert_eq!(
+        alices.versions,
+        attaching(&["github", "linear"]),
+        "the latest version of each workflow, for the servers it attaches the secret for"
+    );
+
+    let limited = usage(secret_of(Some(&alice()), "github"), 1).await;
+    assert_eq!(
+        (limited.active_runs, limited.active_total),
+        (vec![first.clone()], 2),
+        "at most the limit, and the totals of all"
+    );
+
+    let bob_s = usage(secret_of(Some(&bob()), "github"), 10).await;
+    assert_eq!(bob_s.active_runs, std::slice::from_ref(&bobs));
+    assert_eq!(bob_s.waiting_runs, std::slice::from_ref(&bobs));
+    assert_eq!(
+        bob_s.versions,
+        attaching(&["github", "linear"]),
+        "a version attaching ns/github counts for every namespace's github"
+    );
+
+    let organization = usage(secret_of(None, "zendesk"), 10).await;
+    assert_eq!(organization.active_runs, std::slice::from_ref(&first));
+    assert_eq!(organization.waiting_runs, std::slice::from_ref(&first));
+    assert_eq!(organization.versions, attaching(&["zendesk"]));
+    let shared_github = usage(secret_of(None, "github"), 10).await;
+    assert_eq!(shared_github.active_runs, std::slice::from_ref(&shared));
+    assert!(shared_github.waiting_runs.is_empty(), "no call of it");
+    assert!(shared_github.versions.is_empty());
+
+    let elsewhere = store
+        .secret_usage(&tenant("other"), &secret_of(Some(&alice()), "github"), 10)
+        .await
+        .expect("secret_usage");
+    assert_eq!(elsewhere, SecretUsage::default(), "another tenant's");
 }
 
 pub async fn claims_respect_concurrency_limits<S: JournalStore>(store: &S) {
