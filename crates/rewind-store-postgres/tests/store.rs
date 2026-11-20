@@ -90,7 +90,6 @@ async fn the_database_behind_the_store() {
     check!(servers_starting_together_migrate_once);
     check!(runs_survive_a_restart);
     check!(a_call_dropped_half_way_writes_nothing);
-    check!(secrets_are_encrypted_at_rest);
     check!(tenants_are_in_byte_order);
     check!(a_claim_reads_past_tasks_without_a_free_slot);
     check!(a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next);
@@ -100,6 +99,8 @@ async fn the_database_behind_the_store() {
     check!(concurrent_starts_never_take_the_same_last_place);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
+    // The SecretStore of named secrets, last: the stores workstream builds it.
+    check!(secrets_are_encrypted_at_rest);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {

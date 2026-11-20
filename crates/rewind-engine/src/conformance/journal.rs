@@ -46,7 +46,6 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         scripts_and_toolsets_are_stored_by_tenant_and_digest
     );
     check!("journal", new_store(), create_run_enqueues_run_started);
-    check!("journal", new_store(), run_metadata_keeps_the_attachments);
     check!("journal", new_store(), run_ids_are_unique_across_tenants);
     check!(
         "journal",
@@ -161,11 +160,6 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         approval_and_parked_tasks_wait_for_the_harness
     );
     check!("journal", new_store(), a_token_names_its_task);
-    check!(
-        "journal",
-        new_store(),
-        a_secret_put_again_resumes_the_calls_that_read_it
-    );
     check!("journal", new_store(), claims_respect_concurrency_limits);
     check!(
         "journal",
@@ -292,6 +286,14 @@ pub async fn run_all<S: JournalStore>(new_store: impl Fn() -> S) {
         "journal",
         new_store(),
         watching_a_run_says_whether_it_has_ended
+    );
+    // The secrets a run attaches, last: a store that does not keep them yet still runs every
+    // check above.
+    check!("journal", new_store(), run_metadata_keeps_the_attachments);
+    check!(
+        "journal",
+        new_store(),
+        a_secret_put_again_resumes_the_calls_that_read_it
     );
 }
 

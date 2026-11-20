@@ -3,7 +3,6 @@ import { checkNamespaceName, type Transport } from "../http.js";
 import type {
   CreateToken,
   CreateTokenKey,
-  Credentials,
   Namespace,
   NamespaceDefaults,
   NamespaceDetail,
@@ -165,29 +164,6 @@ export class Namespaces {
       () =>
         this.transport.api.DELETE("/v1/namespaces/{name}", {
           params: { path: { name } },
-          signal: options.signal,
-        }),
-      { retry: true, signal: options.signal },
-    );
-  }
-
-  /**
-   * Sets or renews the end user's own credentials for a toolset (Alice's GitHub token). A run uses its own
-   * credentials if it has some, else its namespace's for its toolset, else the toolset's. Calls parked by
-   * `credentials.expired` go on.
-   */
-  async setCredentials(
-    name: string,
-    toolset: string,
-    credentials: Credentials,
-    options: RequestOptions = {},
-  ): Promise<void> {
-    checkNamespaceName(name);
-    await this.transport.send(
-      () =>
-        this.transport.api.PUT("/v1/namespaces/{name}/toolsets/{id}/credentials", {
-          params: { path: { name, id: toolset } },
-          body: credentials,
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },

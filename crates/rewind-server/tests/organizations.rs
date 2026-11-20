@@ -445,6 +445,7 @@ async fn no_one_gives_or_takes_away_more_than_they_hold() {
         permissions: vec![
             Permission::RunsRead,
             Permission::ToolsetsRead,
+            Permission::SecretsRead,
             Permission::SubscriptionsRead,
             Permission::MembersRead,
             Permission::MembersInvite,

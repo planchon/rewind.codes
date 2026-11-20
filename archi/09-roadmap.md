@@ -101,7 +101,14 @@ and the public JWKS, the permissions `secrets:*` in place of `credentials:write`
 `secrets` and `list_secrets`, over MCP too; the SDK, with `verifyRewindCall`; the dashboard's
 Secrets; `rewind secrets`
 and `--secret`; the documentation (`docs/`); `--allow-internal-tools`; the acceptance suite and
-the release gate, whose canary secret becomes an attached one. Dax keeps its host tools.
+the release gate, whose canary secret becomes an attached one. Dax keeps its host tools. The
+same day their contracts were frozen in code
+([08](08-decisions.md#taken-while-freezing-the-contracts-of-secrets-and-api-toolsets-november-2026)):
+the domain types, format v1, the `SecretStore` port with its memory adapter and conformance
+suite, the `ToolDispatcher`'s `CallAuth`, the `JournalStore`'s additions, the endpoints and
+DTOs of `rewind-api` with the OpenAPI document and the TypeScript types, and `rewind-outbound`
+and `rewind-openapi` as empty crates; what each workstream builds is a `todo!` naming it
+(`stores`, `outbound`, `engine-server`, `ts`).
 
 | Crate | State |
 | --- | --- |

@@ -19,7 +19,7 @@ const body = JSON.stringify({
     server: "github",
     toolset: "ab",
     owner: "toolset",
-    parked: "credentials_expired",
+    parked: "credentials_refused",
   },
 });
 

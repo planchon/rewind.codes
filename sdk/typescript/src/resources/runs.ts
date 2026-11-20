@@ -6,7 +6,6 @@ import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Tr
 import { labelParams, timeParam } from "../params.js";
 import {
   isTerminal,
-  type Credentials,
   type Duration,
   type Entry,
   type FailureGroupPage,
@@ -72,8 +71,11 @@ export interface StartRunOptions extends RequestOptions {
   ttl?: Duration | undefined;
   /** Type-check the script before starting it. `true` by default. A workflow's is not checked again. */
   check?: boolean | undefined;
-  /** The run's own credentials, used instead of the toolset's. */
-  credentials?: Credentials | undefined;
+  /**
+   * The secrets the run reads, by MCP server or API: `{ github: "ns/github", zendesk: "org/zendesk" }`
+   * (`org/<name>`, the organization's; `ns/<name>`, the run's namespace's). Names, never values.
+   */
+  secrets?: Record<string, string> | undefined;
 }
 
 export interface ForkRunParams extends RequestOptions {
@@ -481,19 +483,6 @@ export class Runs {
           signal: options.signal,
         }),
       { retry: false, signal: options.signal },
-    );
-  }
-
-  /** Sets or renews the run's own credentials. Its calls parked by `credentials.expired` go on. */
-  async setCredentials(id: string, credentials: Credentials, options: RequestOptions = {}): Promise<void> {
-    await this.transport.send(
-      () =>
-        this.transport.api.PUT("/v1/runs/{id}/credentials", {
-          params: { path: { id } },
-          body: credentials,
-          signal: options.signal,
-        }),
-      { retry: true, signal: options.signal },
     );
   }
 

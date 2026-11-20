@@ -14,7 +14,7 @@ mod files {
 }
 
 /// The first segments of the server's own paths: nothing under them is the dashboard's.
-const SERVER_ROOTS: [&str; 7] = [
+const SERVER_ROOTS: [&str; 8] = [
     "v1",
     "auth",
     "oauth",
@@ -22,6 +22,8 @@ const SERVER_ROOTS: [&str; 7] = [
     "mcp",
     "hooks",
     "assets",
+    // The organizations' public keys (`/organizations/{tenant}/jwks.json`).
+    "organizations",
 ];
 
 /// Serves a file of the build, `index.html` for `/` and for a route of the dashboard.

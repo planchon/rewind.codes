@@ -69,7 +69,8 @@ payloads   (tenant, digest, bytes, preview, value, unreferenced_since, deletion_
                                                            PK (tenant, digest)  -- value up to 64 KiB
 payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
 secrets    (tenant, namespace, name, ciphertext, labels, created_by, created_at, updated_by,
-            updated_at, last_read_at, last_read_run)       PK (tenant, namespace, name)
+            updated_at, last_read_at, last_read_run, last_read_namespace)
+                                                            PK (tenant, namespace, name)
                                                  -- namespace *: the organization's secrets
 secret_reads (tenant, namespace, name, day, reads)         PK (tenant, namespace, name, day)
 signing_keys (tenant, kid, public_jwk, private_ciphertext, created_at, retired_at)

@@ -33,7 +33,7 @@ use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
     BlobStore, CallAuth, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched, Entropy,
-    JournalStore, ParkKind, ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskPhase,
+    JournalStore, ParkKind, ParkReason, RunRecord, RunRef, ScriptExecutor, SecretStore, TaskPhase,
     TaskProgress, TaskToken, TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext,
     WebhookEvent, WebhookEventKind, WebhookSender,
 };
@@ -456,28 +456,45 @@ where
     /// run's namespace and counted (`None` when it no longer exists: the call is parked); or the
     /// tenant's signing key with the claims of the call (`iss` from the public URL, `sub` the
     /// namespace, the labels, the run, the tool, the idempotency key and the attempt). Nothing
-    /// falls back on another secret.
-    #[expect(
-        clippy::todo,
-        reason = "the engine-server workstream resolves secrets and keys"
-    )]
+    /// falls back on another secret. Mock mode reads no secret and signs nothing
+    /// (`archi/05-testing-and-observability.md`): the mocks answer.
     async fn call_auth(
         &self,
         record: &RunRecord,
         call: &ToolCall,
         auth: &ToolAuth,
     ) -> Result<Option<CallAuth>, EngineError> {
-        match auth {
-            ToolAuth::None => Ok(Some(CallAuth::None)),
-            ToolAuth::Secret(_) | ToolAuth::Rewind => {
-                let _ = (record, call);
-                todo!(
-                    "engine-server: read the secret record.metadata.secrets attaches for the \
-                     server (SecretId::resolve in the run's namespace, SecretStore::read), or \
-                     sign with SecretStore::signing_key and CallClaims"
-                )
-            }
+        if *auth == ToolAuth::None || self.run_mode(&call.run).await? != Some(RunMode::Live) {
+            return Ok(Some(CallAuth::None));
         }
+        self.live_call_auth(record, call, auth).await
+    }
+
+    #[expect(
+        clippy::todo,
+        reason = "the engine-server workstream resolves secrets and keys"
+    )]
+    async fn live_call_auth(
+        &self,
+        record: &RunRecord,
+        call: &ToolCall,
+        auth: &ToolAuth,
+    ) -> Result<Option<CallAuth>, EngineError> {
+        let _ = (record, call, auth);
+        todo!(
+            "engine-server: read the secret record.metadata.secrets attaches for the server \
+             (SecretId::resolve in the run's namespace, SecretStore::read), or sign with \
+             SecretStore::signing_key and CallClaims"
+        )
+    }
+
+    /// The mode the run started in, from its `run_started`; `None` before its first activation.
+    async fn run_mode(&self, run: &RunRef) -> Result<Option<RunMode>, EngineError> {
+        let history = self.journal.load_history(run, 0).await?;
+        Ok(history.first().and_then(|entry| match &entry.event {
+            Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
+            _ => None,
+        }))
     }
 
     /// Whether the engine serves the call itself: the `webhook` built-in and the workflows'
@@ -496,11 +513,7 @@ where
             },
             _ => return Ok(None),
         };
-        let history = self.journal.load_history(&task.task.run, 0).await?;
-        let mode = history.first().and_then(|entry| match &entry.event {
-            Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
-            _ => None,
-        });
+        let mode = self.run_mode(&task.task.run).await?;
         Ok(match (mode, served) {
             (Some(RunMode::Live), served) => Some(served),
             (

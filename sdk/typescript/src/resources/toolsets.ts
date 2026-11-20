@@ -1,12 +1,5 @@
 import type { Transport } from "../http.js";
-import type {
-  CreateToolset,
-  Credentials,
-  DeclarationFormat,
-  DeclarationsText,
-  Toolset,
-  ToolSearchResults,
-} from "../types.js";
+import type { CreateToolset, DeclarationFormat, DeclarationsText, Toolset, ToolSearchResults } from "../types.js";
 
 export interface RequestOptions {
   signal?: AbortSignal | undefined;
@@ -50,22 +43,6 @@ export class Toolsets {
       () =>
         this.transport.api.GET("/v1/toolsets/{id}/search", {
           params: { path: { id }, query: { query, limit: options.limit } },
-          signal: options.signal,
-        }),
-      { retry: true, signal: options.signal },
-    );
-  }
-
-  /**
-   * Sets or renews the toolset's credentials. Calls parked by `credentials.expired` are sent
-   * again with the same idempotency key.
-   */
-  async setCredentials(id: string, credentials: Credentials, options: RequestOptions = {}): Promise<void> {
-    await this.transport.send(
-      () =>
-        this.transport.api.PUT("/v1/toolsets/{id}/credentials", {
-          params: { path: { id } },
-          body: credentials,
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },

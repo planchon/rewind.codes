@@ -186,7 +186,7 @@ function runWaiting() {
         tool: "x",
         taskId: "t-creds",
         state: "parked" as const,
-        parked: "credentials_expired" as const,
+        parked: "credentials_refused" as const,
         attempt: 1,
         args: payload({}),
       },

@@ -522,8 +522,11 @@ where
             });
         }
         bounds.check_lines(&request.script)?;
-        if !request.metadata.secrets.is_empty() || request.toolset.taking_secrets().next().is_some()
-        {
+        // Mock mode reads no secret: a test needs no attachment
+        // (`archi/05-testing-and-observability.md`, "Testing and mocks").
+        let attaches = !request.metadata.secrets.is_empty()
+            || request.toolset.taking_secrets().next().is_some();
+        if request.mode == RunMode::Live && attaches {
             self.check_attachments(&request).await?;
         }
         let input = Payload::Value(request.input);

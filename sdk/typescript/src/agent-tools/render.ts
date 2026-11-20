@@ -156,9 +156,11 @@ function describeWaiting(waiting: Waiting): string {
         case "approval":
           return `${call}: it waits for the harness's approval`;
         case "parked":
-          return waiting.parked === "credentials_expired"
-            ? `${call}: parked, the server refused the credentials; the harness must renew them`
-            : `${call}: parked, the tool changed since the toolset was pinned; the harness decides whether it goes on`;
+          if (waiting.parked === "credentials_refused")
+            return `${call}: parked, the server refused the credentials; the harness must renew them`;
+          if (waiting.parked === "secret_missing")
+            return `${call}: parked, the secret the run attached no longer exists; the harness must put it again`;
+          return `${call}: parked, the tool changed since the toolset was pinned; the harness decides whether it goes on`;
         case "deferred":
           return `${call}: waiting for its answer${attempt}`;
         case "claimed":
