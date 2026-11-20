@@ -1,18 +1,19 @@
-//! The egress rules of the `http` tool (`archi/04-tools.md`, "The http tool and egress"):
+//! The egress checks (`archi/04-tools.md`, "The http tool and egress" and "Where MCP servers and
+//! APIs may be"; `archi/06-storage-and-scale.md`, "Security"):
 //!
-//! 1. The host must be in the toolset's allow-list ([`AllowList`]).
-//! 2. The name is resolved once ([`CheckedResolver`], the only resolver of the client).
-//! 3. Private, loopback, link-local and cloud-metadata addresses are refused ([`forbidden`]);
-//!    a name with any such address is refused.
-//! 4. The connection goes to the addresses that were checked: the resolver hands exactly
-//!    those to the connector, so a DNS answer that changes in between is never used.
+//! 1. The name is resolved once ([`CheckedResolver`], the only resolver of the client).
+//! 2. Private, loopback, link-local and cloud-metadata addresses are refused ([`forbidden`]); a
+//!    name with any such address is refused.
+//! 3. The connection goes to the addresses that were checked: the resolver hands exactly those
+//!    to the connector, so a DNS answer that changes in between is never used.
 //!
 //! A URL whose host is an IP address is checked against the same rules before the request.
-//! Redirects go through all of them again (`super`).
+//! Redirects go through them again ([`crate::client`]).
 //!
-//! [`Egress`] lends steps 2 to 4 to the other requests a deployment sends where a tenant says:
-//! the server's lifecycle webhooks, and its MCP servers. For MCP servers only, an operator may
-//! let some internal hosts and networks through ([`InternalAllowList`]).
+//! [`Egress`] holds them, for every request a deployment sends where a tenant says: the `http`
+//! tool's (whose allow-list `rewind-mcp` checks first), the MCP servers' and the APIs', the
+//! OpenAPI documents' and the lifecycle webhooks'. For MCP servers and APIs, an operator may let
+//! some internal hosts and networks through ([`InternalAllowList`], `--allow-internal-tools`).
 
 use std::error::Error;
 use std::fmt;
@@ -27,16 +28,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ipnet::IpNet;
 use url::{Host, Url};
 
-/// A refused request: the reason, written for the model.
+/// A refused request: the reason, written for the model. It travels as the source of the
+/// client's error; [`Egress::refusal_of`] finds it there.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
-pub(crate) struct Refused(pub(crate) String);
+pub struct Refused(pub String);
 
 /// What a [`NameResolver`] returns.
 pub type Resolving = Pin<Box<dyn Future<Output = io::Result<Vec<IpAddr>>> + Send>>;
 
-/// Resolves host names for the `http` tool. The dispatcher uses the system's resolver; a
-/// deployment or a test may plug its own. Its answer is checked before any connection.
+/// Resolves host names for the checked clients. A deployment uses the system's resolver; a test
+/// may plug its own. Its answer is checked before any connection.
 pub trait NameResolver: Send + Sync + fmt::Debug + 'static {
     fn resolve(&self, host: &str) -> Resolving;
 }
@@ -55,24 +57,22 @@ impl NameResolver for SystemResolver {
     }
 }
 
-/// Says whether an address is refused, and why.
-pub(crate) type Policy = fn(IpAddr) -> Option<&'static str>;
-
-/// How the `http` tool ends the reason of a refusal.
-pub(crate) const HTTP_TOOL: &str = "the http tool does not reach it";
+/// Says whether an address is refused, and why: [`forbidden`] in production; a test may treat
+/// a local address as public.
+pub type AddressPolicy = fn(IpAddr) -> Option<&'static str>;
 
 /// What may be reached: the addresses `policy` does not refuse, and those `internal` lets
 /// through. `refusal` ends the reason of a refusal: who does not go there.
 #[derive(Debug, Clone)]
 pub(crate) struct Rules {
-    pub(crate) policy: Policy,
+    pub(crate) policy: AddressPolicy,
     pub(crate) internal: Arc<InternalAllowList>,
     pub(crate) refusal: &'static str,
 }
 
 /// An address that may be reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Reach {
+pub enum Reach {
     /// The policy does not refuse it.
     Public,
     /// The policy refuses it, and the operator's allow-list lets it through.
@@ -80,15 +80,6 @@ pub(crate) enum Reach {
 }
 
 impl Rules {
-    /// The rules of the `http` tool: `policy`, without exceptions.
-    pub(crate) fn strict(policy: Policy, refusal: &'static str) -> Self {
-        Self {
-            policy,
-            internal: Arc::new(InternalAllowList::default()),
-            refusal,
-        }
-    }
-
     /// Whether `address`, an address of the name `host` or given as such, may be reached; the
     /// reason when it may not.
     fn judge(&self, host: Option<&str>, address: IpAddr) -> Result<Reach, String> {
@@ -124,11 +115,11 @@ impl Rules {
 /// The client's resolver: resolves once, refuses the name if any of its addresses is refused,
 /// and hands the connector exactly the addresses it checked.
 #[derive(Debug)]
-pub(crate) struct CheckedResolver {
-    pub(crate) resolver: Arc<dyn NameResolver>,
-    pub(crate) rules: Rules,
+struct CheckedResolver {
+    resolver: Arc<dyn NameResolver>,
+    rules: Rules,
     /// Set once the resolver hands out an address only the operator's allow-list lets through.
-    pub(crate) reached_internal: Option<Arc<AtomicBool>>,
+    reached_internal: Option<Arc<AtomicBool>>,
 }
 
 impl reqwest::dns::Resolve for CheckedResolver {
@@ -140,7 +131,7 @@ impl reqwest::dns::Resolve for CheckedResolver {
         Box::pin(async move {
             let (addresses, reach) = resolve(resolver.as_ref(), &host, &rules)
                 .await
-                .map_err(|error| error.into_boxed())?;
+                .map_err(Unresolved::into_boxed)?;
             if reach == Reach::Internal
                 && let Some(reached) = &reached_internal
             {
@@ -205,9 +196,7 @@ async fn resolve(
     Ok((addresses, reach))
 }
 
-/// The egress checks of the `http` tool, without its allow-list, for the other requests a
-/// deployment sends to a place a tenant chose: the server's lifecycle webhooks and its MCP
-/// servers. A name is resolved once, a name with any private, loopback, link-local or
+/// The egress checks: a name is resolved once, a name with any private, loopback, link-local or
 /// cloud-metadata address is refused, and the connection goes to the addresses that were
 /// checked. A URL whose host is an address is checked before the request. The internal hosts
 /// and networks of an [`InternalAllowList`] are let through, when one is given.
@@ -221,9 +210,23 @@ impl Egress {
     /// The checks, resolving names with `resolver`. `refusal` ends the reason of a refusal,
     /// such as "webhooks are not sent there".
     pub fn new(resolver: Arc<dyn NameResolver>, refusal: &'static str) -> Self {
+        Self::with_policy(resolver, forbidden, refusal)
+    }
+
+    /// The checks with another policy of addresses: for tests, which serve on 127.0.0.1 and
+    /// treat it as a public address.
+    pub fn with_policy(
+        resolver: Arc<dyn NameResolver>,
+        policy: AddressPolicy,
+        refusal: &'static str,
+    ) -> Self {
         Self {
             resolver,
-            rules: Rules::strict(forbidden, refusal),
+            rules: Rules {
+                policy,
+                internal: Arc::new(InternalAllowList::default()),
+                refusal,
+            },
         }
     }
 
@@ -260,7 +263,7 @@ impl Egress {
     }
 
     /// [`Egress::check_url`], saying whether the address is reached only through the allow-list.
-    pub(crate) fn judge_url(&self, url: &Url) -> Result<Reach, String> {
+    pub fn judge_url(&self, url: &Url) -> Result<Reach, String> {
         self.rules.judge_url(url)
     }
 
@@ -281,7 +284,8 @@ impl Egress {
         }
     }
 
-    /// The reason, when a request failed because these checks refused its address.
+    /// The reason, when a request failed because these checks refused its address, or a
+    /// redirect the client does not follow ([`Refused`] among the error's sources).
     pub fn refusal_of(error: &(dyn Error + 'static)) -> Option<String> {
         let mut source = Some(error);
         while let Some(current) = source {
@@ -294,11 +298,12 @@ impl Egress {
     }
 }
 
-/// The internal hosts and networks an operator lets a deployment's MCP servers be reached at,
-/// despite the egress checks: names (`mcp.internal.example`), the subdomains of a name
-/// (`*.svc.cluster.local`, not the name itself), addresses (`10.0.0.7`, `fd00::7`) and networks
-/// in CIDR notation (`10.20.0.0/16`, `fd00::/8`). A name lets through every address it resolves
-/// to; an address or a network lets through any name that resolves into it.
+/// The internal hosts and networks an operator lets a deployment's MCP servers and APIs be
+/// reached at, despite the egress checks (`--allow-internal-tools`): names
+/// (`mcp.internal.example`), the subdomains of a name (`*.svc.cluster.local`, not the name
+/// itself), addresses (`10.0.0.7`, `fd00::7`) and networks in CIDR notation (`10.20.0.0/16`,
+/// `fd00::/8`). A name lets through every address it resolves to; an address or a network lets
+/// through any name that resolves into it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InternalAllowList {
     names: Vec<String>,
@@ -379,117 +384,25 @@ impl InternalAllowList {
 
 /// Whether `name` is a subdomain of `parent`, both lowercase: `a.example.org` of `example.org`,
 /// not `example.org` itself nor `evilexample.org`.
-fn is_subdomain(name: &str, parent: &str) -> bool {
+pub fn is_subdomain(name: &str, parent: &str) -> bool {
     name.strip_suffix(parent)
         .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.'))
 }
 
-/// The hosts of a toolset's allow-list: names (`api.example.com`), wildcards for the subdomains
-/// of a name (`*.example.com`, not `example.com` itself), or IP addresses.
-#[derive(Debug, Clone)]
-pub(crate) struct AllowList {
-    entries: Vec<Entry>,
-    listed: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Entry {
-    Name(String),
-    Subdomains(String),
-    Address(IpAddr),
-}
-
-impl AllowList {
-    pub(crate) fn new(hosts: &[String]) -> Self {
-        let entries = hosts
-            .iter()
-            .filter_map(|host| {
-                let host = host.trim().trim_end_matches('.');
-                if let Some(parent) = host.strip_prefix("*.") {
-                    return domain(parent).map(Entry::Subdomains);
-                }
-                let bare = host.trim_start_matches('[').trim_end_matches(']');
-                if let Ok(address) = bare.parse::<IpAddr>() {
-                    return Some(Entry::Address(address));
-                }
-                match Host::parse(host) {
-                    Ok(Host::Domain(name)) => Some(Entry::Name(name)),
-                    Ok(Host::Ipv4(address)) => Some(Entry::Address(IpAddr::V4(address))),
-                    Ok(Host::Ipv6(address)) => Some(Entry::Address(IpAddr::V6(address))),
-                    Err(_) => None,
-                }
-            })
-            .collect();
-        Self {
-            entries,
-            listed: hosts.join(", "),
-        }
-    }
-
-    fn allows(&self, host: &Host<&str>) -> bool {
-        match host {
-            Host::Domain(name) => {
-                let name = name.trim_end_matches('.').to_ascii_lowercase();
-                self.entries.iter().any(|entry| match entry {
-                    Entry::Name(allowed) => *allowed == name,
-                    Entry::Subdomains(parent) => is_subdomain(&name, parent),
-                    Entry::Address(_) => false,
-                })
-            }
-            Host::Ipv4(address) => self.entries.contains(&Entry::Address(IpAddr::V4(*address))),
-            Host::Ipv6(address) => self.entries.contains(&Entry::Address(IpAddr::V6(*address))),
-        }
-    }
-}
-
 /// A name in its ASCII, lowercase form.
-fn domain(name: &str) -> Option<String> {
+pub fn domain(name: &str) -> Option<String> {
     match Host::parse(name) {
         Ok(Host::Domain(name)) => Some(name),
         _ => None,
     }
 }
 
-/// Checks a URL before a request is sent to it: an http or https URL, a host in the allow-list,
-/// and for a host given as an address, an address the tool may reach. Hosts given as names are
-/// checked by [`CheckedResolver`].
-pub(crate) fn check(url: &Url, allowed: &AllowList, policy: Policy) -> Result<(), Refused> {
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(Refused(format!(
-            "the http tool only sends http and https requests, not {}:",
-            url.scheme()
-        )));
-    }
-    let Some(host) = url.host() else {
-        return Err(Refused(format!("{url} has no host")));
-    };
-    if !allowed.allows(&host) {
-        return Err(Refused(format!(
-            "{host} is not in the toolset's allow-list of the http tool ({})",
-            allowed.listed
-        )));
-    }
-    let address = match host {
-        Host::Ipv4(address) => Some(IpAddr::V4(address)),
-        Host::Ipv6(address) => Some(IpAddr::V6(address)),
-        Host::Domain(_) => None,
-    };
-    if let Some(address) = address
-        && let Some(reason) = policy(address)
-    {
-        return Err(Refused(format!(
-            "{address} is a {reason} address: {HTTP_TOOL}"
-        )));
-    }
-    Ok(())
-}
-
-/// Why the `http` tool refuses an address, if it does: everything but global unicast
+/// Why the egress checks refuse an address, if they do: everything but global unicast
 /// addresses. The ranges are those of the IANA special-purpose address registries, with the
 /// cloud metadata endpoints they contain (`169.254.169.254`, `fd00:ec2::254`,
 /// `100.100.100.200`). An IPv6 address that embeds an IPv4 one (mapped, NAT64, 6to4) is judged
 /// by its IPv4 address.
-pub(crate) fn forbidden(address: IpAddr) -> Option<&'static str> {
+pub fn forbidden(address: IpAddr) -> Option<&'static str> {
     match address {
         IpAddr::V4(address) => forbidden_v4(address),
         IpAddr::V6(address) => forbidden_v6(address),
@@ -612,61 +525,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_allow_list_matches_names_subdomains_and_addresses() {
-        let allowed = AllowList::new(&[
-            "API.example.com".into(),
-            "*.example.org".into(),
-            "93.184.216.34".into(),
-            "[2606:4700::1]".into(),
-            "bücher.example".into(),
-        ]);
-        let ok = |url: &str| check(&Url::parse(url).unwrap(), &allowed, forbidden).is_ok();
-        assert!(ok("https://api.example.com/x"));
-        assert!(ok("https://API.EXAMPLE.COM./x"));
-        assert!(ok("http://a.example.org:8080/"));
-        assert!(ok("https://a.b.example.org/"));
-        assert!(!ok("https://example.org/"));
-        assert!(!ok("https://evilexample.org/"));
-        assert!(!ok("https://api.example.com.evil.net/"));
-        assert!(ok("http://93.184.216.34/"));
-        assert!(ok("http://[2606:4700::1]/"));
-        assert!(ok("https://xn--bcher-kva.example/"));
-        assert!(!ok("ftp://api.example.com/"));
-    }
-
-    #[test]
-    fn addresses_in_urls_are_checked_even_when_allowed() {
-        let allowed = AllowList::new(&["127.0.0.1".into(), "localhost".into()]);
-        let error = check(
-            &Url::parse("http://127.0.0.1/").unwrap(),
-            &allowed,
-            forbidden,
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.0,
-            "127.0.0.1 is a loopback address: the http tool does not reach it"
-        );
-        // The WHATWG parser reads every spelling of an address as that address.
-        let decimal = check(
-            &Url::parse("http://2130706433/").unwrap(),
-            &allowed,
-            forbidden,
-        );
-        assert!(decimal.is_err());
-        let error = check(
-            &Url::parse("http://internal.example/").unwrap(),
-            &allowed,
-            forbidden,
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.0,
-            "internal.example is not in the toolset's allow-list of the http tool (127.0.0.1, localhost)"
-        );
-    }
-
     /// Answers every name with the same addresses.
     #[derive(Debug)]
     struct Fixed(Vec<IpAddr>);
@@ -684,7 +542,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn other_requests_get_the_same_checks_without_an_allow_list() {
+    async fn every_request_gets_the_same_checks() {
         let public = egress(&["93.184.215.14"]);
         let url = |text: &str| Url::parse(text).unwrap();
         assert_eq!(
@@ -704,6 +562,8 @@ mod tests {
                     .into()
             )
         );
+        // The WHATWG parser reads every spelling of an address as that address.
+        assert!(public.check_url(&url("http://2130706433/")).is_err());
         let internal = egress(&["93.184.215.14", "10.0.0.7"]);
         assert_eq!(
             internal.check(&url("https://hooks.example.com/x")).await,

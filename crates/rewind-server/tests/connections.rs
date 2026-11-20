@@ -1,7 +1,7 @@
 //! People's connections and the OAuth authorization server end to end
 //! (`archi/06-storage-and-scale.md`, "Connections"; `archi/07-code-architecture.md`, "MCP and
 //! OAuth"), with the engine's fake of WorkOS: a client's metadata document served by a fake on
-//! 127.0.0.1 (let through with `--allow-internal-mcp`), a registered client, the consent, the
+//! 127.0.0.1 (let through with `--allow-internal-tools`), a registered client, the consent, the
 //! tokens, `/v1` with `Rewind-Organization`, refresh, revocation, and the refusals.
 //!
 //! The full flow runs on Turso and on Postgres (Docker; skipped with a message without it,
@@ -71,7 +71,7 @@ async fn server_on(identity: &MemoryIdentity, store: Option<&str>) -> TestServer
     let extra = [
         "--public-url",
         PUBLIC_URL,
-        "--allow-internal-mcp",
+        "--allow-internal-tools",
         "127.0.0.1",
     ];
     match store {

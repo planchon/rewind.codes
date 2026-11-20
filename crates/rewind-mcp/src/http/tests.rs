@@ -19,6 +19,7 @@ use rewind_engine::ports::{NamespaceName, RunRef, TaskToken, TenantId};
 use serde_json::{Value, json};
 
 use super::*;
+use rewind_outbound::Resolving;
 
 const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 

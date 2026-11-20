@@ -33,7 +33,8 @@ use rewind_engine::testing::TestOptions;
 use rewind_engine::{
     Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartError, StartRun, StartWorkflow,
 };
-use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
+use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
+use rewind_outbound::ToolEgress;
 use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
@@ -206,7 +207,7 @@ impl World {
 
         // The fake servers listen on 127.0.0.1, as a developer's would for the embedded server.
         let mcp = McpDispatcher::new(McpConfig {
-            egress: McpEgress::open(),
+            egress: ToolEgress::open(),
             ..McpConfig::default()
         });
         let tenant = TenantId::local();
@@ -220,7 +221,7 @@ impl World {
                 },
             );
             let listed = mcp
-                .list_tools(&tenant, &server, None)
+                .list_tools(&tenant, &server, ListingAuth::None)
                 .await
                 .map_err(|err| WorldError::Discovery {
                     server: server.name.clone(),

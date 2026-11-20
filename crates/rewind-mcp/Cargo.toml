@@ -1,17 +1,24 @@
 [package]
 name = "rewind-mcp"
-description = "Tool dispatcher of Rewind outside mock mode: the MCP client (discovery, dispatch, credentials in the transport) and the built-in http tool with its egress checks."
+description = "Tool dispatcher of Rewind outside mock mode: the MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-in http tool with its allow-list."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+# An adapter: it depends on rewind-core and rewind-engine, and, as a tool dispatcher, on
+# rewind-outbound (archi/07-code-architecture.md, "Dependency rules").
 [dependencies]
 rewind-core.workspace = true
 rewind-engine.workspace = true
+rewind-outbound.workspace = true
 base64.workspace = true
-ipnet.workspace = true
+# The stream type rmcp's HTTP client trait names, which the signing client implements.
+futures-util = { workspace = true, features = ["alloc"] }
+# The random key of the pool's fingerprints.
+getrandom.workspace = true
+hmac.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
 rmcp = { workspace = true, features = [
@@ -22,6 +29,8 @@ rmcp = { workspace = true, features = [
 ] }
 serde_json.workspace = true
 sha2.workspace = true
+# The version rmcp's HTTP client trait names (`Sse`), not the workspace's.
+sse-stream = "0.2"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "process", "net", "io-util", "macros"] }
 tracing.workspace = true

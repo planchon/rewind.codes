@@ -43,7 +43,7 @@ that is broken. The GitHub workflow (`.github/workflows/release-gate.yml`, start
 
 | Setup | What | Used for |
 | --- | --- | --- |
-| A, deployed | Postgres 17, MinIO, an OpenTelemetry Collector, `--role api`, two `--role worker`, behind an edge that sends `POST /v1/test` to the workers (as `deploy/edge/Caddyfile`); `--allow-internal-mcp 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable | Every area |
+| A, deployed | Postgres 17, MinIO, an OpenTelemetry Collector, `--role api`, two `--role worker`, behind an edge that sends `POST /v1/test` to the workers (as `deploy/edge/Caddyfile`); `--allow-internal-tools 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable | Every area |
 | B, strict | One server with both roles on Turso, with a deployed server's defaults: no internal MCP server, no private webhook, no stdio, no WorkOS | Egress and SSRF, hardening |
 | C, local | The CLI and the embedded server it starts in a project directory | CLI |
 | D, lifecycle | A deployed setup of its own, retention in seconds | Lifecycle |

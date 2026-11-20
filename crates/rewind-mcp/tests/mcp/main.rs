@@ -18,15 +18,16 @@ use std::time::{Duration, Instant};
 use fixture::{Auth, Fixture};
 use libtest_mimic::{Arguments, Trial};
 use rewind_core::{
-    McpServer, McpTransport, RunId, Seq, Tool, ToolFailure, ToolFailureKind, ToolRoute, Toolset,
+    McpServer, McpTransport, RunId, SecretPlacement, Seq, Timestamp, Tool, ToolAuth, ToolFailure,
+    ToolFailureKind, ToolRoute, Toolset,
 };
+use rewind_engine::adapters::MemorySecrets;
 use rewind_engine::ports::{
-    CallAuth, Dispatched, NamespaceName, ParkKind, RunRef, Secret, TaskToken, TenantId, ToolCall,
-    ToolDispatcher, TraceContext,
+    CallAuth, CallClaims, Dispatched, NamespaceName, ParkKind, RunRef, Secret, SecretStore,
+    SigningKey, TaskToken, TenantId, ToolCall, ToolDispatcher, TraceContext,
 };
-use rewind_mcp::{
-    IDEMPOTENCY_KEY_META, McpConfig, McpDispatcher, McpEgress, McpError, TransportSecrets,
-};
+use rewind_mcp::{IDEMPOTENCY_KEY_META, ListingAuth, McpConfig, McpDispatcher, McpError};
+use rewind_outbound::ToolEgress;
 use serde_json::{Value, json};
 
 fn main() -> std::process::ExitCode {
@@ -59,6 +60,18 @@ fn main() -> std::process::ExitCode {
         test(
             "a_401_with_a_challenge_parks_too",
             headers_reach_the_server_and_a_401_parks(true),
+        ),
+        test(
+            "a_secret_goes_into_its_header",
+            a_secret_goes_into_its_header(),
+        ),
+        test(
+            "signed_sessions_sign_every_request",
+            signed_sessions_sign_every_request(),
+        ),
+        test(
+            "a_stdio_server_gets_its_secret_in_its_variable",
+            a_stdio_server_gets_its_secret_in_its_variable(),
         ),
         test(
             "the_execution_timeout_cancels_the_call",
@@ -132,7 +145,7 @@ where
 /// which do not concern them.
 fn open_config() -> McpConfig {
     McpConfig {
-        egress: McpEgress::open(),
+        egress: ToolEgress::open(),
         ..McpConfig::default()
     }
 }
@@ -174,10 +187,10 @@ fn tenant() -> TenantId {
 async fn pin(
     dispatcher: &McpDispatcher,
     server: &McpServer,
-    secrets: Option<&TransportSecrets>,
+    auth: ListingAuth,
 ) -> BTreeMap<String, Tool> {
     dispatcher
-        .list_tools(&tenant(), server, secrets)
+        .list_tools(&tenant(), server, auth)
         .await
         .unwrap()
         .into_iter()
@@ -204,14 +217,42 @@ fn call(server: &McpServer, tool: &Tool, args: Value) -> ToolCall {
     }
 }
 
-/// The headers a secret attached as `Authorization: Bearer {secret}` puts in the transport.
-fn bearer(token: &str) -> TransportSecrets {
-    TransportSecrets {
-        headers: BTreeMap::from([(
-            "Authorization".to_owned(),
-            Secret::new(format!("Bearer {token}")),
-        )]),
-        env: BTreeMap::new(),
+/// A server whose secret goes in `Authorization: Bearer {secret}`.
+fn bearer_server(url: &str) -> McpServer {
+    let mut server = http_server(url);
+    server.auth = ToolAuth::Secret(SecretPlacement::bearer());
+    server
+}
+
+/// The secret a run attached for a `bearer_server`.
+fn bearer(token: &str) -> CallAuth {
+    CallAuth::Secret {
+        value: Secret::new(token),
+        placement: SecretPlacement::bearer(),
+    }
+}
+
+/// The tenant's signing key, as the memory store makes it.
+async fn signing_key() -> SigningKey {
+    MemorySecrets::new()
+        .signing_key(&tenant(), Timestamp(0))
+        .await
+        .unwrap()
+}
+
+const ISSUER: &str = "https://rewind.example/organizations/local";
+
+/// The claims the engine resolves for `call`.
+fn claims(call: &ToolCall) -> CallClaims {
+    CallClaims {
+        issuer: ISSUER.into(),
+        subject: call.namespace.clone(),
+        labels: call.labels.clone(),
+        run: call.run.id,
+        tool: call.tool.name.clone(),
+        idempotency_key: call.idempotency_key.clone(),
+        seq: call.seq,
+        attempt: call.attempt,
     }
 }
 
@@ -248,7 +289,10 @@ async fn discovery_pins_the_server_tools() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = dispatcher.list_tools(&tenant(), &mcp, None).await.unwrap();
+    let tools = dispatcher
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
+        .await
+        .unwrap();
     let names: Vec<&str> = tools.iter().map(|tool| tool.name.as_str()).collect();
     assert_eq!(
         names,
@@ -291,7 +335,7 @@ async fn a_tool_list_without_end_is_refused() {
     });
     let started = Instant::now();
     let error = dispatcher
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -325,7 +369,7 @@ async fn content_and_structured_results() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
 
     let lookup = result(
         dispatcher
@@ -355,7 +399,7 @@ async fn idempotency_key_and_trace_context_in_meta() {
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let mut meta_call = call(&mcp, &tools["meta"], json!({}));
     meta_call.attempt = 2;
     meta_call.trace_context = Some(TraceContext {
@@ -383,7 +427,7 @@ async fn errors_are_mapped() {
     let server = fixture::serve_http(Fixture::new(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
 
     let fail = failed(
         dispatcher
@@ -420,8 +464,7 @@ async fn errors_are_mapped() {
     );
 }
 
-/// How a call's secret or signature reaches the transport is the outbound workstream's
-/// (`archi/09-roadmap.md`); the transport's headers and a refusal are checked here.
+/// A server that refuses a call's credentials answers 401: the call is parked.
 async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
     let auth = Auth {
         challenge,
@@ -431,11 +474,11 @@ async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
     let fixture = Fixture::new();
     let server = fixture::serve_http(fixture.clone(), auth.clone()).await;
     let dispatcher = open();
-    let mcp = http_server(&server.url);
+    let mcp = bearer_server(&server.url);
 
-    // Without its header, discovery is refused.
+    // Without its secret, discovery is refused.
     let refused = dispatcher
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -443,25 +486,230 @@ async fn headers_reach_the_server_and_a_401_parks(challenge: bool) {
         "{refused:?}"
     );
 
-    let tools = pin(&dispatcher, &mcp, Some(&bearer("first"))).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("first"))).await;
     let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
+    result(dispatcher.dispatch(lookup.clone(), bearer("first")).await);
 
-    // Without its header, a call is parked.
-    let Dispatched::Park(parked) = dispatcher.dispatch(lookup, CallAuth::None).await else {
-        panic!("a call refused with a 401 is parked");
+    // Without its secret, or with another, a call is parked.
+    for auth in [CallAuth::None, bearer("second")] {
+        let Dispatched::Park(parked) = dispatcher.dispatch(lookup.clone(), auth).await else {
+            panic!("a call refused with a 401 is parked");
+        };
+        assert_eq!(parked.kind, ParkKind::CredentialsRefused);
+        assert!(
+            parked
+                .message
+                .starts_with("fx refused the credentials (HTTP 401)"),
+            "{}",
+            parked.message
+        );
+        assert!(
+            !parked.message.contains("second"),
+            "the message never holds the secret"
+        );
+    }
+}
+
+/// The attached secret goes into the header of the server's `auth`, with its format and
+/// encoding, on every request of the session.
+async fn a_secret_goes_into_its_header() {
+    let auth = Auth::default();
+    // `Basic {secret}` in base64: the fixture expects `Bearer <token>`, so the token is what
+    // the encoded secret reads as.
+    *auth.token.lock().unwrap() = Some("YWRhOnMzY3JldA==".into());
+    let fixture = Fixture::new();
+    let server = fixture::serve_http(fixture.clone(), auth).await;
+    let dispatcher = open();
+    let mut mcp = http_server(&server.url);
+    let placement = SecretPlacement::Header {
+        name: "Authorization".into(),
+        format: Some("Bearer {secret}".into()),
+        encoding: rewind_core::SecretEncoding::Base64,
+    };
+    mcp.auth = ToolAuth::Secret(placement.clone());
+    let tools = pin(
+        &dispatcher,
+        &mcp,
+        ListingAuth::Secret(Secret::new("ada:s3cret")),
+    )
+    .await;
+    let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-2" }));
+    let found = result(
+        dispatcher
+            .dispatch(
+                lookup,
+                CallAuth::Secret {
+                    value: Secret::new("ada:s3cret"),
+                    placement,
+                },
+            )
+            .await,
+    );
+    assert_eq!(text_json(&found)["id"], "c-2");
+    // A listing secret on a server that takes none is refused before anything is sent.
+    let refused = dispatcher
+        .list_tools(
+            &tenant(),
+            &http_server(&server.url),
+            ListingAuth::Secret(Secret::new("x")),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, McpError::Refused { message, .. } if message == "fx: its auth takes no secret"),
+        "{refused:?}"
+    );
+}
+
+/// A server whose `auth` is `rewind` checks a JWT on each HTTP request of the session: the
+/// call's `tools/call` with the call's claims, the others with the reduced set. A key it does
+/// not publish is refused (401), and the call is parked.
+async fn signed_sessions_sign_every_request() {
+    let key = signing_key().await;
+    let signed = fixture::Signed {
+        jwks: json!({ "keys": [rewind_outbound::jwk(&key.public.kid, &key.public.key)] }),
+        issuer: ISSUER.into(),
+        seen: Default::default(),
+    };
+    let fixture = Fixture::new();
+    let auth = Auth {
+        signed: Some(signed.clone()),
+        ..Auth::default()
+    };
+    let server = fixture::serve_http(fixture.clone(), auth).await;
+    let dispatcher = open();
+    let mut mcp = http_server(&server.url);
+    mcp.auth = ToolAuth::Rewind;
+
+    // The listing at registration: the reduced set, on every request of its session.
+    let tools = pin(
+        &dispatcher,
+        &mcp,
+        ListingAuth::Signed {
+            key: key.clone(),
+            issuer: ISSUER.into(),
+        },
+    )
+    .await;
+    {
+        let seen = signed.seen.lock().unwrap();
+        let methods: Vec<Option<&str>> = seen.iter().map(|seen| seen.rpc.as_deref()).collect();
+        assert!(methods.contains(&Some("initialize")), "{methods:?}");
+        assert!(methods.contains(&Some("tools/list")), "{methods:?}");
+        for seen in seen.iter() {
+            let mut names: Vec<&str> = seen
+                .claims
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            names.sort_unstable();
+            let reduced = ["aud", "exp", "htm", "htu", "iat", "iss", "jti"];
+            let with_body = ["aud", "body", "exp", "htm", "htu", "iat", "iss", "jti"];
+            assert!(
+                names == reduced || names == with_body,
+                "{} {:?}: {names:?}",
+                seen.http,
+                seen.rpc
+            );
+        }
+        let jtis: std::collections::BTreeSet<&str> = seen
+            .iter()
+            .map(|seen| seen.claims["jti"].as_str().unwrap())
+            .collect();
+        assert_eq!(jtis.len(), seen.len(), "one jti per request");
+    }
+    let sessions = fixture.state().sessions;
+
+    // A call: its `tools/call` carries the call's claims.
+    let mut lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-3" }));
+    lookup.labels = BTreeMap::from([("env".into(), "prod".into())]);
+    lookup.attempt = 2;
+    let auth = CallAuth::Signed {
+        key: key.clone(),
+        claims: claims(&lookup),
+    };
+    result(dispatcher.dispatch(lookup.clone(), auth).await);
+    let called = signed
+        .seen
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|seen| seen.rpc.as_deref() == Some("tools/call"))
+        .cloned()
+        .unwrap();
+    let run = lookup.run.id.to_string();
+    assert_eq!(called.claims["sub"], "alice");
+    assert_eq!(called.claims["labels"], json!({ "env": "prod" }));
+    assert_eq!(called.claims["run"], run.as_str());
+    assert_eq!(called.claims["tool"], "fx.lookup");
+    assert_eq!(called.claims["idempotency_key"], format!("{run}/3"));
+    assert_eq!(called.claims["jti"], format!("{run}/3/2"));
+    assert_eq!(called.claims["aud"], server.url.as_str());
+    assert_eq!(called.claims["htu"], server.url.as_str());
+    assert_eq!(called.claims["htm"], "POST");
+    // The schema check's listing on the call's session carries the reduced set.
+    assert!(
+        signed
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|seen| seen.rpc.as_deref() != Some("tools/call"))
+            .all(|seen| seen.claims.get("sub").is_none())
+    );
+    // The call's end user has a session of their own, apart from the listing's.
+    assert_eq!(fixture.state().sessions, sessions + 1);
+    let mut bob = lookup.clone();
+    bob.namespace = NamespaceName::new("bob").unwrap();
+    let auth = CallAuth::Signed {
+        key: key.clone(),
+        claims: claims(&bob),
+    };
+    result(dispatcher.dispatch(bob, auth).await);
+    assert_eq!(fixture.state().sessions, sessions + 2);
+
+    // Another tenant's key is not in this server's JWKS: refused, parked.
+    let other = MemorySecrets::new()
+        .signing_key(&TenantId::new("other").unwrap(), Timestamp(0))
+        .await
+        .unwrap();
+    let auth = CallAuth::Signed {
+        key: other,
+        claims: claims(&lookup),
+    };
+    let Dispatched::Park(parked) = dispatcher.dispatch(lookup, auth).await else {
+        panic!("a refused signature parks the call");
     };
     assert_eq!(parked.kind, ParkKind::CredentialsRefused);
-    assert!(
-        parked
-            .message
-            .starts_with("fx refused the credentials (HTTP 401)"),
-        "{}",
-        parked.message
+}
+
+/// A stdio server gets the attached secret in the variable its `auth` names, and nothing of the
+/// dispatcher's own environment.
+async fn a_stdio_server_gets_its_secret_in_its_variable() {
+    let dispatcher = McpDispatcher::default();
+    let mut mcp = stdio_server(&[]);
+    let placement = SecretPlacement::Env {
+        variable: "FIXTURE_TOKEN".into(),
+    };
+    mcp.auth = ToolAuth::Secret(placement.clone());
+    let tools = pin(&dispatcher, &mcp, ListingAuth::Secret(Secret::new("s-1"))).await;
+    let env = result(
+        dispatcher
+            .dispatch(
+                call(&mcp, &tools["env"], json!({})),
+                CallAuth::Secret {
+                    value: Secret::new("s-2"),
+                    placement,
+                },
+            )
+            .await,
     );
-    assert!(
-        !parked.message.contains("first"),
-        "the message never holds the secret"
-    );
+    assert_eq!(text_json(&env)["token"], "s-2");
+    assert_eq!(text_json(&env)["manifest_dir"], Value::Null);
+    dispatcher.close();
 }
 
 async fn the_execution_timeout_cancels_the_call() {
@@ -469,7 +717,7 @@ async fn the_execution_timeout_cancels_the_call() {
     let server = fixture::serve_http(fixture.clone(), Auth::default()).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let mut slow = tools["slow"].clone();
     slow.policy.execution_timeout = Some(Duration::from_millis(300));
     let started = Instant::now();
@@ -501,7 +749,7 @@ async fn a_schema_change_parks_the_call() {
         ..open_config()
     });
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
 
     // A new optional property: the call still fits.
@@ -576,7 +824,7 @@ async fn connections_are_shared_and_replaced() {
     let server = fixture::serve_http(fixture.clone(), auth).await;
     let dispatcher = open();
     let mcp = http_server(&server.url);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let lookup = call(&mcp, &tools["lookup"], json!({ "id": "c-1" }));
 
     // Concurrent calls share the session discovery opened.
@@ -590,7 +838,12 @@ async fn connections_are_shared_and_replaced() {
     assert_eq!(dispatcher.open_connections(), 1);
 
     // Other secrets, another session.
-    pin(&dispatcher, &mcp, Some(&bearer("other"))).await;
+    pin(
+        &dispatcher,
+        &bearer_server(&server.url),
+        ListingAuth::Secret(Secret::new("other")),
+    )
+    .await;
     assert_eq!(fixture.state().sessions, 2);
     assert_eq!(dispatcher.open_connections(), 2);
 
@@ -612,7 +865,7 @@ async fn an_unreachable_server_is_transient() {
     });
     let mcp = http_server(&format!("http://127.0.0.1:{port}/mcp"));
     let error = dispatcher
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(matches!(error, McpError::Unreachable { .. }), "{error:?}");
@@ -645,7 +898,7 @@ async fn a_stdio_server_gets_its_own_environment_only() {
     );
     let dispatcher = McpDispatcher::default();
     let mcp = stdio_server(&[("MODE", "test")]);
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     assert_eq!(tools.len(), 8);
     let env = result(
         dispatcher
@@ -718,7 +971,7 @@ async fn reference_server(command_line: Option<String>) {
         connect_timeout: Duration::from_secs(120),
         ..McpConfig::default()
     });
-    let tools = pin(&dispatcher, &mcp, None).await;
+    let tools = pin(&dispatcher, &mcp, ListingAuth::None).await;
     let echo = tools
         .get("echo")
         .expect("the reference server has an echo tool");

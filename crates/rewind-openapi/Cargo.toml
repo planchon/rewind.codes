@@ -13,6 +13,20 @@ license.workspace = true
 rewind-core.workspace = true
 rewind-engine.workspace = true
 rewind-outbound.workspace = true
+base64.workspace = true
+# Retry-After as an HTTP date.
+httpdate.workspace = true
+percent-encoding.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }
 
 [lints]
 workspace = true
