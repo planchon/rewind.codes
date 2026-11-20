@@ -218,6 +218,41 @@ async fn a_transient_failure_is_retried_after_a_backoff() {
 }
 
 #[tokio::test]
+async fn a_transient_failure_is_retried_no_sooner_than_its_retry_after() {
+    let dispatcher = RecordingDispatcher::dispatching(|call, _| {
+        if call.attempt < 2 {
+            Dispatched::Transient(ToolFailure {
+                data: Some(json!({ "status": 429, "retryAfter": 3600 })),
+                ..failure(ToolFailureKind::Unavailable, "rate limited")
+            })
+        } else {
+            Dispatched::Result(json!({ "number": 4 }))
+        }
+    });
+    let engine = engine(caller(), dispatcher.clone());
+    let run = engine
+        .start_run(calling(ISSUE, toolset(|_| {})))
+        .await
+        .unwrap()
+        .run;
+    drive(&engine).await;
+
+    assert_eq!(
+        output(&engine, &run).await,
+        json!({ "result": { "number": 4 } })
+    );
+    let key = format!("{}/1", run.id);
+    let waited = Backoff::default()
+        .delay(&key, 1)
+        .max(Duration::from_secs(3600));
+    assert_eq!(
+        completed_at(&engine, &run, 1).await,
+        T0.saturating_add(waited),
+        "the API asked for an hour, longer than the backoff"
+    );
+}
+
+#[tokio::test]
 async fn an_engine_restarted_during_a_backoff_wakes_up_for_the_retry() {
     let dispatcher = RecordingDispatcher::dispatching(|call, _| {
         if call.attempt < 2 {

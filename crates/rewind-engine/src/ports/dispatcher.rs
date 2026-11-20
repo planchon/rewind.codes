@@ -103,6 +103,12 @@ impl CallClaims {
     }
 }
 
+/// The key of a transient failure's `data` that holds, in seconds, how long the server asked to
+/// wait before the call is sent again (an API's `Retry-After` that the dispatcher could not wait
+/// out within the execution timeout): the engine retries no sooner (`archi/04-tools.md`, "API
+/// tools": "never before its `Retry-After`").
+pub const RETRY_AFTER_DATA: &str = "retryAfter";
+
 /// What became of one attempt (`archi/04-tools.md`, "Tool task lifecycle").
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dispatched {

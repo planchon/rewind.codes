@@ -59,7 +59,9 @@ pub use connections::{
     ConnectionTokenKind, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization,
     Rotation,
 };
-pub use dispatcher::{CallAuth, CallClaims, Dispatched, ToolCall, ToolDispatcher};
+pub use dispatcher::{
+    CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA, ToolCall, ToolDispatcher,
+};
 pub use executor::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,

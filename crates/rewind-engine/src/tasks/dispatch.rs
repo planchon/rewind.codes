@@ -33,9 +33,10 @@ use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
     BlobStore, CallAuth, CallClaims, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched,
-    Entropy, JournalStore, ParkKind, ParkReason, RunRecord, RunRef, ScriptExecutor, SecretId,
-    SecretReader, SecretStore, TaskPhase, TaskProgress, TaskToken, TaskUpdate, ToolCall,
-    ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind, WebhookSender,
+    Entropy, JournalStore, ParkKind, ParkReason, RETRY_AFTER_DATA, RunRecord, RunRef,
+    ScriptExecutor, SecretId, SecretReader, SecretStore, TaskPhase, TaskProgress, TaskToken,
+    TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind,
+    WebhookSender,
 };
 use crate::{metrics, payloads, text};
 
@@ -355,8 +356,19 @@ where
         task: &ToolTask,
         token: &TaskToken,
     ) -> Result<TaskUpdate, EngineError> {
+        self.retry_after(task, token, Duration::ZERO).await
+    }
+
+    /// As [`retry_later`](Self::retry_later), never sooner than `at_least` from now: the wait a
+    /// server asked for (`Retry-After`).
+    pub(super) async fn retry_after(
+        &self,
+        task: &ToolTask,
+        token: &TaskToken,
+        at_least: Duration,
+    ) -> Result<TaskUpdate, EngineError> {
         let call = idempotency_key(task.task.run.id, task.task.seq);
-        let delay = self.config.backoff.delay(&call, task.attempt);
+        let delay = self.config.backoff.delay(&call, task.attempt).max(at_least);
         let next_attempt_at = self.clock.now().saturating_add(delay);
         Ok(self.journal.retry_tool_task(token, next_attempt_at).await?)
     }
@@ -681,7 +693,13 @@ where
                     && task.attempt < self.config.max_tool_attempts;
                 if retry {
                     metrics::tool_retry(&task.tool);
-                    self.retry_later(task, token).await?;
+                    let asked = failure
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get(RETRY_AFTER_DATA))
+                        .and_then(serde_json::Value::as_u64)
+                        .map_or(Duration::ZERO, Duration::from_secs);
+                    self.retry_after(task, token, asked).await?;
                 } else {
                     self.finish(task, token, ToolOutcome::Failure(failure))
                         .await?;

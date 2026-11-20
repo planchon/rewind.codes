@@ -45,8 +45,8 @@ use crate::read::is_json;
 use crate::request::{self, Built};
 
 /// The `data` key of a transient failure's `Retry-After`, in seconds, when the dispatcher could
-/// not wait it out within the execution timeout: the engine must not retry before.
-pub const RETRY_AFTER_DATA: &str = "retryAfter";
+/// not wait it out within the execution timeout: the engine does not retry before.
+pub use rewind_engine::ports::RETRY_AFTER_DATA;
 
 /// Bytes of a failed answer's body quoted in its failure.
 const QUOTED_BODY: usize = 2048;
