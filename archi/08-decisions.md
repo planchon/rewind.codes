@@ -1389,6 +1389,19 @@ documentation, against the frozen OpenAPI document and a mocked server.
 | The dashboard's tests that counted 23 permissions count 25, and the role `reader` gives `secrets:read` | Leaving them failing | The frozen contracts replaced `credentials:write` with the three `secrets:*`. |
 | The documentation gets three pages (SDK: Secrets, Signed calls; Dashboard: Secrets) and rewrites every mention of credentials; the guide shows `verifyRewindCall` in a Fetch handler, Express (`express.raw`, `trust proxy`) and a NestJS guard (`rawBody: true`); no screenshot of the new views yet | Folding everything into Toolsets | A harness developer reads how to attach, and a backend developer how to check, on separate pages; screenshots wait for `docs/scripts/screenshots.ts` against a built server. |
 
+### Taken while fixing the security review of secrets (November 2026)
+
+An independent review of the integrated feature found three medium and two low defects; each is
+fixed, with a test that fails without the fix.
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A path parameter whose segment is `.` or `..` refuses the call, and the built URL must keep the API's origin and stay under its base URL's path | Percent-encoding the dots | The URL's parsing resolves dot segments, `%2e` included: a script gave `..` and sent a branch deletion, with the organization's token, to the repository's own path, outside the operations pinned and their policies. |
+| A script starts a version its toolset pins only if the version was saved under its run's scope (the grant's labels): `workflows.<name>.start` fails otherwise | Checking the version's secrets against the run's labels | The API already refused it; from a script, a key limited to `env=dev` started a version saved under `env=prod` and read its output, the run attaching the organization's `env=prod` secret. Runs carry labels a grant never limits (Dax's `goal`), so the scope, not the labels, is the rule. |
+| One reading of an OpenAPI document expands its schemas to at most a million values, references inlined; beyond, the registration is refused, naming `components.schemas` and `operations` | Memoizing inlined references | A reference used twice is inlined twice: a document of 1.4 KB took 1.6 GB on the API's process. A budget also bounds a large subschema referred to many times, which memoizing would not. |
+| The engine takes the attached secret's value, and its base64 form for HTTP basic, out of whatever a call answers (its result, its failure's message and data, a park's message), for every route, as `[secret]`; secrets shorter than 4 bytes are left | Stripping in each dispatcher; leaving it to the servers | A server that quotes the key it refused, or an echo endpoint, would bring the organization's token into an end user's journal and script. The engine is the one place that knows the value and sees every answer. |
+| `secret_usage` takes the caller's labels and counts only the runs carrying them; a secret's last read is left out for a caller limited to labels or to a namespace when it does not see that run | Filtering the listed runs only | The totals and the last read named runs and namespaces outside the caller's labels. |
+
 ### Taken while building the attachments of secrets (November 2026)
 
 The engine-server workstream of [secrets and API toolsets](#taken-for-secrets-and-api-toolsets-november-2026):

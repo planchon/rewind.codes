@@ -68,7 +68,7 @@ pub(super) async fn list(
         )
         .await?;
     Ok(Json(SecretList {
-        secrets: listed.iter().map(view).collect(),
+        secrets: shown_all(&app, &caller, &listed).await?,
     }))
 }
 
@@ -147,7 +147,7 @@ pub(super) async fn list_of_namespace(
         )
         .await?;
     Ok(Json(SecretList {
-        secrets: listed.iter().map(view).collect(),
+        secrets: shown_all(&app, &caller, &listed).await?,
     }))
 }
 
@@ -377,7 +377,7 @@ async fn write(
         // The calls made ready are in the runs waiting on a server the secret serves.
         let usage = app
             .store
-            .secret_usage(&caller.tenant, &id, USAGE_RUNS)
+            .secret_usage(&caller.tenant, &id, &BTreeMap::new(), USAGE_RUNS)
             .await?;
         for run in &usage.waiting_runs {
             app.record_tasks(run).await;
@@ -394,7 +394,7 @@ async fn write(
         Put::Created => StatusCode::CREATED,
         Put::Replaced => StatusCode::OK,
     };
-    Ok((status, Json(view(&meta))).into_response())
+    Ok((status, Json(seen_by(app, caller, &meta).await?)).into_response())
 }
 
 /// Deletes a secret: 204, or 404 when it does not exist. The next call of a run that attaches
@@ -417,7 +417,7 @@ async fn usage_of(
 ) -> Result<SecretUsage, ApiError> {
     let usage = app
         .store
-        .secret_usage(&caller.tenant, id, USAGE_RUNS)
+        .secret_usage(&caller.tenant, id, &caller.labels, USAGE_RUNS)
         .await?;
     let mut visible = BTreeMap::new();
     for run in usage.active_runs.iter().chain(&usage.waiting_runs) {
@@ -452,7 +452,7 @@ async fn usage_of(
         }
     }
     Ok(SecretUsage {
-        secret: view(meta),
+        secret: seen_by(app, caller, meta).await?,
         active_runs: shown(&usage.active_runs),
         active_total: usage.active_total,
         waiting_runs: shown(&usage.waiting_runs),
@@ -472,6 +472,36 @@ fn carries(labels: &BTreeMap<String, String>, wanted: &BTreeMap<String, String>)
     wanted
         .iter()
         .all(|(key, value)| labels.get(key) == Some(value))
+}
+
+/// A secret as `caller` sees it: its last read left out when it was by a run the caller does not
+/// see (another label, another end user), which would otherwise name that run and its namespace.
+async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<SecretView, ApiError> {
+    let mut view = view(meta);
+    let restricted = !caller.labels.is_empty() || caller.namespace.is_some();
+    if restricted && let Some(last) = &meta.last_read {
+        let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), last.run);
+        let sees = match app.store.get_run(&run).await? {
+            Some(record) => caller.sees_run(&record),
+            None => false,
+        };
+        if !sees {
+            view.last_read = None;
+        }
+    }
+    Ok(view)
+}
+
+async fn shown_all(
+    app: &App,
+    caller: &Caller,
+    listed: &[SecretMeta],
+) -> Result<Vec<SecretView>, ApiError> {
+    let mut all = Vec::with_capacity(listed.len());
+    for meta in listed {
+        all.push(seen_by(app, caller, meta).await?);
+    }
+    Ok(all)
 }
 
 /// A secret, as the API lists it.

@@ -2303,6 +2303,7 @@ impl JournalStore for TursoStore {
         &self,
         tenant_id: &TenantId,
         secret: &SecretId,
+        labels: &BTreeMap<String, String>,
         max: usize,
     ) -> Result<SecretUsage, StoreError> {
         let mut usage = SecretUsage::default();
@@ -2313,7 +2314,7 @@ impl JournalStore for TursoStore {
             let runs = sql::query(
                 &connection,
                 concat!(
-                    "SELECT id, namespace, secrets FROM runs \
+                    "SELECT id, namespace, secrets, labels FROM runs \
                      WHERE tenant = ? AND secrets <> '{}' AND status NOT IN ",
                     terminal!(),
                     " ORDER BY created_at, id"
@@ -2340,6 +2341,13 @@ impl JournalStore for TursoStore {
                 let run = row.run_id(0)?;
                 let namespace = namespace_name(row.text(1)?)?;
                 let attached = codec::decode_attachments(&row.text(2)?)?;
+                let carried = decode_labels(&row.text(3)?)?;
+                if !labels
+                    .iter()
+                    .all(|(key, value)| carried.get(key) == Some(value))
+                {
+                    continue;
+                }
                 let servers: Vec<&str> = attached
                     .iter()
                     .filter(|(_, attached)| SecretId::resolve(attached, &namespace) == *secret)

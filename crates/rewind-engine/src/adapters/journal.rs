@@ -1751,6 +1751,7 @@ impl JournalStore for MemoryJournal {
         &self,
         tenant: &TenantId,
         secret: &SecretId,
+        labels: &BTreeMap<String, String>,
         limit: usize,
     ) -> Result<SecretUsage, StoreError> {
         let state = self.lock()?;
@@ -1759,7 +1760,12 @@ impl JournalStore for MemoryJournal {
         let mut active: Vec<(Timestamp, RunId, bool)> = Vec::new();
         for run in state.runs.values() {
             let record = &run.record;
-            if record.run.tenant != *tenant || record.status.is_terminal() {
+            if record.run.tenant != *tenant
+                || record.status.is_terminal()
+                || !labels
+                    .iter()
+                    .all(|(key, value)| record.metadata.labels.get(key) == Some(value))
+            {
                 continue;
             }
             let serves: BTreeSet<&str> = record

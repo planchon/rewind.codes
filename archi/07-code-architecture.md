@@ -143,7 +143,7 @@ defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
 approve_tool_task(task, now) / reject_tool_task(task, failure, now)
 resume_parked(Secret { tenant, secret: SecretId { namespace, name } }, now)
-secret_usage(tenant, SecretId, limit) -> { active_runs, active_total, waiting_runs, waiting_total, versions }
+secret_usage(tenant, SecretId, labels, limit) -> { active_runs, active_total, waiting_runs, waiting_total, versions }
 tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
@@ -281,7 +281,8 @@ Contracts, all covered by the conformance suite:
   put again (for a namespace's secret, the runs of that namespace). `secret_usage` reads, for a
   secret, the active runs that attach it, those of them with a call to a server it serves that
   is parked or not yet sent, and the latest version of each workflow that attaches it; a
-  version attaching `ns/<name>` counts for every namespace's secret of that name.
+  version attaching `ns/<name>` counts for every namespace's secret of that name. Only the runs
+  carrying `labels` count, so a caller limited to labels learns nothing of the others.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
   failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
   `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.

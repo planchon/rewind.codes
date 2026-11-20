@@ -17,6 +17,8 @@ rewind-core.workspace = true
 # The Ed25519 signing keys the memory `SecretStore` makes, and the conformance suite checks: the
 # crypto the HTTP clients already build (rustls on aws-lc-rs).
 aws-lc-rs.workspace = true
+# The base64 form of an HTTP basic secret, taken out of the answers that echo it.
+base64.workspace = true
 # Quota alerts are sent to every subscription at once (`join_all`).
 futures-util = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true

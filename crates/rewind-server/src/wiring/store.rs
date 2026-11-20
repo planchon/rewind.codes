@@ -540,9 +540,10 @@ impl JournalStore for Store {
         &self,
         tenant: &TenantId,
         secret: &SecretId,
+        labels: &BTreeMap<String, String>,
         limit: usize,
     ) -> Result<SecretUsage, StoreError> {
-        journal!(self, store => store.secret_usage(tenant, secret, limit).await)
+        journal!(self, store => store.secret_usage(tenant, secret, labels, limit).await)
     }
 
     async fn expire_deferred_tool_tasks(

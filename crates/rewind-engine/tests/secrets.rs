@@ -16,7 +16,7 @@ use rewind_core::{
 use rewind_engine::adapters::StaticTypeChecker;
 use rewind_engine::attachments::{AttachRights, AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
-    CallAuth, CallClaims, Clock, CredentialsExpiredReason, Day, Delivery, JournalStore,
+    CallAuth, CallClaims, Clock, CredentialsExpiredReason, Day, Delivery, Dispatched, JournalStore,
     NamespaceName, NewSecret, ParkKind, PutSecret, RunFilter, RunRef, Secret, SecretId,
     SecretNamespace, SecretStore, Subscription, TaskState, TenantId, ToolDeclarations,
     WebhookEventKind, WorkflowDeclarations,
@@ -461,6 +461,46 @@ async fn a_call_reads_the_secret_its_run_attached_in_its_own_namespace() {
         .unwrap();
     assert!(org.last_read.is_none(), "nothing fell back on it");
     assert_eq!(output(&engine, &alices).await, json!({ "result": {} }));
+}
+
+#[tokio::test]
+async fn a_secret_a_server_echoes_never_reaches_the_journal_nor_the_script() {
+    let dispatcher = RecordingDispatcher::dispatching(|call, auth| {
+        let CallAuth::Secret { value, .. } = auth else {
+            panic!("the call carries its secret");
+        };
+        let value = value.expose();
+        if call.attempt == 1 {
+            // An error that quotes the key, retried.
+            return Dispatched::Transient(rewind_core::ToolFailure {
+                kind: ToolFailureKind::Unavailable,
+                message: format!("invalid key {value}"),
+                data: Some(json!({ "body": format!("token={value}") })),
+            });
+        }
+        Dispatched::Result(json!({ "echo": format!("Bearer {value}"), value: [value] }))
+    });
+    let engine = engine(programs(), dispatcher.clone());
+    put(&engine, of(&alice(), "github"), "ghp_alice_secret", &[]).await;
+    let run = engine
+        .start_run(start(
+            "caller",
+            "github.get_issue",
+            &alice(),
+            &[("github", "ns/github")],
+            &RightsTo::Namespace,
+        ))
+        .await
+        .unwrap()
+        .run;
+    drive(&engine).await;
+
+    assert_eq!(
+        output(&engine, &run).await,
+        json!({ "result": { "echo": "Bearer [secret]", "[secret]": ["[secret]"] } })
+    );
+    let journal = format!("{:?}", engine.history(&run).await.unwrap());
+    assert!(!journal.contains("ghp_alice_secret"), "{journal}");
 }
 
 #[tokio::test]

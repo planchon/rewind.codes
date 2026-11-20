@@ -2828,7 +2828,7 @@ pub async fn secret_usage_says_what_reads_a_secret<S: JournalStore>(store: &S) {
 
     let usage = |secret: SecretId, limit: usize| async move {
         store
-            .secret_usage(&acme(), &secret, limit)
+            .secret_usage(&acme(), &secret, &BTreeMap::new(), limit)
             .await
             .expect("secret_usage")
     };
@@ -2883,10 +2883,44 @@ pub async fn secret_usage_says_what_reads_a_secret<S: JournalStore>(store: &S) {
     assert!(shared_github.versions.is_empty());
 
     let elsewhere = store
-        .secret_usage(&tenant("other"), &secret_of(Some(&alice()), "github"), 10)
+        .secret_usage(
+            &tenant("other"),
+            &secret_of(Some(&alice()), "github"),
+            &BTreeMap::new(),
+            10,
+        )
         .await
         .expect("secret_usage");
     assert_eq!(elsewhere, SecretUsage::default(), "another tenant's");
+
+    // A caller limited to labels counts only the runs carrying them.
+    let mut labelled = new_run_of(run_ref(6), &alice(), b"script", T0);
+    labelled.metadata.secrets = attachments(&[("zendesk", "org/zendesk")]);
+    labelled.metadata.labels = BTreeMap::from([("env".to_owned(), "prod".to_owned())]);
+    store.create_run(labelled, None).await.expect("create_run");
+    let zendesk_of = |labels: &[(&str, &str)]| {
+        let labels: BTreeMap<String, String> = labels
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        async move {
+            store
+                .secret_usage(&acme(), &secret_of(None, "zendesk"), &labels, 10)
+                .await
+                .expect("secret_usage")
+        }
+    };
+    let all = zendesk_of(&[]).await;
+    assert_eq!(all.active_total, 2, "the labelled run and the first");
+    let prod = zendesk_of(&[("env", "prod")]).await;
+    assert_eq!(prod.active_runs, [run_ref(6)]);
+    assert_eq!((prod.active_total, prod.waiting_total), (1, 0));
+    let dev = zendesk_of(&[("env", "dev")]).await;
+    assert_eq!(
+        (dev.active_runs.len(), dev.active_total, dev.waiting_total),
+        (0, 0, 0),
+        "nothing of the runs outside the caller's labels"
+    );
 }
 
 /// What reads a secret before it is deleted (`archi/04-tools.md`, "Secrets": who reads what).
@@ -3013,7 +3047,7 @@ pub async fn secret_usage_answers_the_runs_and_versions_attaching_it<S: JournalS
     };
     let usage = |tenant: TenantId, secret: SecretId, limit: usize| async move {
         store
-            .secret_usage(&tenant, &secret, limit)
+            .secret_usage(&tenant, &secret, &BTreeMap::new(), limit)
             .await
             .expect("secret_usage")
     };

@@ -517,12 +517,14 @@ pub trait JournalStore: Send + Sync {
     /// What reads `secret` in `tenant`: the active runs that attach it (an organization's
     /// secret in every namespace, a namespace's in its own), those of them with a call to a
     /// server or an API it serves that is parked or not yet sent, and the latest version of each
-    /// workflow that attaches it. Each list of runs holds at most `limit`; the totals count them
-    /// all.
+    /// workflow that attaches it. Only the runs carrying every one of `labels` count: a caller
+    /// limited to labels learns nothing of the others. Each list of runs holds at most `limit`;
+    /// the totals count them all.
     fn secret_usage(
         &self,
         tenant: &TenantId,
         secret: &SecretId,
+        labels: &BTreeMap<String, String>,
         limit: usize,
     ) -> impl Future<Output = Result<SecretUsage, StoreError>> + Send;
 

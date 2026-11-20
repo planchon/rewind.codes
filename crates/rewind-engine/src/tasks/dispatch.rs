@@ -23,8 +23,9 @@ use std::time::Duration;
 use tracing::Instrument as _;
 
 use rewind_core::{
-    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, SecretRef, SecretScope,
-    Seq, Timestamp, ToolAuth, ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
+    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, SecretEncoding,
+    SecretPlacement, SecretRef, SecretScope, Seq, Timestamp, ToolAuth, ToolFailure,
+    ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
 };
 use serde_json::json;
 
@@ -214,7 +215,8 @@ where
                 mock_end = end;
                 return dispatched;
             }
-            self.dispatcher.dispatch(call, auth).await
+            let texts = secret_texts(&auth);
+            redacted(self.dispatcher.dispatch(call, auth).await, &texts)
         }
         .instrument(attempt.clone())
         .await;
@@ -772,5 +774,87 @@ where
             }
         }
         Ok(())
+    }
+}
+
+/// The shortest secret whose value is taken out of answers: a shorter one would match ordinary
+/// text.
+const MIN_REDACTED_SECRET: usize = 4;
+
+/// What replaces a secret's value in an answer.
+const REDACTED: &str = "[secret]";
+
+/// The texts of the attached secret an answer must not carry: its value, and its base64 form
+/// when its header encodes it (HTTP basic).
+fn secret_texts(auth: &CallAuth) -> Vec<String> {
+    let CallAuth::Secret { value, placement } = auth else {
+        return Vec::new();
+    };
+    let value = value.expose();
+    if value.len() < MIN_REDACTED_SECRET {
+        return Vec::new();
+    }
+    let mut texts = vec![value.to_owned()];
+    if let SecretPlacement::Header {
+        encoding: SecretEncoding::Base64,
+        ..
+    } = placement
+    {
+        use base64::Engine as _;
+        texts.push(base64::engine::general_purpose::STANDARD.encode(value));
+    }
+    texts
+}
+
+/// `dispatched` without the attached secret's texts: a server that echoes its credential (an
+/// error quoting the key, a debug endpoint) must not bring it into the journal and the script
+/// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
+fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
+    if texts.is_empty() {
+        return dispatched;
+    }
+    let failure = |mut failure: ToolFailure| {
+        failure.message = redacted_text(failure.message, texts);
+        failure.data = failure.data.map(|data| redacted_json(data, texts));
+        failure
+    };
+    match dispatched {
+        Dispatched::Result(value) => Dispatched::Result(redacted_json(value, texts)),
+        Dispatched::Failed(failed) => Dispatched::Failed(failure(failed)),
+        Dispatched::Transient(failed) => Dispatched::Transient(failure(failed)),
+        Dispatched::Park(mut reason) => {
+            reason.message = redacted_text(reason.message, texts);
+            Dispatched::Park(reason)
+        }
+        Dispatched::Deferred => Dispatched::Deferred,
+    }
+}
+
+fn redacted_text(text: String, texts: &[String]) -> String {
+    if texts.iter().any(|secret| text.contains(secret.as_str())) {
+        texts
+            .iter()
+            .fold(text, |text, secret| text.replace(secret.as_str(), REDACTED))
+    } else {
+        text
+    }
+}
+
+fn redacted_json(value: JsonValue, texts: &[String]) -> JsonValue {
+    match value {
+        JsonValue::String(text) => JsonValue::String(redacted_text(text, texts)),
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .into_iter()
+                .map(|item| redacted_json(item, texts))
+                .collect(),
+        ),
+        JsonValue::Object(fields) => JsonValue::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (redacted_text(key, texts), redacted_json(value, texts)))
+                .collect(),
+        ),
+        other => other,
     }
 }

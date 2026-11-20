@@ -3278,15 +3278,18 @@ impl JournalStore for PostgresStore {
         &self,
         tenant_id: &TenantId,
         secret: &SecretId,
+        labels: &BTreeMap<String, String>,
         max: usize,
     ) -> Result<SecretUsage, StoreError> {
         let (attached, namespace) = attached_as(secret);
+        let labels =
+            serde_json::to_string(labels).map_err(|error| Error::Corrupt(error.to_string()))?;
         // The active runs that attach the secret, and those of them with a call to a server or
         // an API it serves that is parked or not yet sent.
         let active = concat!(
             "r.tenant = $1 AND r.status NOT IN ",
             terminal!(),
-            " AND ($3::text IS NULL OR r.namespace = $3) \
+            " AND ($3::text IS NULL OR r.namespace = $3) AND r.labels @> $5::jsonb \
              AND EXISTS (SELECT 1 FROM jsonb_each_text(r.secrets) a WHERE a.value = $2)"
         );
         let waiting = " AND EXISTS (SELECT 1 FROM tool_tasks t \
@@ -3312,6 +3315,7 @@ impl JournalStore for PostgresStore {
             .bind(attached.as_str())
             .bind(namespace)
             .bind(limit(max))
+            .bind(labels.as_str())
             .fetch_all(&self.pool)
             .await
             .map_err(Error::from)?;
@@ -3320,6 +3324,8 @@ impl JournalStore for PostgresStore {
                     .bind(tenant(tenant_id))
                     .bind(attached.as_str())
                     .bind(namespace)
+                    .bind(None::<i64>)
+                    .bind(labels.as_str())
                     .fetch_one(&self.pool)
                     .await
                     .map_err(Error::from)?;
