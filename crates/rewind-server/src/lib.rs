@@ -46,7 +46,10 @@ use clap::Parser;
 
 pub use config::{ConfigError, OtlpArg, RoleArg, ServerArgs};
 pub use connections::{McpCaller, McpOrganization, McpPrincipal};
-pub use serve::{Running, StartupError, VERSION, start, start_in_memory, start_with_identity};
+pub use serve::{
+    Rewrapped, Running, StartupError, VERSION, rewrap_data_keys, start, start_in_memory,
+    start_with_identity,
+};
 
 /// Exit codes of `rewind server`.
 pub mod exit {
@@ -54,14 +57,25 @@ pub mod exit {
     pub const STOPPED: u8 = 0;
     /// The command line is invalid.
     pub const USAGE: u8 = 64;
-    /// The server cannot start: a store, a port, a file.
+    /// The server cannot start: a store, a port, a file, a data key held under a master key it
+    /// was not given. `--rewrap-data-keys` that failed.
     pub const FAILED: u8 = 70;
     /// Another embedded server holds the directory's lock.
     pub const LOCKED: u8 = 75;
 }
 
+/// The exit code of a server that could not start.
+pub fn exit_code(error: &StartupError) -> u8 {
+    match error {
+        StartupError::Config(_) => exit::USAGE,
+        StartupError::Locked(_) => exit::LOCKED,
+        StartupError::Io(_) | StartupError::Setup(_) => exit::FAILED,
+    }
+}
+
 /// `rewind server …`: `args` are the arguments after `server`. Runs until a signal (SIGINT,
-/// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server.
+/// SIGTERM), `POST /v1/server/stop` or the idle timeout stops the server. With
+/// `--rewrap-data-keys`, rewraps the data keys, prints how many it changed, and exits.
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let args = match ServerArgs::try_parse_from(
         std::iter::once(OsString::from("rewind server")).chain(args),
@@ -91,15 +105,26 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
                 return ExitCode::from(exit::USAGE);
             }
         };
+        if args.rewrap_data_keys {
+            return match rewrap_data_keys(args).await {
+                Ok(rewrapped) => {
+                    println!(
+                        "{} data key(s) encrypted again with the master key {}",
+                        rewrapped.changed, rewrapped.master_key
+                    );
+                    ExitCode::from(exit::STOPPED)
+                }
+                Err(error) => {
+                    eprintln!("rewind server: {error}");
+                    ExitCode::from(exit_code(&error))
+                }
+            };
+        }
         let running = match start(args).await {
             Ok(running) => running,
             Err(error) => {
                 eprintln!("rewind server: {error}");
-                return ExitCode::from(match error {
-                    StartupError::Config(_) => exit::USAGE,
-                    StartupError::Locked(_) => exit::LOCKED,
-                    StartupError::Io(_) | StartupError::Setup(_) => exit::FAILED,
-                });
+                return ExitCode::from(exit_code(&error));
             }
         };
         tokio::select! {

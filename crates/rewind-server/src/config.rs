@@ -4,12 +4,14 @@
 //! rewind server --embedded [--dir .rewind] [--virtual-time | --real-time] [--idle-timeout 10m]
 //! rewind server --store turso:<path> [--blobs <dir> | s3://<bucket>] [--listen 127.0.0.1:8080]
 //!            [--role api|worker]… [--public-url https://…] …
+//! rewind server --store … --master-key <new> --previous-master-keys <old> --rewrap-data-keys
 //! ```
 //!
 //! Every option also reads an environment variable (`REWIND_*`), for deployments; WorkOS's four
 //! keep WorkOS's names (`WORKOS_*`, `archi/07-code-architecture.md`, "Sign-in (`/auth`)"). The
-//! secrets (`--master-key`, `--admin-key`, S3 keys, WorkOS's API key and cookie password) are
-//! never printed.
+//! secrets (`--master-key`, `--previous-master-keys`, `--admin-key`, S3 keys, WorkOS's API key
+//! and cookie password) are never printed: a master key is named by its id, the first 8 bytes of
+//! its SHA-256 in hex.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -20,7 +22,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
-use rewind_engine::ports::{Quotas, Retention, TenantId, TenantScope};
+use rewind_engine::ports::{MasterKeyId, Quotas, Retention, TenantId, TenantScope};
 use rewind_engine::{CacheConfig, EngineConfig};
 use rewind_mcp::{InternalAllowList, McpEgress};
 
@@ -115,6 +117,23 @@ pub struct ServerArgs {
     /// key. The embedded server keeps its own in `.rewind/master.key`.
     #[arg(long, env = "REWIND_MASTER_KEY", hide_env_values = true)]
     pub master_key: Option<String>,
+
+    /// The master keys `--master-key` replaced, 32 bytes in base64 each, separated by commas:
+    /// they only decrypt the data keys still held under them, until `--rewrap-data-keys` has
+    /// run. A server refuses to start while a data key is held under a key it was not given.
+    #[arg(
+        long,
+        env = "REWIND_PREVIOUS_MASTER_KEYS",
+        hide_env_values = true,
+        value_delimiter = ','
+    )]
+    pub previous_master_keys: Vec<String>,
+
+    /// Encrypts with `--master-key` every data key held under one of `--previous-master-keys`,
+    /// one tenant at a time, prints how many it changed, and exits without serving. The secrets
+    /// and the private keys are not encrypted again; servers may keep running meanwhile.
+    #[arg(long)]
+    pub rewrap_data_keys: bool,
 
     /// An API key (`rewind_sk_…`) with the role `operator`, registered at start: the first key,
     /// from which the others are made with `POST /v1/api-keys`.
@@ -400,6 +419,54 @@ impl ServerArgs {
     }
 }
 
+/// The master keys of the secret store (`archi/04-tools.md`, "Secrets": the master key can be
+/// replaced): the current one, which encrypts, and the previous ones, which only decrypt. `Debug`
+/// shows their ids, never a key.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct MasterKeyRing {
+    pub(crate) current: [u8; 32],
+    /// Never the current one, and no key twice.
+    pub(crate) previous: Vec<[u8; 32]>,
+}
+
+impl MasterKeyRing {
+    pub(crate) fn new(current: [u8; 32]) -> Self {
+        Self {
+            current,
+            previous: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_previous(mut self, previous: impl IntoIterator<Item = [u8; 32]>) -> Self {
+        for key in previous {
+            if key != self.current && !self.previous.contains(&key) {
+                self.previous.push(key);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn current_id(&self) -> MasterKeyId {
+        MasterKeyId::of(&self.current)
+    }
+
+    pub(crate) fn previous_ids(&self) -> Vec<MasterKeyId> {
+        self.previous
+            .iter()
+            .map(|key| MasterKeyId::of(key))
+            .collect()
+    }
+}
+
+impl fmt::Debug for MasterKeyRing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MasterKeyRing")
+            .field("current", &self.current_id())
+            .field("previous", &self.previous_ids())
+            .finish()
+    }
+}
+
 /// How the server listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Listen {
@@ -419,7 +486,9 @@ pub(crate) struct Config {
     pub(crate) store: StoreLocation,
     pub(crate) blobs: BlobLocation,
     /// `None` for the embedded server, which keeps its own.
-    pub(crate) master_key: Option<[u8; 32]>,
+    pub(crate) master_keys: Option<MasterKeyRing>,
+    /// `--rewrap-data-keys`: rewrap, print, exit.
+    pub(crate) rewrap_data_keys: bool,
     pub(crate) admin_key: Option<String>,
     pub(crate) admin_tenant: TenantId,
     pub(crate) public_url: Option<String>,
@@ -546,6 +615,12 @@ impl ServerArgs {
         }
 
         if self.embedded {
+            if self.rewrap_data_keys {
+                return Err(ConfigError::new(
+                    "the embedded server keeps its master key in --dir: --rewrap-data-keys does \
+                     not apply to it",
+                ));
+            }
             if !self.roles.is_empty() {
                 return Err(ConfigError::new(
                     "the embedded server takes both roles: --role does not apply to it",
@@ -570,7 +645,8 @@ impl ServerArgs {
                 listen: Listen::Embedded { dir },
                 api: true,
                 worker: true,
-                master_key: None,
+                master_keys: None,
+                rewrap_data_keys: false,
                 admin_key: None,
                 admin_tenant: TenantId::local(),
                 public_url: self
@@ -648,6 +724,22 @@ impl ServerArgs {
             )
         })?;
         let master_key = parse_master_key(master_key)?;
+        let previous = self
+            .previous_master_keys
+            .iter()
+            .map(|key| key.trim())
+            .filter(|key| !key.is_empty())
+            .enumerate()
+            .map(|(at, key)| {
+                parse_master_key(key).map_err(|error| {
+                    ConfigError::new(format!(
+                        "--previous-master-keys (REWIND_PREVIOUS_MASTER_KEYS), key {}: {error}",
+                        at + 1
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let master_keys = MasterKeyRing::new(master_key).with_previous(previous);
         let admin_tenant = TenantId::new(self.admin_tenant.clone())
             .map_err(|error| ConfigError::new(error.to_string()))?;
         if let Some(key) = &self.admin_key
@@ -670,7 +762,8 @@ impl ServerArgs {
             worker,
             store,
             blobs,
-            master_key: Some(master_key),
+            master_keys: Some(master_keys),
+            rewrap_data_keys: self.rewrap_data_keys,
             admin_key: self.admin_key,
             admin_tenant,
             public_url: self
@@ -705,11 +798,11 @@ impl ServerArgs {
     }
 }
 
-/// Reads a master key: 32 bytes in base64.
+/// Reads a master key: 32 bytes in base64. An error never quotes the text, which may be a key.
 pub(crate) fn parse_master_key(text: &str) -> Result<[u8; 32], ConfigError> {
     let bytes = BASE64
         .decode(text.trim())
-        .map_err(|error| ConfigError::new(format!("the master key is not base64: {error}")))?;
+        .map_err(|_| ConfigError::new("the master key is not base64"))?;
     <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
         ConfigError::new(format!(
             "the master key has {} bytes: it must have 32",
@@ -773,7 +866,8 @@ mod tests {
         ])
         .unwrap_or_else(|error| panic!("{error}"));
         assert!(config.api && !config.worker);
-        assert_eq!(config.master_key, Some([7u8; 32]));
+        assert_eq!(config.master_keys, Some(MasterKeyRing::new([7u8; 32])));
+        assert!(!config.rewrap_data_keys);
         assert!(
             parse(&["--store", "postgres://x", "--master-key", &key]).is_err(),
             "Postgres needs --blobs"
@@ -913,6 +1007,67 @@ mod tests {
         assert!(
             embedded.workos.is_none(),
             "the embedded server ignores them"
+        );
+    }
+
+    #[test]
+    fn previous_master_keys_only_decrypt_and_are_never_printed() {
+        let (current, old, older) = (
+            BASE64.encode([7u8; 32]),
+            BASE64.encode([8u8; 32]),
+            BASE64.encode([9u8; 32]),
+        );
+        let previous = format!("{old}, {older},{current},{old}");
+        let config = parse(&[
+            "--store",
+            "turso:/tmp/j.db",
+            "--master-key",
+            &current,
+            "--previous-master-keys",
+            &previous,
+            "--rewrap-data-keys",
+        ])
+        .unwrap_or_else(|error| panic!("{error}"));
+        let keys = config.master_keys.clone().expect("master keys");
+        assert_eq!(keys.current, [7u8; 32]);
+        assert_eq!(
+            keys.previous,
+            [[8u8; 32], [9u8; 32]],
+            "in order, without the current key nor twice the same"
+        );
+        assert!(config.rewrap_data_keys);
+        let printed = format!("{config:?}");
+        for key in [&current, &old, &older] {
+            assert!(!printed.contains(key.as_str()), "{printed}");
+        }
+        assert!(!printed.contains("[7, 7, 7"), "{printed}");
+        assert!(
+            printed.contains(MasterKeyId::of(&[8u8; 32]).as_str()),
+            "{printed}"
+        );
+
+        let invalid = parse(&[
+            "--store",
+            "turso:/tmp/j.db",
+            "--master-key",
+            &current,
+            "--previous-master-keys",
+            "c2VjcmV0LWJ1dC1zaG9ydA==",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(invalid.contains("key 1"), "{invalid}");
+        assert!(
+            !invalid.contains("c2VjcmV0"),
+            "the key is not printed: {invalid}"
+        );
+        let not_base64 = parse(&["--store", "turso:/tmp/j.db", "--master-key", "s3cr3t!!"])
+            .unwrap_err()
+            .to_string();
+        assert!(!not_base64.contains("s3cr3t"), "{not_base64}");
+        assert!(
+            parse(&["--embedded", "--rewrap-data-keys"]).is_err(),
+            "the embedded server keeps its master key"
         );
     }
 

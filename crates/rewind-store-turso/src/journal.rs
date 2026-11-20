@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId,
-    RunStatus, Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
+    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
     end_signal_name,
 };
 use rewind_engine::ports::{
@@ -17,7 +17,7 @@ use rewind_engine::ports::{
     RunRecord, RunRef, RunWorkflow, SecretId, SecretUsage, StartedBy, StoreError, StoredScript,
     StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
     TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
-    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
+    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowAttaching, WorkflowFilter,
     deferred_timeout_failure,
 };
 use rewind_engine::ports::{
@@ -53,7 +53,7 @@ macro_rules! run_columns {
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
          ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
-         workflow_version, started_by, started_seq, detached, scope, namespace"
+         workflow_version, started_by, started_seq, detached, scope, namespace, secrets"
     };
 }
 
@@ -141,8 +141,7 @@ fn record_from_row(row: &Row) -> Result<RunRecord, Error> {
                 })
                 .transpose()?,
             scope: decode_labels(&row.text(31)?)?,
-            // The `runs.secrets` column is the stores workstream's: no run attaches any yet.
-            secrets: Attachments::new(),
+            secrets: codec::decode_attachments(&row.text(33)?)?,
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -1039,9 +1038,6 @@ impl JournalStore for TursoStore {
                 Err(refused) => return Ok(refused),
             };
             let metadata = &run.metadata;
-            if !metadata.secrets.is_empty() {
-                keep_attachments(&metadata.secrets);
-            }
             let trace = metadata.trace_context.as_ref();
             let workflow = metadata.workflow.as_ref();
             let started_by = metadata.started_by;
@@ -1050,9 +1046,10 @@ impl JournalStore for TursoStore {
                 "INSERT INTO runs (id, tenant, script, toolset, status, epoch, history_len, \
                  expires_at, expiry_enqueued, failures, attempts, fence, labels, traceparent, \
                  tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
-                 workflow, workflow_version, started_by, started_seq, detached, scope, namespace) \
+                 workflow, workflow_version, started_by, started_seq, detached, scope, namespace, \
+                 secrets) \
                  VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-                 ?, ?, ?, ?, ?)",
+                 ?, ?, ?, ?, ?, ?)",
                 vec![
                     run_id(run.run.id),
                     tenant(tenant_id),
@@ -1078,6 +1075,7 @@ impl JournalStore for TursoStore {
                     started_by.map_or(Value::Null, |started_by| boolean(started_by.detached)),
                     text(encode_labels(&metadata.scope)),
                     text(run.namespace.as_str()),
+                    text(codec::encode_attachments(&metadata.secrets)),
                 ],
             )
             .await?;
@@ -2252,37 +2250,149 @@ impl JournalStore for TursoStore {
         .await
     }
 
-    #[expect(
-        clippy::todo,
-        reason = "the stores workstream resumes the calls by secret"
-    )]
     async fn resume_parked(
         &self,
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
-        let _ = (scope, now);
-        todo!(
-            "stores: make ready the tasks parked by credentials_refused or secret_missing whose \
-             run's runs.secrets attaches the secret for the task's server"
-        )
+        let ParkedScope::Secret {
+            tenant: tenant_id,
+            secret,
+        } = scope;
+        let connection = self.connection().await?;
+        let connection = &*connection;
+        transaction(connection, async {
+            // The tasks parked by a refusal or by a missing secret (`credentials_expired` before
+            // schema 9), of a server or an API: those whose run attaches the secret go on.
+            let parked = sql::query(
+                connection,
+                "SELECT t.run_id, t.seq, t.mcp_server, r.namespace, r.secrets \
+                 FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                 WHERE r.tenant = ? AND t.state = 'parked' AND t.mcp_server IS NOT NULL \
+                 AND t.parked_kind IN ('credentials_refused', 'secret_missing', \
+                     'credentials_expired') \
+                 ORDER BY t.run_id, t.seq",
+                vec![tenant(tenant_id)],
+            )
+            .await?;
+            let ready = TaskState::Ready {
+                next_attempt_at: now,
+            };
+            let mut resumed = 0;
+            for row in &parked {
+                let namespace = namespace_name(row.text(3)?)?;
+                let attached = codec::decode_attachments(&row.text(4)?)?;
+                let reads_it = attached
+                    .get(&row.text(2)?)
+                    .is_some_and(|attached| SecretId::resolve(attached, &namespace) == *secret);
+                if reads_it {
+                    let task = TaskRef {
+                        run: RunRef::new(tenant_id.clone(), row.run_id(0)?),
+                        seq: Seq(row.u32(1)?),
+                    };
+                    set_task_state(connection, &task, &ready, None).await?;
+                    resumed += 1;
+                }
+            }
+            Ok(resumed)
+        })
+        .await
     }
 
-    #[expect(
-        clippy::todo,
-        reason = "the stores workstream answers what reads a secret"
-    )]
     async fn secret_usage(
         &self,
-        tenant: &TenantId,
+        tenant_id: &TenantId,
         secret: &SecretId,
-        limit: usize,
+        max: usize,
     ) -> Result<SecretUsage, StoreError> {
-        let _ = (tenant, secret, limit);
-        todo!(
-            "stores: the active runs whose runs.secrets attaches the secret, those waiting on a \
-             call it serves, the latest workflow versions attaching it"
+        let mut usage = SecretUsage::default();
+        {
+            let connection = self.connection().await?;
+            // The active runs of the tenant that attach anything, oldest first: those attaching
+            // the secret are kept, with the servers and APIs they attach it for.
+            let runs = sql::query(
+                &connection,
+                concat!(
+                    "SELECT id, namespace, secrets FROM runs \
+                     WHERE tenant = ? AND secrets <> '{}' AND status NOT IN ",
+                    terminal!(),
+                    " ORDER BY created_at, id"
+                ),
+                vec![tenant(tenant_id)],
+            )
+            .await?;
+            // The calls of the tenant's active runs that are parked or not yet sent.
+            let waiting: BTreeSet<(RunId, String)> = sql::query(
+                &connection,
+                concat!(
+                    "SELECT t.run_id, t.mcp_server FROM tool_tasks t JOIN runs r ON r.id = t.run_id \
+                     WHERE r.tenant = ? AND r.secrets <> '{}' AND t.mcp_server IS NOT NULL \
+                     AND t.state IN ('approval', 'ready', 'parked') AND r.status NOT IN ",
+                    terminal!()
+                ),
+                vec![tenant(tenant_id)],
+            )
+            .await?
+            .iter()
+            .map(|row| Ok((row.run_id(0)?, row.text(1)?)))
+            .collect::<Result<_, Error>>()?;
+            for row in &runs {
+                let run = row.run_id(0)?;
+                let namespace = namespace_name(row.text(1)?)?;
+                let attached = codec::decode_attachments(&row.text(2)?)?;
+                let servers: Vec<&str> = attached
+                    .iter()
+                    .filter(|(_, attached)| SecretId::resolve(attached, &namespace) == *secret)
+                    .map(|(server, _)| server)
+                    .collect();
+                if servers.is_empty() {
+                    continue;
+                }
+                let run_ref = RunRef::new(tenant_id.clone(), run);
+                usage.active_total += 1;
+                if usage.active_runs.len() < max {
+                    usage.active_runs.push(run_ref.clone());
+                }
+                if servers
+                    .iter()
+                    .any(|server| waiting.contains(&(run, (*server).to_owned())))
+                {
+                    usage.waiting_total += 1;
+                    if usage.waiting_runs.len() < max {
+                        usage.waiting_runs.push(run_ref);
+                    }
+                }
+            }
+        }
+        // A tenant has few workflows: the attachments are read from their latest versions.
+        let latest = JournalStore::latest_workflows(
+            self,
+            &WorkflowFilter {
+                tenant: tenant_id.clone(),
+                labels: BTreeMap::new(),
+                after: None,
+                limit: None,
+            },
         )
+        .await?;
+        let attached = secret.to_ref();
+        usage.versions = latest
+            .iter()
+            .filter_map(|stored| {
+                let servers: Vec<String> = stored
+                    .workflow
+                    .secrets()
+                    .servers_reading(&attached)
+                    .map(str::to_owned)
+                    .collect();
+                (!servers.is_empty()).then(|| WorkflowAttaching {
+                    name: stored.workflow.name().to_owned(),
+                    version: stored.workflow.version(),
+                    servers,
+                })
+            })
+            .collect();
+        Ok(usage)
     }
 
     async fn expire_deferred_tool_tasks(
@@ -3250,14 +3360,4 @@ impl JournalStore for TursoStore {
         })
         .await
     }
-}
-
-/// Keeps a run's attachments in `runs.secrets`.
-#[expect(
-    clippy::todo,
-    reason = "the stores workstream adds the runs.secrets column"
-)]
-fn keep_attachments(secrets: &Attachments) {
-    let _ = secrets;
-    todo!("stores: write the run's attachments to runs.secrets, and read them back in get_run")
 }

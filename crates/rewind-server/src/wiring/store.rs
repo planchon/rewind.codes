@@ -48,7 +48,7 @@ use rewind_store_postgres::PostgresStore;
 use rewind_store_turso::TursoStore;
 use std::collections::BTreeMap;
 
-use crate::config::ConfigError;
+use crate::config::{ConfigError, MasterKeyRing};
 
 /// Where the store lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,9 +102,10 @@ pub(crate) struct MemoryStore {
 }
 
 impl Store {
+    /// Opens the store at `location`, whose secrets are encrypted under `master_keys`.
     pub(crate) async fn open(
         location: &StoreLocation,
-        master_key: [u8; 32],
+        master_keys: &MasterKeyRing,
     ) -> Result<Self, ConfigError> {
         match location {
             StoreLocation::Turso(path) => {
@@ -113,18 +114,33 @@ impl Store {
                         ConfigError::new(format!("cannot create {}: {error}", parent.display()))
                     })?;
                 }
-                let master_key = rewind_store_turso::MasterKey::from_bytes(master_key);
-                let store = TursoStore::open(path, master_key).await.map_err(|error| {
+                use rewind_store_turso::{MasterKey, MasterKeys};
+                let keys = MasterKeys::new(MasterKey::from_bytes(master_keys.current))
+                    .with_previous(
+                        master_keys
+                            .previous
+                            .iter()
+                            .copied()
+                            .map(MasterKey::from_bytes),
+                    );
+                let store = TursoStore::open(path, keys).await.map_err(|error| {
                     ConfigError::new(format!("cannot open {}: {error}", path.display()))
                 })?;
                 Ok(Self::Turso(store))
             }
             StoreLocation::Postgres(url) => {
-                let master_key = rewind_store_postgres::MasterKey::from_bytes(master_key);
-                let store =
-                    PostgresStore::connect(&rewind_store_postgres::Config::new(url), master_key)
-                        .await
-                        .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
+                use rewind_store_postgres::{MasterKey, MasterKeys};
+                let keys = MasterKeys::new(MasterKey::from_bytes(master_keys.current))
+                    .with_previous(
+                        master_keys
+                            .previous
+                            .iter()
+                            .copied()
+                            .map(MasterKey::from_bytes),
+                    );
+                let store = PostgresStore::connect(&rewind_store_postgres::Config::new(url), keys)
+                    .await
+                    .map_err(|error| ConfigError::new(format!("Postgres: {error}")))?;
                 Ok(Self::Postgres(store))
             }
             StoreLocation::Memory => Ok(Self::Memory(Arc::new(MemoryStore::default()))),

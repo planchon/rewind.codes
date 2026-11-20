@@ -1,6 +1,6 @@
 //! What the conformance suites cannot see: the database file itself. Its schema version and
-//! migrations, what survives a restart, the settings in `meta`, secrets at rest, and claims
-//! that read several pages of due tasks.
+//! migrations, what survives a restart, the settings in `meta`, secrets at rest and the master key
+//! replaced, and claims that read several pages of due tasks.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,7 +15,7 @@ use rewind_engine::ports::{
     RunMetadata, RunRef, Secret, SecretError, SecretId, SecretReader, SecretStore, TaskFilter,
     TenantId,
 };
-use rewind_store_turso::{Error, MasterKey, SCHEMA_VERSION, TursoStore};
+use rewind_store_turso::{Error, MasterKey, MasterKeys, SCHEMA_VERSION, TursoStore};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -232,7 +232,7 @@ async fn secrets_are_encrypted_at_rest() {
     let dir = TempDir::new().expect("temporary directory");
     let path = dir.path().join("journal.db");
     let secret = github_token();
-    {
+    let signing = {
         let store = open(&path).await;
         store
             .put(&TenantId::local(), &secret, T0)
@@ -241,16 +241,19 @@ async fn secrets_are_encrypted_at_rest() {
         store
             .signing_key(&TenantId::local(), T0)
             .await
-            .expect("signing_key");
-    }
+            .expect("signing_key")
+    };
 
-    // Neither the database nor its write-ahead log holds the secret in clear.
+    // Neither the database nor its write-ahead log holds the secret or the private key in clear.
     for file in std::fs::read_dir(dir.path()).expect("read the directory") {
         let bytes = std::fs::read(file.expect("entry").path()).expect("read the file");
-        let found = bytes
-            .windows(b"ghp_plaintext_token".len())
-            .any(|window| window == b"ghp_plaintext_token");
-        assert!(!found, "a secret is stored in clear");
+        for clear in [
+            b"ghp_plaintext_token".as_slice(),
+            signing.private.expose().as_slice(),
+        ] {
+            let found = bytes.windows(clear.len()).any(|window| window == clear);
+            assert!(!found, "a secret or a private key is stored in clear");
+        }
     }
 
     let store = open(&path).await;
@@ -262,17 +265,104 @@ async fn secrets_are_encrypted_at_rest() {
         Some(secret.value.clone())
     );
 
+    assert_eq!(
+        store.signing_key(&TenantId::local(), T0).await,
+        Ok(signing),
+        "the same key after a restart"
+    );
+    assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
+
     // Another master key reads nothing.
     drop(store);
     let stranger = TursoStore::open(&path, MasterKey::from_bytes([4; 32]))
         .await
         .expect("open");
-    assert!(matches!(
+    assert_eq!(
         stranger
             .read(&TenantId::local(), &secret.id, &reader(), T0)
             .await,
-        Err(SecretError::Crypto(_) | SecretError::UnknownMasterKey(_))
-    ));
+        Err(SecretError::UnknownMasterKey(key().id()))
+    );
+}
+
+fn secret_of(tenant: &str, value: &str) -> (TenantId, NewSecret) {
+    let secret = NewSecret {
+        id: SecretId::of_namespace(
+            NamespaceName::new("alice").expect("valid"),
+            SecretName::new("github").expect("valid"),
+        ),
+        value: Secret::new(value),
+        labels: BTreeMap::new(),
+        by: "token:alice".into(),
+    };
+    (TenantId::new(tenant).expect("tenant"), secret)
+}
+
+async fn value_of(store: &TursoStore, (tenant, secret): &(TenantId, NewSecret)) -> Secret {
+    store
+        .read(tenant, &secret.id, &reader(), T0)
+        .await
+        .expect("read")
+        .expect("the secret exists")
+}
+
+/// The operator gives a new master key and the old one as a previous key, rewraps the data keys,
+/// then removes the old key: the secrets read the same throughout.
+#[tokio::test]
+async fn the_master_key_is_replaced_by_a_rewrap() {
+    let dir = TempDir::new().expect("temporary directory");
+    let path = dir.path().join("journal.db");
+    let (old, new) = (
+        MasterKey::from_bytes([1; 32]),
+        MasterKey::from_bytes([2; 32]),
+    );
+    let secrets = [secret_of("acme", "a-1"), secret_of("globex", "g-1")];
+    let acme = &secrets[0].0;
+    let signing = {
+        let before = TursoStore::open(&path, old.clone()).await.expect("open");
+        for (tenant, secret) in &secrets {
+            before.put(tenant, secret, T0).await.expect("put");
+        }
+        assert_eq!(before.master_keys_in_use().await, Ok(vec![old.id()]));
+        before.signing_key(acme, T0).await.expect("signing_key")
+    };
+
+    {
+        let ring = MasterKeys::new(new.clone()).with_previous([old.clone()]);
+        let during = TursoStore::open(&path, ring).await.expect("open");
+        for secret in &secrets {
+            assert_eq!(
+                value_of(&during, secret).await,
+                secret.1.value,
+                "read through a previous key"
+            );
+        }
+        let initech = secret_of("initech", "i-1");
+        during.put(&initech.0, &initech.1, T0).await.expect("put");
+        let mut in_use = vec![old.id(), new.id()];
+        in_use.sort();
+        assert_eq!(
+            during.master_keys_in_use().await,
+            Ok(in_use),
+            "a new data key is made under the current key"
+        );
+        assert_eq!(during.rewrap_data_keys().await, Ok(2));
+        assert_eq!(during.rewrap_data_keys().await, Ok(0), "nothing left");
+        assert_eq!(during.master_keys_in_use().await, Ok(vec![new.id()]));
+    }
+
+    let after = TursoStore::open(&path, new.clone()).await.expect("open");
+    for secret in &secrets {
+        assert_eq!(value_of(&after, secret).await, secret.1.value);
+    }
+    assert_eq!(after.signing_key(acme, T0).await, Ok(signing));
+    drop(after);
+    let stale = TursoStore::open(&path, old).await.expect("open");
+    assert_eq!(
+        stale.read(acme, &secrets[0].1.id, &reader(), T0).await,
+        Err(SecretError::UnknownMasterKey(new.id())),
+        "the old key alone no longer reads"
+    );
 }
 
 #[test]

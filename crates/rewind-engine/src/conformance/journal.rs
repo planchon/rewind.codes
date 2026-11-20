@@ -22,10 +22,10 @@ use crate::ports::{
     ForkParent, JournalStore, Lease, NewRun, NewTimer, NewToolTask, PAYLOAD_DELETION_TIMEOUT,
     ParkKind, ParkReason, ParkedScope, PayloadRecord, QUARANTINE_AFTER_FAILURES, QuarantineKind,
     Retention, RunCursor, RunFilter, RunMetadata, RunRef, RunWorkflow, STICKY_GRACE, Secret,
-    SecretId, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState,
-    TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
-    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    SecretId, SecretUsage, StartedBy, StoreError, Subscription, TEST_GRACE, TaskFilter, TaskRef,
+    TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations,
+    TraceContext, Trigger, Watched, WebhookEventType, WebhookToken, WorkflowAttaching,
+    WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DeleteNamespace, DisplayName, DropNamespace, Month, NamespaceCursor, NamespaceFilter,
@@ -2723,6 +2723,201 @@ pub async fn a_secret_put_again_resumes_the_calls_that_read_it<S: JournalStore>(
         resume(acme(), secret_of(Some(&bob()), "github")).await,
         0,
         "nothing waits any more"
+    );
+}
+
+/// What reads a secret before it is deleted (`archi/04-tools.md`, "Secrets": who reads what).
+///
+/// Not in [`run_all`] yet: the memory journal's `secret_usage` is still to build. The stores run
+/// it on their own.
+pub async fn secret_usage_answers_the_runs_and_versions_attaching_it<S: JournalStore>(store: &S) {
+    let github = |seq| {
+        let mut task = mcp_task(seq, "github.list_issues", "github", 8);
+        task.policy.approval = true;
+        task
+    };
+    let zendesk = |seq| mcp_task(seq, "zendesk.get_ticket", "zendesk", 8);
+    let alice_run = start_attaching(
+        store,
+        run_ref(1),
+        &alice(),
+        attachments(&[("github", "ns/github"), ("zendesk", "org/zendesk")]),
+        vec![github(1), zendesk(2)],
+    )
+    .await;
+    let bob_run = start_attaching(
+        store,
+        run_ref(2),
+        &bob(),
+        attachments(&[("github", "ns/github")]),
+        vec![mcp_task(1, "github.list_issues", "github", 8)],
+    )
+    .await;
+    let shared_run = start_attaching(
+        store,
+        run_ref(3),
+        &alice(),
+        attachments(&[("github", "org/github")]),
+        Vec::new(),
+    )
+    .await;
+    let ended_run = start_attaching(
+        store,
+        run_ref(4),
+        &alice(),
+        attachments(&[("github", "ns/github")]),
+        Vec::new(),
+    )
+    .await;
+    end(store, &ended_run, None, later(T0, 1)).await;
+    start_attaching(
+        store,
+        run_in(&tenant("other"), 5),
+        &alice(),
+        attachments(&[("zendesk", "org/zendesk")]),
+        Vec::new(),
+    )
+    .await;
+    // Alice's zendesk call is sent, bob's github call parked; alice's github call waits for its
+    // approval.
+    let claimed = claim(store, "a", &TaskFilter::All, T0, 10).await;
+    assert_eq!(claimed.len(), 2);
+    for task in claimed.iter().filter(|task| task.task.task.run == bob_run) {
+        let missing = ParkReason {
+            kind: ParkKind::SecretMissing,
+            message: "deleted".into(),
+        };
+        store
+            .park_tool_task(&task.token, missing)
+            .await
+            .expect("park");
+    }
+    let route = ToolRoute::Api {
+        api: "helpdesk".into(),
+    };
+    let api_call = NewToolTask {
+        seq: Seq(1),
+        tool: "helpdesk.get_ticket".into(),
+        args: json!({ "seq": 1 }).into(),
+        policy: ToolPolicy::default_for(&route),
+        route,
+        server_concurrency: Some(8),
+    };
+    let api_run = start_attaching(
+        store,
+        run_ref(6),
+        &bob(),
+        attachments(&[("helpdesk", "org/zendesk")]),
+        vec![api_call],
+    )
+    .await;
+
+    let put = |workflow: Workflow, secrets: &[(&str, &str)], at: Timestamp| {
+        let workflow = workflow.with_secrets(attachments(secrets));
+        async move {
+            store
+                .put_workflow(&acme(), &workflow, at)
+                .await
+                .expect("put_workflow")
+                .workflow
+        }
+    };
+    put(workflow("triage", "v1"), &[("github", "ns/github")], T0).await;
+    let triage = put(
+        workflow("triage", "v2"),
+        &[("github", "ns/github"), ("zendesk", "org/zendesk")],
+        later(T0, 10),
+    )
+    .await;
+    put(workflow("sync", "v1"), &[("zendesk", "org/zendesk")], T0).await;
+    put(workflow("sync", "v2"), &[], later(T0, 10)).await;
+    let report = put(
+        workflow("report", "v1"),
+        &[("zendesk", "org/zendesk"), ("helpdesk", "org/zendesk")],
+        T0,
+    )
+    .await;
+    store
+        .put_workflow(
+            &tenant("other"),
+            &workflow("triage", "elsewhere")
+                .with_secrets(attachments(&[("zendesk", "org/zendesk")])),
+            T0,
+        )
+        .await
+        .expect("put_workflow");
+    let attaching = |workflow: &Workflow, servers: &[&str]| WorkflowAttaching {
+        name: workflow.name().to_owned(),
+        version: workflow.version(),
+        servers: servers.iter().map(|server| (*server).to_owned()).collect(),
+    };
+    let usage = |tenant: TenantId, secret: SecretId, limit: usize| async move {
+        store
+            .secret_usage(&tenant, &secret, limit)
+            .await
+            .expect("secret_usage")
+    };
+
+    assert_eq!(
+        usage(acme(), secret_of(Some(&alice()), "github"), 10).await,
+        SecretUsage {
+            active_runs: vec![alice_run.clone()],
+            active_total: 1,
+            waiting_runs: vec![alice_run.clone()],
+            waiting_total: 1,
+            versions: vec![attaching(&triage, &["github"])],
+        },
+        "alice's active runs that attach ns/github, a call waiting for its approval, and the \
+         latest version of each workflow attaching ns/github"
+    );
+    assert_eq!(
+        usage(acme(), secret_of(Some(&bob()), "github"), 10).await,
+        SecretUsage {
+            active_runs: vec![bob_run.clone()],
+            active_total: 1,
+            waiting_runs: vec![bob_run],
+            waiting_total: 1,
+            versions: vec![attaching(&triage, &["github"])],
+        },
+        "a parked call waits; a version attaching ns/github counts for every namespace's"
+    );
+    assert_eq!(
+        usage(acme(), secret_of(None, "zendesk"), 10).await,
+        SecretUsage {
+            active_runs: vec![alice_run.clone(), api_run.clone()],
+            active_total: 2,
+            waiting_runs: vec![api_run.clone()],
+            waiting_total: 1,
+            versions: vec![
+                attaching(&report, &["helpdesk", "zendesk"]),
+                attaching(&triage, &["zendesk"]),
+            ],
+        },
+        "every namespace's runs, a call in flight not waiting, an API's call waiting, and no \
+         workflow whose latest version stopped attaching it"
+    );
+    let first = usage(acme(), secret_of(None, "zendesk"), 1).await;
+    assert_eq!(
+        (first.active_runs, first.active_total),
+        (vec![alice_run], 2),
+        "at most the limit, oldest first, with the total"
+    );
+    assert_eq!(
+        (first.waiting_runs, first.waiting_total),
+        (vec![api_run], 1)
+    );
+    assert_eq!(
+        usage(acme(), secret_of(None, "github"), 10).await,
+        SecretUsage {
+            active_runs: vec![shared_run],
+            active_total: 1,
+            ..SecretUsage::default()
+        }
+    );
+    assert_eq!(
+        usage(tenant("initech"), secret_of(None, "zendesk"), 10).await,
+        SecretUsage::default(),
+        "another tenant's"
     );
 }
 

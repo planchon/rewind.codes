@@ -16,8 +16,10 @@
 //! - `ReadModel`: the projections behind the dashboard's searches, statistics and failure
 //!   groups: run summaries with their labels, waits, search text and quarantine, tool calls with
 //!   their tasks' states;
-//! - `SecretStore`: credentials per toolset, per namespace and toolset, and per run, encrypted
-//!   with a data key per tenant, itself encrypted by the deployment's [`MasterKey`].
+//! - `SecretStore`: named secrets of the organization and of each namespace, their reads per
+//!   day, and each tenant's Ed25519 signing keys; values and private keys encrypted with a data
+//!   key per tenant, itself encrypted by one of the deployment's [`MasterKeys`], whose id it
+//!   records.
 //!
 //! Many workers, schedulers and projectors share one database. Each port method is one short
 //! transaction at `READ COMMITTED`, and the rows they compete for are taken with
@@ -52,7 +54,7 @@ use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 pub use schema::SCHEMA_VERSION;
-pub use secrets::MasterKey;
+pub use secrets::{MasterKey, MasterKeys};
 
 /// The errors of this crate. The port methods convert them into the port's own error type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -146,11 +148,7 @@ impl std::fmt::Debug for Config {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: PgPool,
-    #[expect(
-        dead_code,
-        reason = "the stores workstream's SecretStore seals with it"
-    )]
-    master_key: MasterKey,
+    master_keys: MasterKeys,
 }
 
 impl std::fmt::Debug for PostgresStore {
@@ -161,8 +159,13 @@ impl std::fmt::Debug for PostgresStore {
 
 impl PostgresStore {
     /// Connects to the database and brings its schema to [`SCHEMA_VERSION`]. A database with a
-    /// newer schema is refused.
-    pub async fn connect(config: &Config, master_key: MasterKey) -> Result<Self, Error> {
+    /// newer schema is refused. `master_keys` is the current master key, which encrypts, and the
+    /// previous ones, which only decrypt (a [`MasterKey`] alone has none).
+    pub async fn connect(
+        config: &Config,
+        master_keys: impl Into<MasterKeys>,
+    ) -> Result<Self, Error> {
+        let master_keys = master_keys.into();
         let options = PgConnectOptions::from_str(&config.url)
             .map_err(|err| Error::InvalidUrl(err.to_string()))?
             // Statements are the store's business; slow ones are still reported.
@@ -174,7 +177,7 @@ impl PostgresStore {
             .connect_with(options)
             .await?;
         schema::migrate(&pool).await?;
-        Ok(Self { pool, master_key })
+        Ok(Self { pool, master_keys })
     }
 
     /// The schema version of the database: always [`SCHEMA_VERSION`] once connected.
