@@ -20,8 +20,9 @@ Every key starts with the tenant, and what belongs to an end user names its name
 ([tenancy](#tenancy-namespaces-identity-and-access)).
 
 ```
-tenants    (id PK, data_key, master_key, quotas, namespace_defaults, retention)
-                                     -- data_key encrypted by the master key whose id is master_key
+tenants    (id PK, quotas, namespace_defaults, retention)
+data_keys  (tenant PK, wrapped_key, master_key)      -- wrapped_key: the tenant's data key, encrypted
+                                                     -- by the master key whose id is master_key
 namespaces (tenant, name, display_name, quotas, tokens_revoked_before, created_at, last_active_at,
             deleting_since)                                PK (tenant, name)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
@@ -73,7 +74,7 @@ secrets    (tenant, namespace, name, ciphertext, labels, created_by, created_at,
                                                             PK (tenant, namespace, name)
                                                  -- namespace *: the organization's secrets
 secret_reads (tenant, namespace, name, day, reads)         PK (tenant, namespace, name, day)
-signing_keys (tenant, kid, public_jwk, private_ciphertext, created_at, retired_at)
+signing_keys (tenant, kid, public_key, private_ciphertext, created_at, retired_at)
                                                            PK (tenant, kid)
 subscriptions (tenant, id, url, secret, events)
 usage      (tenant, namespace, day, cpu_ms, runs_started)  PK (tenant, namespace, day)  -- namespace *: the tenant
