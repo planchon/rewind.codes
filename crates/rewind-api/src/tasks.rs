@@ -31,14 +31,18 @@ use crate::namespaces::NamespaceName;
 #[into_params(parameter_in = Query)]
 pub struct TaskStreamQuery {
     /// The toolset whose host tools this worker executes: only the tasks of runs of this toolset.
-    pub toolset: String,
+    /// Without it, the tasks of the tools named in `tools`, whatever the toolset of their run (a
+    /// toolset derived from another, as saving a workflow does, keeps its host tools' names).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub toolset: Option<String>,
     /// Only the tasks of runs of this namespace. An end user's token is limited to its own: it
     /// may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
     /// same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub namespace: Option<NamespaceName>,
-    /// Only these tools. Repeat for several. All the toolset's host tools when absent.
+    /// Only these tools. Repeat for several. All the host tools of `toolset` when absent, every
+    /// host tool without `toolset` either.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<String>,
     /// At most this many tasks in flight on this stream: handed, and neither completed, failed,
@@ -348,8 +352,12 @@ mod tests {
             "worker": "w-1"
         }))
         .unwrap();
+        assert_eq!(query.toolset.as_deref(), Some("ab"));
         assert_eq!(query.tools, ["ask_user"]);
         assert_eq!(query.slots, Some(4));
-        assert!(serde_json::from_value::<TaskStreamQuery>(json!({})).is_err());
+        assert_eq!(
+            serde_json::from_value::<TaskStreamQuery>(json!({})).unwrap(),
+            TaskStreamQuery::default()
+        );
     }
 }

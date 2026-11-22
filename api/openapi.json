@@ -18472,14 +18472,14 @@
     },
     "/v1/tasks/stream": {
       "get": {
-        "description": "The tasks of the toolset's host tools, as they become ready, among the runs the caller\nsees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "description": "The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among\nthe runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
         "operationId": "streamTasks",
         "parameters": [
           {
-            "description": "The toolset whose host tools this worker executes: only the tasks of runs of this toolset.",
+            "description": "The toolset whose host tools this worker executes: only the tasks of runs of this toolset.\nWithout it, the tasks of the tools named in `tools`, whatever the toolset of their run (a\ntoolset derived from another, as saving a workflow does, keeps its host tools' names).",
             "in": "query",
             "name": "toolset",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -18494,7 +18494,7 @@
             }
           },
           {
-            "description": "Only these tools. Repeat for several. All the toolset's host tools when absent.",
+            "description": "Only these tools. Repeat for several. All the host tools of `toolset` when absent, every\nhost tool without `toolset` either.",
             "in": "query",
             "name": "tools",
             "required": false,

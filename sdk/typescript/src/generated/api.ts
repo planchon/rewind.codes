@@ -1741,8 +1741,8 @@ export interface paths {
         };
         /**
          * Follow the host-tool tasks handed to this worker (server-sent events)
-         * @description The tasks of the toolset's host tools, as they become ready, among the runs the caller
-         *     sees: an end user's token those of its namespace, a key limited to labels those of the
+         * @description The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among
+         *     the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
          *     runs carrying them. At most `slots` are in flight on the stream at once. Each event's
          *     `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
          *     its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
@@ -13143,16 +13143,23 @@ export interface operations {
     };
     streamTasks: {
         parameters: {
-            query: {
-                /** @description The toolset whose host tools this worker executes: only the tasks of runs of this toolset. */
-                toolset: string;
+            query?: {
+                /**
+                 * @description The toolset whose host tools this worker executes: only the tasks of runs of this toolset.
+                 *     Without it, the tasks of the tools named in `tools`, whatever the toolset of their run (a
+                 *     toolset derived from another, as saving a workflow does, keeps its host tools' names).
+                 */
+                toolset?: string;
                 /**
                  * @description Only the tasks of runs of this namespace. An end user's token is limited to its own: it
                  *     may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
                  *     same way.
                  */
                 namespace?: string;
-                /** @description Only these tools. Repeat for several. All the toolset's host tools when absent. */
+                /**
+                 * @description Only these tools. Repeat for several. All the host tools of `toolset` when absent, every
+                 *     host tool without `toolset` either.
+                 */
                 tools?: string[];
                 /**
                  * @description At most this many tasks in flight on this stream: handed, and neither completed, failed,

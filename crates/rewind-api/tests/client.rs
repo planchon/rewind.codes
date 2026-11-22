@@ -357,7 +357,7 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
 async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
     let (client, _) = serve_tcp().await;
     let query = TaskStreamQuery {
-        toolset: "ab".into(),
+        toolset: Some("ab".into()),
         tools: vec!["ask_user".into(), "approve".into()],
         slots: Some(4),
         worker: Some("w-1".into()),

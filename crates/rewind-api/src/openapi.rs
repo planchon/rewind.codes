@@ -1062,8 +1062,8 @@ mod operations {
 
     /// Follow the host-tool tasks handed to this worker (server-sent events)
     ///
-    /// The tasks of the toolset's host tools, as they become ready, among the runs the caller
-    /// sees: an end user's token those of its namespace, a key limited to labels those of the
+    /// The tasks of the host tools it names (`toolset`, `tools`), as they become ready, among
+    /// the runs the caller sees: an end user's token those of its namespace, a key limited to labels those of the
     /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
     /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
     /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
