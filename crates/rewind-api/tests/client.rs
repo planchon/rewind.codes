@@ -18,7 +18,7 @@ use rewind_api::events::{EventsQuery, StreamEvent};
 use rewind_api::headers::IdempotencyKey;
 use rewind_api::problem::{self, Problem, ProblemType};
 use rewind_api::runs::{Run, RunFilter, StartRun};
-use rewind_api::tasks::CompleteTask;
+use rewind_api::tasks::{CompleteTask, TaskGone, TaskStreamEvent, TaskStreamQuery};
 use rewind_api::{Client, Error, routes};
 use serde_json::{Value, json};
 
@@ -177,6 +177,27 @@ fn app(log: Log) -> Router {
                 ([(header::CONTENT_TYPE, "text/event-stream")], Body::from(body))
             }),
         )
+        .route(
+            routes::TASK_STREAM,
+            get(|headers: HeaderMap, RawQuery(query): RawQuery| async move {
+                assert_eq!(headers.get(header::ACCEPT).unwrap(), "text/event-stream");
+                assert_eq!(
+                    query.as_deref(),
+                    Some("slots=4&tools=ask_user&tools=approve&toolset=ab&worker=w-1")
+                );
+                let task = json!({
+                    "token": "tk_1", "id": "task_1", "runId": "r1", "namespace": "alice",
+                    "seq": 3, "tool": "ask_user", "args": { "question": "ok?" },
+                    "idempotencyKey": "r1/3", "attempt": 1, "labels": {}
+                });
+                let body = format!(
+                    ":\n\nevent: task\ndata: {task}\n\nevent: later\ndata: {{}}\n\n:\n\n\
+                     event: gone\ndata: {}\n\n",
+                    json!({ "token": "tk_1" })
+                );
+                ([(header::CONTENT_TYPE, "text/event-stream")], Body::from(body))
+            }),
+        )
         .with_state(log)
 }
 
@@ -329,6 +350,40 @@ async fn the_event_stream_skips_keep_alives_and_reads_each_event() {
         StreamEvent::End {
             status: RunStatus::Completed
         }
+    );
+}
+
+#[tokio::test]
+async fn the_task_stream_hands_tasks_and_skips_comments_and_unknown_events() {
+    let (client, _) = serve_tcp().await;
+    let query = TaskStreamQuery {
+        toolset: "ab".into(),
+        tools: vec!["ask_user".into(), "approve".into()],
+        slots: Some(4),
+        worker: Some("w-1".into()),
+        ..TaskStreamQuery::default()
+    };
+    let events: Vec<TaskStreamEvent> = client
+        .task_stream(&query)
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+        TaskStreamEvent::Task(task) => {
+            assert_eq!(task.token, "tk_1");
+            assert_eq!(task.tool, "ask_user");
+            assert_eq!(task.args, json!({ "question": "ok?" }));
+        }
+        other => panic!("expected a task, got {other:?}"),
+    }
+    assert_eq!(
+        events[1],
+        TaskStreamEvent::Gone(TaskGone {
+            token: "tk_1".into()
+        })
     );
 }
 

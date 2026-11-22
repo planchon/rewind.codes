@@ -52,8 +52,11 @@ change of the API shows in its diff.
 | Workflow versions | `name` names the latest version the caller sees, `name@<version>` one by its digest (12 hex digits at least) and `name@v<number>` one by its number (`triage@v12`) |
 | Idempotency | `Idempotency-Key` on `POST /v1/runs`, `POST /v1/runs/{id}/fork` and `POST /v1/runs/{id}/signals/{name}` |
 | Errors | `application/problem+json`: `type` is `urn:rewind:problem:<slug>`, `detail` is written for a model, `invalid-script` adds `diagnostics`, `invalid-query` adds `query` |
-| Query strings | lists repeat their key: `?label=agent:triage&label=conversation:c-42`, `?tool=a&tool=b` |
-| Event stream | `GET /v1/runs/{id}/events` is server-sent events: `event` is the `type` of the `StreamEvent` in `data`, `id` is the entry's index |
+| Query strings | lists repeat their key: `?label=agent:triage&label=conversation:c-42`, `?tool=a&tool=b`, `?tools=ask_user&tools=approve` |
+| Event streams | Server-sent events, read with `fetch` by a browser (`EventSource` cannot send `Authorization`); while it sends nothing else, the server writes a comment line (`:`) at least every 15 s, which a client skips. `GET /v1/runs/{id}/events`: `event` is the `type` of the `StreamEvent` in `data`, `id` is the entry's index, resumed with `from` or `Last-Event-ID`. `GET /v1/changes`: `event` is `run` (`data`: the run's summary, as `GET /v1/runs` lists it), `script` (`{ digest }`), `workflow` (`{ name, version }`), `secret` (`{ name, namespace? }`), `namespace` (`{ name? }`, no name for the default limits) or `connection` (`{ id }`), or `resync` (`{}`: read again what is shown); no `id`, no resume. `GET /v1/tasks/stream`: `event` is `task` (`data`: the `HandedTask`, with its token) or `gone` (`{ token }`); no `id`; reopened after a drop with the same `worker` |
+| Waits | `wait` on `POST /v1/runs`, `GET /v1/runs/{id}`, `POST /v1/runs/{id}/cancel` and `POST /v1/runs/{id}/fork` holds the one request until the run ends or is quarantined, or until `wait` passes, however long it is |
+| Pages of runs | `GET /v1/runs` may answer fewer runs than `limit`, or none, with a `nextCursor`: a partition stopped at its scan budget. Only a page without `nextCursor` is the last |
+| Statistics | `GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts` and `GET /v1/tools/stats` answer from hourly counters: a scope (the tenant, or one namespace: a token's, `Rewind-Namespace`, or a single `namespace:<name>` term of `q`) and a window of whole UTC hours (bounds rounded out, `bucket` rounded up to hours); `GET /v1/tools/stats` also takes `prefix`, the start of a tool's name. Any other term of `q` is `invalid-query`; a grant or a token limited to labels is `forbidden` |
 | Payloads | `{ digest, bytes, preview, value? }`; `value` is left out above 256 KiB, read it with `GET /v1/payloads/{digest}?run=<id>` (`run` is required with a token, a `Rewind-Namespace` header, or a grant limited to labels) |
 | Webhooks | Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64 HMAC-SHA256>`), secret `whsec_…`; every event about a run names its `namespace`; `quota.alert` reports a limit crossed |
 | Secrets | `secret-required` adds `attachments` |
@@ -64,9 +67,9 @@ The problem types:
 | Slug | Status | When |
 | --- | --- | --- |
 | `invalid-request` | 400 | A missing or invalid field, header or parameter; a webhook URL the server does not send to |
-| `invalid-query` | 400 | A query (`q`) that cannot be read; `query` gives the position of the term at fault |
+| `invalid-query` | 400 | A query (`q`) that cannot be read, or, on a statistics route, a term other than one `namespace:` of one value; `query` gives the position of the term at fault |
 | `unauthorized` | 401 | No token, or an unknown, revoked or expired one; a signed token whose key, signature, audience, lifetime or permissions do not hold; on `/auth`, no session |
-| `forbidden` | 403 | The caller's grant does not hold the permission the request needs (the message names it), or its allowed labels do not cover the request; a member without a grant in the organization |
+| `forbidden` | 403 | The caller's grant does not hold the permission the request needs (the message names it), or its allowed labels do not cover the request; a grant or a token limited to labels on a statistics route, since counters do not know labels; a member without a grant in the organization |
 | `not-found` | 404 | No such run, toolset, script, task, payload, subscription, key, role, member or invitation |
 | `run-ended` | 409 | A signal or a cancellation to a run that has ended |
 | `not-quarantined` | 409 | Releasing or giving up a run that is not quarantined |
@@ -74,7 +77,7 @@ The problem types:
 | `role-in-use` | 409 | Deleting a role that a grant still points to |
 | `namespace-deleting` | 409 | Starting a run in, or minting a token for, a namespace being erased |
 | `last-owner` | 409 | Changing or removing a grant that would leave the organization without an `owner` |
-| `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or its claim was lost |
+| `task-gone` | 410 | The task no longer exists: its run ended, it was answered, or it was handed again after the stream it was handed on stayed closed past its grace (or, on the long-poll, its claim was lost) |
 | `payload-too-large` | 413 | A body or payload above the server's limits; a host-tool failure above 64 KiB |
 | `unsupported-media-type` | 415 | A body that is not JSON where JSON is expected |
 | `invalid-script` | 422 | The script was refused before any run exists |

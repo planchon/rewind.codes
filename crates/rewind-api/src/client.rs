@@ -48,6 +48,7 @@ use crate::secrets::{
 };
 use crate::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
+    TaskStreamEvent, TaskStreamQuery,
 };
 use crate::toolsets::{
     CreateToolset, DeclarationFormat, DeclarationsQuery, DeclarationsText, SearchQuery,
@@ -399,12 +400,26 @@ impl Client {
         })
     }
 
-    /// `GET /v1/changes`: the runs of the organization that change, as the caller may see them,
-    /// until the server ends the stream. Events of a later version are skipped.
+    /// `GET /v1/changes`: what changes in the organization, its runs and its control plane, as the
+    /// caller may see it, until the server ends the stream. Events of a later version are skipped.
     pub async fn changes(&self) -> Result<ChangeStream, Error> {
         let request = self
             .request(Method::GET, routes::CHANGES, &[])?
             .header(ACCEPT, "text/event-stream");
+        let inner = self
+            .named_events(request, "change stream", ChangeEvent::from_sse)
+            .await?;
+        Ok(ChangeStream { inner })
+    }
+
+    /// The server-sent events of a stream whose events are named by their `event` field: each
+    /// decoded from its name and its data, an unknown name skipped, as a comment is.
+    async fn named_events<T: Send + 'static>(
+        &self,
+        request: RequestBuilder,
+        stream: &'static str,
+        decode: fn(&str, &str) -> Result<Option<T>, serde_json::Error>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<T, Error>> + Send>>, Error> {
         let url = self.base.to_string();
         let response = self.send(request).await?;
         let events = SseByteStream::new(response.bytes_stream()).filter_map(move |item| {
@@ -413,22 +428,20 @@ impl Client {
                 match item {
                     Ok(sse) => {
                         let (event, data) = (sse.event?, sse.data.unwrap_or_default());
-                        ChangeEvent::from_sse(&event, &data)
+                        decode(&event, &data)
                             .map_err(|error| {
-                                Error::Decode(format!("invalid event of the stream: {error}"))
+                                Error::Decode(format!("invalid event of the {stream}: {error}"))
                             })
                             .transpose()
                     }
                     Err(error) => Some(Err(Error::Transport {
                         url,
-                        message: format!("the change stream broke: {error}"),
+                        message: format!("the {stream} broke: {error}"),
                     })),
                 }
             }
         });
-        Ok(ChangeStream {
-            inner: Box::pin(events),
-        })
+        Ok(Box::pin(events))
     }
 
     /// `POST /v1/runs/{id}/signals/{name}`.
@@ -490,6 +503,20 @@ impl Client {
 
     // ---------------------------------------------------------------------------------------
     // Host-tool tasks
+
+    /// `GET /v1/tasks/stream`: the tasks handed to this worker as they become ready, until the
+    /// server ends the stream or the connection drops. The open stream is the liveness of the
+    /// tasks handed on it: open it again after a drop, with the same `query.worker`, and the
+    /// server keeps them for their grace. Events of a later version and comments are skipped.
+    pub async fn task_stream(&self, query: &TaskStreamQuery) -> Result<TaskStream, Error> {
+        let request = self
+            .request_with(Method::GET, routes::TASK_STREAM, &[], query)?
+            .header(ACCEPT, "text/event-stream");
+        let inner = self
+            .named_events(request, "task stream", TaskStreamEvent::from_sse)
+            .await?;
+        Ok(TaskStream { inner })
+    }
 
     /// `GET /v1/tasks`: claims tasks, waiting up to `query.wait` for one.
     pub async fn claim_tasks(&self, query: &TaskQuery) -> Result<TaskBatch, Error> {
@@ -1211,6 +1238,26 @@ impl fmt::Debug for ChangeStream {
 
 impl Stream for ChangeStream {
     type Item = Result<ChangeEvent, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+/// The events of `GET /v1/tasks/stream`, until the server ends the stream or the connection
+/// drops.
+pub struct TaskStream {
+    inner: Pin<Box<dyn Stream<Item = Result<TaskStreamEvent, Error>> + Send>>,
+}
+
+impl fmt::Debug for TaskStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TaskStream")
+    }
+}
+
+impl Stream for TaskStream {
+    type Item = Result<TaskStreamEvent, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)

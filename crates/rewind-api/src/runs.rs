@@ -52,8 +52,9 @@ pub struct StartRun {
     /// The input of `main`. `{}` when absent.
     #[serde(default = "empty_object")]
     pub input: Value,
-    /// Wait up to this long for the run to end before answering. Without it, the answer comes
-    /// as soon as the run exists.
+    /// Hold the answer until the run ends or is quarantined, or until this long has passed,
+    /// however long it is: one request waits, and nothing is asked again meanwhile. Without it,
+    /// the answer comes as soon as the run exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
     /// Run metadata: filters runs, scopes `list_runs`, API keys and webhooks. The script never
@@ -315,7 +316,8 @@ pub struct LogLine {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[into_params(parameter_in = Query)]
 pub struct GetRunQuery {
-    /// Wait up to this long for the run to end before answering.
+    /// Hold the answer until the run ends or is quarantined, or until this long has passed,
+    /// however long it is: one request waits, and nothing is asked again meanwhile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub wait: Option<Duration>,
@@ -323,6 +325,11 @@ pub struct GetRunQuery {
 
 /// `GET /v1/runs`: runs, most recently started first unless `sort` says otherwise. A key
 /// limited to labels only sees runs carrying them.
+///
+/// A query runs where its runs are (`archi/05-testing-and-observability.md`, "Query language"):
+/// in the partition of its namespace when it names one, in every partition otherwise, each
+/// reading at most its scan budget of summaries for one page. A page cut by the budget holds
+/// fewer runs than `limit`, possibly none, and a `nextCursor` that resumes where it stopped.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
@@ -381,7 +388,8 @@ pub struct RunFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub started_before: Option<Timestamp>,
-    /// At most this many runs (50 by default, 500 at most).
+    /// At most this many runs (50 by default, 500 at most). A page may hold fewer, even when
+    /// more match: see `nextCursor`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
     /// The `nextCursor` of the previous page.
@@ -389,11 +397,14 @@ pub struct RunFilter {
     pub cursor: Option<String>,
 }
 
+/// A page of runs. It may hold fewer runs than `limit`, possibly none, and still have a
+/// `nextCursor`: the server stopped at its scan budget. Only a page without `nextCursor` is the
+/// last.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunPage {
     pub runs: Vec<RunSummary>,
-    /// Pass it as `cursor` to read the next page; absent on the last page.
+    /// Pass it as `cursor` to read the next page; absent on the last page only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
 }
@@ -507,24 +518,34 @@ pub struct RunWait {
     pub callsite: Option<Callsite>,
 }
 
-/// `GET /v1/runs/stats`: the runs a query matches, started in a window.
+/// `GET /v1/runs/stats`: the runs of a scope started in a window, from the hourly counters
+/// (`archi/05-testing-and-observability.md`, "Statistics").
+///
+/// The statistics routes (`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts`,
+/// `GET /v1/tools/stats`) take a scope and a window only. The scope is the caller's tenant, or one
+/// namespace: a token's, the `Rewind-Namespace` header's, or the one `q` names with a single
+/// `namespace:` term. The window is made of whole hours in UTC: its bounds are rounded out to the
+/// hour. A grant or a token limited to labels reads none of them (`forbidden`): counters do not
+/// know labels.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct RunStatsQuery {
-    /// A query, as in `GET /v1/runs`.
+    /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+    /// tenant. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
-    /// Runs started at or after this time. No lower bound by default.
+    /// Runs started at or after this time, rounded down to the hour. No lower bound by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub since: Option<Timestamp>,
-    /// Runs started before this time. Now by default.
+    /// Runs started before this time, rounded up to the hour. Now by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
-    /// The width of the series' buckets (`"1h"`), from `since`, which it requires; 500 buckets
-    /// at most. No series without it.
+    /// The width of the series' buckets (`"1h"`, `"1d"`), from `since`, which it requires; whole
+    /// hours, a shorter or uneven width rounded up to them; 500 buckets at most. No series
+    /// without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub bucket: Option<Duration>,
@@ -533,9 +554,10 @@ pub struct RunStatsQuery {
     pub top: Option<u32>,
 }
 
-/// The runs a query matches. Counts, series, durations and facets are over the runs started
-/// in the window; `waiting` and `quarantined` are over the runs that match the query now,
-/// whenever they started.
+/// The runs of a scope. Counts, series, durations and facets are over the runs started in the
+/// window, from the hourly counters; `since`, `until` and `bucket` are the window and the width
+/// the answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the
+/// scope now, whenever they started, from the gauge of the active runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunStats {
@@ -603,11 +625,15 @@ pub struct DurationStats {
 }
 
 /// The most frequent values among the runs, most frequent first: what to suggest in a query
-/// bar, and the counts beside a list.
+/// bar, and the counts beside a list. The counters count the runs of the window by status, by
+/// workflow and by namespace; the facets they do not count are empty.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Facets {
     pub statuses: Vec<FacetValue>,
+    /// Workflows, by name: the runs of each.
+    #[serde(default)]
+    pub workflows: Vec<FacetValue>,
     /// The most frequent label keys, each with its most frequent values.
     pub labels: Vec<LabelFacet>,
     pub tools: Vec<FacetValue>,
@@ -639,25 +665,27 @@ pub struct LabelFacet {
     pub values: Vec<FacetValue>,
 }
 
-/// `GET /v1/runs/failures`: the failed, cancelled and aborted runs a query matches, ended in a
-/// window, grouped by fingerprint.
+/// `GET /v1/runs/failures`: the failed, cancelled and aborted runs of a scope, ended in a window,
+/// grouped by fingerprint, from the hourly counters. A scope and a window only, as
+/// [`RunStatsQuery`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct FailureQuery {
-    /// A query, as in `GET /v1/runs`.
+    /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+    /// tenant. Any other term is refused with its position (`invalid-query`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
-    /// Runs ended at or after this time. No lower bound by default.
+    /// Runs ended at or after this time, rounded down to the hour. No lower bound by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub since: Option<Timestamp>,
-    /// Runs ended before this time. Now by default.
+    /// Runs ended before this time, rounded up to the hour. Now by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,
-    /// The width of each group's series' buckets, from `since`, which it requires; 500
-    /// buckets at most.
+    /// The width of each group's series' buckets, from `since`, which it requires; whole hours,
+    /// a shorter or uneven width rounded up to them; 500 buckets at most.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>)]
     pub bucket: Option<Duration>,
@@ -740,7 +768,8 @@ pub struct CancelRun {
     /// The message of the `CancelledError`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Wait up to this long for the run to end before answering.
+    /// Hold the answer until the run ends or is quarantined, or until this long has passed, as
+    /// `POST /v1/runs` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
 }
@@ -764,6 +793,8 @@ pub struct ForkRun {
         skip_serializing_if = "Option::is_none"
     )]
     pub input: Option<Value>,
+    /// Hold the answer until the fork ends or is quarantined, or until this long has passed, as
+    /// `POST /v1/runs` does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<Duration>,
     /// The fork's labels. Absent, the fork keeps its parent's labels, so that whoever sees the

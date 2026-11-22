@@ -611,7 +611,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "Wait up to this long for the run to end before answering."
+                "description": "Hold the answer until the run ends or is quarantined, or until this long has passed, as\n`POST /v1/runs` does."
               },
               {
                 "type": "null"
@@ -622,15 +622,35 @@
         "type": "object"
       },
       "ChangeEvent": {
-        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the\nrun's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows.",
+        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field names it and whose `data` is this JSON value: for `run`, the run's\nsummary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is\ndurable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the\ncontrol plane, by its name or id (the client reads again the views that show it); for\n`resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows. While it sends nothing else,\nthe server writes a comment line (`:`) at least every 15 seconds.",
         "oneOf": [
           {
             "$ref": "#/components/schemas/RunSummary",
             "description": "`run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it."
           },
           {
+            "$ref": "#/components/schemas/ScriptChanged",
+            "description": "`script`: the organization's runs ran a script for the first time."
+          },
+          {
+            "$ref": "#/components/schemas/WorkflowChanged",
+            "description": "`workflow`: a workflow has a new version."
+          },
+          {
+            "$ref": "#/components/schemas/SecretChanged",
+            "description": "`secret`: a secret was put or deleted."
+          },
+          {
+            "$ref": "#/components/schemas/NamespaceChanged",
+            "description": "`namespace`: a namespace was created, renamed, given other limits or tokens, or erased;\nor the organization's default limits or ceiling changed."
+          },
+          {
+            "$ref": "#/components/schemas/ConnectionChanged",
+            "description": "`connection`: a connection was made, changed, used or revoked."
+          },
+          {
             "$ref": "#/components/schemas/Resync",
-            "description": "`resync`: more runs changed at once than the server reads in one pass. Read again what\nis shown."
+            "description": "`resync`: more changed at once than the server reads in one pass. Read again what is\nshown."
           }
         ]
       },
@@ -809,6 +829,19 @@
           "client",
           "organizations",
           "createdAt"
+        ],
+        "type": "object"
+      },
+      "ConnectionChanged": {
+        "description": "The data of a `connection` event: one of the caller's own connections, or a connection that\nopens the organization, was made, changed, revoked or taken out of the organization, or its\n`lastUsedAt` moved.",
+        "properties": {
+          "id": {
+            "description": "The connection's id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
         ],
         "type": "object"
       },
@@ -1608,7 +1641,7 @@
       },
       "DeferTask": {
         "additionalProperties": false,
-        "description": "`POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token. No heartbeat is needed meanwhile.",
+        "description": "`POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with\n`/complete` or `/fail` and the same token, whether the task stream it was handed on stays open\nor not: its slot on the stream is free, and no heartbeat is needed meanwhile.",
         "properties": {
           "timeout": {
             "oneOf": [
@@ -2274,7 +2307,7 @@
         "type": "object"
       },
       "Facets": {
-        "description": "The most frequent values among the runs, most frequent first: what to suggest in a query\nbar, and the counts beside a list.",
+        "description": "The most frequent values among the runs, most frequent first: what to suggest in a query\nbar, and the counts beside a list. The counters count the runs of the window by status, by\nworkflow and by namespace; the facets they do not count are empty.",
         "properties": {
           "errors": {
             "description": "Errors the runs ended with (names and abort kinds), and kinds their calls failed with.",
@@ -2324,6 +2357,13 @@
             "type": "array"
           },
           "waiting": {
+            "items": {
+              "$ref": "#/components/schemas/FacetValue"
+            },
+            "type": "array"
+          },
+          "workflows": {
+            "description": "Workflows, by name: the runs of each.",
             "items": {
               "$ref": "#/components/schemas/FacetValue"
             },
@@ -2647,7 +2687,8 @@
           "wait": {
             "oneOf": [
               {
-                "$ref": "#/components/schemas/Duration"
+                "$ref": "#/components/schemas/Duration",
+                "description": "Hold the answer until the fork ends or is quarantined, or until this long has passed, as\n`POST /v1/runs` does."
               },
               {
                 "type": "null"
@@ -2689,6 +2730,86 @@
         },
         "required": [
           "role"
+        ],
+        "type": "object"
+      },
+      "HandedTask": {
+        "description": "A host-tool call handed to a worker on its task stream. The worker answers it by its token,\nwith `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it\nworks.",
+        "properties": {
+          "args": {
+            "description": "The arguments, validated against the tool's input schema."
+          },
+          "attempt": {
+            "description": "From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed\nand did not come back within its grace.",
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "description": "The task's id, as listed in the run's state.",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "`{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every\nattempt: the handler uses it to recognize a call it already made.",
+            "type": "string"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "description": "The run's labels."
+          },
+          "namespace": {
+            "$ref": "#/components/schemas/NamespaceName",
+            "description": "The namespace of the run: the end user the handler acts for."
+          },
+          "runId": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "timeoutMs": {
+            "description": "The tool's execution timeout, in milliseconds: past it, the call is not waited for any\nmore. Absent when the tool has none, the default of host tools: the run's TTL bounds it.",
+            "format": "int64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "token": {
+            "description": "The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names\nthe run, so an answer reaches the run's owner from whichever process receives it.",
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "traceparent": {
+            "description": "W3C trace context, with the tool call's span as parent.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracestate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "token",
+          "id",
+          "runId",
+          "namespace",
+          "seq",
+          "tool",
+          "args",
+          "idempotencyKey",
+          "attempt",
+          "labels"
         ],
         "type": "object"
       },
@@ -3382,6 +3503,22 @@
           "createdAt",
           "lastActiveAt"
         ],
+        "type": "object"
+      },
+      "NamespaceChanged": {
+        "description": "The data of a `namespace` event: a namespace created, renamed, given other exceptions or\ntokens, or being erased or erased; without `name`, the organization's default limits or its\nceiling, which every namespace's limits follow.",
+        "properties": {
+          "name": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
         "type": "object"
       },
       "NamespaceDefaults": {
@@ -5089,9 +5226,10 @@
         "type": "string"
       },
       "RunPage": {
+        "description": "A page of runs. It may hold fewer runs than `limit`, possibly none, and still have a\n`nextCursor`: the server stopped at its scan budget. Only a page without `nextCursor` is the\nlast.",
         "properties": {
           "nextCursor": {
-            "description": "Pass it as `cursor` to read the next page; absent on the last page.",
+            "description": "Pass it as `cursor` to read the next page; absent on the last page only.",
             "type": [
               "string",
               "null"
@@ -5110,7 +5248,7 @@
         "type": "object"
       },
       "RunStats": {
-        "description": "The runs a query matches. Counts, series, durations and facets are over the runs started\nin the window; `waiting` and `quarantined` are over the runs that match the query now,\nwhenever they started.",
+        "description": "The runs of a scope. Counts, series, durations and facets are over the runs started in the\nwindow, from the hourly counters; `since`, `until` and `bucket` are the window and the width\nthe answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the\nscope now, whenever they started, from the gauge of the active runs.",
         "properties": {
           "bucket": {
             "description": "The width of the series' buckets, if any.",
@@ -5495,6 +5633,19 @@
         ],
         "type": "object"
       },
+      "ScriptChanged": {
+        "description": "The data of a `script` event: a script the organization's runs ran for the first time, which\n`GET /v1/scripts` now lists.",
+        "properties": {
+          "digest": {
+            "description": "SHA-256 of the TypeScript source, lowercase hex.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest"
+        ],
+        "type": "object"
+      },
       "ScriptError": {
         "description": "How a script failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,\nor `CancelledError`.",
         "properties": {
@@ -5690,6 +5841,29 @@
           "updatedBy",
           "updatedAt",
           "reads"
+        ],
+        "type": "object"
+      },
+      "SecretChanged": {
+        "description": "The data of a `secret` event: a secret put (created or given a new value) or deleted.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName",
+                "description": "The namespace whose secret it is; absent for the organization's."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -6198,7 +6372,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "Wait up to this long for the run to end before answering. Without it, the answer comes\nas soon as the run exists."
+                "description": "Hold the answer until the run ends or is quarantined, or until this long has passed,\nhowever long it is: one request waits, and nothing is asked again meanwhile. Without it,\nthe answer comes as soon as the run exists."
               },
               {
                 "type": "null"
@@ -6507,6 +6681,19 @@
         ],
         "type": "object"
       },
+      "TaskGone": {
+        "description": "The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its\nrun ended, or its call timed out; an answer sent now is dropped (`task-gone`), and its slot is\nfree.",
+        "properties": {
+          "token": {
+            "description": "The token the task was handed with.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "type": "object"
+      },
       "TaskState": {
         "description": "The state of a tool task.",
         "enum": [
@@ -6518,6 +6705,19 @@
           "done"
         ],
         "type": "string"
+      },
+      "TaskStreamEvent": {
+        "description": "One event of the task stream (`GET /v1/tasks/stream`). On the wire, each is a server-sent\nevent whose `event` field is `task` or `gone` and whose `data` is this JSON object; events\nhave no `id`. While it sends nothing else, the server writes a comment line (`:`) at least\nevery 15 seconds, so that proxies keep the stream open: a client skips comments, and may take\na stream silent for longer as broken. The stream closes once the caller stops authenticating\nor no longer holds `tasks:work`, as the change stream does.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/HandedTask",
+            "description": "`task`: a task handed to this worker, with its token."
+          },
+          {
+            "$ref": "#/components/schemas/TaskGone",
+            "description": "`gone`: a task handed on this stream no longer waits for its answer."
+          }
+        ]
       },
       "Test": {
         "additionalProperties": false,
@@ -8308,6 +8508,23 @@
           "name",
           "version",
           "servers"
+        ],
+        "type": "object"
+      },
+      "WorkflowChanged": {
+        "description": "The data of a `workflow` event: the version a workflow was saved as.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "description": "The digest of the new version, as `GET /v1/workflows/{name}` lists it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
         ],
         "type": "object"
       },
@@ -10113,7 +10330,7 @@
     },
     "/v1/changes": {
       "get": {
-        "description": "The runs of the organization that change from now on, as the caller may see them: an\nend user's token its namespace's, a key or a member with `Rewind-Namespace` that\nnamespace's, a grant limited to labels the runs carrying them all. A run the caller\ncannot open never shows, not even its id. Each event's `event` field names it and its\n`data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as\nan item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);\n`resync`, with `{}`, when more runs changed at once than the server reads in one pass:\nread again what is shown. There is no resume: after a drop, read again what is shown and\nopen a new stream. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "description": "The runs of the organization that change from now on, and the changes of its control\nplane, as the caller may see them: an end user's token its namespace's, a key or a member\nwith `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them\nall. A run the caller cannot open never shows, not even its id. Each event's `event` field\nnames it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the\nsame object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's\nowner once its batch is durable (a deleted run is not announced); `script`, `workflow`,\n`secret`, `namespace` and `connection`, naming what changed in the control plane, whose\nviews are read again; `resync`, with `{}`, when more changed at once than the server reads\nin one pass: read again what is shown. Nothing is read on a timer: after a drop, read again\nwhat is shown and open a new stream, as there is no resume. The server writes a comment\nline at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
         "operationId": "streamChanges",
         "parameters": [
           {
@@ -10144,7 +10361,7 @@
                 }
               }
             },
-            "description": "A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`."
+            "description": "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`."
           },
           "400": {
             "content": {
@@ -10197,7 +10414,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Follow the runs that change (server-sent events)",
+        "summary": "Follow what changes in the organization (server-sent events)",
         "tags": [
           "runs"
         ]
@@ -14743,6 +14960,7 @@
     },
     "/v1/runs": {
       "get": {
+        "description": "From the run index of the partitions that hold the query's runs, each reading at most its\nscan budget for one page: a page may hold fewer runs than `limit`, or none, and still have\na `nextCursor`. Only a page without `nextCursor` is the last.",
         "operationId": "listRuns",
         "parameters": [
           {
@@ -14885,7 +15103,7 @@
             }
           },
           {
-            "description": "At most this many runs (50 by default, 500 at most).",
+            "description": "At most this many runs (50 by default, 500 at most). A page may hold fewer, even when\nmore match: see `nextCursor`.",
             "in": "query",
             "name": "limit",
             "required": false,
@@ -14932,7 +15150,7 @@
                 }
               }
             },
-            "description": "A page of runs, in the order of `sort`."
+            "description": "A page of runs, in the order of `sort`; possibly short, with a cursor."
           },
           "400": {
             "content": {
@@ -14991,7 +15209,7 @@
         ]
       },
       "post": {
-        "description": "Compiles, checks and type-checks the script, then starts the run. With `wait`, answers\nwhen the run ends or `wait` passes, whichever comes first.",
+        "description": "Compiles, checks and type-checks the script, then starts the run. With `wait`, the one\nrequest is answered when the run ends or is quarantined, or when `wait` passes, whichever\ncomes first, however long `wait` is.",
         "operationId": "startRun",
         "parameters": [
           {
@@ -15168,11 +15386,11 @@
     },
     "/v1/runs/failures": {
       "get": {
-        "description": "The failed, cancelled and aborted runs a query matches, ended in the window, grouped\nby fingerprint: across scripts, the runs that ended with the same error.",
+        "description": "From the hourly counters, over a window of whole hours: the failed, cancelled and aborted\nruns of a namespace or the tenant, ended in the window, grouped by fingerprint: across\nscripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes\nit.",
         "operationId": "listRunFailures",
         "parameters": [
           {
-            "description": "A query, as in `GET /v1/runs`.",
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
             "in": "query",
             "name": "q",
             "required": false,
@@ -15181,7 +15399,7 @@
             }
           },
           {
-            "description": "Runs ended at or after this time. No lower bound by default.",
+            "description": "Runs ended at or after this time, rounded down to the hour. No lower bound by default.",
             "in": "query",
             "name": "since",
             "required": false,
@@ -15191,7 +15409,7 @@
             }
           },
           {
-            "description": "Runs ended before this time. Now by default.",
+            "description": "Runs ended before this time, rounded up to the hour. Now by default.",
             "in": "query",
             "name": "until",
             "required": false,
@@ -15201,7 +15419,7 @@
             }
           },
           {
-            "description": "The width of each group's series' buckets, from `since`, which it requires; 500\nbuckets at most.",
+            "description": "The width of each group's series' buckets, from `since`, which it requires; whole hours,\na shorter or uneven width rounded up to them; 500 buckets at most.",
             "in": "query",
             "name": "bucket",
             "required": false,
@@ -15258,7 +15476,7 @@
                 }
               }
             },
-            "description": "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid."
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
           },
           "401": {
             "content": {
@@ -15278,7 +15496,7 @@
                 }
               }
             },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
           },
           "500": {
             "content": {
@@ -15309,11 +15527,11 @@
     },
     "/v1/runs/stats": {
       "get": {
-        "description": "Counts by status, a series over time, durations and facets of the runs started in the\nwindow; the runs waiting now by what they wait for, and the quarantined ones.",
+        "description": "From the hourly counters, over a window of whole hours: counts by status, a series over\ntime, durations and facets (status, workflow, namespace) of the runs started in the\nwindow; the runs waiting now by what they wait for, and the quarantined ones. The scope is\nthe tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single\n`namespace:` term of `q`.",
         "operationId": "getRunStats",
         "parameters": [
           {
-            "description": "A query, as in `GET /v1/runs`.",
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
             "in": "query",
             "name": "q",
             "required": false,
@@ -15322,7 +15540,7 @@
             }
           },
           {
-            "description": "Runs started at or after this time. No lower bound by default.",
+            "description": "Runs started at or after this time, rounded down to the hour. No lower bound by default.",
             "in": "query",
             "name": "since",
             "required": false,
@@ -15332,7 +15550,7 @@
             }
           },
           {
-            "description": "Runs started before this time. Now by default.",
+            "description": "Runs started before this time, rounded up to the hour. Now by default.",
             "in": "query",
             "name": "until",
             "required": false,
@@ -15342,7 +15560,7 @@
             }
           },
           {
-            "description": "The width of the series' buckets (`\"1h\"`), from `since`, which it requires; 500 buckets\nat most. No series without it.",
+            "description": "The width of the series' buckets (`\"1h\"`, `\"1d\"`), from `since`, which it requires; whole\nhours, a shorter or uneven width rounded up to them; 500 buckets at most. No series\nwithout it.",
             "in": "query",
             "name": "bucket",
             "required": false,
@@ -15399,7 +15617,7 @@
                 }
               }
             },
-            "description": "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid."
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
           },
           "401": {
             "content": {
@@ -15419,7 +15637,7 @@
                 }
               }
             },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
           },
           "500": {
             "content": {
@@ -15442,7 +15660,7 @@
             "description": "The server cannot serve the request now (`unavailable`)."
           }
         },
-        "summary": "Statistics of the runs a query matches",
+        "summary": "Statistics of the runs of a namespace or the tenant",
         "tags": [
           "runs"
         ]
@@ -15552,6 +15770,7 @@
         ]
       },
       "get": {
+        "description": "With `wait`, the one request is answered when the run ends or is quarantined, or when\n`wait` passes, however long it is.",
         "operationId": "getRun",
         "parameters": [
           {
@@ -15564,7 +15783,7 @@
             }
           },
           {
-            "description": "Wait up to this long for the run to end before answering.",
+            "description": "Hold the answer until the run ends or is quarantined, or until this long has passed,\nhowever long it is: one request waits, and nothing is asked again meanwhile.",
             "in": "query",
             "name": "wait",
             "required": false,
@@ -16894,8 +17113,38 @@
     },
     "/v1/scripts": {
       "get": {
+        "description": "From the hourly counters, over a window of whole hours: each script the runs of a\nnamespace or the tenant ran, with its runs by status and the tools it called. The scope as\n`GET /v1/runs/stats` takes it.",
         "operationId": "listScripts",
         "parameters": [
+          {
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs started at or after this time, rounded down to the hour. No lower bound by default.",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Runs started before this time, rounded up to the hour. Now by default.",
+            "in": "query",
+            "name": "until",
+            "required": false,
+            "schema": {
+              "format": "date-time",
+              "type": "string"
+            }
+          },
           {
             "description": "Only this script: its digest.",
             "in": "query",
@@ -16984,7 +17233,7 @@
                 }
               }
             },
-            "description": "The request is malformed (`invalid-request`)."
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
           },
           "401": {
             "content": {
@@ -17004,7 +17253,7 @@
                 }
               }
             },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
           },
           "500": {
             "content": {
@@ -18221,6 +18470,158 @@
         ]
       }
     },
+    "/v1/tasks/stream": {
+      "get": {
+        "description": "The tasks of the toolset's host tools, as they become ready, among the runs the caller\nsees: an end user's token those of its namespace, a key limited to labels those of the\nruns carrying them. At most `slots` are in flight on the stream at once. Each event's\n`event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with\nits token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this\nstream that no longer waits for its answer. The open stream is the liveness of every task\nhanded on it: no heartbeat. When it closes, its tasks wait for the grace of their tool\n(60 s by default) for a stream opened again with the same `worker`, which keeps them; then\neach is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`\nunder `at_most_once`. A worker opens the stream again after it drops, with a backoff. The\nserver writes a comment line at least every 15 seconds while it sends nothing else.",
+        "operationId": "streamTasks",
+        "parameters": [
+          {
+            "description": "The toolset whose host tools this worker executes: only the tasks of runs of this toolset.",
+            "in": "query",
+            "name": "toolset",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the tasks of runs of this namespace. An end user's token is limited to its own: it\nmay name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the\nsame way.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only these tools. Repeat for several. All the toolset's host tools when absent.",
+            "in": "query",
+            "name": "tools",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "At most this many tasks in flight on this stream: handed, and neither completed, failed,\ndeferred (by whichever process answers) nor gone. 1 by default, 100 at most.",
+            "in": "query",
+            "name": "slots",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The worker's own id, drawn once when it starts (a UUID) and sent again on every\nreconnection: a stream opened again with it within the grace keeps the tasks handed on the\none that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without\nit, the tasks of a closed stream go to another worker once the grace has passed.",
+            "in": "query",
+            "name": "worker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskStreamEvent"
+                }
+              }
+            },
+            "description": "A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one (`unauthorized`)."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No such toolset."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Follow the host-tool tasks handed to this worker (server-sent events)",
+        "tags": [
+          "tasks"
+        ]
+      }
+    },
     "/v1/tasks/{id}/approve": {
       "post": {
         "description": "A task under the `approval` policy is sent; a task parked by a schema change continues\nagainst the new schema.",
@@ -19266,8 +19667,27 @@
     },
     "/v1/tools/stats": {
       "get": {
+        "description": "From the hourly counters, over a window of whole hours: per tool, the calls of the runs of\na namespace or the tenant, filtered by the start of a tool's name. The scope as\n`GET /v1/runs/stats` takes it.",
         "operationId": "getToolStats",
         "parameters": [
+          {
+            "description": "The scope, as a query: one term `namespace:<name>` of one value, or nothing for the\ntenant. Any other term is refused with its position (`invalid-query`).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only the tools whose name starts with this (`github.`).",
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
           {
             "description": "Only calls of runs of this toolset.",
             "in": "query",
@@ -19287,7 +19707,7 @@
             }
           },
           {
-            "description": "Calls scheduled at or after this time. 24 hours ago by default.",
+            "description": "Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default.",
             "in": "query",
             "name": "since",
             "required": false,
@@ -19297,7 +19717,7 @@
             }
           },
           {
-            "description": "Calls scheduled before this time. Now by default.",
+            "description": "Calls scheduled before this time, rounded up to the hour. Now by default.",
             "in": "query",
             "name": "until",
             "required": false,
@@ -19344,7 +19764,7 @@
                 }
               }
             },
-            "description": "The request is malformed (`invalid-request`)."
+            "description": "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid."
           },
           "401": {
             "content": {
@@ -19364,7 +19784,7 @@
                 }
               }
             },
-            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+            "description": "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`)."
           },
           "500": {
             "content": {
@@ -20402,7 +20822,7 @@
       "name": "runs"
     },
     {
-      "description": "Host-tool tasks: long-polled by the harness's SDK worker, approved or rejected by the harness.",
+      "description": "Host-tool tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness.",
       "name": "tasks"
     },
     {

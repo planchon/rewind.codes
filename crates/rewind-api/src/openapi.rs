@@ -22,6 +22,7 @@ use crate::events::{ChangeEvent, StreamEvent};
 use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
 use crate::oauth::OAuthError;
 use crate::problem::{self, Problem, QuotaReached};
+use crate::tasks::TaskStreamEvent;
 use crate::webhooks::{
     WEBHOOK_ID, WEBHOOK_SIGNATURE, WEBHOOK_TIMESTAMP, WebhookEvent, WebhookEventType,
 };
@@ -84,6 +85,7 @@ use crate::webhooks::{
         operations::export_run_journal,
         operations::release_run,
         operations::give_up_run,
+        operations::stream_tasks,
         operations::claim_tasks,
         operations::heartbeat_task,
         operations::defer_task,
@@ -177,6 +179,7 @@ use crate::webhooks::{
         QuotaScope,
         StreamEvent,
         ChangeEvent,
+        TaskStreamEvent,
         WebhookEvent,
         WebhookEventType,
         SignedTokenClaims,
@@ -189,7 +192,7 @@ use crate::webhooks::{
         (name = "workflows", description = "Workflows: named scripts with typed inputs, outputs and signals, that scripts start and signal."),
         (name = "scripts", description = "Type-check scripts, and run them as scenarios in mock mode."),
         (name = "runs", description = "Start, follow, steer, fork and erase runs."),
-        (name = "tasks", description = "Host-tool tasks: long-polled by the harness's SDK worker, approved or rejected by the harness."),
+        (name = "tasks", description = "Host-tool tasks: handed to the harness's SDK worker on its task stream, answered by their token, approved or rejected by the harness."),
         (name = "webhooks", description = "Inbound webhooks that become signals, and subscriptions to signed lifecycle events."),
         (name = "reading", description = "The scripts executed on the platform, tool statistics and payloads, for the dashboard."),
         (name = "organization", description = "Who calls; the organizations, their members and invitations."),
@@ -556,6 +559,7 @@ mod operations {
     };
     use crate::tasks::{
         CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
+        TaskStreamEvent, TaskStreamQuery,
     };
     use crate::testing::{Test, TestRun};
     use crate::toolsets::{
@@ -739,10 +743,18 @@ mod operations {
     pub(super) fn test_script() {}
 
     /// List the distinct scripts executed
+    ///
+    /// From the hourly counters, over a window of whole hours: each script the runs of a
+    /// namespace or the tenant ran, with its runs by status and the tools it called. The scope as
+    /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
         get, path = "/v1/scripts", tag = "reading", operation_id = "listScripts",
         params(ScriptFilter),
-        responses((status = 200, description = "A page of scripts, most recently run first.", body = ScriptPage))
+        responses(
+            (status = 200, description = "A page of scripts, most recently run first.", body = ScriptPage),
+            (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+        )
     )]
     pub(super) fn list_scripts() {}
 
@@ -780,8 +792,9 @@ mod operations {
 
     /// Start a run (`run_script`)
     ///
-    /// Compiles, checks and type-checks the script, then starts the run. With `wait`, answers
-    /// when the run ends or `wait` passes, whichever comes first.
+    /// Compiles, checks and type-checks the script, then starts the run. With `wait`, the one
+    /// request is answered when the run ends or is quarantined, or when `wait` passes, whichever
+    /// comes first, however long `wait` is.
     #[utoipa::path(
         post, path = "/v1/runs", tag = "runs", operation_id = "startRun",
         params(
@@ -802,45 +815,59 @@ mod operations {
     pub(super) fn start_run() {}
 
     /// List runs (`list_runs`)
+    ///
+    /// From the run index of the partitions that hold the query's runs, each reading at most its
+    /// scan budget for one page: a page may hold fewer runs than `limit`, or none, and still have
+    /// a `nextCursor`. Only a page without `nextCursor` is the last.
     #[utoipa::path(
         get, path = "/v1/runs", tag = "runs", operation_id = "listRuns",
         params(RunFilter),
         responses(
-            (status = 200, description = "A page of runs, in the order of `sort`.", body = RunPage),
+            (status = 200, description = "A page of runs, in the order of `sort`; possibly short, with a cursor.", body = RunPage),
             (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or another parameter is invalid.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn list_runs() {}
 
-    /// Statistics of the runs a query matches
+    /// Statistics of the runs of a namespace or the tenant
     ///
-    /// Counts by status, a series over time, durations and facets of the runs started in the
-    /// window; the runs waiting now by what they wait for, and the quarantined ones.
+    /// From the hourly counters, over a window of whole hours: counts by status, a series over
+    /// time, durations and facets (status, workflow, namespace) of the runs started in the
+    /// window; the runs waiting now by what they wait for, and the quarantined ones. The scope is
+    /// the tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
+    /// `namespace:` term of `q`.
     #[utoipa::path(
         get, path = "/v1/runs/stats", tag = "runs", operation_id = "getRunStats",
         params(RunStatsQuery),
         responses(
             (status = 200, description = "The statistics.", body = RunStats),
-            (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn get_run_stats() {}
 
     /// Failures grouped by cause
     ///
-    /// The failed, cancelled and aborted runs a query matches, ended in the window, grouped
-    /// by fingerprint: across scripts, the runs that ended with the same error.
+    /// From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
+    /// runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
+    /// scripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
+    /// it.
     #[utoipa::path(
         get, path = "/v1/runs/failures", tag = "runs", operation_id = "listRunFailures",
         params(FailureQuery),
         responses(
             (status = 200, description = "The groups, the largest first.", body = FailureGroupPage),
-            (status = 400, description = "`q` cannot be read (`invalid-query`, with `query`), or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn list_run_failures() {}
 
     /// A run's state (`get_run`)
+    ///
+    /// With `wait`, the one request is answered when the run ends or is quarantined, or when
+    /// `wait` passes, however long it is.
     #[utoipa::path(
         get, path = "/v1/runs/{id}", tag = "runs", operation_id = "getRun",
         params(("id" = String, Path, description = "The run's id, or its handle percent-encoded (`dana%2Ftriage%2F06bqx3k9f2mt`)."), GetRunQuery),
@@ -907,17 +934,20 @@ mod operations {
     )]
     pub(super) fn stream_run_events() {}
 
-    /// Follow the runs that change (server-sent events)
+    /// Follow what changes in the organization (server-sent events)
     ///
-    /// The runs of the organization that change from now on, as the caller may see them: an
-    /// end user's token its namespace's, a key or a member with `Rewind-Namespace` that
-    /// namespace's, a grant limited to labels the runs carrying them all. A run the caller
-    /// cannot open never shows, not even its id. Each event's `event` field names it and its
-    /// `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as
-    /// an item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);
-    /// `resync`, with `{}`, when more runs changed at once than the server reads in one pass:
-    /// read again what is shown. There is no resume: after a drop, read again what is shown and
-    /// open a new stream. The stream closes at a member's or a connection's access token's
+    /// The runs of the organization that change from now on, and the changes of its control
+    /// plane, as the caller may see them: an end user's token its namespace's, a key or a member
+    /// with `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them
+    /// all. A run the caller cannot open never shows, not even its id. Each event's `event` field
+    /// names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
+    /// same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
+    /// owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
+    /// `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
+    /// views are read again; `resync`, with `{}`, when more changed at once than the server reads
+    /// in one pass: read again what is shown. Nothing is read on a timer: after a drop, read again
+    /// what is shown and open a new stream, as there is no resume. The server writes a comment
+    /// line at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's
     /// expiry; once an end user's token or a connection no longer authenticates; once a key is
     /// revoked, or the grant of a key, a member or a connection is removed, changes its labels or
     /// no longer gives `runs:read`; and after a `resync` when the server cannot read the changes
@@ -925,7 +955,7 @@ mod operations {
     #[utoipa::path(
         get, path = "/v1/changes", tag = "runs", operation_id = "streamChanges",
         responses(
-            (status = 200, description = "A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
+            (status = 200, description = "A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
             (status = 401, description = "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it.", body = Problem, content_type = "application/problem+json"),
         )
     )]
@@ -1029,6 +1059,29 @@ mod operations {
 
     // ---------------------------------------------------------------------------------------
     // Host-tool tasks
+
+    /// Follow the host-tool tasks handed to this worker (server-sent events)
+    ///
+    /// The tasks of the toolset's host tools, as they become ready, among the runs the caller
+    /// sees: an end user's token those of its namespace, a key limited to labels those of the
+    /// runs carrying them. At most `slots` are in flight on the stream at once. Each event's
+    /// `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
+    /// its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
+    /// stream that no longer waits for its answer. The open stream is the liveness of every task
+    /// handed on it: no heartbeat. When it closes, its tasks wait for the grace of their tool
+    /// (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
+    /// each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
+    /// under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
+    /// server writes a comment line at least every 15 seconds while it sends nothing else.
+    #[utoipa::path(
+        get, path = "/v1/tasks/stream", tag = "tasks", operation_id = "streamTasks",
+        params(TaskStreamQuery),
+        responses(
+            (status = 200, description = "A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`.", body = TaskStreamEvent, content_type = "text/event-stream"),
+            (status = 404, description = "No such toolset.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn stream_tasks() {}
 
     /// Claim host-tool tasks (long-poll)
     ///
@@ -1177,10 +1230,18 @@ mod operations {
     // Reading
 
     /// Latency, errors and retries per tool
+    ///
+    /// From the hourly counters, over a window of whole hours: per tool, the calls of the runs of
+    /// a namespace or the tenant, filtered by the start of a tool's name. The scope as
+    /// `GET /v1/runs/stats` takes it.
     #[utoipa::path(
         get, path = "/v1/tools/stats", tag = "reading", operation_id = "getToolStats",
         params(ToolStatsFilter),
-        responses((status = 200, description = "Statistics per tool over the window.", body = ToolStatsPage))
+        responses(
+            (status = 200, description = "Statistics per tool over the window.", body = ToolStatsPage),
+            (status = 400, description = "`q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+        )
     )]
     pub(super) fn get_tool_stats() {}
 

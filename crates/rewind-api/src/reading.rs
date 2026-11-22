@@ -9,23 +9,31 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::common::Timestamp;
 
-/// `GET /v1/tools/stats`: latency, errors and retries per tool, over the calls scheduled in a
-/// time window.
+/// `GET /v1/tools/stats`: latency, errors and retries per tool, over the calls of a scope
+/// scheduled in a window, from the hourly counters. A scope and a window, as `GET /v1/runs/stats`
+/// takes them (`crate::runs::RunStatsQuery`), and the start of a tool's name.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct ToolStatsFilter {
+    /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+    /// tenant. Any other term is refused with its position (`invalid-query`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// Only the tools whose name starts with this (`github.`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
     /// Only calls of runs of this toolset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub toolset: Option<String>,
     /// Only this tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool: Option<String>,
-    /// Calls scheduled at or after this time. 24 hours ago by default.
+    /// Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub since: Option<Timestamp>,
-    /// Calls scheduled before this time. Now by default.
+    /// Calls scheduled before this time, rounded up to the hour. Now by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(value_type = Option<String>, format = DateTime)]
     pub until: Option<Timestamp>,

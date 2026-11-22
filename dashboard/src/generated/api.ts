@@ -459,16 +459,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Follow the runs that change (server-sent events)
-         * @description The runs of the organization that change from now on, as the caller may see them: an
-         *     end user's token its namespace's, a key or a member with `Rewind-Namespace` that
-         *     namespace's, a grant limited to labels the runs carrying them all. A run the caller
-         *     cannot open never shows, not even its id. Each event's `event` field names it and its
-         *     `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as
-         *     an item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);
-         *     `resync`, with `{}`, when more runs changed at once than the server reads in one pass:
-         *     read again what is shown. There is no resume: after a drop, read again what is shown and
-         *     open a new stream. The stream closes at a member's or a connection's access token's
+         * Follow what changes in the organization (server-sent events)
+         * @description The runs of the organization that change from now on, and the changes of its control
+         *     plane, as the caller may see them: an end user's token its namespace's, a key or a member
+         *     with `Rewind-Namespace` that namespace's, a grant limited to labels the runs carrying them
+         *     all. A run the caller cannot open never shows, not even its id. Each event's `event` field
+         *     names it and its `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the
+         *     same object as an item of `GET /v1/runs`, whenever its summary changes, pushed by the run's
+         *     owner once its batch is durable (a deleted run is not announced); `script`, `workflow`,
+         *     `secret`, `namespace` and `connection`, naming what changed in the control plane, whose
+         *     views are read again; `resync`, with `{}`, when more changed at once than the server reads
+         *     in one pass: read again what is shown. Nothing is read on a timer: after a drop, read again
+         *     what is shown and open a new stream, as there is no resume. The server writes a comment
+         *     line at least every 15 seconds while it sends nothing else. The stream closes at a member's or a connection's access token's
          *     expiry; once an end user's token or a connection no longer authenticates; once a key is
          *     revoked, or the grant of a key, a member or a connection is removed, changes its labels or
          *     no longer gives `runs:read`; and after a `resync` when the server cannot read the changes
@@ -1241,13 +1244,19 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List runs (`list_runs`) */
+        /**
+         * List runs (`list_runs`)
+         * @description From the run index of the partitions that hold the query's runs, each reading at most its
+         *     scan budget for one page: a page may hold fewer runs than `limit`, or none, and still have
+         *     a `nextCursor`. Only a page without `nextCursor` is the last.
+         */
         get: operations["listRuns"];
         put?: never;
         /**
          * Start a run (`run_script`)
-         * @description Compiles, checks and type-checks the script, then starts the run. With `wait`, answers
-         *     when the run ends or `wait` passes, whichever comes first.
+         * @description Compiles, checks and type-checks the script, then starts the run. With `wait`, the one
+         *     request is answered when the run ends or is quarantined, or when `wait` passes, whichever
+         *     comes first, however long `wait` is.
          */
         post: operations["startRun"];
         delete?: never;
@@ -1265,8 +1274,10 @@ export interface paths {
         };
         /**
          * Failures grouped by cause
-         * @description The failed, cancelled and aborted runs a query matches, ended in the window, grouped
-         *     by fingerprint: across scripts, the runs that ended with the same error.
+         * @description From the hourly counters, over a window of whole hours: the failed, cancelled and aborted
+         *     runs of a namespace or the tenant, ended in the window, grouped by fingerprint: across
+         *     scripts, the runs that ended with the same error. The scope as `GET /v1/runs/stats` takes
+         *     it.
          */
         get: operations["listRunFailures"];
         put?: never;
@@ -1285,9 +1296,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Statistics of the runs a query matches
-         * @description Counts by status, a series over time, durations and facets of the runs started in the
-         *     window; the runs waiting now by what they wait for, and the quarantined ones.
+         * Statistics of the runs of a namespace or the tenant
+         * @description From the hourly counters, over a window of whole hours: counts by status, a series over
+         *     time, durations and facets (status, workflow, namespace) of the runs started in the
+         *     window; the runs waiting now by what they wait for, and the quarantined ones. The scope is
+         *     the tenant, or one namespace: a token's, the `Rewind-Namespace` header's, or a single
+         *     `namespace:` term of `q`.
          */
         get: operations["getRunStats"];
         put?: never;
@@ -1305,7 +1319,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** A run's state (`get_run`) */
+        /**
+         * A run's state (`get_run`)
+         * @description With `wait`, the one request is answered when the run ends or is quarantined, or when
+         *     `wait` passes, however long it is.
+         */
         get: operations["getRun"];
         put?: never;
         post?: never;
@@ -1501,7 +1519,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the distinct scripts executed */
+        /**
+         * List the distinct scripts executed
+         * @description From the hourly counters, over a window of whole hours: each script the runs of a
+         *     namespace or the tenant ran, with its runs by status and the tools it called. The scope as
+         *     `GET /v1/runs/stats` takes it.
+         */
         get: operations["listScripts"];
         put?: never;
         post?: never;
@@ -1709,6 +1732,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tasks/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Follow the host-tool tasks handed to this worker (server-sent events)
+         * @description The tasks of the toolset's host tools, as they become ready, among the runs the caller
+         *     sees: an end user's token those of its namespace, a key limited to labels those of the
+         *     runs carrying them. At most `slots` are in flight on the stream at once. Each event's
+         *     `event` field names it and its `data` is a `TaskStreamEvent`: `task`, a task handed with
+         *     its token, to answer with `/complete`, `/fail` or `/defer`; `gone`, a task handed on this
+         *     stream that no longer waits for its answer. The open stream is the liveness of every task
+         *     handed on it: no heartbeat. When it closes, its tasks wait for the grace of their tool
+         *     (60 s by default) for a stream opened again with the same `worker`, which keeps them; then
+         *     each is handed to another worker with its attempt + 1, or fails with `outcomeUnknown`
+         *     under `at_most_once`. A worker opens the stream again after it drops, with a backoff. The
+         *     server writes a comment line at least every 15 seconds while it sends nothing else.
+         */
+        get: operations["streamTasks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tasks/{id}/approve": {
         parameters: {
             query?: never;
@@ -1892,7 +1945,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Latency, errors and retries per tool */
+        /**
+         * Latency, errors and retries per tool
+         * @description From the hourly counters, over a window of whole hours: per tool, the calls of the runs of
+         *     a namespace or the tenant, filtered by the start of a tool's name. The scope as
+         *     `GET /v1/runs/stats` takes it.
+         */
         get: operations["getToolStats"];
         put?: never;
         post?: never;
@@ -2469,11 +2527,15 @@ export interface components {
         };
         /**
          * @description One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
-         *     whose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the
-         *     run's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:
-         *     the stream is not resumed, the client reads again what it shows.
+         *     whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
+         *     summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
+         *     durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+         *     control plane, by its name or id (the client reads again the views that show it); for
+         *     `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
+         *     the stream is not resumed, the client reads again what it shows. While it sends nothing else,
+         *     the server writes a comment line (`:`) at least every 15 seconds.
          */
-        ChangeEvent: components["schemas"]["RunSummary"] | components["schemas"]["Resync"];
+        ChangeEvent: components["schemas"]["RunSummary"] | components["schemas"]["ScriptChanged"] | components["schemas"]["WorkflowChanged"] | components["schemas"]["SecretChanged"] | components["schemas"]["NamespaceChanged"] | components["schemas"]["ConnectionChanged"] | components["schemas"]["Resync"];
         /**
          * @description `POST /v1/check`: type-checks a script against the sandbox lib and a toolset's
          *     declarations, in strict mode, before anything runs.
@@ -2543,6 +2605,15 @@ export interface components {
              */
             organizations: components["schemas"]["ConnectionOrganization"][];
             person: components["schemas"]["ConnectionPerson"];
+        };
+        /**
+         * @description The data of a `connection` event: one of the caller's own connections, or a connection that
+         *     opens the organization, was made, changed, revoked or taken out of the organization, or its
+         *     `lastUsedAt` moved.
+         */
+        ConnectionChanged: {
+            /** @description The connection's id. */
+            id: string;
         };
         /** @description The client a connection was made through. */
         ConnectionClient: {
@@ -2963,7 +3034,8 @@ export interface components {
         };
         /**
          * @description `POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with
-         *     `/complete` or `/fail` and the same token. No heartbeat is needed meanwhile.
+         *     `/complete` or `/fail` and the same token, whether the task stream it was handed on stays open
+         *     or not: its slot on the stream is free, and no heartbeat is needed meanwhile.
          */
         DeferTask: {
             timeout?: components["schemas"]["Duration"] | null;
@@ -3157,7 +3229,8 @@ export interface components {
         };
         /**
          * @description The most frequent values among the runs, most frequent first: what to suggest in a query
-         *     bar, and the counts beside a list.
+         *     bar, and the counts beside a list. The counters count the runs of the window by status, by
+         *     workflow and by namespace; the facets they do not count are empty.
          */
         Facets: {
             /** @description Errors the runs ended with (names and abort kinds), and kinds their calls failed with. */
@@ -3173,6 +3246,8 @@ export interface components {
             statuses: components["schemas"]["FacetValue"][];
             tools: components["schemas"]["FacetValue"][];
             waiting: components["schemas"]["FacetValue"][];
+            /** @description Workflows, by name: the runs of each. */
+            workflows?: components["schemas"]["FacetValue"][];
         };
         /**
          * @description `POST /v1/tasks/{token}/fail`: the tool failed. The script gets a `ToolError`, unless the
@@ -3314,6 +3389,50 @@ export interface components {
              *     exists gives no permission.
              */
             role: string;
+        };
+        /**
+         * @description A host-tool call handed to a worker on its task stream. The worker answers it by its token,
+         *     with `/complete` or `/fail`, or `/defer` to answer later; nothing else is asked of it while it
+         *     works.
+         */
+        HandedTask: {
+            /** @description The arguments, validated against the tool's input schema. */
+            args: unknown;
+            /**
+             * Format: int32
+             * @description From 1. Above 1, an earlier attempt was interrupted: the stream it was handed on closed
+             *     and did not come back within its grace.
+             */
+            attempt: number;
+            /** @description The task's id, as listed in the run's state. */
+            id: string;
+            /**
+             * @description `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
+             *     attempt: the handler uses it to recognize a call it already made.
+             */
+            idempotencyKey: string;
+            /** @description The run's labels. */
+            labels: components["schemas"]["Labels"];
+            /** @description The namespace of the run: the end user the handler acts for. */
+            namespace: components["schemas"]["NamespaceName"];
+            runId: string;
+            /** Format: int32 */
+            seq: number;
+            /**
+             * Format: int64
+             * @description The tool's execution timeout, in milliseconds: past it, the call is not waited for any
+             *     more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
+             */
+            timeoutMs?: number | null;
+            /**
+             * @description The hand-out's secret token: `/v1/tasks/{token}/…`. A new one at each hand-out. It names
+             *     the run, so an answer reaches the run's owner from whichever process receives it.
+             */
+            token: string;
+            tool: string;
+            /** @description W3C trace context, with the tool call's span as parent. */
+            traceparent?: string | null;
+            tracestate?: string | null;
         };
         /** @description `POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task. */
         HeartbeatAck: {
@@ -3560,6 +3679,14 @@ export interface components {
             name: components["schemas"]["NamespaceName"];
             /** @description Its use of the month listed. */
             usage: components["schemas"]["QuotaUsage"];
+        };
+        /**
+         * @description The data of a `namespace` event: a namespace created, renamed, given other exceptions or
+         *     tokens, or being erased or erased; without `name`, the organization's default limits or its
+         *     ceiling, which every namespace's limits follow.
+         */
+        NamespaceChanged: {
+            name?: components["schemas"]["NamespaceName"] | null;
         };
         /**
          * @description `GET /v1/organization/namespace-defaults`: the limits of every namespace without an
@@ -4241,15 +4368,21 @@ export interface components {
          * @enum {string}
          */
         RunMode: "live" | "mock";
+        /**
+         * @description A page of runs. It may hold fewer runs than `limit`, possibly none, and still have a
+         *     `nextCursor`: the server stopped at its scan budget. Only a page without `nextCursor` is the
+         *     last.
+         */
         RunPage: {
-            /** @description Pass it as `cursor` to read the next page; absent on the last page. */
+            /** @description Pass it as `cursor` to read the next page; absent on the last page only. */
             nextCursor?: string | null;
             runs: components["schemas"]["RunSummary"][];
         };
         /**
-         * @description The runs a query matches. Counts, series, durations and facets are over the runs started
-         *     in the window; `waiting` and `quarantined` are over the runs that match the query now,
-         *     whenever they started.
+         * @description The runs of a scope. Counts, series, durations and facets are over the runs started in the
+         *     window, from the hourly counters; `since`, `until` and `bucket` are the window and the width
+         *     the answer used, in whole hours. `waiting` and `quarantined` are over the active runs of the
+         *     scope now, whenever they started, from the gauge of the active runs.
          */
         RunStats: {
             /** @description The width of the series' buckets, if any. */
@@ -4389,6 +4522,14 @@ export interface components {
             tools: string[];
         };
         /**
+         * @description The data of a `script` event: a script the organization's runs ran for the first time, which
+         *     `GET /v1/scripts` now lists.
+         */
+        ScriptChanged: {
+            /** @description SHA-256 of the TypeScript source, lowercase hex. */
+            digest: string;
+        };
+        /**
          * @description How a script failed: what `main` threw, the rejection it left unhandled, `DeadlockError`,
          *     or `CancelledError`.
          */
@@ -4457,6 +4598,11 @@ export interface components {
             updatedAt: string;
             /** @description Who wrote it last. */
             updatedBy: string;
+        };
+        /** @description The data of a `secret` event: a secret put (created or given a new value) or deleted. */
+        SecretChanged: {
+            name: string;
+            namespace?: components["schemas"]["NamespaceName"] | null;
         };
         /**
          * @description How a secret is written into a header's `format`.
@@ -4831,10 +4977,28 @@ export interface components {
             tasks: components["schemas"]["Task"][];
         };
         /**
+         * @description The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its
+         *     run ended, or its call timed out; an answer sent now is dropped (`task-gone`), and its slot is
+         *     free.
+         */
+        TaskGone: {
+            /** @description The token the task was handed with. */
+            token: string;
+        };
+        /**
          * @description The state of a tool task.
          * @enum {string}
          */
         TaskState: "approval" | "ready" | "claimed" | "deferred" | "parked" | "done";
+        /**
+         * @description One event of the task stream (`GET /v1/tasks/stream`). On the wire, each is a server-sent
+         *     event whose `event` field is `task` or `gone` and whose `data` is this JSON object; events
+         *     have no `id`. While it sends nothing else, the server writes a comment line (`:`) at least
+         *     every 15 seconds, so that proxies keep the stream open: a client skips comments, and may take
+         *     a stream silent for longer as broken. The stream closes once the caller stops authenticating
+         *     or no longer holds `tasks:work`, as the change stream does.
+         */
+        TaskStreamEvent: components["schemas"]["HandedTask"] | components["schemas"]["TaskGone"];
         /**
          * @description A test: what the run is given (its input, the tools' answers, signals), and what must hold
          *     at the end. It never names its script.
@@ -5488,6 +5652,12 @@ export interface components {
             /** @description The servers and APIs it attaches the secret for. */
             servers: string[];
             /** @description The version (SHA-256, lowercase hex). */
+            version: string;
+        };
+        /** @description The data of a `workflow` event: the version a workflow was saved as. */
+        WorkflowChanged: {
+            name: string;
+            /** @description The digest of the new version, as `GET /v1/workflows/{name}` lists it. */
             version: string;
         };
         /**
@@ -6848,7 +7018,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`. */
+            /** @description A stream of server-sent events `run`, `script`, `workflow`, `secret`, `namespace`, `connection` and `resync`; each `data` is a `ChangeEvent`. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10552,7 +10722,10 @@ export interface operations {
                 startedAfter?: string;
                 /** @description Only runs started before this time. */
                 startedBefore?: string;
-                /** @description At most this many runs (50 by default, 500 at most). */
+                /**
+                 * @description At most this many runs (50 by default, 500 at most). A page may hold fewer, even when
+                 *     more match: see `nextCursor`.
+                 */
                 limit?: number;
                 /** @description The `nextCursor` of the previous page. */
                 cursor?: string;
@@ -10568,7 +10741,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of runs, in the order of `sort`. */
+            /** @description A page of runs, in the order of `sort`; possibly short, with a cursor. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -10757,15 +10930,18 @@ export interface operations {
     listRunFailures: {
         parameters: {
             query?: {
-                /** @description A query, as in `GET /v1/runs`. */
+                /**
+                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 */
                 q?: string;
-                /** @description Runs ended at or after this time. No lower bound by default. */
+                /** @description Runs ended at or after this time, rounded down to the hour. No lower bound by default. */
                 since?: string;
-                /** @description Runs ended before this time. Now by default. */
+                /** @description Runs ended before this time, rounded up to the hour. Now by default. */
                 until?: string;
                 /**
-                 * @description The width of each group's series' buckets, from `since`, which it requires; 500
-                 *     buckets at most.
+                 * @description The width of each group's series' buckets, from `since`, which it requires; whole hours,
+                 *     a shorter or uneven width rounded up to them; 500 buckets at most.
                  */
                 bucket?: string;
                 /** @description Groups at most (50 by default, 500 at most). */
@@ -10791,7 +10967,7 @@ export interface operations {
                     "application/json": components["schemas"]["FailureGroupPage"];
                 };
             };
-            /** @description `q` cannot be read (`invalid-query`, with `query`), or the window is invalid. */
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10809,7 +10985,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10841,15 +11017,19 @@ export interface operations {
     getRunStats: {
         parameters: {
             query?: {
-                /** @description A query, as in `GET /v1/runs`. */
+                /**
+                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 */
                 q?: string;
-                /** @description Runs started at or after this time. No lower bound by default. */
+                /** @description Runs started at or after this time, rounded down to the hour. No lower bound by default. */
                 since?: string;
-                /** @description Runs started before this time. Now by default. */
+                /** @description Runs started before this time, rounded up to the hour. Now by default. */
                 until?: string;
                 /**
-                 * @description The width of the series' buckets (`"1h"`), from `since`, which it requires; 500 buckets
-                 *     at most. No series without it.
+                 * @description The width of the series' buckets (`"1h"`, `"1d"`), from `since`, which it requires; whole
+                 *     hours, a shorter or uneven width rounded up to them; 500 buckets at most. No series
+                 *     without it.
                  */
                 bucket?: string;
                 /** @description Values per facet (10 by default, 50 at most). */
@@ -10875,7 +11055,7 @@ export interface operations {
                     "application/json": components["schemas"]["RunStats"];
                 };
             };
-            /** @description `q` cannot be read (`invalid-query`, with `query`), or the window is invalid. */
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10893,7 +11073,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10925,7 +11105,10 @@ export interface operations {
     getRun: {
         parameters: {
             query?: {
-                /** @description Wait up to this long for the run to end before answering. */
+                /**
+                 * @description Hold the answer until the run ends or is quarantined, or until this long has passed,
+                 *     however long it is: one request waits, and nothing is asked again meanwhile.
+                 */
                 wait?: string;
             };
             header?: {
@@ -11950,6 +12133,15 @@ export interface operations {
     listScripts: {
         parameters: {
             query?: {
+                /**
+                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 */
+                q?: string;
+                /** @description Runs started at or after this time, rounded down to the hour. No lower bound by default. */
+                since?: string;
+                /** @description Runs started before this time, rounded up to the hour. Now by default. */
+                until?: string;
                 /** @description Only this script: its digest. */
                 digest?: string;
                 /** @description Only scripts that ran with this label, as `key:value`. Repeat to require several. */
@@ -11981,7 +12173,7 @@ export interface operations {
                     "application/json": components["schemas"]["ScriptPage"];
                 };
             };
-            /** @description The request is malformed (`invalid-request`). */
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -11999,7 +12191,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12949,6 +13141,108 @@ export interface operations {
             };
         };
     };
+    streamTasks: {
+        parameters: {
+            query: {
+                /** @description The toolset whose host tools this worker executes: only the tasks of runs of this toolset. */
+                toolset: string;
+                /**
+                 * @description Only the tasks of runs of this namespace. An end user's token is limited to its own: it
+                 *     may name it, and naming another is `forbidden`. The header `Rewind-Namespace` narrows the
+                 *     same way.
+                 */
+                namespace?: string;
+                /** @description Only these tools. Repeat for several. All the toolset's host tools when absent. */
+                tools?: string[];
+                /**
+                 * @description At most this many tasks in flight on this stream: handed, and neither completed, failed,
+                 *     deferred (by whichever process answers) nor gone. 1 by default, 100 at most.
+                 */
+                slots?: number;
+                /**
+                 * @description The worker's own id, drawn once when it starts (a UUID) and sent again on every
+                 *     reconnection: a stream opened again with it within the grace keeps the tasks handed on the
+                 *     one that closed, and they are not handed again. 1 to 128 visible ASCII characters. Without
+                 *     it, the tasks of a closed stream go to another worker once the grace has passed.
+                 */
+                worker?: string;
+            };
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A stream of server-sent events `task` and `gone`; each `data` is a `TaskStreamEvent`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["TaskStreamEvent"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No such toolset. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     approveTask: {
         parameters: {
             query?: never;
@@ -13731,13 +14025,20 @@ export interface operations {
     getToolStats: {
         parameters: {
             query?: {
+                /**
+                 * @description The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+                 *     tenant. Any other term is refused with its position (`invalid-query`).
+                 */
+                q?: string;
+                /** @description Only the tools whose name starts with this (`github.`). */
+                prefix?: string;
                 /** @description Only calls of runs of this toolset. */
                 toolset?: string;
                 /** @description Only this tool. */
                 tool?: string;
-                /** @description Calls scheduled at or after this time. 24 hours ago by default. */
+                /** @description Calls scheduled at or after this time, rounded down to the hour. 24 hours ago by default. */
                 since?: string;
-                /** @description Calls scheduled before this time. Now by default. */
+                /** @description Calls scheduled before this time, rounded up to the hour. Now by default. */
                 until?: string;
             };
             header?: {
@@ -13760,7 +14061,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolStatsPage"];
                 };
             };
-            /** @description The request is malformed (`invalid-request`). */
+            /** @description `q` cannot be read, or holds another term than one `namespace:` of one value (`invalid-query`, with `query`); or the window is invalid. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -13778,7 +14079,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            /** @description The caller lacks `runs:read`, or its grant or token is limited to labels, which counters do not know (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;

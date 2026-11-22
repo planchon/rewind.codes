@@ -31,9 +31,13 @@ pub const RUN_FORK: &str = "/v1/runs/{id}/fork";
 pub const RUN_JOURNAL: &str = "/v1/runs/{id}/journal";
 pub const RUN_RELEASE: &str = "/v1/runs/{id}/release";
 pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
-/// The runs of the organization that change, as server-sent events (`crate::events::ChangeEvent`).
+/// What changes in the organization, its runs and its control plane, as server-sent events
+/// (`crate::events::ChangeEvent`).
 pub const CHANGES: &str = "/v1/changes";
 
+/// The host-tool tasks handed to a worker, as server-sent events
+/// (`crate::tasks::TaskStreamEvent`).
+pub const TASK_STREAM: &str = "/v1/tasks/stream";
 pub const TASKS: &str = "/v1/tasks";
 pub const TASK_HEARTBEAT: &str = "/v1/tasks/{token}/heartbeat";
 pub const TASK_DEFER: &str = "/v1/tasks/{token}/defer";
@@ -154,6 +158,7 @@ pub const OPERATIONS: [(&str, &str); 115] = [
     ("GET", RUN_JOURNAL),
     ("POST", RUN_RELEASE),
     ("POST", RUN_GIVE_UP),
+    ("GET", TASK_STREAM),
     ("GET", TASKS),
     ("POST", TASK_HEARTBEAT),
     ("POST", TASK_DEFER),

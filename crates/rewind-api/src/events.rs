@@ -1,6 +1,6 @@
 //! A run's journal over HTTP: one entry in full (`GET /v1/runs/{id}/entries/{idx}`) and the
-//! event stream (`GET /v1/runs/{id}/events`, server-sent events); and the stream of the runs
-//! that change (`GET /v1/changes`, server-sent events).
+//! event stream (`GET /v1/runs/{id}/events`, server-sent events); and the stream of what changes
+//! in the organization, its runs and its control plane (`GET /v1/changes`, server-sent events).
 //!
 //! These are projections of committed entries (`archi/05-testing-and-observability.md`). The
 //! stored form of the journal is `rewind-format`'s, exported by `GET /v1/runs/{id}/journal`; the
@@ -14,6 +14,7 @@ use crate::common::{
     AbortReason, Callsite, LogLevel, Payload, RunMode, RunStatus, ScriptError, Timestamp,
     ToolFailure, timestamp,
 };
+use crate::namespaces::NamespaceName;
 use crate::runs::RunSummary;
 
 /// One journal entry.
@@ -313,17 +314,80 @@ impl StreamEvent {
 // The change stream
 
 /// One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
-/// whose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the
-/// run's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:
-/// the stream is not resumed, the client reads again what it shows.
+/// whose `event` field names it and whose `data` is this JSON value: for `run`, the run's
+/// summary, the very object `GET /v1/runs` lists, pushed by the run's owner once its batch is
+/// durable; for `script`, `workflow`, `secret`, `namespace` and `connection`, what changed in the
+/// control plane, by its name or id (the client reads again the views that show it); for
+/// `resync`, `{}`. Each reaches the caller only if it may see what changed. Events have no `id`:
+/// the stream is not resumed, the client reads again what it shows. While it sends nothing else,
+/// the server writes a comment line (`:`) at least every 15 seconds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(untagged)]
 pub enum ChangeEvent {
     /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
     Run(Box<RunSummary>),
-    /// `resync`: more runs changed at once than the server reads in one pass. Read again what
-    /// is shown.
+    /// `script`: the organization's runs ran a script for the first time.
+    Script(ScriptChanged),
+    /// `workflow`: a workflow has a new version.
+    Workflow(WorkflowChanged),
+    /// `secret`: a secret was put or deleted.
+    Secret(SecretChanged),
+    /// `namespace`: a namespace was created, renamed, given other limits or tokens, or erased;
+    /// or the organization's default limits or ceiling changed.
+    Namespace(NamespaceChanged),
+    /// `connection`: a connection was made, changed, used or revoked.
+    Connection(ConnectionChanged),
+    /// `resync`: more changed at once than the server reads in one pass. Read again what is
+    /// shown.
     Resync(Resync),
+}
+
+/// The data of a `script` event: a script the organization's runs ran for the first time, which
+/// `GET /v1/scripts` now lists.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ScriptChanged {
+    /// SHA-256 of the TypeScript source, lowercase hex.
+    pub digest: String,
+}
+
+/// The data of a `workflow` event: the version a workflow was saved as.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowChanged {
+    pub name: String,
+    /// The digest of the new version, as `GET /v1/workflows/{name}` lists it.
+    pub version: String,
+}
+
+/// The data of a `secret` event: a secret put (created or given a new value) or deleted.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretChanged {
+    pub name: String,
+    /// The namespace whose secret it is; absent for the organization's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<NamespaceName>,
+}
+
+/// The data of a `namespace` event: a namespace created, renamed, given other exceptions or
+/// tokens, or being erased or erased; without `name`, the organization's default limits or its
+/// ceiling, which every namespace's limits follow.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct NamespaceChanged {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<NamespaceName>,
+}
+
+/// The data of a `connection` event: one of the caller's own connections, or a connection that
+/// opens the organization, was made, changed, revoked or taken out of the organization, or its
+/// `lastUsedAt` moved.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionChanged {
+    /// The connection's id.
+    pub id: String,
 }
 
 /// The data of a `resync` event: an empty object.
@@ -331,10 +395,16 @@ pub enum ChangeEvent {
 pub struct Resync {}
 
 impl ChangeEvent {
-    /// The SSE `event` field: `run` or `resync`.
+    /// The SSE `event` field: `run`, `script`, `workflow`, `secret`, `namespace`, `connection`
+    /// or `resync`.
     pub fn sse_event(&self) -> &'static str {
         match self {
             ChangeEvent::Run(_) => "run",
+            ChangeEvent::Script(_) => "script",
+            ChangeEvent::Workflow(_) => "workflow",
+            ChangeEvent::Secret(_) => "secret",
+            ChangeEvent::Namespace(_) => "namespace",
+            ChangeEvent::Connection(_) => "connection",
             ChangeEvent::Resync(_) => "resync",
         }
     }
@@ -344,6 +414,11 @@ impl ChangeEvent {
     pub fn from_sse(event: &str, data: &str) -> Result<Option<Self>, serde_json::Error> {
         Ok(match event {
             "run" => Some(ChangeEvent::Run(Box::new(serde_json::from_str(data)?))),
+            "script" => Some(ChangeEvent::Script(serde_json::from_str(data)?)),
+            "workflow" => Some(ChangeEvent::Workflow(serde_json::from_str(data)?)),
+            "secret" => Some(ChangeEvent::Secret(serde_json::from_str(data)?)),
+            "namespace" => Some(ChangeEvent::Namespace(serde_json::from_str(data)?)),
+            "connection" => Some(ChangeEvent::Connection(serde_json::from_str(data)?)),
             "resync" => Some(ChangeEvent::Resync(Resync {})),
             _ => None,
         })
@@ -475,5 +550,72 @@ mod tests {
         assert_eq!(ChangeEvent::from_sse("resync", "{}").unwrap(), Some(resync));
         assert_eq!(ChangeEvent::from_sse("later", "{}").unwrap(), None);
         assert!(ChangeEvent::from_sse("run", "{}").is_err());
+    }
+
+    #[test]
+    fn a_control_plane_change_names_what_changed() {
+        let cases = [
+            (
+                "script",
+                json!({ "digest": "ab" }),
+                ChangeEvent::Script(ScriptChanged {
+                    digest: "ab".into(),
+                }),
+            ),
+            (
+                "workflow",
+                json!({ "name": "triage", "version": "cd" }),
+                ChangeEvent::Workflow(WorkflowChanged {
+                    name: "triage".into(),
+                    version: "cd".into(),
+                }),
+            ),
+            (
+                "secret",
+                json!({ "name": "github", "namespace": "alice" }),
+                ChangeEvent::Secret(SecretChanged {
+                    name: "github".into(),
+                    namespace: Some("alice".parse().unwrap()),
+                }),
+            ),
+            (
+                "secret",
+                json!({ "name": "github" }),
+                ChangeEvent::Secret(SecretChanged {
+                    name: "github".into(),
+                    namespace: None,
+                }),
+            ),
+            (
+                "namespace",
+                json!({ "name": "alice" }),
+                ChangeEvent::Namespace(NamespaceChanged {
+                    name: Some("alice".parse().unwrap()),
+                }),
+            ),
+            (
+                "namespace",
+                json!({}),
+                ChangeEvent::Namespace(NamespaceChanged { name: None }),
+            ),
+            (
+                "connection",
+                json!({ "id": "conn_1" }),
+                ChangeEvent::Connection(ConnectionChanged {
+                    id: "conn_1".into(),
+                }),
+            ),
+        ];
+        for (name, data, event) in cases {
+            assert_eq!(event.sse_event(), name);
+            assert_eq!(serde_json::to_value(&event).unwrap(), data, "{name}");
+            assert_eq!(
+                ChangeEvent::from_sse(name, &data.to_string()).unwrap(),
+                Some(event),
+                "{name}"
+            );
+        }
+        assert!(ChangeEvent::from_sse("script", "{}").is_err());
+        assert!(ChangeEvent::from_sse("connection", "{}").is_err());
     }
 }

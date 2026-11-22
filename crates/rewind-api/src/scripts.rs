@@ -147,11 +147,25 @@ pub struct TestRequest {
 // -------------------------------------------------------------------------------------------
 // Scripts executed on the platform
 
-/// `GET /v1/scripts`: every distinct script, most recently run first.
+/// `GET /v1/scripts`: every distinct script the runs of a scope ran in a window, most recently run
+/// first, each with its runs by status and the tools it called, from the hourly counters. A scope
+/// and a window, as `GET /v1/runs/stats` takes them (`crate::runs::RunStatsQuery`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, IntoParams)]
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct ScriptFilter {
+    /// The scope, as a query: one term `namespace:<name>` of one value, or nothing for the
+    /// tenant. Any other term is refused with its position (`invalid-query`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub q: Option<String>,
+    /// Runs started at or after this time, rounded down to the hour. No lower bound by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub since: Option<Timestamp>,
+    /// Runs started before this time, rounded up to the hour. Now by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[param(value_type = Option<String>, format = DateTime)]
+    pub until: Option<Timestamp>,
     /// Only this script: its digest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub digest: Option<String>,

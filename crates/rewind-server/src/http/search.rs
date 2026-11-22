@@ -439,6 +439,7 @@ fn values(values: &[ports::FacetValue]) -> Vec<FacetValue> {
 pub(crate) fn facets(facets: &ports::Facets) -> Facets {
     Facets {
         statuses: values(&facets.statuses),
+        workflows: Vec::new(),
         labels: facets
             .labels
             .iter()
