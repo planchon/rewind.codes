@@ -18,7 +18,7 @@ import {
   test,
   unique,
 } from "../support/gate.js";
-import { between, ended, events, getRun, journal, parseSse, runIds, started, startRun, waitingFor } from "../support/runs-helpers.js";
+import { between, ended, events, follow, getRun, journal, parseSse, runIds, started, startRun, waitingFor } from "../support/runs-helpers.js";
 
 let tenant: Tenant;
 let mcp: McpFixture;
@@ -317,6 +317,29 @@ export default async function main(input: { id: string }) {
   expect(cassette.text).toContain("fx.lookup");
   expect(cassette.text).toContain(id);
   expect(cassette.text).toContain("decision");
+});
+
+test("the change stream announces each change of a run, as GET /v1/runs lists it", { tag: "@success" }, async () => {
+  const changes = await follow(tenant.api, "/v1/changes");
+  try {
+    expect(changes.status).toBe(200);
+    expect(changes.contentType).toContain("text/event-stream");
+    const run = await started(alice, { script: WAITS_FOR_GO });
+    const of = (status: string) => (e: { event: string; data: any }) =>
+      e.event === "run" && e.data?.id === run.id && e.data?.status === status;
+    expect(await changes.until(of("active"), 15_000), "the stream announces the run active").toBeDefined();
+    await waitingFor(alice, run.id, "signal", "go");
+    expectOk(await alice.post(`/v1/runs/${run.id}/signals/go`, "now"), 202);
+    const done = await changes.until(of("completed"), 15_000);
+    expect(done, "the stream announces the run completed").toBeDefined();
+    const listed = await alice.get("/v1/runs", { query: { q: run.id } });
+    expectOk(listed, 200);
+    expect(done!.data).toEqual((listed.json.runs as { id: string }[]).find((r) => r.id === run.id));
+    const announced = changes.events.filter((e) => e.event === "run" && e.data?.id === run.id).length;
+    evidence(`${announced} run events for ${run.id}, active then completed; the last equals its item of GET /v1/runs`);
+  } finally {
+    changes.close();
+  }
 });
 
 test("the event stream sends every entry then the end, from any entry, and follows a live run", { tag: "@success" }, async () => {

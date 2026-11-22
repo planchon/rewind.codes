@@ -182,6 +182,12 @@ test fails (`tests-failed`, nothing saved) and a suite with two tests of one nam
 (`invalid-test`). The gate's run of November 22: GO, 347 of 347 checks, 0 unexpected 5xx, 0
 canary leaks. `acceptance/run.sh` was not run again: criterion 7 is the gate's check, and 8 needs
 WorkOS Staging's keys.
+For the live dashboard, the gate's first run was NO-GO, 347 of 349 checks: `GET /v1/changes` had
+no probe in the permission matrix, and the Sandbox area read the Collector's file while it wrote
+a line. The matrix now reads the stream's head only, Runs checks that the stream announces a run
+as `GET /v1/runs` lists it, Tenant isolation that another tenant's stream shows nothing of it,
+and the Collector's unfinished last line is left out. The gate's run of November 22: GO, 349 of
+349 checks, 0 unexpected 5xx, 0 canary leaks.
 
 | Crate | State |
 | --- | --- |

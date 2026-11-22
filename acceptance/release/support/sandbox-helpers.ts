@@ -103,9 +103,9 @@ export function replayDocument(document: string, args: string[] = []): { code: n
 /** The spans the Collector wrote to `file` (one export request per line). */
 export function collectorSpans(file: string): SpanRecord[] {
   if (!existsSync(file)) return [];
-  const exports = readFileSync(file, "utf8")
-    .split("\n")
-    .filter((line) => line.trim() !== "")
-    .map((line) => JSON.parse(line) as unknown);
+  const lines = readFileSync(file, "utf8").split("\n");
+  // The Collector may be writing its last line: only the lines it ended are read.
+  lines.pop();
+  const exports = lines.filter((line) => line.trim() !== "").map((line) => JSON.parse(line) as unknown);
   return flattenSpans(exports);
 }

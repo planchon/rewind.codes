@@ -10,6 +10,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { createKey, mintToken, runProbe, startRun, waitingRun } from "../support/access-helpers.js";
+import { follow } from "../support/runs-helpers.js";
 import { signingKey, startWebhookReceiver, type WebhookReceiver } from "../support/fixtures.js";
 import {
   Api,
@@ -266,6 +267,27 @@ test("another tenant's run is not found, whatever is asked of it", { tag: "@atta
   expect(ended.json.status, ended.text).toBe("completed");
   expect(ended.json.output.value).toEqual({ note: `${MARK} waits`, n: 7 });
   evidence(`${seen.length} requests on acme's run with globex's key, each 404 not-found; acme's journal unchanged; acme's own signal completes it with n=7`);
+});
+
+test("another tenant's change stream shows nothing of its runs", { tag: "@attack" }, async () => {
+  const theirs = await follow(globex.api, "/v1/changes");
+  const mine = await follow(acme.tenant.api, "/v1/changes");
+  try {
+    expect(theirs.status, "globex may follow its own changes").toBe(200);
+    const run = await startRun(acme.tenant.api, NS, { wait: "30s", script: COMPLETED_SCRIPT });
+    expectOk(run);
+    const id = run.json.id as string;
+    const announced = await mine.until((e) => e.event === "run" && e.data?.id === id && e.data?.status === "completed", 15_000);
+    expect(announced, "acme's own stream announces its run").toBeDefined();
+    // The change loop passes every second: two more, and globex's stream would have had it.
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    const leaked = theirs.events.filter((e) => e.data?.id === id || JSON.stringify(e.data ?? "").includes(MARK));
+    expect(leaked, "globex's stream names nothing of acme's").toEqual([]);
+    evidence(`acme's stream announced ${id} completed; globex's stream, open all along, got ${theirs.events.length} events, none of acme's`);
+  } finally {
+    theirs.close();
+    mine.close();
+  }
 });
 
 test("another tenant's lists, statistics and failure groups hold nothing of it", { tag: "@attack" }, async () => {

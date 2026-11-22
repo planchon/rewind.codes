@@ -72,6 +72,8 @@ interface Probe {
   query?: Record<string, string>;
   /** Names the namespace with a key (`Rewind-Namespace`), required to create in one. */
   namespaced?: boolean;
+  /** Answers an event stream that never ends when allowed: its head is read, its body closed. */
+  stream?: true;
   /** Refused (403) to these principals even when they hold the permission, by a rule of 06. */
   refusedTo?: Scope[];
   /**
@@ -192,6 +194,7 @@ const PROBES: Probe[] = [
   { op: "PUT /v1/roles/{name}", need: p("roles:write"), path: "/v1/roles/matrix-empty", body: { permissions: [] } },
   // Runs.
   { op: "GET /v1/runs", need: p("runs:read"), path: "/v1/runs" },
+  { op: "GET /v1/changes", need: p("runs:read"), path: "/v1/changes", stream: true },
   {
     op: "POST /v1/runs",
     need: p("runs:start"),
@@ -304,6 +307,7 @@ async function send(api: Api, probe: Probe, principal: Principal, tenant: string
   return target.request(method, probe.path.replace("{tenant}", tenant), {
     json: probe.body,
     query: probe.query,
+    stream: probe.stream,
   });
 }
 

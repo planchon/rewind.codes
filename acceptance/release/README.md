@@ -89,7 +89,7 @@ later runs reuse.
 
 | Area | File | Covers |
 | --- | --- | --- |
-| Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, traces |
+| Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, the change stream, traces |
 | Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
 | Host tools and tasks | `areas/host-tools.spec.ts` | Claims, heartbeats, deferrals, failures, retries, timeouts, approvals, task tokens |
 | MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
@@ -98,7 +98,7 @@ later runs reuse.
 | Observability | `areas/observability.spec.ts` | Queries, statistics, failure groups, OTLP traces, signed webhooks, quota alerts |
 | Access | `areas/access.spec.ts` | The permission matrix over every operation of `api/openapi.json` (the 25 permissions of `GET /v1/permissions`, `secrets:*` included), roles, grants, revocation, labels on secrets, `secrets:use` |
 | Namespaces and tokens | `areas/namespaces.spec.ts` | The header, opaque and signed tokens, Alice and Bob, quotas, each end user's secrets (no fallback, a token's `secrets:use`), the dashboard's Secrets, erasure |
-| Tenant isolation | `areas/tenancy.spec.ts` | Everything of one tenant probed from another |
+| Tenant isolation | `areas/tenancy.spec.ts` | Everything of one tenant probed from another, its change stream among them |
 | Sandbox | `areas/sandbox.spec.ts` | Determinism, removed globals, imports, state across runs, exhaustion |
 | API hardening | `areas/hardening.spec.ts` | Malformed and oversized input and secrets, paths, injections, idempotency keys, `/hooks`, cookies, `/auth` |
 | CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay, an API called over http with the secret `rewind secrets put` wrote and `--secret` attaches |

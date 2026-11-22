@@ -224,6 +224,8 @@ export interface RequestOptions {
   headers?: Record<string, string>;
   /** `?key=value`, keys repeated for arrays. */
   query?: Record<string, string | number | boolean | (string | number)[] | undefined>;
+  /** An event stream that may never end (`GET /v1/changes`): its head is read, its body closed. */
+  stream?: true;
 }
 
 /**
@@ -275,7 +277,13 @@ export class Api {
       if (qs !== "") target += `${target.includes("?") ? "&" : "?"}${qs}`;
     }
     const response = await recordingFetch(target, { method, headers, body: body as BodyInit | undefined });
-    const text = await response.text();
+    let text: string;
+    if (options.stream && (response.headers.get("content-type") ?? "").includes("text/event-stream")) {
+      await response.body?.cancel();
+      text = "";
+    } else {
+      text = await response.text();
+    }
     let json: any;
     try {
       json = text === "" ? undefined : JSON.parse(text);

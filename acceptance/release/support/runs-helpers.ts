@@ -3,7 +3,7 @@
  * test): start a run as raw HTTP, wait for its end, read its journal's events.
  */
 import { eventually } from "../../support/processes.js";
-import { type Api, expect, expectOk, type Reply } from "./gate.js";
+import { type Api, expect, expectOk, type Reply, recordingFetch } from "./gate.js";
 
 /** The statuses a run ends with. */
 export const ENDED = new Set(["completed", "failed", "cancelled", "aborted"]);
@@ -113,6 +113,68 @@ export function parseSse(text: string): { event: string; id?: string; data: any 
     out.push({ event, id, data: parsed });
   }
   return out;
+}
+
+/** One server-sent event. */
+export interface SseEvent {
+  event: string;
+  id?: string;
+  data: any;
+}
+
+/** An event stream read as it arrives: its events so far, until it is closed. */
+export interface Following {
+  status: number;
+  contentType: string;
+  events: SseEvent[];
+  /** The first event `match` accepts, once it arrived; `undefined` after `timeoutMs`. */
+  until(match: (event: SseEvent) => boolean, timeoutMs: number): Promise<SseEvent | undefined>;
+  close(): void;
+}
+
+/** Opens an event stream that may never end (`GET /v1/changes`) and reads it as it arrives. */
+export async function follow(api: Api, path: string): Promise<Following> {
+  const controller = new AbortController();
+  const headers = new Headers(api.defaultHeaders);
+  if (api.bearer !== undefined) headers.set("authorization", `Bearer ${api.bearer}`);
+  const response = await recordingFetch(`${api.url}${path}`, { headers, signal: controller.signal });
+  const contentType = response.headers.get("content-type") ?? "";
+  const events: SseEvent[] = [];
+  if (contentType.includes("text/event-stream") && response.body) {
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    void (async () => {
+      let buffer = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return;
+          buffer += value;
+          const end = buffer.lastIndexOf("\n\n");
+          if (end < 0) continue;
+          events.push(...parseSse(buffer.slice(0, end + 2)));
+          buffer = buffer.slice(end + 2);
+        }
+      } catch {
+        // Closed.
+      }
+    })();
+  } else {
+    await response.body?.cancel();
+  }
+  return {
+    status: response.status,
+    contentType,
+    events,
+    async until(match, timeoutMs) {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const found = events.find(match);
+        if (found || Date.now() >= deadline) return found;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    },
+    close: () => controller.abort(),
+  };
 }
 
 /** Milliseconds between two RFC 3339 times. */
