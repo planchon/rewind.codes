@@ -2,12 +2,13 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.3.0 (2026-11-22)
 
 For named secrets attached to runs, API tools from OpenAPI documents, and calls signed with a key per organization.
 
 - `rewind.secrets` (`list`, `put`, `delete`, `usage`): the organization's secrets, with their labels, who wrote them
-  and when, their reads per day and their last read; never a value. `rewind.namespaces.secrets` (`list`, `put`,
+  and when, their reads per day and their last read; never a value. A last read's `run` and `namespace` are `null`
+  when a toolset's registration read the secret to list a server's tools. `rewind.namespaces.secrets` (`list`, `put`,
   `delete`, `usage`): an end user's own. `isSecretName` checks a name.
 - `runs.start`, `runs.fork` and `workflows.create` take `secrets`, the attachments by MCP server or API
   (`{ github: "ns/github", zendesk: "org/zendesk" }`); `Run` and `Workflow` have them. The problem slug
