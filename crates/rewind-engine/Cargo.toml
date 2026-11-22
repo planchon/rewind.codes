@@ -8,8 +8,9 @@ publish.workspace = true
 license.workspace = true
 
 [features]
-# The conformance suites every adapter of `JournalStore`, `AccessStore`, `BlobStore`,
-# `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
+# The conformance suites every adapter of `CatalogStore`, `PartitionStore`, `RunArchive`,
+# `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel`, `SecretStore`,
+# `SpanExporter` and `WebhookSender` must pass.
 conformance = []
 
 [dependencies]
@@ -19,7 +20,8 @@ rewind-core.workspace = true
 aws-lc-rs.workspace = true
 # The base64 form of an HTTP basic secret, taken out of the answers that echo it.
 base64.workspace = true
-# Quota alerts are sent to every subscription at once (`join_all`).
+# Quota alerts are sent to every subscription at once (`join_all`); the changes of the control
+# plane are a `Stream`.
 futures-util = { workspace = true, features = ["alloc"] }
 getrandom.workspace = true
 jiff.workspace = true

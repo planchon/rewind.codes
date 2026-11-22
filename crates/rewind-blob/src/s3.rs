@@ -2,11 +2,12 @@
 
 use std::fmt;
 
+use futures_util::StreamExt as _;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::path::Path;
 use object_store::{ObjectStore as _, ObjectStoreExt as _, PutMode};
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobStore, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 
 use crate::{Error, verify};
 
@@ -55,12 +56,16 @@ impl fmt::Debug for S3Config {
 }
 
 /// `BlobStore` on S3: a tenant's blob is the object `{tenant}/sha256/{hex digest}` of the
-/// bucket.
+/// bucket; a run's, `blobs/{tenant}/{run}/sha256/{hex digest}`; a tenant's test,
+/// `tests/{tenant}/sha256/{hex digest}` (`archi/06-storage-and-scale.md`, "The archive and the
+/// blobs").
 ///
 /// A put is conditional (`If-None-Match: *`), so a second put of a digest never rewrites its
 /// object; the service must support conditional writes, as AWS S3, MinIO and R2 do. A get checks
-/// the digest of the object's bytes. S3 does not say whether a deletion removed anything, so
-/// `delete` asks first: two concurrent deletions of one blob may both report it existed.
+/// the digest of the object's bytes. A copy is the service's own copy, the bytes staying in the
+/// bucket; it may rewrite a target already there with the same bytes. S3 does not say whether a
+/// deletion removed anything, so `delete` asks first: two concurrent deletions of one blob may
+/// both report it existed. `delete_run` lists the run's prefix and deletes what it holds.
 /// Requests are retried with backoff by `object_store`. The store must be used inside a Tokio
 /// runtime.
 #[derive(Debug, Clone)]
@@ -121,6 +126,70 @@ impl S3Blobs {
         // Tenant ids and hex digests hold no character a path would encode.
         Path::from(Self::key(tenant, digest))
     }
+
+    /// The key of an owner's blob: `blobs/{tenant}/{run}/sha256/{hex digest}` or
+    /// `tests/{tenant}/sha256/{hex digest}`.
+    pub fn key_in(owner: &BlobOwner, digest: Digest) -> String {
+        match owner {
+            BlobOwner::Run(run) => format!("{}/sha256/{}", Self::run_prefix(run), digest.to_hex()),
+            BlobOwner::Tests(tenant) => format!("tests/{tenant}/sha256/{}", digest.to_hex()),
+        }
+    }
+
+    /// The prefix of a run's blobs: `blobs/{tenant}/{run}`.
+    pub fn run_prefix(run: &RunRef) -> String {
+        format!("blobs/{}/{}", run.tenant, run.id)
+    }
+
+    fn location_in(owner: &BlobOwner, digest: Digest) -> Path {
+        // Tenant ids, run ids and hex digests hold no character a path would encode.
+        Path::from(Self::key_in(owner, digest))
+    }
+
+    async fn read(&self, location: &Path, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
+        let object = match self.store.get(location).await {
+            Ok(object) => object,
+            Err(object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(failed("read", location, &error)),
+        };
+        let bytes = object
+            .bytes()
+            .await
+            .map_err(|error| failed("read", location, &error))?;
+        verify(digest, &bytes, "stored bytes")?;
+        Ok(Some(bytes.into()))
+    }
+
+    async fn write(
+        &self,
+        location: &Path,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        verify(digest, &bytes, "bytes")?;
+        match self
+            .store
+            .put_opts(location, bytes.into(), PutMode::Create.into())
+            .await
+        {
+            // Blobs are immutable: a second put changes nothing.
+            Ok(_) | Err(object_store::Error::AlreadyExists { .. }) => Ok(()),
+            Err(error) => Err(failed("write", location, &error)),
+        }
+    }
+
+    async fn remove(&self, location: &Path) -> Result<bool, BlobError> {
+        match self.store.head(location).await {
+            Ok(_) => {}
+            Err(object_store::Error::NotFound { .. }) => return Ok(false),
+            Err(error) => return Err(failed("delete", location, &error)),
+        }
+        self.store
+            .delete(location)
+            .await
+            .map_err(|error| failed("delete", location, &error))?;
+        Ok(true)
+    }
 }
 
 impl BlobStore for S3Blobs {
@@ -130,46 +199,68 @@ impl BlobStore for S3Blobs {
         digest: Digest,
         bytes: Vec<u8>,
     ) -> Result<(), BlobError> {
-        verify(digest, &bytes, "bytes")?;
-        let location = Self::location(tenant, digest);
-        match self
-            .store
-            .put_opts(&location, bytes.into(), PutMode::Create.into())
+        self.write(&Self::location(tenant, digest), digest, bytes)
             .await
-        {
-            // Blobs are immutable: a second put changes nothing.
-            Ok(_) | Err(object_store::Error::AlreadyExists { .. }) => Ok(()),
-            Err(error) => Err(failed("write", &location, &error)),
-        }
     }
 
     async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        let location = Self::location(tenant, digest);
-        let object = match self.store.get(&location).await {
-            Ok(object) => object,
-            Err(object_store::Error::NotFound { .. }) => return Ok(None),
-            Err(error) => return Err(failed("read", &location, &error)),
-        };
-        let bytes = object
-            .bytes()
-            .await
-            .map_err(|error| failed("read", &location, &error))?;
-        verify(digest, &bytes, "stored bytes")?;
-        Ok(Some(bytes.into()))
+        self.read(&Self::location(tenant, digest), digest).await
     }
 
     async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        let location = Self::location(tenant, digest);
-        match self.store.head(&location).await {
-            Ok(_) => {}
-            Err(object_store::Error::NotFound { .. }) => return Ok(false),
-            Err(error) => return Err(failed("delete", &location, &error)),
-        }
-        self.store
-            .delete(&location)
+        self.remove(&Self::location(tenant, digest)).await
+    }
+
+    async fn put_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        self.write(&Self::location_in(owner, digest), digest, bytes)
             .await
-            .map_err(|error| failed("delete", &location, &error))?;
-        Ok(true)
+    }
+
+    async fn get_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        self.read(&Self::location_in(owner, digest), digest).await
+    }
+
+    async fn copy(
+        &self,
+        from: &BlobOwner,
+        to: &BlobOwner,
+        digest: Digest,
+    ) -> Result<(), BlobError> {
+        let (source, target) = (
+            Self::location_in(from, digest),
+            Self::location_in(to, digest),
+        );
+        match self.store.copy(&source, &target).await {
+            Ok(()) => Ok(()),
+            Err(object_store::Error::NotFound { .. }) => Err(BlobError::Missing(digest)),
+            Err(error) => Err(failed("copy", &target, &error)),
+        }
+    }
+
+    async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
+        let prefix = Path::from(Self::run_prefix(run));
+        let mut listed = self.store.list(Some(&prefix));
+        while let Some(object) = listed.next().await {
+            let object = object.map_err(|error| failed("list", &prefix, &error))?;
+            match self.store.delete(&object.location).await {
+                Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => return Err(failed("delete", &object.location, &error)),
+            }
+        }
+        Ok(())
+    }
+
+    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        self.remove(&Self::location_in(owner, digest)).await
     }
 }
 
@@ -188,6 +279,31 @@ mod tests {
         let key = S3Blobs::key(&tenant, digest);
         assert_eq!(key, format!("acme/sha256/{}", digest.to_hex()));
         assert_eq!(S3Blobs::location(&tenant, digest).as_ref(), key);
+    }
+
+    #[test]
+    fn owned_keys_are_the_buckets_layout() {
+        let tenant = TenantId::new("Acme").expect("tenant");
+        let run = RunRef::new(
+            tenant.clone(),
+            "01930000-0000-7000-8000-000000000001"
+                .parse()
+                .expect("run id"),
+        );
+        let digest = Digest::of(b"{}");
+        let hex = digest.to_hex();
+        assert_eq!(
+            S3Blobs::key_in(&BlobOwner::Run(run.clone()), digest),
+            format!("blobs/Acme/01930000-0000-7000-8000-000000000001/sha256/{hex}")
+        );
+        assert_eq!(
+            S3Blobs::key_in(&BlobOwner::Tests(tenant), digest),
+            format!("tests/Acme/sha256/{hex}")
+        );
+        assert_eq!(
+            S3Blobs::run_prefix(&run),
+            "blobs/Acme/01930000-0000-7000-8000-000000000001"
+        );
     }
 
     #[test]

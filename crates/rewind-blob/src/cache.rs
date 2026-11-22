@@ -1,14 +1,21 @@
 //! The workers' local cache of blobs (`archi/06-storage-and-scale.md`, "Payloads").
 
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
 use quick_cache::sync::Cache;
 use quick_cache::{OptionsBuilder, Weighter};
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobStore, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 
-type Key = (TenantId, Digest);
+/// A cached blob: a tenant's, or an owner's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Key {
+    Tenant(TenantId, Digest),
+    Owned(BlobOwner, Digest),
+}
+
 type Bytes = Arc<Vec<u8>>;
 
 /// What an entry costs beyond its bytes: its key and the cache's bookkeeping.
@@ -32,8 +39,9 @@ pub const DEFAULT_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 /// same bytes, so an entry is never refreshed, and only bytes whose digest a store checked
 /// enter it. A get that misses reads the inner store and keeps the blob; a put always writes
 /// to the inner store, then keeps the blob; a delete drops the entry and deletes from the
-/// inner store. Another worker's cache may still serve a blob this one deleted: a cleanup only
-/// deletes blobs that no run has referenced for a day.
+/// inner store, and so does the deletion of a run's blobs for each of them. A copy is the inner
+/// store's. Another worker's cache may still serve a blob this one deleted: a cleanup only
+/// deletes blobs that no run has referenced for a day, and an erased run is read no more.
 pub struct CachedBlobs<S> {
     inner: S,
     cache: Cache<Key, Bytes, BlobWeight>,
@@ -81,7 +89,43 @@ impl<S> CachedBlobs<S> {
 
     /// Whether the cache holds a tenant's blob.
     pub fn is_cached(&self, tenant: &TenantId, digest: Digest) -> bool {
-        self.cache.peek(&(tenant.clone(), digest)).is_some()
+        self.cache
+            .peek(&Key::Tenant(tenant.clone(), digest))
+            .is_some()
+    }
+
+    /// Whether the cache holds an owner's blob.
+    pub fn is_cached_in(&self, owner: &BlobOwner, digest: Digest) -> bool {
+        self.cache
+            .peek(&Key::Owned(owner.clone(), digest))
+            .is_some()
+    }
+
+    async fn read(
+        &self,
+        key: Key,
+        inner: impl Future<Output = Result<Option<Vec<u8>>, BlobError>>,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        if let Some(bytes) = self.cache.get(&key) {
+            return Ok(Some(Vec::clone(&bytes)));
+        }
+        let bytes = inner.await?;
+        if let Some(bytes) = &bytes {
+            self.cache.insert(key, Arc::new(bytes.clone()));
+        }
+        Ok(bytes)
+    }
+
+    async fn remove(
+        &self,
+        key: Key,
+        inner: impl Future<Output = Result<bool, BlobError>>,
+    ) -> Result<bool, BlobError> {
+        self.cache.remove(&key);
+        let existed = inner.await?;
+        // Also drops what a get that missed concurrently kept.
+        self.cache.remove(&key);
+        Ok(existed)
     }
 }
 
@@ -106,29 +150,74 @@ impl<S: BlobStore> BlobStore for CachedBlobs<S> {
         // Always written through: the blob may have been cleaned up from the inner store since
         // this cache kept it.
         self.inner.put(tenant, digest, bytes.clone()).await?;
-        self.cache.insert((tenant.clone(), digest), Arc::new(bytes));
+        self.cache
+            .insert(Key::Tenant(tenant.clone(), digest), Arc::new(bytes));
         Ok(())
     }
 
     async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
-        let key = (tenant.clone(), digest);
-        if let Some(bytes) = self.cache.get(&key) {
-            return Ok(Some(Vec::clone(&bytes)));
-        }
-        let bytes = self.inner.get(tenant, digest).await?;
-        if let Some(bytes) = &bytes {
-            self.cache.insert(key, Arc::new(bytes.clone()));
-        }
-        Ok(bytes)
+        self.read(
+            Key::Tenant(tenant.clone(), digest),
+            self.inner.get(tenant, digest),
+        )
+        .await
     }
 
     async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
-        let key = (tenant.clone(), digest);
-        self.cache.remove(&key);
-        let existed = self.inner.delete(tenant, digest).await?;
-        // Also drops what a get that missed concurrently kept.
-        self.cache.remove(&key);
-        Ok(existed)
+        self.remove(
+            Key::Tenant(tenant.clone(), digest),
+            self.inner.delete(tenant, digest),
+        )
+        .await
+    }
+
+    async fn put_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        self.inner.put_in(owner, digest, bytes.clone()).await?;
+        self.cache
+            .insert(Key::Owned(owner.clone(), digest), Arc::new(bytes));
+        Ok(())
+    }
+
+    async fn get_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        self.read(
+            Key::Owned(owner.clone(), digest),
+            self.inner.get_in(owner, digest),
+        )
+        .await
+    }
+
+    async fn copy(
+        &self,
+        from: &BlobOwner,
+        to: &BlobOwner,
+        digest: Digest,
+    ) -> Result<(), BlobError> {
+        self.inner.copy(from, to, digest).await
+    }
+
+    async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
+        let of_run = |key: &Key| matches!(key, Key::Owned(BlobOwner::Run(of), _) if of == run);
+        self.cache.retain(|key, _| !of_run(key));
+        self.inner.delete_run(run).await?;
+        self.cache.retain(|key, _| !of_run(key));
+        Ok(())
+    }
+
+    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        self.remove(
+            Key::Owned(owner.clone(), digest),
+            self.inner.delete_in(owner, digest),
+        )
+        .await
     }
 }
 

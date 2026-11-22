@@ -1,8 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rewind_core::{RunId, Seed};
+use rewind_core::{PartitionId, RunId, Seed, Timestamp};
+use uuid::Uuid;
 
 use crate::ports::Entropy;
 
@@ -67,6 +67,22 @@ impl Entropy for SystemEntropy {
         RunId::from_v7_parts(ms, (Self::node() << NODE_BITS) | count, random_u64())
     }
 
+    /// The system clock's millisecond, and random bits from the operating system's CSPRNG.
+    fn run_id_in(&self, partition: PartitionId) -> RunId {
+        let millis = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |since| {
+                u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
+            });
+        let mut random = [0u8; 8];
+        getrandom::fill(&mut random).expect("the operating system's random generator is available");
+        RunId::in_partition(
+            partition,
+            Timestamp::from_millis(millis),
+            u64::from_le_bytes(random),
+        )
+    }
+
     fn seed(&self) -> Seed {
         let mut bytes = [0u8; 32];
         // Without a CSPRNG, seeds would be predictable, and so would `crypto` in scripts.
@@ -107,6 +123,15 @@ impl Entropy for SeededEntropy {
         RunId::from_uuid(uuid)
     }
 
+    /// A run id of the partition whose time and random bits come from the counter.
+    fn run_id_in(&self, partition: PartitionId) -> RunId {
+        RunId::in_partition(
+            partition,
+            Timestamp::from_millis(self.next() >> 16),
+            self.next(),
+        )
+    }
+
     fn seed(&self) -> Seed {
         let mut bytes = [0u8; 32];
         for chunk in bytes.as_chunks_mut::<8>().0 {
@@ -142,6 +167,25 @@ mod tests {
     fn system_entropy_is_not() {
         assert_ne!(SystemEntropy.seed(), SystemEntropy.seed());
         assert_ne!(SystemEntropy.run_id(), SystemEntropy.run_id());
+        let partition = PartitionId::new(41);
+        assert_ne!(
+            SystemEntropy.run_id_in(partition),
+            SystemEntropy.run_id_in(partition)
+        );
+    }
+
+    #[test]
+    fn run_ids_are_drawn_for_their_partition() {
+        let seeded = SeededEntropy::new(7);
+        for partition in [0, 1, 63, u16::MAX].map(PartitionId::new) {
+            assert_eq!(seeded.run_id_in(partition).partition(), partition);
+            assert_eq!(SystemEntropy.run_id_in(partition).partition(), partition);
+        }
+        assert_eq!(
+            SeededEntropy::new(3).run_id_in(PartitionId::new(5)),
+            SeededEntropy::new(3).run_id_in(PartitionId::new(5)),
+            "seeded run ids are reproducible"
+        );
     }
 
     #[test]

@@ -9,11 +9,11 @@ use rewind_core::{
 
 use crate::adapters::SystemClock;
 use crate::ports::{
-    ChangedRun, Clock, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,
-    Latency, Predicate, ProjectedRun, QuarantineNote, ReadModel, ReadModelError, RunOrder,
-    RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor,
-    StatsWindow, TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter, Wait, WaitKind,
-    WaitingFor,
+    ChangedRun, Clock, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow,
+    IndexedSummary, LabelFacet, Latency, ProjectedRun, QuarantineNote, ReadModel, ReadModelError,
+    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
+    SearchCursor, StatsWindow, TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter,
+    Wait, WaitKind, WaitingFor,
 };
 
 /// Every status, in the order of `RunStatus`: what `run_stats` counts, zeros included.
@@ -69,15 +69,9 @@ struct Call {
     result: Option<Shape>,
 }
 
-/// A run as the queries see it: its summary and what its calls did.
-#[derive(Debug)]
-struct Row {
-    summary: RunSummary,
-    /// The tools it scheduled calls to.
-    tools: BTreeSet<String>,
-    /// The kinds its failed calls failed with.
-    failed: BTreeSet<ToolFailureKind>,
-}
+/// A run as the queries see it: its summary and what its calls did, as the run index of a
+/// partition holds it.
+type Row = IndexedSummary;
 
 impl MemoryReadModel {
     pub fn new() -> Self {
@@ -232,7 +226,7 @@ impl State {
         Row {
             summary,
             tools,
-            failed,
+            call_errors: failed,
         }
     }
 
@@ -242,12 +236,7 @@ impl State {
             .values()
             .filter(|projected| projected.run.run.tenant == query.tenant)
             .map(|projected| self.row(projected))
-            .filter(|row| {
-                query
-                    .terms
-                    .iter()
-                    .all(|term| row.holds(&term.predicate) != term.negated)
-            })
+            .filter(|row| row.matches(query))
             .collect()
     }
 
@@ -266,113 +255,6 @@ impl State {
             .get(&run)
             .map_or(now, |previous| now.max(previous.saturating_add(1)));
         self.changed.insert(run, stamp);
-    }
-}
-
-impl Row {
-    /// What the run waits for: its waits' kinds, while it is active.
-    fn waiting(&self) -> BTreeSet<WaitingFor> {
-        if self.summary.status != RunStatus::Active {
-            return BTreeSet::new();
-        }
-        self.summary.waits.iter().map(Wait::waiting_for).collect()
-    }
-
-    /// The signals the run waits for.
-    fn signals(&self) -> BTreeSet<&str> {
-        self.summary
-            .waits
-            .iter()
-            .filter(|wait| wait.kind == WaitKind::Signal)
-            .filter_map(|wait| wait.name.as_deref())
-            .collect()
-    }
-
-    /// From start to end, once ended.
-    fn duration(&self) -> Option<u64> {
-        self.summary.duration()
-    }
-
-    /// What free text is searched in.
-    fn text(&self) -> Vec<String> {
-        let summary = &self.summary;
-        let mut fields = vec![summary.run.id.to_string(), summary.headline.clone()];
-        if let Some(ending) = &summary.ending {
-            fields.push(ending.error.clone());
-            fields.push(ending.message.clone());
-        }
-        fields.extend(summary.labels.values().cloned());
-        fields
-    }
-
-    fn holds(&self, predicate: &Predicate) -> bool {
-        let summary = &self.summary;
-        let hex_prefix = |digest: &Digest, prefixes: &[String]| {
-            let hex = digest.to_hex();
-            prefixes
-                .iter()
-                .any(|prefix| hex.starts_with(prefix.as_str()))
-        };
-        match predicate {
-            Predicate::Namespace(names) => names.contains(&summary.namespace),
-            Predicate::Id(prefixes) => {
-                let id = summary.run.id.to_string();
-                prefixes
-                    .iter()
-                    .any(|prefix| id.starts_with(prefix.as_str()))
-            }
-            Predicate::Status(statuses) => statuses.contains(&summary.status),
-            Predicate::Label { key, values } => summary
-                .labels
-                .get(key)
-                .is_some_and(|value| values.iter().any(|matcher| matcher.matches(value))),
-            Predicate::Script(prefixes) => hex_prefix(&summary.script, prefixes),
-            Predicate::Toolset(prefixes) => hex_prefix(&summary.toolset, prefixes),
-            Predicate::Tool(matchers) => self
-                .tools
-                .iter()
-                .any(|tool| matchers.iter().any(|matcher| matcher.matches(tool))),
-            Predicate::Error { names, kinds } => {
-                summary
-                    .ending
-                    .as_ref()
-                    .is_some_and(|ending| names.contains(&ending.error))
-                    || self.failed.iter().any(|kind| kinds.contains(kind))
-            }
-            Predicate::Waiting(kinds) => {
-                let waiting = self.waiting();
-                !waiting.is_empty()
-                    && (kinds.is_empty() || waiting.iter().any(|kind| kinds.contains(kind)))
-            }
-            Predicate::Signal(matchers) => self
-                .signals()
-                .iter()
-                .any(|name| matchers.iter().any(|matcher| matcher.matches(name))),
-            Predicate::Started(range) => summary.started_at.is_some_and(|at| range.contains(&at)),
-            Predicate::Ended(range) => summary.ended_at.is_some_and(|at| range.contains(&at)),
-            Predicate::Activity(range) => range.contains(&summary.last_activity_at),
-            Predicate::Duration(range) => self
-                .duration()
-                .is_some_and(|duration| range.contains(&duration)),
-            Predicate::Calls(range) => range.contains(&summary.tool_calls),
-            Predicate::Errors(range) => range.contains(&summary.errors),
-            Predicate::Parent(parent) => summary.parent == Some(*parent),
-            Predicate::Workflow(matchers) => summary
-                .workflow
-                .as_deref()
-                .is_some_and(|name| matchers.iter().any(|matcher| matcher.matches(name))),
-            Predicate::StartedBy(run) => summary.started_by == Some(*run),
-            Predicate::Fingerprint(fingerprints) => summary
-                .ending
-                .as_ref()
-                .is_some_and(|ending| fingerprints.contains(&ending.fingerprint)),
-            Predicate::Quarantined => summary.quarantine.is_some(),
-            Predicate::Mode(modes) => summary.mode.is_some_and(|mode| modes.contains(&mode)),
-            Predicate::Text(text) => self
-                .text()
-                .iter()
-                .any(|field| field.to_lowercase().contains(text.as_str())),
-        }
     }
 }
 
@@ -500,7 +382,7 @@ fn facets(rows: &[&Row], top: usize) -> Facets {
             *tools.entry(tool.clone()).or_default() += 1;
         }
         let mut run_errors: BTreeSet<String> = row
-            .failed
+            .call_errors
             .iter()
             .map(|kind| kind.as_str().to_owned())
             .collect();
@@ -678,7 +560,7 @@ impl ReadModel for MemoryReadModel {
             {
                 *stats.series[index].entry(row.summary.status).or_default() += 1;
             }
-            durations.extend(row.duration());
+            durations.extend(row.summary.duration());
             windowed.push(row);
         }
         stats.durations = latency(durations);

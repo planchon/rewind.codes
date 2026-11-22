@@ -23,11 +23,13 @@
 //! - [`testing`]: tests run in virtual time against a script, several at once; the checks of a
 //!   test against its toolset and its workflow's interface.
 //! - [`trace`]: the LLM trace of a run.
-//! - [`adapters`]: in-memory storage, access, read model, secrets, telemetry and webhooks; a
-//!   fake identity provider; static tool responses and type-checking; system and virtual time;
+//! - [`adapters`]: the in-memory control plane (catalog, cluster), run plane (partitions) and
+//!   archive; in-memory storage, access, read model, secrets, telemetry and webhooks; a fake
+//!   identity provider; static tool responses and type-checking; system and virtual time;
 //!   system and seeded entropy. With a virtual clock they make mock mode and the test harness.
-//! - `conformance` (feature): the suites every adapter of `JournalStore`, `AccessStore`,
-//!   `BlobStore`, `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
+//! - `conformance` (feature): the suites every adapter of `CatalogStore`, `PartitionStore`,
+//!   `RunArchive`, `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel`,
+//!   `SecretStore`, `SpanExporter` and `WebhookSender` must pass.
 //!
 //! The engine is deterministic given its ports. Service telemetry (spans, logs and measurements)
 //! goes through the `tracing` facade; what a script did is recorded in the journal, never

@@ -25,8 +25,9 @@ const MINIO_IMAGE: &str = "cgr.dev/chainguard/minio:latest";
 const MC_IMAGE: &str = "cgr.dev/chainguard/minio-client:latest";
 const USER: &str = "rewindblob";
 const PASSWORD: &str = "rewindblob-secret";
-/// One bucket per store the suites create, and one for the corruption test.
-const BUCKETS: usize = 13;
+/// One bucket per store the suites create (12 checks, alone and behind the cache), and one for
+/// the corruption test.
+const BUCKETS: usize = 25;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn s3_blobs_pass_the_conformance_suite_on_minio() {

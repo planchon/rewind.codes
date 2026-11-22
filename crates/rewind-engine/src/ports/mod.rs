@@ -8,6 +8,10 @@
 //!
 //! | Port | Adapters |
 //! | --- | --- |
+//! | [`CatalogStore`] | memory |
+//! | [`PartitionStore`] / [`PartitionLog`] | memory |
+//! | [`RunArchive`] | memory |
+//! | [`Cluster`] / [`cluster::Membership`] | memory |
 //! | [`JournalStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`AccessStore`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
@@ -21,23 +25,33 @@
 //! | [`WebhookSender`] | memory, HTTP (`rewind-server`) |
 //! | [`Clock`], [`Entropy`] | system, virtual or seeded |
 //!
-//! The ports with state ([`JournalStore`], [`AccessStore`], [`BlobStore`], [`ReadModel`],
-//! [`SecretStore`]), [`SpanExporter`] and [`WebhookSender`] have a conformance suite in the
-//! module `conformance` (feature `conformance`) that every adapter passes. A span exporter and a
+//! The ports with state ([`CatalogStore`], [`PartitionStore`], [`RunArchive`], [`Cluster`],
+//! [`JournalStore`], [`AccessStore`], [`BlobStore`], [`ReadModel`], [`SecretStore`]),
+//! [`SpanExporter`] and [`WebhookSender`] have a conformance suite in the module `conformance`
+//! (feature `conformance`) that every adapter passes.
+//!
+//! The modules [`catalog`], [`partition`], [`archive`] and [`cluster`] are public: the names
+//! they share with other ports ([`partition::CreateRun`], [`partition::Activation`],
+//! [`catalog::NamespaceFilter`], [`catalog::NamespacePage`], [`cluster::Membership`]) are read
+//! through them; every other name is also re-exported here. A span exporter and a
 //! webhook sender have no read side: their suites read the backend through a collector or a
 //! receiver the adapter's test provides. An identity provider's contract is not observable
 //! through the port alone: its adapters test it.
 
 pub mod access;
+pub mod archive;
 mod blob;
+pub mod catalog;
 mod checker;
 mod clock;
+pub mod cluster;
 pub mod connections;
 mod dispatcher;
 mod executor;
 pub mod identity;
 mod journal;
 mod namespaces;
+pub mod partition;
 mod read_model;
 mod secrets;
 mod telemetry;
@@ -48,12 +62,18 @@ pub use access::{
     AccessStore, ApiKey, Grant, GrantClaim, GrantDeletion, GrantWrite, InvalidPrincipal, Principal,
     Role, RoleDeletion, Token, TokenKey,
 };
-pub use blob::{BlobError, BlobStore};
+pub use archive::{ArchiveError, RunArchive, SealedAttempt};
+pub use blob::{BlobError, BlobOwner, BlobStore};
+pub use catalog::{CatalogError, CatalogStore, TEST_DELETION_TIMEOUT};
 pub use checker::{
     CheckerError, Diagnostic, DiagnosticSource, Severity, ToolDeclarations, TypeChecker,
     WorkflowDeclarations,
 };
 pub use clock::{Clock, Entropy, VirtualTime};
+pub use cluster::{
+    Cluster, ClusterError, ControlPlaneChange, Departed, InvalidNodeId, Moves, NodeId, NodeInfo,
+    PartitionEpoch, PartitionMap, PartitionOwner,
+};
 pub use connections::{
     Access, ClientAuthMethod, ClientKind, CodeRedemption, Connection, ConnectionToken,
     ConnectionTokenKind, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization,
@@ -86,6 +106,14 @@ pub use namespaces::{
     InvalidNamespace, Month, Namespace, NamespaceCursor, NamespaceFilter, NamespaceName,
     NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite, QuotaAlert, QuotaAlertKey,
     QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf, limits,
+};
+pub use partition::{
+    Admission, Attempt, Batch, Change, CountedNamespace, CounterDelta, Counters, DueTimer,
+    FailureCounts, Found, Gauges, Hour, IndexedSummary, LATEST_RUNS, LatestRun, OrganizationState,
+    OutboxChange, OutboxEntry, OutboxId, Page, PartitionError, PartitionLog, PartitionStore,
+    Projection, Recovery, RunCounts, RunHead, SCAN_BUDGET, Scope, ScriptCounts, SearchPosition,
+    Sketch, TaskChange, TaskRecord, TimerChange, TimerKind, ToolCounts, Watcher, Window,
+    home_partition, namespace_partition,
 };
 pub use read_model::{
     ChangedRun, Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,

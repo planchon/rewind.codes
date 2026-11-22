@@ -7,7 +7,7 @@ use rewind_blob::{CachedBlobs, DEFAULT_CACHE_CAPACITY};
 use rewind_core::{Digest, canonical_json};
 use rewind_engine::adapters::MemoryBlobs;
 use rewind_engine::conformance::{blobs, tenant};
-use rewind_engine::ports::{BlobError, BlobStore, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 use serde_json::json;
 
 fn blob(text: &str) -> (Digest, Vec<u8>) {
@@ -45,6 +45,41 @@ impl BlobStore for Counting {
 
     async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
         self.blobs.delete(tenant, digest).await
+    }
+
+    async fn put_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        self.blobs.put_in(owner, digest, bytes).await
+    }
+
+    async fn get_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        self.gets.fetch_add(1, Ordering::Relaxed);
+        self.blobs.get_in(owner, digest).await
+    }
+
+    async fn copy(
+        &self,
+        from: &BlobOwner,
+        to: &BlobOwner,
+        digest: Digest,
+    ) -> Result<(), BlobError> {
+        self.blobs.copy(from, to, digest).await
+    }
+
+    async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
+        self.blobs.delete_run(run).await
+    }
+
+    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        self.blobs.delete_in(owner, digest).await
     }
 }
 

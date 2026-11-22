@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use rewind_blob::{CachedBlobs, DEFAULT_CACHE_CAPACITY, FileBlobs, S3Blobs, S3Config};
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobStore, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 
 use crate::config::ConfigError;
 
@@ -109,6 +109,55 @@ impl BlobStore for Blobs {
         match self {
             Blobs::Files(files) => files.delete(tenant, digest).await,
             Blobs::S3(s3) => s3.delete(tenant, digest).await,
+        }
+    }
+
+    async fn put_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        match self {
+            Blobs::Files(files) => files.put_in(owner, digest, bytes).await,
+            Blobs::S3(s3) => s3.put_in(owner, digest, bytes).await,
+        }
+    }
+
+    async fn get_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        match self {
+            Blobs::Files(files) => files.get_in(owner, digest).await,
+            Blobs::S3(s3) => s3.get_in(owner, digest).await,
+        }
+    }
+
+    async fn copy(
+        &self,
+        from: &BlobOwner,
+        to: &BlobOwner,
+        digest: Digest,
+    ) -> Result<(), BlobError> {
+        match self {
+            Blobs::Files(files) => files.copy(from, to, digest).await,
+            Blobs::S3(s3) => s3.copy(from, to, digest).await,
+        }
+    }
+
+    async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
+        match self {
+            Blobs::Files(files) => files.delete_run(run).await,
+            Blobs::S3(s3) => s3.delete_run(run).await,
+        }
+    }
+
+    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        match self {
+            Blobs::Files(files) => files.delete_in(owner, digest).await,
+            Blobs::S3(s3) => s3.delete_in(owner, digest).await,
         }
     }
 }

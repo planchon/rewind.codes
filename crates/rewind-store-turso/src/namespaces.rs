@@ -12,7 +12,7 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use rewind_core::{Digest, Timestamp};
+use rewind_core::{Digest, PartitionId, Timestamp};
 use rewind_engine::ports::{
     CreateRun, Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace,
     NamespaceFilter, NamespaceName, NamespaceOrder, NamespacePage, NamespaceUsage, NamespaceWrite,
@@ -170,6 +170,8 @@ fn namespace_from_row(row: &Row) -> Result<Namespace, Error> {
         tenant: row.tenant(0)?,
         name: NamespaceName::new(name.clone())
             .map_err(|_| Error::Corrupt(format!("invalid namespace {name:?}")))?,
+        // The journal store keeps every run of the tenant in one store: partition 0.
+        partition: PartitionId::new(0),
         display_name: row.opt_text(12)?.map(display_name_of).transpose()?,
         exceptions: quotas_from_row(row, 2)?,
         tokens_revoked_before: row.opt_ts(8)?,

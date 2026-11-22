@@ -1,4 +1,4 @@
-use rewind_core::{RunId, Seed, Timestamp};
+use rewind_core::{PartitionId, RunId, Seed, Timestamp};
 
 /// The current time. Every timestamp the engine writes comes from here.
 pub trait Clock: Send + Sync {
@@ -15,5 +15,10 @@ pub trait VirtualTime: Clock {
 /// Run ids and seeds.
 pub trait Entropy: Send + Sync {
     fn run_id(&self) -> RunId;
+
+    /// A run id of `partition`: a UUID v7 whose 16 bits after the variant hold the partition
+    /// ([`RunId::in_partition`]).
+    fn run_id_in(&self, partition: PartitionId) -> RunId;
+
     fn seed(&self) -> Seed;
 }

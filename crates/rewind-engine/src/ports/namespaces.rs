@@ -8,7 +8,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use rewind_core::Timestamp;
+use rewind_core::{PartitionId, Timestamp};
 
 use super::tenancy::{Tenant, TenantId};
 
@@ -404,6 +404,9 @@ impl fmt::Display for Day {
 pub struct Namespace {
     pub tenant: TenantId,
     pub name: NamespaceName,
+    /// The partition its runs live in, chosen when it is created and never changed
+    /// (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes").
+    pub partition: PartitionId,
     /// The customer's label for it, if any.
     pub display_name: Option<DisplayName>,
     /// Its exceptions to the tenant's defaults.
@@ -418,11 +421,17 @@ pub struct Namespace {
 }
 
 impl Namespace {
-    /// A namespace without exceptions, created at `now`.
-    pub fn new(tenant: TenantId, name: NamespaceName, now: Timestamp) -> Self {
+    /// A namespace of `partition` without exceptions, created at `now`.
+    pub fn new(
+        tenant: TenantId,
+        name: NamespaceName,
+        partition: PartitionId,
+        now: Timestamp,
+    ) -> Self {
         Self {
             tenant,
             name,
+            partition,
             display_name: None,
             exceptions: Quotas::default(),
             tokens_revoked_before: None,
@@ -609,6 +618,10 @@ pub struct QuotaAlert {
 
 /// What `put_namespace` and `set_namespace_display_name` did.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one per write of the control plane: its size does not matter"
+)]
 pub enum NamespaceWrite {
     /// The namespace as stored now.
     Written(Namespace),

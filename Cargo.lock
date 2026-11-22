@@ -4169,6 +4169,7 @@ dependencies = [
 name = "rewind-blob"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "object_store",
  "quick_cache",
  "rewind-core",

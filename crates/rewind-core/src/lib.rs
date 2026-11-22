@@ -12,6 +12,7 @@
 //! - [`JournalDocument`]: a run's journal with its script and toolset, replayable on its own.
 //! - [`Cassette`]: the mocks recorded from a run, derived from its history.
 //! - [`Shape`]: the type of a tool's results, as observed in journals.
+//! - [`RunId`] and [`PartitionId`]: a run id names the partition its run lives in.
 //! - [`Workflow`]: a script with a name and a typed interface, that scripts start and signal;
 //!   [`RunEnd`], how a run's end reaches the runs that watch it; its [`Suite`] of tests.
 //! - [`Test`]: the world a run meets and what the outside must see at the end; [`RunPath`],
@@ -60,7 +61,7 @@ pub use handle::{
     is_origin, origin_slug, run_suffix, suffix_len_apart, suffix_neighbours, suffix_range,
 };
 pub use history::{HistoryError, validate_history};
-pub use ids::{Epoch, RunId, Seed, Seq};
+pub use ids::{Epoch, PartitionId, RunId, Seed, Seq};
 pub use journal::{JournalDocument, JournalError};
 pub use payload::Payload;
 pub use replay::{Next, NonDeterminism, ReplayCursor, Replayed};

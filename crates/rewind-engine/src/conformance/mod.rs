@@ -1,5 +1,6 @@
-//! The conformance suites of the ports (feature `conformance`): `JournalStore`, `AccessStore`,
-//! `BlobStore`, `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender`.
+//! The conformance suites of the ports (feature `conformance`): `CatalogStore`,
+//! `PartitionStore`, `RunArchive`, `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`,
+//! `ReadModel`, `SecretStore`, `SpanExporter` and `WebhookSender`.
 //!
 //! Every adapter of a port passes its suite: they check the contract of the port, not a table
 //! layout. Each suite is deterministic: time is always passed in, never read, and the only
@@ -14,14 +15,21 @@
 //! ```
 //!
 //! A span exporter has no read side: its suite also reads the exporter's backend, through a
-//! [`spans::Collector`] the adapter's test provides.
+//! [`spans::Collector`] the adapter's test provides. The suites of `CatalogStore` and
+//! `RunArchive` take a function that creates the store with the port it reaches over the same
+//! backend: the catalog with its `Cluster`, whose members receive its changes; the archive with
+//! its `BlobStore`, from which it erases a run's blobs.
 //!
 //! `run_all` prints the name of each check before running it, so a failure names its check.
 //! Each check is also public, to run one alone while debugging.
 
 pub mod access;
+pub mod archive;
 pub mod blobs;
+pub mod catalog;
+pub mod cluster;
 pub mod journal;
+pub mod partition;
 pub mod read_model;
 pub mod secrets;
 pub mod spans;

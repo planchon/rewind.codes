@@ -3,9 +3,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, Epoch, HistoryEntry, Interruption, Payload, RunId, Script,
-    Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset, Workflow,
-    end_signal_name, suffix_len_apart, suffix_neighbours,
+    CancelReason, Completion, Digest, Epoch, HistoryEntry, Interruption, PartitionId, Payload,
+    RunId, Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, ToolRoute, Toolset,
+    Workflow, end_signal_name,
 };
 
 use crate::adapters::random_token;
@@ -25,6 +25,9 @@ use crate::ports::{
     QuotaAlertKey, QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta,
     UsageOf,
 };
+
+/// The partition of every namespace of the journal store, which keeps every run in one store.
+const JOURNAL_PARTITION: PartitionId = PartitionId::new(0);
 
 /// `JournalStore` in memory: engine tests and mock mode. It is the reference implementation
 /// of the store contract, and passes the conformance suite.
@@ -701,7 +704,7 @@ impl JournalStore for MemoryJournal {
         let namespace = state
             .namespaces
             .entry((tenant.clone(), name.clone()))
-            .or_insert_with(|| Namespace::new(tenant.clone(), name.clone(), now))
+            .or_insert_with(|| Namespace::new(tenant.clone(), name.clone(), JOURNAL_PARTITION, now))
             .clone();
         if namespace.deleting_since.is_some() {
             return Ok(CreateRun::NamespaceDeleting);
@@ -2406,7 +2409,9 @@ impl JournalStore for MemoryJournal {
         let namespace = state
             .namespaces
             .entry((tenant.clone(), name.clone()))
-            .or_insert_with(|| Namespace::new(tenant.clone(), name.clone(), now));
+            .or_insert_with(|| {
+                Namespace::new(tenant.clone(), name.clone(), JOURNAL_PARTITION, now)
+            });
         if namespace.deleting_since.is_some() {
             return Ok(NamespaceWrite::Deleting);
         }

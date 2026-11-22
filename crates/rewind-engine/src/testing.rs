@@ -21,9 +21,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 use futures_util::stream;
 use rewind_core::{
-    AbortReason, Command, Event, HistoryEntry, JsonValue, Observed, ObservedCall, RunId, RunMode,
-    RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, SignalWhen, Test, Timestamp,
-    ToolOutcome, Toolset, WorkflowOp, WorkflowSchemas,
+    AbortReason, Command, Event, HistoryEntry, JsonValue, Observed, ObservedCall, PartitionId,
+    RunId, RunMode, RunOutcome, RunState, RunStatus, Script, ScriptError, Seed, SignalWhen, Test,
+    Timestamp, ToolOutcome, Toolset, WorkflowOp, WorkflowSchemas,
 };
 
 use crate::adapters::{
@@ -532,6 +532,10 @@ struct TestEntropy {
 impl Entropy for TestEntropy {
     fn run_id(&self) -> RunId {
         self.inner.run_id()
+    }
+
+    fn run_id_in(&self, partition: PartitionId) -> RunId {
+        self.inner.run_id_in(partition)
     }
 
     fn seed(&self) -> Seed {

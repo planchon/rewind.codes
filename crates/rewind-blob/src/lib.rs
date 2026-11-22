@@ -1,20 +1,22 @@
-//! `BlobStore` adapters of Rewind (`archi/06-storage-and-scale.md`, "Payloads").
+//! `BlobStore` adapters of Rewind (`archi/06-storage-and-scale.md`, "Payloads", "The archive
+//! and the blobs").
 //!
-//! The `BlobStore` port holds immutable bytes by tenant and by their SHA-256: payload values
-//! above the table tier, and the journal documents of archived runs. This crate says where they
-//! live:
+//! The `BlobStore` port holds immutable bytes by their SHA-256: under a run, its payload values
+//! above 64 KiB; under a tenant's tests, their documents; under a tenant alone, the payload
+//! values and archived journals of the journal store. This crate says where they live:
 //!
-//! - [`FileBlobs`]: local files, for the embedded server (`.rewind/blobs/`). Writes are atomic: a
+//! - [`FileBlobs`]: local files, for the embedded server (`.rewind/`). Writes are atomic: a
 //!   staging file, synced, then renamed. A tenant's directory escapes its capital letters, so
 //!   that tenants stay apart on a file system that ignores case.
 //! - [`S3Blobs`]: S3 or any S3-compatible service, for production. Keys are
+//!   `blobs/{tenant}/{run}/sha256/{digest}`, `tests/{tenant}/sha256/{digest}` and
 //!   `{tenant}/sha256/{digest}`.
 //! - [`CachedBlobs`]: the workers' local cache, in memory and bounded in bytes, in front of
 //!   either store.
 //!
 //! Every store checks the digest of the bytes it is given and of the bytes it reads, and passes
-//! the conformance suite of the port. `delete` serves the cleanup of unreferenced payloads and
-//! expired archives.
+//! the conformance suite of the port. `copy` serves a fork, `delete_run` the erasure of a run,
+//! the other deletions the cleanup of tests, of unreferenced payloads and of expired archives.
 
 #![forbid(unsafe_code)]
 

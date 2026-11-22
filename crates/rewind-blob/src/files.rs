@@ -1,4 +1,4 @@
-//! `BlobStore` on local files: the embedded server's `.rewind/blobs/`.
+//! `BlobStore` on local files: the embedded server's `.rewind/`.
 
 use std::fs::{self, File};
 use std::io::{self, Write as _};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use rewind_core::Digest;
-use rewind_engine::ports::{BlobError, BlobStore, TenantId};
+use rewind_engine::ports::{BlobError, BlobOwner, BlobStore, RunRef, TenantId};
 
 use crate::{Error, verify};
 
@@ -19,13 +19,17 @@ const STALE_STAGING: Duration = Duration::from_secs(60 * 60);
 
 /// `BlobStore` on local files.
 ///
-/// A blob lives at `{root}/{tenant}/sha256/{first two hex digits}/{hex digest}`; the embedded
-/// server's root is `.rewind/blobs`. Tenant ids are case-sensitive and file systems may not be
-/// (macOS, Windows), so a capital letter of a tenant id is written `+` and the letter in
-/// lowercase: `Acme` lives in `+acme`, apart from `acme`. A put writes a staging file in `{root}/.staging`, syncs it,
-/// then renames it to its path without replacing an existing blob, and syncs the directory: a
-/// blob is either absent or complete, and stays on disk once `put` returns. `open` removes the
-/// staging files a crash left behind.
+/// A tenant's blob lives at `{root}/{tenant}/sha256/{first two hex digits}/{hex digest}`. An
+/// owner's blob lives under the keys of the bucket (`archi/06-storage-and-scale.md`, "The
+/// archive and the blobs"), as paths under the root: a run's at
+/// `{root}/blobs/{tenant}/{run}/sha256/{hex digest}`, a tenant's test at
+/// `{root}/tests/{tenant}/sha256/{hex digest}`. Tenant ids are case-sensitive and file systems
+/// may not be (macOS, Windows), so a capital letter of a tenant id is written `+` and the
+/// letter in lowercase: `Acme` lives in `+acme`, apart from `acme`. A put writes a staging file
+/// in `{root}/.staging`, syncs it, then renames it to its path without replacing an existing
+/// blob, and syncs the directory: a blob is either absent or complete, and stays on disk once
+/// `put` returns. A copy is a hard link, made without replacing an existing blob. `open`
+/// removes the staging files a crash left behind.
 ///
 /// File operations run on Tokio's blocking threads, so the store must be used inside a Tokio
 /// runtime.
@@ -64,6 +68,24 @@ impl FileBlobs {
             .join(hex)
     }
 
+    /// The path of an owner's blob: `{root}/blobs/{tenant}/{run}/sha256/{abcdef…}` or
+    /// `{root}/tests/{tenant}/sha256/{abcdef…}`, the tenant's capital letters escaped.
+    pub fn path_in(&self, owner: &BlobOwner, digest: Digest) -> PathBuf {
+        let directory = match owner {
+            BlobOwner::Run(run) => self.run_directory(run),
+            BlobOwner::Tests(tenant) => self.root.join("tests").join(tenant_directory(tenant)),
+        };
+        directory.join("sha256").join(digest.to_hex())
+    }
+
+    /// The directory of a run's blobs: `{root}/blobs/{tenant}/{run}`.
+    fn run_directory(&self, run: &RunRef) -> PathBuf {
+        self.root
+            .join("blobs")
+            .join(tenant_directory(&run.tenant))
+            .join(run.id.to_string())
+    }
+
     fn staging(&self) -> PathBuf {
         self.root.join(STAGING)
     }
@@ -87,20 +109,102 @@ impl BlobStore for FileBlobs {
 
     async fn get(&self, tenant: &TenantId, digest: Digest) -> Result<Option<Vec<u8>>, BlobError> {
         let path = self.path(tenant, digest);
-        blocking(move || match fs::read(&path) {
-            Ok(bytes) => {
-                verify(digest, &bytes, "stored bytes")?;
-                Ok(Some(bytes))
-            }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(failed("read", &path, &error)),
-        })
-        .await
+        blocking(move || read(digest, &path)).await
     }
 
     async fn delete(&self, tenant: &TenantId, digest: Digest) -> Result<bool, BlobError> {
         let path = self.path(tenant, digest);
         blocking(move || remove(&path).map_err(|error| failed("delete", &path, &error))).await
+    }
+
+    async fn put_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+        bytes: Vec<u8>,
+    ) -> Result<(), BlobError> {
+        let path = self.path_in(owner, digest);
+        let staging = self.staging();
+        blocking(move || {
+            verify(digest, &bytes, "bytes")?;
+            write(&staging, &path, &bytes).map_err(|error| failed("write", &path, &error))
+        })
+        .await
+    }
+
+    async fn get_in(
+        &self,
+        owner: &BlobOwner,
+        digest: Digest,
+    ) -> Result<Option<Vec<u8>>, BlobError> {
+        let path = self.path_in(owner, digest);
+        blocking(move || read(digest, &path)).await
+    }
+
+    async fn copy(
+        &self,
+        from: &BlobOwner,
+        to: &BlobOwner,
+        digest: Digest,
+    ) -> Result<(), BlobError> {
+        let (source, target) = (self.path_in(from, digest), self.path_in(to, digest));
+        blocking(move || match link(&source, &target) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound && !source.exists() => {
+                Err(BlobError::Missing(digest))
+            }
+            Err(error) => Err(failed("copy", &target, &error)),
+        })
+        .await
+    }
+
+    async fn delete_run(&self, run: &RunRef) -> Result<(), BlobError> {
+        let directory = self.run_directory(run);
+        blocking(move || {
+            remove_directory(&directory).map_err(|error| failed("delete", &directory, &error))
+        })
+        .await
+    }
+
+    async fn delete_in(&self, owner: &BlobOwner, digest: Digest) -> Result<bool, BlobError> {
+        let path = self.path_in(owner, digest);
+        blocking(move || remove(&path).map_err(|error| failed("delete", &path, &error))).await
+    }
+}
+
+/// Reads a blob and checks its digest.
+fn read(digest: Digest, path: &Path) -> Result<Option<Vec<u8>>, BlobError> {
+    match fs::read(path) {
+        Ok(bytes) => {
+            verify(digest, &bytes, "stored bytes")?;
+            Ok(Some(bytes))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(failed("read", path, &error)),
+    }
+}
+
+/// Links a blob to a second path, durably, unless a blob is already there: a blob is immutable,
+/// so both paths name the same bytes for good.
+fn link(source: &Path, target: &Path) -> io::Result<()> {
+    if target.try_exists()? {
+        return Ok(());
+    }
+    let dir = parent(target)?;
+    create_dirs(dir)?;
+    match fs::hard_link(source, target) {
+        Ok(()) => sync_dir(dir),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Removes a directory and everything under it, durably; a missing directory is not an error.
+fn remove_directory(dir: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(dir) {
+        Ok(()) => sync_dir(parent(dir)?),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 

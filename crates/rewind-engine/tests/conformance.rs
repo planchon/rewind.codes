@@ -4,11 +4,42 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_engine::adapters::{
-    MemoryAccess, MemoryBlobs, MemoryJournal, MemoryReadModel, MemorySecrets, MemorySpanExporter,
-    MemoryWebhooks,
+    MemoryAccess, MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster, MemoryJournal,
+    MemoryPartitions, MemoryReadModel, MemorySecrets, MemorySpanExporter, MemoryWebhooks,
 };
 use rewind_engine::conformance;
 use rewind_engine::ports::{Secret, Subscription, TenantId, WebhookEventType};
+
+#[tokio::test]
+async fn memory_catalog_conforms() {
+    conformance::catalog::run_all(|| {
+        let cluster = MemoryCluster::new(conformance::cluster::PARTITIONS);
+        (
+            MemoryCatalog::with_changes(cluster.changes().clone()),
+            cluster,
+        )
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn memory_partitions_conform() {
+    conformance::partition::run_all(MemoryPartitions::new).await;
+}
+
+#[tokio::test]
+async fn memory_archive_conforms() {
+    conformance::archive::run_all(|| {
+        let blobs = MemoryBlobs::new();
+        (MemoryArchive::with_blobs(blobs.clone()), blobs)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn memory_cluster_conforms() {
+    conformance::cluster::run_all(|| MemoryCluster::new(conformance::cluster::PARTITIONS)).await;
+}
 
 #[tokio::test]
 async fn memory_journal_conforms() {
