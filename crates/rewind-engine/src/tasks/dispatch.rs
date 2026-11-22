@@ -533,7 +533,7 @@ where
                     ));
                 };
                 let id = SecretId::resolve(attached, &record.namespace);
-                let reader = SecretReader {
+                let reader = SecretReader::Run {
                     run: call.run.id,
                     namespace: record.namespace.clone(),
                 };

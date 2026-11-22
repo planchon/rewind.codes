@@ -196,13 +196,12 @@ fn listed(list: &SecretList, namespace: Option<&NamespaceName>) -> String {
             reads.to_string(),
             secret.last_read.as_ref().map_or_else(
                 || "never".to_owned(),
-                |last| {
-                    format!(
-                        "{} (run {}, {})",
-                        last.at,
-                        last.run,
-                        last.namespace.as_str()
-                    )
+                |last| match (&last.run, &last.namespace) {
+                    (Some(run), Some(namespace)) => {
+                        format!("{} (run {run}, {})", last.at, namespace.as_str())
+                    }
+                    (Some(run), None) => format!("{} (run {run})", last.at),
+                    (None, _) => format!("{} (toolset registration)", last.at),
                 },
             ),
         ]);

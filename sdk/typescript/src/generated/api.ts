@@ -3373,12 +3373,17 @@ export interface components {
         Labels: {
             [key: string]: string;
         };
-        /** @description The last read of a secret: by which run, of which namespace, when. */
+        /**
+         * @description The last read of a secret: by which run, of which namespace, when. A toolset's registration
+         *     reads an organization's secret to list the tools of the MCP server it is attached for, before
+         *     any run exists: such a read names neither run nor namespace.
+         */
         LastRead: {
             /** Format: date-time */
             at: string;
-            namespace: components["schemas"]["NamespaceName"];
-            run: string;
+            namespace?: components["schemas"]["NamespaceName"] | null;
+            /** @description The run that read it; `null` for a toolset's registration. */
+            run?: string | null;
         };
         Latency: {
             /** Format: int64 */

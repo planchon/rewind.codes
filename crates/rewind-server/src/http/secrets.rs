@@ -476,11 +476,17 @@ fn carries(labels: &BTreeMap<String, String>, wanted: &BTreeMap<String, String>)
 
 /// A secret as `caller` sees it: its last read left out when it was by a run the caller does not
 /// see (another label, another end user), which would otherwise name that run and its namespace.
+/// A registration's read names neither: every caller that sees the secret sees it.
 async fn seen_by(app: &App, caller: &Caller, meta: &SecretMeta) -> Result<SecretView, ApiError> {
     let mut view = view(meta);
     let restricted = !caller.labels.is_empty() || caller.namespace.is_some();
-    if restricted && let Some(last) = &meta.last_read {
-        let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), last.run);
+    let last_run = meta
+        .last_read
+        .as_ref()
+        .and_then(|last| last.by.run())
+        .map(|(run, _)| run);
+    if restricted && let Some(last) = last_run {
+        let run = rewind_engine::ports::RunRef::new(caller.tenant.clone(), last);
         let sees = match app.store.get_run(&run).await? {
             Some(record) => caller.sees_run(&record),
             None => false,
@@ -531,13 +537,19 @@ pub(crate) fn view(meta: &SecretMeta) -> SecretView {
                 reads: day.reads,
             })
             .collect(),
-        last_read: meta.last_read.as_ref().and_then(|last| {
-            Some(LastRead {
-                run: last.run.to_string(),
-                namespace: rewind_api::namespaces::NamespaceName::new(last.namespace.as_str())
-                    .ok()?,
+        last_read: meta.last_read.as_ref().map(|last| {
+            let (run, namespace) = match last.by.run() {
+                Some((run, namespace)) => (
+                    Some(run.to_string()),
+                    rewind_api::namespaces::NamespaceName::new(namespace.as_str()).ok(),
+                ),
+                None => (None, None),
+            };
+            LastRead {
+                run,
+                namespace,
                 at: timestamp(last.at),
-            })
+            }
         }),
     }
 }

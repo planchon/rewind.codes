@@ -584,7 +584,7 @@ fn github_token(name: &str) -> NewSecret {
 }
 
 fn reader() -> SecretReader {
-    SecretReader {
+    SecretReader::Run {
         run: RunId::from_u128(1),
         namespace: NamespaceName::migrated(),
     }

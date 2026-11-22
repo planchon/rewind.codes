@@ -34,7 +34,7 @@ use rewind_engine::ports::{
 use turso::{Connection, Row, Value};
 
 use crate::codec::{decode_labels, encode_labels};
-use crate::sql::{self, Columns, duration_ms, millis, tenant, text, transaction, ts};
+use crate::sql::{self, Columns, duration_ms, millis, opt_text, tenant, text, transaction, ts};
 use crate::{Error, TursoStore};
 
 const NONCE_LEN: usize = 24;
@@ -349,8 +349,13 @@ fn metas_from_rows(rows: &[Row]) -> Result<Vec<SecretMeta>, Error> {
         let last_read = match row.opt_ts(7)? {
             None => None,
             Some(at) => Some(LastRead {
-                run: row.run_id(8)?,
-                namespace: namespace_name(row.text(9)?)?,
+                by: match (row.opt_run_id(8)?, row.opt_text(9)?) {
+                    (Some(run), Some(namespace)) => SecretReader::Run {
+                        run,
+                        namespace: namespace_name(namespace)?,
+                    },
+                    _ => SecretReader::Registration,
+                },
                 at,
             }),
         };
@@ -648,8 +653,8 @@ impl SecretStore for TursoStore {
             if row.opt_ts(1)?.is_none_or(|last| last <= now) {
                 let mut params = vec![
                     ts(now),
-                    text(reader.run.to_string()),
-                    text(reader.namespace.as_str()),
+                    opt_text(reader.run().map(|(run, _)| run.to_string())),
+                    opt_text(reader.run().map(|(_, namespace)| namespace.as_str())),
                 ];
                 params.extend(secret_key(tenant_id, secret));
                 sql::execute(

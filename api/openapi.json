@@ -2991,22 +2991,32 @@
         "type": "object"
       },
       "LastRead": {
-        "description": "The last read of a secret: by which run, of which namespace, when.",
+        "description": "The last read of a secret: by which run, of which namespace, when. A toolset's registration\nreads an organization's secret to list the tools of the MCP server it is attached for, before\nany run exists: such a read names neither run nor namespace.",
         "properties": {
           "at": {
             "format": "date-time",
             "type": "string"
           },
           "namespace": {
-            "$ref": "#/components/schemas/NamespaceName"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NamespaceName",
+                "description": "The namespace of that run; `null` for a toolset's registration."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "run": {
-            "type": "string"
+            "description": "The run that read it; `null` for a toolset's registration.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
-          "run",
-          "namespace",
           "at"
         ],
         "type": "object"

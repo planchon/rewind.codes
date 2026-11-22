@@ -152,13 +152,10 @@ pub struct DailyReads {
     pub reads: u64,
 }
 
-/// The last read of a secret: by which run, of which namespace, when.
+/// The last read of a secret: by whom, when.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LastRead {
-    pub run: RunId,
-    /// The namespace of the run: an organization's secret is read by the runs of every
-    /// namespace.
-    pub namespace: NamespaceName,
+    pub by: SecretReader,
     pub at: Timestamp,
 }
 
@@ -184,11 +181,28 @@ pub enum PutSecret {
     Replaced,
 }
 
-/// Who reads a secret: the run whose call the dispatcher prepares, in its namespace.
+/// Who reads a secret.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SecretReader {
-    pub run: RunId,
-    pub namespace: NamespaceName,
+pub enum SecretReader {
+    /// The run whose call the dispatcher prepares, in its namespace: an organization's secret is
+    /// read by the runs of every namespace.
+    Run {
+        run: RunId,
+        namespace: NamespaceName,
+    },
+    /// A toolset's registration, listing the tools of an MCP server the secret is attached for
+    /// (`POST /v1/toolsets`): no run exists yet.
+    Registration,
+}
+
+impl SecretReader {
+    /// The run that reads, and its namespace; none for a registration.
+    pub fn run(&self) -> Option<(RunId, &NamespaceName)> {
+        match self {
+            Self::Run { run, namespace } => Some((*run, namespace)),
+            Self::Registration => None,
+        }
+    }
 }
 
 /// The id of a master key: the first 8 bytes of its SHA-256, in lowercase hex

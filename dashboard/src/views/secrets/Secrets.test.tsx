@@ -60,6 +60,11 @@ describe("the Secrets view", () => {
       expect.stringMatching(/^\/runs\/[0-9a-f-]+$/),
     );
 
+    // Read only by a toolset's registration, to list its server's tools: no run to link to.
+    const notion = secretRow("org/notion");
+    expect(within(notion).getByText("at a toolset's registration")).toBeInTheDocument();
+    expect(within(notion).queryByTitle("The run that read it last")).toBeNull();
+
     // Never read, attached by nothing.
     const zendesk = secretRow("org/zendesk");
     expect(within(zendesk).getByText("never")).toBeInTheDocument();

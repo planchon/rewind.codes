@@ -18,7 +18,8 @@ export interface MockSecret {
   updatedAt: number;
   /** Reads by UTC day (`2026-11-20`). */
   reads: Map<string, number>;
-  lastRead: { run: string; namespace: string; at: number } | null;
+  /** Its last read; `run` and `namespace` null for a toolset's registration. */
+  lastRead: { run: string | null; namespace: string | null; at: number } | null;
 }
 
 export interface MockSigningKey {
@@ -105,12 +106,17 @@ export function createSecretWorld({
       s.lastRead = { run: last.id, namespace: last.namespace, at: last.start };
     return s;
   };
+  // Read once, to list the tools of the MCP server a toolset's registration attached it for.
+  const listing = secret(null, "notion", {}, "user:user_01ADA", 1, 0);
+  listing.reads.set(dayOf(now - 3 * HOUR), 1);
+  listing.lastRead = { run: null, namespace: null, at: now - 3 * HOUR };
   return {
     secrets: [
       secret(null, "github", {}, "user:user_01ADA", 40, 12),
       secret(null, "slack", {}, "user:user_01ADA", 40, 20, 6),
       secret(null, "crm", { env: "prod" }, "user:user_01GRACE", 18, 4),
       secret(null, "zendesk", { env: "prod" }, "user:user_01GRACE", 2, 0),
+      listing,
       secret("alice", "github", {}, "token:alice", 25, 6),
       secret("bob", "github", {}, "user:user_01GRACE", 12, 2),
       secret("chen", "linear", {}, "token:chen", 5, 0),

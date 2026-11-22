@@ -984,6 +984,18 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
         }),
         "the listing carried the organization's secret attached for it"
     );
+    let read = customer
+        .secret_usage("github-listing")
+        .await
+        .unwrap()
+        .secret;
+    let last = read.last_read.expect("the listing read it");
+    assert_eq!(
+        (last.run, last.namespace),
+        (None, None),
+        "a registration's read names no run"
+    );
+    assert_eq!(read.reads.iter().map(|day| day.reads).sum::<u64>(), 1);
 
     customer
         .put_namespace_secret(&ns("alice"), "github", &value(&alice))
@@ -1027,8 +1039,8 @@ async fn each_end_user_calls_with_their_own_secret(server: &TestServer, outside:
             .unwrap();
         let last = usage.secret.last_read.unwrap();
         assert_eq!(
-            (last.run.as_str(), last.namespace),
-            (run.id.as_str(), ns(user))
+            (last.run.as_deref(), last.namespace),
+            (Some(run.id.as_str()), Some(ns(user)))
         );
         assert!(usage.secret.reads.iter().map(|day| day.reads).sum::<u64>() >= 1);
     }

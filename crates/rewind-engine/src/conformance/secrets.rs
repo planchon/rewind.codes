@@ -38,6 +38,7 @@ pub async fn run_all<S: SecretStore>(new_store: impl Fn() -> S) {
         new_store(),
         reads_are_counted_per_day_with_the_last_read
     );
+    check!("secrets", new_store(), a_registration_s_read_names_no_run);
     check!(
         "secrets",
         new_store(),
@@ -101,7 +102,7 @@ fn run(n: u128) -> RunId {
 }
 
 fn reader(n: u128, user: &str) -> SecretReader {
-    SecretReader {
+    SecretReader::Run {
         run: run(n),
         namespace: namespace(user),
     }
@@ -175,8 +176,7 @@ pub async fn a_secret_is_created_then_replaced<S: SecretStore>(store: &S) {
                 reads: 1
             }],
             last_read: Some(LastRead {
-                run: run(1),
-                namespace: namespace("alice"),
+                by: reader(1, "alice"),
                 at: at(0, 2),
             }),
         },
@@ -331,8 +331,7 @@ pub async fn reads_are_counted_per_day_with_the_last_read<S: SecretStore>(store:
     assert_eq!(
         all.last_read,
         Some(LastRead {
-            run: run(3),
-            namespace: namespace("alice"),
+            by: reader(3, "alice"),
             at: at(2, 5),
         })
     );
@@ -354,6 +353,74 @@ pub async fn reads_are_counted_per_day_with_the_last_read<S: SecretStore>(store:
         .await
         .expect("list");
     assert_eq!(listed, [all], "a listing gives the same metadata");
+}
+
+/// A toolset's registration reads a secret to list a server's tools before any run exists: the
+/// read is counted, and the last read names no run until a run reads it again.
+pub async fn a_registration_s_read_names_no_run<S: SecretStore>(store: &S) {
+    let acme = tenant("acme");
+    let notion = of_org("notion");
+    put(
+        store,
+        &acme,
+        &secret(&notion, "n", BTreeMap::new(), "user:ada"),
+        at(0, 0),
+    )
+    .await;
+    let last_after = |by: SecretReader, now: Timestamp| {
+        let (acme, notion) = (acme.clone(), notion.clone());
+        async move {
+            let read = store.read(&acme, &notion, &by, now).await.expect("read");
+            assert_eq!(read, Some(Secret::new("n")));
+            let meta = store
+                .meta(&acme, &notion, Day::of(T0))
+                .await
+                .expect("meta")
+                .expect("the secret exists");
+            (meta.last_read, meta.reads)
+        }
+    };
+    let (last, reads) = last_after(SecretReader::Registration, at(0, 10)).await;
+    assert_eq!(
+        last,
+        Some(LastRead {
+            by: SecretReader::Registration,
+            at: at(0, 10),
+        }),
+        "a registration's read names no run"
+    );
+    assert_eq!(
+        reads,
+        [DailyReads {
+            day: Day::of(at(0, 0)),
+            reads: 1
+        }],
+        "a registration's read is counted"
+    );
+    let (last, _) = last_after(reader(1, "alice"), at(0, 20)).await;
+    assert_eq!(
+        last,
+        Some(LastRead {
+            by: reader(1, "alice"),
+            at: at(0, 20),
+        })
+    );
+    let (last, reads) = last_after(SecretReader::Registration, at(0, 30)).await;
+    assert_eq!(
+        last,
+        Some(LastRead {
+            by: SecretReader::Registration,
+            at: at(0, 30),
+        }),
+        "a registration's read after a run's leaves no run named"
+    );
+    assert_eq!(
+        reads,
+        [DailyReads {
+            day: Day::of(at(0, 0)),
+            reads: 3
+        }]
+    );
 }
 
 pub async fn a_deleted_secret_is_gone_with_its_reads<S: SecretStore>(store: &S) {

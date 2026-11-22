@@ -187,8 +187,7 @@ impl SecretStore for MemorySecrets {
         };
         *stored.reads.entry(Day::of(now)).or_default() += 1;
         stored.last_read = Some(LastRead {
-            run: reader.run,
-            namespace: reader.namespace.clone(),
+            by: reader.clone(),
             at: now,
         });
         Ok(Some(stored.value.clone()))

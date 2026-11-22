@@ -51,7 +51,7 @@ async fn read_with(dir: &Path, key: [u8; 32]) -> Option<Secret> {
     let store = TursoStore::open(dir.join("journal.db"), MasterKey::from_bytes(key))
         .await
         .unwrap();
-    let reader = SecretReader {
+    let reader = SecretReader::Run {
         run: RunId::from_u128(1),
         namespace: NamespaceName::new("alice").unwrap(),
     };

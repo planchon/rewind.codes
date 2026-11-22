@@ -208,6 +208,17 @@ export function SecretList({
 function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
   const last = secret.lastRead;
   if (!last) return <span className="muted">never</span>;
+  // A toolset's registration reads it to list the tools of the server it is attached for, before
+  // any run exists: no run to link to.
+  if (!last.run)
+    return (
+      <span className="secret-last-read">
+        <Ago ms={Date.parse(last.at)} />{" "}
+        <span title="Read to list the tools of the MCP server it is attached for">
+          at a toolset's registration
+        </span>
+      </span>
+    );
   return (
     <span className="secret-last-read">
       <Ago ms={Date.parse(last.at)} />
@@ -215,7 +226,7 @@ function LastRead({ secret, org }: { secret: Secret; org: boolean }) {
       <Link to={`/runs/${last.run}`} title="The run that read it last">
         <RunId id={last.run} />
       </Link>
-      {org && (
+      {org && last.namespace && (
         <>
           {" · "}
           <NamespaceName name={last.namespace} />

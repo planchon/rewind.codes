@@ -18,8 +18,8 @@ use rewind_engine::attachments::{AttachRights, AttachmentProblem, RefusedAttachm
 use rewind_engine::ports::{
     CallAuth, CallClaims, Clock, CredentialsExpiredReason, Day, Delivery, Dispatched, JournalStore,
     NamespaceName, NewSecret, ParkKind, PutSecret, RunFilter, RunRef, Secret, SecretId,
-    SecretNamespace, SecretStore, Subscription, TaskState, TenantId, ToolDeclarations,
-    WebhookEventKind, WorkflowDeclarations,
+    SecretNamespace, SecretReader, SecretStore, Subscription, TaskState, TenantId,
+    ToolDeclarations, WebhookEventKind, WorkflowDeclarations,
 };
 use rewind_engine::suites::SuiteChanges;
 use rewind_engine::{
@@ -452,7 +452,13 @@ async fn a_call_reads_the_secret_its_run_attached_in_its_own_namespace() {
         .unwrap();
     assert_eq!(read.reads.iter().map(|day| day.reads).sum::<u64>(), 1);
     let last = read.last_read.unwrap();
-    assert_eq!((last.run, last.namespace), (bobs.id, bob()));
+    assert_eq!(
+        last.by,
+        SecretReader::Run {
+            run: bobs.id,
+            namespace: bob(),
+        }
+    );
     let org = engine
         .secrets()
         .meta(&tenant(), &organization("github"), today)

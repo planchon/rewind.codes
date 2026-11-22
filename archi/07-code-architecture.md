@@ -398,8 +398,10 @@ Contracts, all covered by the conformance suite:
   `put(tenant, NewSecret { id, value, labels, by }, now) -> Created | Replaced` creates or
   replaces one; `list(tenant, namespace, labels, since) -> [SecretMeta]` and `meta(tenant, id,
   since)` answer names, labels, who wrote them and when, reads per day from `since` and the last
-  read (run, namespace, date), never a value; `read(tenant, id, SecretReader { run, namespace },
-  now) -> Option<Secret>` answers the value and counts the read, for the dispatcher's path only;
+  read (by a run, with its namespace, or by a registration; date), never a value; `read(tenant,
+  id, SecretReader::Run { run, namespace } | SecretReader::Registration, now) -> Option<Secret>`
+  answers the value and counts the read, for the dispatcher's path and a registration's listing
+  only;
   `delete(tenant, id)`, and `delete_namespace(tenant, namespace)` for an erased end user. Signing keys: `signing_key(tenant, now) -> SigningKey`, made at the first call;
   `rotate_signing_key(tenant, now)`; `public_keys(tenant, now) -> [Jwk]`, the current key and
   those retired less than 24 hours ago. Envelope encryption: each tenant has a data key, itself

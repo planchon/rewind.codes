@@ -386,8 +386,13 @@ fn metas_from_rows(rows: &[PgRow]) -> Result<Vec<SecretMeta>, Error> {
         let last_read = match row.opt_ts(7)? {
             None => None,
             Some(at) => Some(LastRead {
-                run: row.run_id(8)?,
-                namespace: namespace_name(row.text(9)?)?,
+                by: match (row.opt_run_id(8)?, row.opt_text(9)?) {
+                    (Some(run), Some(namespace)) => SecretReader::Run {
+                        run,
+                        namespace: namespace_name(namespace)?,
+                    },
+                    _ => SecretReader::Registration,
+                },
                 at,
             }),
         };
@@ -617,8 +622,8 @@ impl PostgresStore {
         .bind(secret.namespace.as_str())
         .bind(secret.name.as_str())
         .bind(ts(now))
-        .bind(uuid(reader.run))
-        .bind(reader.namespace.as_str())
+        .bind(reader.run().map(|(run, _)| uuid(run)))
+        .bind(reader.run().map(|(_, namespace)| namespace.as_str()))
         .fetch_optional(&mut *tx)
         .await?;
         let Some(sealed) = sealed else {

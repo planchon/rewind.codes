@@ -25,13 +25,13 @@ use rewind_api::toolsets::{
     ToolsetSummary,
 };
 use rewind_core::{
-    Api, Digest, Interruption, McpServer, McpTransport, RunId, SecretRef, SecretScope, Tool,
-    ToolAuth, ToolPolicy, ToolRoute, Toolset,
+    Api, Digest, Interruption, McpServer, McpTransport, SecretRef, SecretScope, Tool, ToolAuth,
+    ToolPolicy, ToolRoute, Toolset,
 };
 use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
-    Day, JournalStore, NamespaceName, ReadModel, Secret, SecretId, SecretNamespace, SecretReader,
-    SecretStore, StoredToolset, TenantId, ToolDeclarations,
+    Day, JournalStore, ReadModel, Secret, SecretId, SecretNamespace, SecretReader, SecretStore,
+    StoredToolset, TenantId, ToolDeclarations,
 };
 use rewind_engine::text::{TOOLSET_TEXT, refuse_nul};
 use rewind_mcp::ListingAuth;
@@ -425,8 +425,8 @@ async fn pin(
 /// (`archi/04-tools.md`, "Secrets": `POST /v1/toolsets` attaches an organization's secrets only,
 /// to list the tools of an MCP server that needs one; no run keeps them). The caller holds
 /// `secrets:use`, and each secret is an organization's it sees (its labels), attached for an
-/// MCP server of the request whose `auth` takes a secret. A read is counted as the run
-/// [`LISTING_RUN`]'s, in the caller's namespace (`local` without one).
+/// MCP server of the request whose `auth` takes a secret. A read is counted as a registration's,
+/// which names no run.
 async fn attached_for_listing(
     app: &App,
     caller: &Caller,
@@ -461,12 +461,7 @@ async fn attached_for_listing(
     }
     let today = Day::of(app.now());
     let mut read = BTreeMap::new();
-    let reader = SecretReader {
-        run: LISTING_RUN,
-        namespace: caller.namespace.clone().unwrap_or_else(|| {
-            NamespaceName::new(NamespaceName::LOCAL).unwrap_or_else(|_| NamespaceName::migrated())
-        }),
-    };
+    let reader = SecretReader::Registration;
     for (server, secret) in attached {
         let id = SecretId::organization(secret.name.clone());
         let seen = app
@@ -517,9 +512,6 @@ async fn attached_for_listing(
     };
     Err(ApiError::secret_required(refused.to_string(), &refused))
 }
-
-/// The run a listing's read of a secret is counted for: none, the nil id.
-pub(crate) const LISTING_RUN: RunId = RunId::from_u128(0);
 
 /// How the listing of a server's tools authenticates at registration (`archi/04-tools.md`,
 /// "Authenticating calls"): the organization's secret attached for it, if any; or a JWT signed

@@ -285,8 +285,9 @@ that attached it.
 - A name is 1 to 64 lowercase letters, digits, `-` and `_`, starting with a letter. A value is a
   string of at most 16 KiB.
 - **Write-only.** No endpoint answers a value. A secret is listed with its metadata: its name, its
-  labels, who wrote it and when, its reads per day, its last read (run, namespace, date)
-  ([07](07-code-architecture.md#http-api-v1)).
+  labels, who wrote it and when, its reads per day, its last read (run, namespace, date; a
+  toolset's registration, which reads an organization's secret to list the tools of the server it
+  is attached for before any run exists, names no run) ([07](07-code-architecture.md#http-api-v1)).
 - **Stored** in the `SecretStore`, encrypted with a data key per tenant, itself encrypted by a
   master key from the deployment's configuration.
 - **The master key can be replaced.** Each data key records which master key encrypted it, by

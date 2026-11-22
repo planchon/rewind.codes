@@ -96,12 +96,16 @@ pub struct DailyReads {
     pub reads: u64,
 }
 
-/// The last read of a secret: by which run, of which namespace, when.
+/// The last read of a secret: by which run, of which namespace, when. A toolset's registration
+/// reads an organization's secret to list the tools of the MCP server it is attached for, before
+/// any run exists: such a read names neither run nor namespace.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LastRead {
-    pub run: String,
-    pub namespace: NamespaceName,
+    /// The run that read it; `null` for a toolset's registration.
+    pub run: Option<String>,
+    /// The namespace of that run; `null` for a toolset's registration.
+    pub namespace: Option<NamespaceName>,
     pub at: Timestamp,
 }
 
