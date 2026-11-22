@@ -2,6 +2,15 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
+## 0.4.0 (2026-11-22)
+
+For the live dashboard and the table of runs ordered from its headers.
+
+- `runs.list({ sort })` takes `oldest` (the first started first), `duration` (the longest first, the runs that have not
+  ended last) and `calls` (the most tool calls first), beside `started`, `activity` and `wakes`.
+- The generated types (`paths`, `components`) describe `GET /v1/changes`, the change stream: server-sent events `run`,
+  each with a run's summary as `GET /v1/runs` lists it, and `resync` (`ChangeEvent`).
+
 ## 0.3.0 (2026-11-22)
 
 For named secrets attached to runs, API tools from OpenAPI documents, and calls signed with a key per organization.
