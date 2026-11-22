@@ -13,7 +13,7 @@
 //! | [`IdentityProvider`] | memory, `rewind-workos` (WorkOS) |
 //! | [`BlobStore`] | memory, `rewind-blob` (files, S3) |
 //! | [`ScriptExecutor`] / [`ScriptInstance`] | `rewind-runtime` (V8) |
-//! | [`ToolDispatcher`] | static responses (memory), mocks, `rewind-mcp` |
+//! | [`ToolDispatcher`] | static responses (memory), mocks, `rewind-mcp`, `rewind-openapi` |
 //! | [`TypeChecker`] | static (memory), `rewind-check` (tsgo) |
 //! | [`ReadModel`] | memory, `rewind-store-turso`, `rewind-store-postgres` |
 //! | [`SpanExporter`] | memory, `rewind-otel` |
@@ -59,7 +59,9 @@ pub use connections::{
     ConnectionTokenKind, NewConnection, NewToken, OAuthClient, OAuthCode, OpenedOrganization,
     Rotation,
 };
-pub use dispatcher::{Dispatched, ToolCall, ToolDispatcher};
+pub use dispatcher::{
+    CallAuth, CallClaims, Dispatched, RETRY_AFTER_DATA, ToolCall, ToolDispatcher,
+};
 pub use executor::{
     CompiledScript, Delivery, Emitted, ExecutorError, InvalidScript, ScriptExecutor,
     ScriptInstance, StartScript,
@@ -74,10 +76,10 @@ pub use journal::{
     Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore, Lease, NewRun, NewTimer,
     NewToolTask, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunMetadata,
-    RunRecord, RunWorkflow, STICKY_GRACE, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, TestRecord,
-    ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    RunRecord, RunWorkflow, STICKY_GRACE, SecretUsage, StartedBy, StoreError, StoredScript,
+    StoredToolset, StoredWorkflow, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
+    TaskUpdate, TestRecord, ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken,
+    WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 pub use namespaces::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, InvalidDisplayName,
@@ -92,12 +94,17 @@ pub use read_model::{
     StatsWindow, TaskPhase, TaskProgress, Term, TextMatch, ToolStats, ToolStatsFilter, Wait,
     WaitKind, WaitingFor,
 };
-pub use secrets::{Credentials, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials};
+pub use secrets::{
+    DailyReads, LastRead, MasterKeyId, NewSecret, PrivateKey, PublicKey, PutSecret,
+    RETIRED_KEY_PUBLISHED, Secret, SecretError, SecretId, SecretMeta, SecretNamespace,
+    SecretReader, SecretStore, SigningKey,
+};
 pub use telemetry::{
     AttributeValue, ExportError, LogRecord, Span, SpanExporter, SpanId, SpanKind, SpanStatus,
     TraceId,
 };
 pub use tenancy::{InvalidTenant, Retention, RunRef, Tenant, TenantId, TenantScope};
 pub use webhooks::{
-    Subscription, WebhookError, WebhookEvent, WebhookEventKind, WebhookEventType, WebhookSender,
+    CredentialsExpiredReason, Subscription, WebhookError, WebhookEvent, WebhookEventKind,
+    WebhookEventType, WebhookSender,
 };

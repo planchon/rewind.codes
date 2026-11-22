@@ -74,6 +74,7 @@ fn triage(toolset: &str, script: &str) -> CreateWorkflow {
         tests: Vec::new(),
         update: Vec::new(),
         retire: Vec::new(),
+        secrets: Default::default(),
     }
 }
 

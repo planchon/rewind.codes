@@ -1,18 +1,21 @@
-//! The tasks Rewind calls itself: MCP tools and built-ins, and every tool in mock mode
+//! The tasks Rewind calls itself: MCP tools, API tools and built-ins, and every tool in mock mode
 //! (`archi/04-tools.md`, "Tool task lifecycle").
 //!
 //! ```text
 //! claim ──► interrupted before? ── at_most_once, or too many attempts ──► done: outcome_unknown
 //!   │
-//!   ▼ prepare: the pinned tool, its args, the run's or the toolset's credentials (MCP only)
-//!   │           (a failure here puts the task back with backoff: the call was not sent)
+//!   ▼ prepare: the pinned tool, its args, its server's or API's auth resolved: the secret the
+//!   │           run attached, or the tenant's signing key (a failure here puts the task back
+//!   │           with backoff: the call was not sent; a secret that no longer exists parks it,
+//!   │           secret_missing)
 //!   ▼ dispatch, the claim heartbeated meanwhile (or, in the engine, the `webhook` built-in and
 //!   │  the workflows' built-ins)
 //!   │
 //!   ├─ Result, Failed ──────────────────────────────────────────────► done
 //!   ├─ Transient ── retry and attempts left ── ready after backoff; else done with the failure
 //!   ├─ Deferred ─── until the execution timeout, bounded by the run's deadline
-//!   └─ Park ─────── parked, then tool.schema_changed / credentials.expired to subscriptions
+//!   └─ Park ─────── parked, then tool.schema_changed / credentials.expired (refused, missing)
+//!                   to subscriptions
 //! ```
 
 use std::time::Duration;
@@ -20,8 +23,9 @@ use std::time::Duration;
 use tracing::Instrument as _;
 
 use rewind_core::{
-    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, Seq, Timestamp,
-    ToolFailure, ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
+    Builtin, Event, Interruption, JsonValue, Lifecycle, Payload, RunMode, SecretEncoding,
+    SecretPlacement, SecretRef, SecretScope, Seq, Timestamp, ToolAuth, ToolFailure,
+    ToolFailureKind, ToolOutcome, ToolRoute, WorkflowOp,
 };
 use serde_json::json;
 
@@ -29,8 +33,9 @@ use super::InFlight;
 use crate::driver::ToolOrder;
 use crate::engine::{Engine, EngineError, idempotency_key};
 use crate::ports::{
-    BlobStore, ClaimedTask, Clock, Credentials, Dispatched, Entropy, JournalStore, ParkKind,
-    ParkReason, RunRecord, ScriptExecutor, SecretStore, TaskPhase, TaskProgress, TaskToken,
+    BlobStore, CallAuth, CallClaims, ClaimedTask, Clock, CredentialsExpiredReason, Dispatched,
+    Entropy, JournalStore, ParkKind, ParkReason, RETRY_AFTER_DATA, RunRecord, RunRef,
+    ScriptExecutor, SecretId, SecretReader, SecretStore, TaskPhase, TaskProgress, TaskToken,
     TaskUpdate, ToolCall, ToolDispatcher, ToolTask, TraceContext, WebhookEvent, WebhookEventKind,
     WebhookSender,
 };
@@ -40,9 +45,21 @@ use crate::{metrics, payloads, text};
 struct Prepared {
     record: RunRecord,
     call: ToolCall,
-    credentials: Option<Credentials>,
+    /// How the call proves who calls.
+    auth: Auth,
     /// The engine answers the call itself, or turns the dispatcher's answer into its own.
     served: Option<Served>,
+}
+
+/// How a prepared call proves who calls, or why it is not sent.
+enum Auth {
+    /// Sent with this.
+    Ready(CallAuth),
+    /// The secret the run attached for the call's server no longer exists: the call is parked
+    /// (`secret_missing`) instead of sent, until the secret is put again.
+    SecretMissing { server: String, secret: SecretRef },
+    /// The call cannot prove who calls, for good: it fails without being sent.
+    Refused(ToolFailure),
 }
 
 /// A call the engine serves: it needs the store, which no dispatcher holds.
@@ -127,9 +144,36 @@ where
         let Prepared {
             record,
             call,
-            credentials,
+            auth,
             served,
         } = prepared;
+        let auth = match auth {
+            Auth::Ready(auth) => auth,
+            Auth::SecretMissing { server, secret } => {
+                let put = match secret.scope {
+                    SecretScope::Organization => format!("PUT /v1/secrets/{}", secret.name),
+                    SecretScope::Namespace => format!(
+                        "PUT /v1/namespaces/{}/secrets/{}",
+                        record.namespace, secret.name
+                    ),
+                };
+                let reason = ParkReason {
+                    kind: ParkKind::SecretMissing,
+                    message: format!(
+                        "the secret {secret} the run attached for {server} no longer exists: \
+                         put it again ({put}), and the call is sent with the same idempotency key"
+                    ),
+                };
+                return self
+                    .settle(&task, &token, &record, Dispatched::Park(reason))
+                    .await;
+            }
+            Auth::Refused(failure) => {
+                return self
+                    .settle(&task, &token, &record, Dispatched::Failed(failure))
+                    .await;
+            }
+        };
         // The attempt span: a child of the tool call span, through the call's trace context.
         let attempt = tracing::info_span!(
             "tool_attempt",
@@ -166,12 +210,13 @@ where
             };
             let _dispatching = self.tool_tasks.dispatching(&token, in_flight);
             if matches!(served, Some(Served::MockStart)) {
-                let answered = self.dispatcher.dispatch(call.clone(), credentials).await;
+                let answered = self.dispatcher.dispatch(call.clone(), auth).await;
                 let (dispatched, end) = self.mock_start(answered);
                 mock_end = end;
                 return dispatched;
             }
-            self.dispatcher.dispatch(call, credentials).await
+            let texts = secret_texts(&auth);
+            redacted(self.dispatcher.dispatch(call, auth).await, &texts)
         }
         .instrument(attempt.clone())
         .await;
@@ -313,8 +358,19 @@ where
         task: &ToolTask,
         token: &TaskToken,
     ) -> Result<TaskUpdate, EngineError> {
+        self.retry_after(task, token, Duration::ZERO).await
+    }
+
+    /// As [`retry_later`](Self::retry_later), never sooner than `at_least` from now: the wait a
+    /// server asked for (`Retry-After`).
+    pub(super) async fn retry_after(
+        &self,
+        task: &ToolTask,
+        token: &TaskToken,
+        at_least: Duration,
+    ) -> Result<TaskUpdate, EngineError> {
         let call = idempotency_key(task.task.run.id, task.task.seq);
-        let delay = self.config.backoff.delay(&call, task.attempt);
+        let delay = self.config.backoff.delay(&call, task.attempt).max(at_least);
         let next_attempt_at = self.clock.now().saturating_add(delay);
         Ok(self.journal.retry_tool_task(token, next_attempt_at).await?)
     }
@@ -375,7 +431,7 @@ where
     // ---------------------------------------------------------------------------------------
     // The dispatched path
 
-    /// The call as the dispatcher receives it, with its credentials. `None` when the run has
+    /// The call as the dispatcher receives it, with its authentication. `None` when the run has
     /// ended.
     async fn prepare(
         &self,
@@ -399,20 +455,24 @@ where
                     run_id: run.id,
                     tool: task.tool.clone(),
                 })?;
-        let (server, credentials) = match &tool.route {
-            ToolRoute::Mcp { server } => (
-                stored.toolset.server(server).cloned(),
-                self.secrets
-                    .resolve(&run.tenant, run.id, &record.namespace, task.toolset)
-                    .await?,
-            ),
+        let (server, api) = match &tool.route {
+            ToolRoute::Mcp { server } => (stored.toolset.server(server).cloned(), None),
+            ToolRoute::Api { api } => (None, stored.toolset.api(api).cloned()),
             ToolRoute::Builtin(_) | ToolRoute::Host { .. } => (None, None),
         };
+        let auth = server
+            .as_ref()
+            .map(|server| server.auth.clone())
+            .or_else(|| api.as_ref().map(|api| api.auth.clone()))
+            .unwrap_or_default();
         let call = ToolCall {
             run: run.clone(),
+            namespace: record.namespace.clone(),
+            labels: record.metadata.labels.clone(),
             seq: task.task.seq,
             tool,
             server,
+            api,
             args: self.task_args(task).await?,
             idempotency_key: self.task_key(&record, task).await?,
             attempt: task.attempt,
@@ -421,12 +481,115 @@ where
             trace_context: self.call_trace_context(&record, task.task.seq),
         };
         let served = self.served(task, &call).await?;
+        let auth = self.call_auth(&record, &call, &auth).await?;
         Ok(Some(Prepared {
             record,
             call,
-            credentials,
+            auth,
             served,
         }))
+    }
+
+    /// How a call proves who calls, from its server's or API's `auth` (`archi/04-tools.md`,
+    /// "Authenticating calls"): nothing; the secret the run attached for the server, read in the
+    /// run's namespace and counted; or the tenant's signing key with the claims of the call.
+    /// Nothing falls back on another secret. Mock mode reads no secret and signs nothing
+    /// (`archi/05-testing-and-observability.md`): the mocks answer.
+    async fn call_auth(
+        &self,
+        record: &RunRecord,
+        call: &ToolCall,
+        auth: &ToolAuth,
+    ) -> Result<Auth, EngineError> {
+        if *auth == ToolAuth::None || self.run_mode(&call.run).await? != Some(RunMode::Live) {
+            return Ok(Auth::Ready(CallAuth::None));
+        }
+        self.live_call_auth(record, call, auth).await
+    }
+
+    async fn live_call_auth(
+        &self,
+        record: &RunRecord,
+        call: &ToolCall,
+        auth: &ToolAuth,
+    ) -> Result<Auth, EngineError> {
+        let tenant = &call.run.tenant;
+        let server = call.tool.route.server().unwrap_or(&call.tool.name);
+        let refused = |message: String| {
+            Ok(Auth::Refused(ToolFailure {
+                kind: ToolFailureKind::Unavailable,
+                message,
+                data: None,
+            }))
+        };
+        match auth {
+            ToolAuth::None => Ok(Auth::Ready(CallAuth::None)),
+            ToolAuth::Secret(placement) => {
+                // Checked at start: a run that imports the server attaches a secret for it.
+                let Some(attached) = record.metadata.secrets.get(server) else {
+                    return refused(format!(
+                        "{server} needs a secret, and the run attached none for it: fork the run \
+                         with \"secrets\": {{\"{server}\": \"org/<name>\" or \"ns/<name>\"}}"
+                    ));
+                };
+                let id = SecretId::resolve(attached, &record.namespace);
+                let reader = SecretReader::Run {
+                    run: call.run.id,
+                    namespace: record.namespace.clone(),
+                };
+                let read = self
+                    .secrets
+                    .read(tenant, &id, &reader, self.clock.now())
+                    .await?;
+                Ok(match read {
+                    Some(value) => Auth::Ready(CallAuth::Secret {
+                        value,
+                        placement: placement.clone(),
+                    }),
+                    None => Auth::SecretMissing {
+                        server: server.to_owned(),
+                        secret: attached.clone(),
+                    },
+                })
+            }
+            ToolAuth::Rewind => {
+                let Some(public_url) = &self.config.public_url else {
+                    return refused(format!(
+                        "{server} checks Rewind's signature, and this server has no public URL \
+                         where its public keys are published (--public-url)"
+                    ));
+                };
+                let key = self.secrets.signing_key(tenant, self.clock.now()).await?;
+                let claims = CallClaims {
+                    issuer: CallClaims::issuer(public_url, tenant),
+                    subject: record.namespace.clone(),
+                    labels: record.metadata.labels.clone(),
+                    run: call.run.id,
+                    tool: call.tool.name.clone(),
+                    idempotency_key: call.idempotency_key.clone(),
+                    seq: call.seq,
+                    attempt: call.attempt,
+                };
+                Ok(Auth::Ready(CallAuth::Signed { key, claims }))
+            }
+        }
+    }
+
+    /// The mode the run started in, from its `run_started`; `None` before its first activation.
+    /// Read once per run on this engine: it never changes.
+    async fn run_mode(&self, run: &RunRef) -> Result<Option<RunMode>, EngineError> {
+        if let Some(mode) = self.tool_tasks.mode(run) {
+            return Ok(Some(mode));
+        }
+        let history = self.journal.load_history(run, 0).await?;
+        let mode = history.first().and_then(|entry| match &entry.event {
+            Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
+            _ => None,
+        });
+        if let Some(mode) = mode {
+            self.tool_tasks.remember_mode(run, mode);
+        }
+        Ok(mode)
     }
 
     /// Whether the engine serves the call itself: the `webhook` built-in and the workflows'
@@ -445,11 +608,7 @@ where
             },
             _ => return Ok(None),
         };
-        let history = self.journal.load_history(&task.task.run, 0).await?;
-        let mode = history.first().and_then(|entry| match &entry.event {
-            Event::Lifecycle(Lifecycle::RunStarted(started)) => Some(started.mode),
-            _ => None,
-        });
+        let mode = self.run_mode(&task.task.run).await?;
         Ok(match (mode, served) {
             (Some(RunMode::Live), served) => Some(served),
             (
@@ -536,7 +695,13 @@ where
                     && task.attempt < self.config.max_tool_attempts;
                 if retry {
                     metrics::tool_retry(&task.tool);
-                    self.retry_later(task, token).await?;
+                    let asked = failure
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get(RETRY_AFTER_DATA))
+                        .and_then(serde_json::Value::as_u64)
+                        .map_or(Duration::ZERO, Duration::from_secs);
+                    self.retry_after(task, token, asked).await?;
                 } else {
                     self.finish(task, token, ToolOutcome::Failure(failure))
                         .await?;
@@ -569,11 +734,25 @@ where
         reason: ParkReason,
     ) -> Result<(), EngineError> {
         let (seq, tool, message) = (task.task.seq, task.tool.clone(), reason.message);
+        let credentials_expired = |reason| WebhookEventKind::CredentialsExpired {
+            seq,
+            tool: tool.clone(),
+            message: message.clone(),
+            reason,
+            secret: task
+                .route
+                .server()
+                .and_then(|server| record.metadata.secrets.get(server))
+                .cloned(),
+        };
         let kind = match reason.kind {
-            ParkKind::SchemaChanged => WebhookEventKind::ToolSchemaChanged { seq, tool, message },
-            ParkKind::CredentialsExpired => {
-                WebhookEventKind::CredentialsExpired { seq, tool, message }
-            }
+            ParkKind::SchemaChanged => WebhookEventKind::ToolSchemaChanged {
+                seq,
+                tool: tool.clone(),
+                message: message.clone(),
+            },
+            ParkKind::CredentialsRefused => credentials_expired(CredentialsExpiredReason::Refused),
+            ParkKind::SecretMissing => credentials_expired(CredentialsExpiredReason::Missing),
         };
         let run = &task.task.run;
         let event = WebhookEvent {
@@ -595,5 +774,87 @@ where
             }
         }
         Ok(())
+    }
+}
+
+/// The shortest secret whose value is taken out of answers: a shorter one would match ordinary
+/// text.
+const MIN_REDACTED_SECRET: usize = 4;
+
+/// What replaces a secret's value in an answer.
+const REDACTED: &str = "[secret]";
+
+/// The texts of the attached secret an answer must not carry: its value, and its base64 form
+/// when its header encodes it (HTTP basic).
+fn secret_texts(auth: &CallAuth) -> Vec<String> {
+    let CallAuth::Secret { value, placement } = auth else {
+        return Vec::new();
+    };
+    let value = value.expose();
+    if value.len() < MIN_REDACTED_SECRET {
+        return Vec::new();
+    }
+    let mut texts = vec![value.to_owned()];
+    if let SecretPlacement::Header {
+        encoding: SecretEncoding::Base64,
+        ..
+    } = placement
+    {
+        use base64::Engine as _;
+        texts.push(base64::engine::general_purpose::STANDARD.encode(value));
+    }
+    texts
+}
+
+/// `dispatched` without the attached secret's texts: a server that echoes its credential (an
+/// error quoting the key, a debug endpoint) must not bring it into the journal and the script
+/// (`archi/04-tools.md`, "Secrets": secrets never enter the journal nor the isolate).
+fn redacted(dispatched: Dispatched, texts: &[String]) -> Dispatched {
+    if texts.is_empty() {
+        return dispatched;
+    }
+    let failure = |mut failure: ToolFailure| {
+        failure.message = redacted_text(failure.message, texts);
+        failure.data = failure.data.map(|data| redacted_json(data, texts));
+        failure
+    };
+    match dispatched {
+        Dispatched::Result(value) => Dispatched::Result(redacted_json(value, texts)),
+        Dispatched::Failed(failed) => Dispatched::Failed(failure(failed)),
+        Dispatched::Transient(failed) => Dispatched::Transient(failure(failed)),
+        Dispatched::Park(mut reason) => {
+            reason.message = redacted_text(reason.message, texts);
+            Dispatched::Park(reason)
+        }
+        Dispatched::Deferred => Dispatched::Deferred,
+    }
+}
+
+fn redacted_text(text: String, texts: &[String]) -> String {
+    if texts.iter().any(|secret| text.contains(secret.as_str())) {
+        texts
+            .iter()
+            .fold(text, |text, secret| text.replace(secret.as_str(), REDACTED))
+    } else {
+        text
+    }
+}
+
+fn redacted_json(value: JsonValue, texts: &[String]) -> JsonValue {
+    match value {
+        JsonValue::String(text) => JsonValue::String(redacted_text(text, texts)),
+        JsonValue::Array(items) => JsonValue::Array(
+            items
+                .into_iter()
+                .map(|item| redacted_json(item, texts))
+                .collect(),
+        ),
+        JsonValue::Object(fields) => JsonValue::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (redacted_text(key, texts), redacted_json(value, texts)))
+                .collect(),
+        ),
+        other => other,
     }
 }

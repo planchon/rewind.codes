@@ -1,28 +1,37 @@
 //! The pinned toolset (`archi/04-tools.md`, "Toolsets and code generation").
 //!
-//! Registering a toolset connects to its MCP servers, lists their tools and **pins** them: the
-//! servers, and for each tool its name, route, description, schemas and policy. The pinned
-//! toolset is immutable and content-addressed: its digest is the SHA-256 of its canonical JSON,
-//! the pinned toolset document of the stored format v1 (`archi/02-journal.md`), and every run
-//! records the digest it was started with.
+//! Registering a toolset connects to its MCP servers, lists their tools, reads its APIs' OpenAPI
+//! documents and **pins** them: the servers and APIs, with how each one authenticates its calls,
+//! and for each tool its name, route, description, schemas and policy. The pinned toolset is
+//! immutable and content-addressed: its digest is the SHA-256 of its canonical JSON, the pinned
+//! toolset document of the stored format v1 (`archi/02-journal.md`), and every run records the
+//! digest it was started with.
 //!
 //! ```text
 //! Toolset
-//! ├── servers:   McpServer { name, transport: http(url) | stdio(command, args, env), concurrency }
-//! ├── tools:     Tool { name, route, description?, input_schema, output_schema?, policy }
-//! │                     route  = mcp(server) | host(group?) | builtin(http(allowed_hosts) | webhook)
+//! ├── servers:   McpServer { name, transport: http(url) | stdio(command, args, env), concurrency,
+//! │                          auth }
+//! ├── apis:      Api { name, base_url, auth, concurrency }
+//! ├── tools:     Tool { name, route, operation?, description?, input_schema, output_schema?,
+//! │                     policy }
+//! │                     route  = mcp(server) | api(api) | host(group?)
+//! │                              | builtin(http(allowed_hosts) | webhook)
+//! │                     operation (API tools only) = { method, path, parameters, body,
+//! │                                                    idempotency_key }
 //! │                     policy = { on_interruption: retry | at_most_once, approval,
 //! │                                execution_timeout?, heartbeat_timeout, concurrency }
 //! └── workflows: PinnedWorkflow { name, version, description?, schemas }
 //!                  each gives two built-ins, not in the document:
 //!                  workflows.<name>.start and workflows.<name>.signal (builtin(workflow))
+//! auth = none | rewind | secret(header(name, format?, encoding) | env(variable))
 //! ```
 //!
 //! A tool is named as its server defines it, behind its namespace: `github.list_issues` for the
-//! tool `list_issues` of the MCP server `github`, `harness.ask_user` or `ask_user` for a host
-//! tool, `http` and `webhook` for the built-ins. The namespace is what `rewind:tools` exports.
-//! The namespace `workflows` is reserved for the workflows' built-ins; `rewind:workflows`
-//! exports one name per pinned workflow.
+//! tool `list_issues` of the MCP server `github`, `dax.createMeasure` for the operation
+//! `createMeasure` of the API `dax`, `harness.ask_user` or `ask_user` for a host tool, `http` and
+//! `webhook` for the built-ins. The namespace is what `rewind:tools` exports. The namespace
+//! `workflows` is reserved for the workflows' built-ins; `rewind:workflows` exports one name per
+//! pinned workflow.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -32,16 +41,23 @@ use serde_json::{Map, Value, json};
 
 use crate::canonical::canonical_json;
 use crate::digest::Digest;
+use crate::secret::{
+    RESERVED_HEADERS, SECRET_PLACEHOLDER, SecretEncoding, SecretPlacement, ToolAuth, is_env_name,
+    is_header_name,
+};
 use crate::workflow::{InvalidWorkflow, PinnedWorkflow, WORKFLOWS_NAMESPACE, WorkflowOp};
 
 /// The tools a run may call, pinned when the toolset was registered.
 ///
-/// Built with [`Toolset::new`], which checks every invariant: unique names, MCP tools of known
-/// servers and inside their namespace, valid policies. Servers and tools are kept sorted by
-/// name, so the digest does not depend on the order they were given in.
+/// Built with [`Toolset::new`] or [`Toolset::from_parts`], which check every invariant: unique
+/// names, MCP and API tools of known servers and APIs and inside their namespace, an operation
+/// for each API tool, valid policies and `auth`. Servers, APIs and tools are kept sorted by name,
+/// so the digest does not depend on the order they were given in.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Toolset {
     servers: Vec<McpServer>,
+    /// Sorted by name.
+    apis: Vec<Api>,
     tools: Vec<Tool>,
     /// Sorted by name.
     workflows: Vec<PinnedWorkflow>,
@@ -57,31 +73,158 @@ pub struct McpServer {
     pub transport: McpTransport,
     /// Calls in flight to this server, on each worker. The claim of tool tasks enforces it.
     pub concurrency: u32,
+    /// How its calls prove who calls (`archi/04-tools.md`, "Authenticating calls"): a header or
+    /// a signature for an HTTP server, a variable for a stdio server.
+    pub auth: ToolAuth,
 }
 
 impl McpServer {
     /// Calls in flight to one MCP server on each worker, unless the toolset says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 8;
 
-    /// A server with the default concurrency.
+    /// A public server with the default concurrency.
     pub fn new(name: impl Into<String>, transport: McpTransport) -> Self {
         Self {
             name: name.into(),
             transport,
             concurrency: Self::DEFAULT_CONCURRENCY,
+            auth: ToolAuth::None,
         }
     }
 }
 
-/// How the dispatcher reaches an MCP server. Credentials are not part of it: they are resolved
-/// at call time from the `SecretStore` and injected into the transport
-/// (`archi/04-tools.md`, "Credentials").
+/// An API of a toolset, described by an OpenAPI document read once at registration
+/// (`archi/04-tools.md`, "API tools"). The document is not kept: each of its operations is a
+/// tool, with its [`ApiOperation`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Api {
+    /// The namespace of its tools in `rewind:tools`, an identifier as a server's name is.
+    pub name: String,
+    /// Where the calls go, the operations' paths joined to it: `https://api.example.com/v1`.
+    pub base_url: String,
+    /// How its calls prove who calls: the `auth` given at registration, or what the document's
+    /// security requirement means, resolved then.
+    pub auth: ToolAuth,
+    /// Calls in flight to this API, on each worker. The claim of tool tasks enforces it.
+    pub concurrency: u32,
+}
+
+impl Api {
+    /// Calls in flight to one API on each worker, unless the toolset says otherwise.
+    pub const DEFAULT_CONCURRENCY: u32 = 8;
+
+    /// A public API with the default concurrency.
+    pub fn new(name: impl Into<String>, base_url: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            base_url: base_url.into(),
+            auth: ToolAuth::None,
+            concurrency: Self::DEFAULT_CONCURRENCY,
+        }
+    }
+}
+
+/// How the dispatcher builds the request of an API tool from its args: the operation of the
+/// OpenAPI document the tool was read from (`archi/04-tools.md`, "API tools").
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ApiOperation {
+    pub method: HttpMethod,
+    /// The path template, as the document writes it, joined to the API's `base_url`:
+    /// `/v1/measures/{id}`. Each `{name}` is a path parameter, percent-encoded into it.
+    pub path: String,
+    /// Its path, query and header parameters, which are args of the same names. Sorted by name;
+    /// no two share one, and none is named `body`.
+    pub parameters: Vec<ApiParameter>,
+    /// It takes a JSON request body: the arg `body`.
+    pub body: bool,
+    /// It declares the header `Idempotency-Key`, which Rewind fills with `{run_id}/{seq}`.
+    pub idempotency_key: bool,
+}
+
+/// A parameter of an operation: an arg of the tool, put where the document says.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ApiParameter {
+    pub name: String,
+    pub location: ParameterLocation,
+}
+
+/// Where a parameter goes. Cookies are not supported: an operation with one is left out at
+/// registration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ParameterLocation {
+    Path,
+    Query,
+    Header,
+}
+
+impl ParameterLocation {
+    /// As OpenAPI writes it in `in`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParameterLocation::Path => "path",
+            ParameterLocation::Query => "query",
+            ParameterLocation::Header => "header",
+        }
+    }
+}
+
+/// The methods of OpenAPI's path items.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum HttpMethod {
+    Get,
+    Put,
+    Post,
+    Delete,
+    Options,
+    Head,
+    Patch,
+    Trace,
+}
+
+impl HttpMethod {
+    /// Lowercase, as OpenAPI's path items name them: `post`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "get",
+            HttpMethod::Put => "put",
+            HttpMethod::Post => "post",
+            HttpMethod::Delete => "delete",
+            HttpMethod::Options => "options",
+            HttpMethod::Head => "head",
+            HttpMethod::Patch => "patch",
+            HttpMethod::Trace => "trace",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "get" => HttpMethod::Get,
+            "put" => HttpMethod::Put,
+            "post" => HttpMethod::Post,
+            "delete" => HttpMethod::Delete,
+            "options" => HttpMethod::Options,
+            "head" => HttpMethod::Head,
+            "patch" => HttpMethod::Patch,
+            "trace" => HttpMethod::Trace,
+            _ => return None,
+        })
+    }
+
+    /// Whether HTTP defines a request sent twice to have the effect of one (RFC 9110, 9.2.2).
+    pub fn is_idempotent(self) -> bool {
+        !matches!(self, HttpMethod::Post | HttpMethod::Patch)
+    }
+}
+
+/// How the dispatcher reaches an MCP server. How its calls authenticate is the server's
+/// [`auth`](McpServer::auth); no value is part of the transport.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum McpTransport {
     /// Streamable HTTP.
     Http { url: String },
     /// A process started by the dispatcher, speaking MCP on its standard input and output.
-    /// `env` holds configuration, never secrets.
+    /// `env` holds configuration, never secrets: an attached secret goes in the variable the
+    /// server's `auth` names.
     Stdio {
         command: String,
         args: Vec<String>,
@@ -95,6 +238,8 @@ pub struct Tool {
     /// The full name scripts call it by, such as `github.list_issues`.
     pub name: String,
     pub route: ToolRoute,
+    /// For an API tool, and only for one: how its request is built.
+    pub operation: Option<ApiOperation>,
     /// Shown to the model, as JSDoc and in the prompt rendering.
     pub description: Option<String>,
     /// JSON Schema of the arguments. Args are validated against it inside the sandbox, before
@@ -112,6 +257,7 @@ impl Tool {
         Self {
             name: name.into(),
             route,
+            operation: None,
             description: None,
             input_schema,
             output_schema: None,
@@ -119,11 +265,31 @@ impl Tool {
         }
     }
 
-    /// The namespace `rewind:tools` exports the tool under: its MCP server or its host-tool group.
-    /// `None` for a bare host tool and for the built-ins.
+    /// The tool of an API's operation, with the default policy of its method
+    /// ([`ToolPolicy::default_for_operation`]), no description and no output schema.
+    pub fn api(
+        name: impl Into<String>,
+        api: impl Into<String>,
+        operation: ApiOperation,
+        input_schema: Value,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            route: ToolRoute::Api { api: api.into() },
+            policy: ToolPolicy::default_for_operation(&operation),
+            operation: Some(operation),
+            description: None,
+            input_schema,
+            output_schema: None,
+        }
+    }
+
+    /// The namespace `rewind:tools` exports the tool under: its MCP server, its API or its
+    /// host-tool group. `None` for a bare host tool and for the built-ins.
     pub fn namespace(&self) -> Option<&str> {
         match &self.route {
             ToolRoute::Mcp { server } => Some(server),
+            ToolRoute::Api { api } => Some(api),
             ToolRoute::Host { group } => group.as_deref(),
             ToolRoute::Builtin(_) => None,
         }
@@ -144,6 +310,9 @@ impl Tool {
 pub enum ToolRoute {
     /// A tool of one of the toolset's MCP servers, called by the dispatcher of Rewind.
     Mcp { server: String },
+    /// An operation of one of the toolset's APIs, called by the dispatcher of Rewind as an HTTP
+    /// client (`archi/04-tools.md`, "API tools").
+    Api { api: String },
     /// A built-in, called by the dispatcher of Rewind.
     Builtin(Builtin),
     /// A function of the harness, executed by its SDK worker, which claims the task through
@@ -152,10 +321,19 @@ pub enum ToolRoute {
 }
 
 impl ToolRoute {
-    /// Whether Rewind calls the tool itself: MCP tools and built-ins. Host tools are claimed by
-    /// the harness's worker instead.
+    /// Whether Rewind calls the tool itself: MCP tools, API tools and built-ins. Host tools are
+    /// claimed by the harness's worker instead.
     pub fn is_dispatched(&self) -> bool {
         !matches!(self, ToolRoute::Host { .. })
+    }
+
+    /// The MCP server or the API the tool belongs to, whose `auth` its calls carry.
+    pub fn server(&self) -> Option<&str> {
+        match self {
+            ToolRoute::Mcp { server } => Some(server),
+            ToolRoute::Api { api } => Some(api),
+            ToolRoute::Builtin(_) | ToolRoute::Host { .. } => None,
+        }
     }
 }
 
@@ -227,7 +405,8 @@ pub struct ToolPolicy {
 impl ToolPolicy {
     /// Calls of one tool in flight in one run, unless the toolset says otherwise.
     pub const DEFAULT_CONCURRENCY: u32 = 16;
-    /// The execution timeout of the tools Rewind calls itself (MCP tools and built-ins).
+    /// The execution timeout of the tools Rewind calls itself (MCP tools, API tools and
+    /// built-ins).
     pub const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
     pub const DEFAULT_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -239,13 +418,24 @@ impl ToolPolicy {
             approval: false,
             execution_timeout: match route {
                 ToolRoute::Host { .. } => None,
-                ToolRoute::Mcp { .. } | ToolRoute::Builtin(_) => {
+                ToolRoute::Mcp { .. } | ToolRoute::Api { .. } | ToolRoute::Builtin(_) => {
                     Some(Self::DEFAULT_EXECUTION_TIMEOUT)
                 }
             },
             heartbeat_timeout: Self::DEFAULT_HEARTBEAT_TIMEOUT,
             concurrency: Self::DEFAULT_CONCURRENCY,
         }
+    }
+
+    /// The default policy of an API's operation: as an MCP tool's, but `at_most_once` for a
+    /// `POST` or a `PATCH` that declares no `Idempotency-Key`, which HTTP does not let a client
+    /// send twice (`archi/04-tools.md`, "API tools").
+    pub fn default_for_operation(operation: &ApiOperation) -> Self {
+        let mut policy = Self::default_for(&ToolRoute::Api { api: String::new() });
+        if !operation.method.is_idempotent() && !operation.idempotency_key {
+            policy.on_interruption = Interruption::AtMostOnce;
+        }
+        policy
     }
 }
 
@@ -262,12 +452,23 @@ pub enum ToolsetError {
     DuplicateServer(String),
     #[error("server {server:?}: {message}")]
     InvalidServer { server: String, message: String },
+    #[error(
+        "invalid API name {0:?}: expected an identifier (letters, digits, _ and $) that is not a \
+         reserved word of JavaScript"
+    )]
+    InvalidApiName(String),
+    #[error("API {0:?} is declared twice, or has the name of a server")]
+    DuplicateApi(String),
+    #[error("API {api:?}: {message}")]
+    InvalidApi { api: String, message: String },
     #[error("invalid tool name {0:?}")]
     InvalidToolName(String),
     #[error("tool {0:?} is declared twice")]
     DuplicateTool(String),
     #[error("tool {tool:?} belongs to server {server:?}, which the toolset does not declare")]
     UnknownServer { tool: String, server: String },
+    #[error("tool {tool:?} belongs to API {api:?}, which the toolset does not declare")]
+    UnknownApi { tool: String, api: String },
     #[error("tool {tool:?} must be named {expected}")]
     MisplacedTool { tool: String, expected: String },
     #[error("tool {tool:?}: {message}")]
@@ -279,10 +480,20 @@ pub enum ToolsetError {
 }
 
 impl Toolset {
-    /// A toolset of these servers and tools, sorted by name. The allowed hosts of `http` are
-    /// lowercased, sorted and deduplicated.
+    /// A toolset of these MCP servers and tools, without APIs: [`from_parts`](Self::from_parts).
     pub fn new(
         servers: impl IntoIterator<Item = McpServer>,
+        tools: impl IntoIterator<Item = Tool>,
+    ) -> Result<Self, ToolsetError> {
+        Self::from_parts(servers, [], tools)
+    }
+
+    /// A toolset of these MCP servers, APIs and tools, sorted by name. The allowed hosts of
+    /// `http` are lowercased, sorted and deduplicated; an operation's parameters are sorted by
+    /// name.
+    pub fn from_parts(
+        servers: impl IntoIterator<Item = McpServer>,
+        apis: impl IntoIterator<Item = Api>,
         tools: impl IntoIterator<Item = Tool>,
     ) -> Result<Self, ToolsetError> {
         let mut servers: Vec<McpServer> = servers.into_iter().collect();
@@ -294,6 +505,22 @@ impl Toolset {
         }
         for server in &servers {
             check_server(server)?;
+        }
+        let mut apis: Vec<Api> = apis.into_iter().collect();
+        apis.sort_by(|a, b| a.name.cmp(&b.name));
+        for pair in apis.windows(2) {
+            if pair[0].name == pair[1].name {
+                return Err(ToolsetError::DuplicateApi(pair[0].name.clone()));
+            }
+        }
+        for api in &apis {
+            if servers
+                .binary_search_by(|server| server.name.as_str().cmp(&api.name))
+                .is_ok()
+            {
+                return Err(ToolsetError::DuplicateApi(api.name.clone()));
+            }
+            check_api(api)?;
         }
 
         let mut tools: Vec<Tool> = tools.into_iter().collect();
@@ -311,10 +538,14 @@ impl Toolset {
                     .collect();
                 *allowed_hosts = hosts.into_iter().collect();
             }
-            check_tool(tool, &servers)?;
+            if let Some(operation) = &mut tool.operation {
+                operation.parameters.sort_by(|a, b| a.name.cmp(&b.name));
+            }
+            check_tool(tool, &servers, &apis)?;
         }
         Ok(Self {
             servers,
+            apis,
             tools,
             workflows: Vec::new(),
             workflow_tools: Vec::new(),
@@ -379,6 +610,44 @@ impl Toolset {
         &self.servers
     }
 
+    /// The APIs, sorted by name.
+    pub fn apis(&self) -> &[Api] {
+        &self.apis
+    }
+
+    pub fn api(&self, name: &str) -> Option<&Api> {
+        self.apis
+            .binary_search_by(|api| api.name.as_str().cmp(name))
+            .ok()
+            .map(|index| &self.apis[index])
+    }
+
+    /// How the calls to the MCP server or the API `name` authenticate, if the toolset has one of
+    /// that name.
+    pub fn auth(&self, name: &str) -> Option<&ToolAuth> {
+        self.server(name)
+            .map(|server| &server.auth)
+            .or_else(|| self.api(name).map(|api| &api.auth))
+    }
+
+    /// The MCP servers and APIs whose `auth` takes a secret, by name, sorted: those a run that
+    /// imports them must attach a secret for.
+    pub fn taking_secrets(&self) -> impl Iterator<Item = &str> {
+        let servers = self
+            .servers
+            .iter()
+            .filter(|server| server.auth.takes_secret())
+            .map(|server| server.name.as_str());
+        let apis = self
+            .apis
+            .iter()
+            .filter(|api| api.auth.takes_secret())
+            .map(|api| api.name.as_str());
+        let mut names: Vec<&str> = servers.chain(apis).collect();
+        names.sort_unstable();
+        names.into_iter()
+    }
+
     /// The tools, sorted by name: those the toolset declares, without the workflows'
     /// built-ins.
     pub fn tools(&self) -> &[Tool] {
@@ -429,12 +698,17 @@ impl Toolset {
     }
 
     /// The pinned toolset document v1, as a JSON value. `workflows` is only there when the
-    /// toolset pins some, so the digests of the toolsets without workflows did not change when
-    /// workflows came.
+    /// toolset pins some, `apis` when it has some, a server's `auth` when it is not none and a
+    /// tool's `operation` for an API tool: the digests of the toolsets without them did not
+    /// change when they came.
     fn document(&self) -> Value {
         let servers: Vec<Value> = self.servers.iter().map(server_json).collect();
         let tools: Vec<Value> = self.tools.iter().map(tool_json).collect();
         let mut document = json!({ "v": 1, "servers": servers, "tools": tools });
+        if !self.apis.is_empty() {
+            let apis: Vec<Value> = self.apis.iter().map(api_json).collect();
+            document["apis"] = Value::Array(apis);
+        }
         if !self.workflows.is_empty() {
             let workflows: Vec<Value> = self
                 .workflows
@@ -483,15 +757,101 @@ fn check_server(server: &McpServer) -> Result<(), ToolsetError> {
         return Err(invalid("its concurrency must be at least 1"));
     }
     match &server.transport {
-        McpTransport::Http { url } if url.is_empty() => Err(invalid("its URL is empty")),
+        McpTransport::Http { url } if url.is_empty() => return Err(invalid("its URL is empty")),
         McpTransport::Stdio { command, .. } if command.is_empty() => {
-            Err(invalid("its command is empty"))
+            return Err(invalid("its command is empty"));
         }
-        _ => Ok(()),
+        _ => {}
+    }
+    let stdio = match &server.transport {
+        McpTransport::Stdio { env, .. } => Some(env),
+        McpTransport::Http { .. } => None,
+    };
+    match (&server.auth, stdio) {
+        (ToolAuth::None, _) => Ok(()),
+        (ToolAuth::Rewind, Some(_)) => Err(invalid(
+            "a stdio server cannot check a signature: its auth can be a secret in a variable",
+        )),
+        (ToolAuth::Secret(SecretPlacement::Header { .. }), Some(_)) => Err(invalid(
+            "a stdio server takes its secret in a variable (\"env\"), not in a header",
+        )),
+        (ToolAuth::Secret(SecretPlacement::Env { .. }), None) => Err(invalid(
+            "an HTTP server takes its secret in a header, not in a variable",
+        )),
+        (ToolAuth::Secret(SecretPlacement::Env { variable }), Some(env)) => {
+            if !is_env_name(variable) {
+                Err(invalid(&format!(
+                    "{variable:?} is not the name of an environment variable"
+                )))
+            } else if env.contains_key(variable) {
+                Err(invalid(&format!(
+                    "its configuration already sets {variable:?}, which its auth takes"
+                )))
+            } else {
+                Ok(())
+            }
+        }
+        (auth, None) => check_header_auth(auth).map_err(|message| invalid(&message)),
     }
 }
 
-fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
+fn check_api(api: &Api) -> Result<(), ToolsetError> {
+    let invalid = |message: String| ToolsetError::InvalidApi {
+        api: api.name.clone(),
+        message,
+    };
+    if !is_identifier(&api.name) || is_reserved(&api.name) {
+        return Err(ToolsetError::InvalidApiName(api.name.clone()));
+    }
+    if api.name == WORKFLOWS_NAMESPACE {
+        return Err(invalid(
+            "the namespace \"workflows\" is reserved for the built-ins of the workflows".into(),
+        ));
+    }
+    if api.concurrency == 0 {
+        return Err(invalid("its concurrency must be at least 1".into()));
+    }
+    let base = api
+        .base_url
+        .strip_prefix("https://")
+        .or_else(|| api.base_url.strip_prefix("http://"));
+    if base.is_none_or(|rest| rest.is_empty() || rest.contains(['?', '#'])) {
+        return Err(invalid(format!(
+            "its base URL {:?} must be an http or https URL, without a query or a fragment",
+            api.base_url
+        )));
+    }
+    if let ToolAuth::Secret(SecretPlacement::Env { .. }) = api.auth {
+        return Err(invalid(
+            "an API takes its secret in a header, not in a variable".into(),
+        ));
+    }
+    check_header_auth(&api.auth).map_err(invalid)
+}
+
+/// The `auth` of an HTTP server or an API.
+fn check_header_auth(auth: &ToolAuth) -> Result<(), String> {
+    let ToolAuth::Secret(SecretPlacement::Header { name, format, .. }) = auth else {
+        return Ok(());
+    };
+    if !is_header_name(name) {
+        return Err(format!("{name:?} is not the name of an HTTP header"));
+    }
+    if RESERVED_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+        return Err(format!("Rewind sets the header {name:?} itself"));
+    }
+    if let Some(format) = format
+        && (!format.contains(SECRET_PLACEHOLDER) || format.chars().any(char::is_control))
+    {
+        return Err(format!(
+            "the format {format:?} of its header must hold {SECRET_PLACEHOLDER} and no control \
+             character"
+        ));
+    }
+    Ok(())
+}
+
+fn check_tool(tool: &Tool, servers: &[McpServer], apis: &[Api]) -> Result<(), ToolsetError> {
     let name = tool.name.as_str();
     let invalid = |message: String| ToolsetError::InvalidTool {
         tool: name.to_owned(),
@@ -516,6 +876,22 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
                 });
             }
             in_namespace(name, server).ok_or_else(|| misplaced(format!("{server}.<tool>")))?;
+        }
+        ToolRoute::Api { api } => {
+            if apis
+                .binary_search_by(|known| known.name.as_str().cmp(api))
+                .is_err()
+            {
+                return Err(ToolsetError::UnknownApi {
+                    tool: name.to_owned(),
+                    api: api.clone(),
+                });
+            }
+            in_namespace(name, api).ok_or_else(|| misplaced(format!("{api}.<operation>")))?;
+            let Some(operation) = &tool.operation else {
+                return Err(invalid("an API tool needs its operation".into()));
+            };
+            check_operation(operation).map_err(invalid)?;
         }
         ToolRoute::Host { group: Some(group) } => {
             if !is_identifier(group) {
@@ -569,8 +945,13 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
             }
         }
     }
-    if matches!(tool.route, ToolRoute::Mcp { .. } | ToolRoute::Host { .. })
-        && matches!(name, "http" | "webhook")
+    if !matches!(tool.route, ToolRoute::Api { .. }) && tool.operation.is_some() {
+        return Err(invalid("only an API tool has an operation".into()));
+    }
+    if matches!(
+        tool.route,
+        ToolRoute::Mcp { .. } | ToolRoute::Api { .. } | ToolRoute::Host { .. }
+    ) && matches!(name, "http" | "webhook")
     {
         return Err(misplaced("as the built-in, with the built-in route".into()));
     }
@@ -589,6 +970,58 @@ fn check_tool(tool: &Tool, servers: &[McpServer]) -> Result<(), ToolsetError> {
     {
         return Err(invalid(
             "its timeouts must be positive whole numbers of milliseconds".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// An operation's path and parameters: each path parameter is a `{name}` of the path and the
+/// reverse, no two parameters share a name, and none is named `body`.
+fn check_operation(operation: &ApiOperation) -> Result<(), String> {
+    if !operation.path.starts_with('/') || operation.path.contains(['?', '#']) {
+        return Err(format!(
+            "its path {:?} must start with / and hold no query or fragment",
+            operation.path
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for parameter in &operation.parameters {
+        if parameter.name.is_empty() || parameter.name == "body" {
+            return Err(format!(
+                "a parameter cannot be named {:?}: the request body is the arg \"body\"",
+                parameter.name
+            ));
+        }
+        if !names.insert(parameter.name.as_str()) {
+            return Err(format!("two parameters are named {:?}", parameter.name));
+        }
+        if parameter.location == ParameterLocation::Header && !is_header_name(&parameter.name) {
+            return Err(format!(
+                "the header parameter {:?} is not the name of an HTTP header",
+                parameter.name
+            ));
+        }
+    }
+    let mut templated = BTreeSet::new();
+    let mut rest = operation.path.as_str();
+    while let Some(start) = rest.find('{') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('}') else {
+            return Err(format!("its path {:?} has an unclosed {{", operation.path));
+        };
+        templated.insert(&after[..end]);
+        rest = &after[end + 1..];
+    }
+    let in_path: BTreeSet<&str> = operation
+        .parameters
+        .iter()
+        .filter(|parameter| parameter.location == ParameterLocation::Path)
+        .map(|parameter| parameter.name.as_str())
+        .collect();
+    if templated != in_path {
+        return Err(format!(
+            "the parameters of its path {:?} are not its path parameters",
+            operation.path
         ));
     }
     Ok(())
@@ -683,12 +1116,67 @@ fn server_json(server: &McpServer) -> Value {
             json!({ "type": "stdio", "command": command, "args": args, "env": env })
         }
     };
-    json!({ "name": server.name, "transport": transport, "concurrency": server.concurrency })
+    let mut object =
+        json!({ "name": server.name, "transport": transport, "concurrency": server.concurrency });
+    if let Some(auth) = auth_json(&server.auth) {
+        object["auth"] = auth;
+    }
+    object
+}
+
+fn api_json(api: &Api) -> Value {
+    let mut object =
+        json!({ "name": api.name, "base_url": api.base_url, "concurrency": api.concurrency });
+    if let Some(auth) = auth_json(&api.auth) {
+        object["auth"] = auth;
+    }
+    object
+}
+
+/// `None` for no auth: the document leaves it out.
+fn auth_json(auth: &ToolAuth) -> Option<Value> {
+    Some(match auth {
+        ToolAuth::None => return None,
+        ToolAuth::Rewind => json!({ "type": "rewind" }),
+        ToolAuth::Secret(SecretPlacement::Header {
+            name,
+            format,
+            encoding,
+        }) => {
+            let mut object = json!({ "type": "secret", "header": name });
+            if let Some(format) = format {
+                object["format"] = json!(format);
+            }
+            if *encoding != SecretEncoding::Plain {
+                object["encoding"] = json!(encoding.as_str());
+            }
+            object
+        }
+        ToolAuth::Secret(SecretPlacement::Env { variable }) => {
+            json!({ "type": "secret", "env": variable })
+        }
+    })
+}
+
+fn operation_json(operation: &ApiOperation) -> Value {
+    let parameters: Vec<Value> = operation
+        .parameters
+        .iter()
+        .map(|parameter| json!({ "name": parameter.name, "in": parameter.location.as_str() }))
+        .collect();
+    json!({
+        "method": operation.method.as_str(),
+        "path": operation.path,
+        "parameters": parameters,
+        "body": operation.body,
+        "idempotency_key": operation.idempotency_key,
+    })
 }
 
 fn tool_json(tool: &Tool) -> Value {
     let route = match &tool.route {
         ToolRoute::Mcp { server } => json!({ "type": "mcp", "server": server }),
+        ToolRoute::Api { api } => json!({ "type": "api", "api": api }),
         ToolRoute::Host { group: None } => json!({ "type": "host" }),
         ToolRoute::Host { group: Some(group) } => json!({ "type": "host", "group": group }),
         ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
@@ -721,6 +1209,9 @@ fn tool_json(tool: &Tool) -> Value {
     let mut object = Map::new();
     object.insert("name".into(), json!(tool.name));
     object.insert("route".into(), route);
+    if let Some(operation) = &tool.operation {
+        object.insert("operation".into(), operation_json(operation));
+    }
     if let Some(description) = &tool.description {
         object.insert("description".into(), json!(description));
     }
@@ -1185,5 +1676,289 @@ mod tests {
             Toolset::new([], [declared]),
             Err(ToolsetError::InvalidTool { .. })
         ));
+    }
+
+    fn dax() -> Api {
+        Api::new("dax", "https://api.example.com/v1")
+    }
+
+    fn create_measure() -> ApiOperation {
+        ApiOperation {
+            method: HttpMethod::Post,
+            path: "/measures/{project}".into(),
+            parameters: vec![
+                ApiParameter {
+                    name: "project".into(),
+                    location: ParameterLocation::Path,
+                },
+                ApiParameter {
+                    name: "dryRun".into(),
+                    location: ParameterLocation::Query,
+                },
+            ],
+            body: true,
+            idempotency_key: false,
+        }
+    }
+
+    fn api_tool() -> Tool {
+        Tool::api(
+            "dax.createMeasure",
+            "dax",
+            create_measure(),
+            json!({ "type": "object" }),
+        )
+    }
+
+    #[test]
+    fn api_tools_have_an_operation_and_a_policy_from_their_method() {
+        let toolset = Toolset::from_parts([github()], [dax()], [api_tool()]).unwrap();
+        let tool = toolset.tool("dax.createMeasure").unwrap();
+        assert_eq!(tool.namespace(), Some("dax"));
+        assert_eq!(tool.local_name(), "createMeasure");
+        assert_eq!(tool.route.server(), Some("dax"));
+        assert!(tool.route.is_dispatched());
+        assert_eq!(tool.policy.on_interruption, Interruption::AtMostOnce);
+        assert_eq!(
+            tool.policy.execution_timeout,
+            Some(ToolPolicy::DEFAULT_EXECUTION_TIMEOUT)
+        );
+        let names: Vec<&str> = tool
+            .operation
+            .as_ref()
+            .unwrap()
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["dryRun", "project"], "parameters are sorted");
+        let keyed = ApiOperation {
+            idempotency_key: true,
+            ..create_measure()
+        };
+        assert_eq!(
+            ToolPolicy::default_for_operation(&keyed).on_interruption,
+            Interruption::Retry
+        );
+        let get = ApiOperation {
+            method: HttpMethod::Get,
+            ..create_measure()
+        };
+        assert_eq!(
+            ToolPolicy::default_for_operation(&get).on_interruption,
+            Interruption::Retry
+        );
+        assert_eq!(toolset.api("dax"), Some(&dax()));
+        assert_eq!(toolset.auth("dax"), Some(&ToolAuth::None));
+        assert_eq!(toolset.auth("github"), Some(&ToolAuth::None));
+        assert_eq!(toolset.auth("slack"), None);
+    }
+
+    #[test]
+    fn api_tools_are_checked() {
+        let err = |apis: Vec<Api>, tools: Vec<Tool>| {
+            Toolset::from_parts([github()], apis, tools).unwrap_err()
+        };
+        assert_eq!(
+            err(vec![], vec![api_tool()]),
+            ToolsetError::UnknownApi {
+                tool: "dax.createMeasure".into(),
+                api: "dax".into()
+            }
+        );
+        assert_eq!(
+            err(vec![dax(), dax()], vec![]),
+            ToolsetError::DuplicateApi("dax".into())
+        );
+        assert_eq!(
+            err(vec![Api::new("github", "https://api.github.com")], vec![]),
+            ToolsetError::DuplicateApi("github".into()),
+            "an API and a server share the namespaces of rewind:tools"
+        );
+        assert_eq!(
+            err(vec![Api::new("delete", "https://x.example")], vec![]),
+            ToolsetError::InvalidApiName("delete".into())
+        );
+        for base in [
+            "ftp://x.example",
+            "https://",
+            "https://x.example/?a=1",
+            "x.example",
+        ] {
+            assert!(
+                matches!(
+                    err(vec![Api::new("dax", base)], vec![]),
+                    ToolsetError::InvalidApi { .. }
+                ),
+                "{base}"
+            );
+        }
+        let mut no_operation = api_tool();
+        no_operation.operation = None;
+        assert!(matches!(
+            err(vec![dax()], vec![no_operation]),
+            ToolsetError::InvalidTool { .. }
+        ));
+        let mut stray = mcp_tool("github.a");
+        stray.operation = Some(create_measure());
+        assert!(matches!(
+            err(vec![], vec![stray]),
+            ToolsetError::InvalidTool { .. }
+        ));
+        let broken = |change: &dyn Fn(&mut ApiOperation)| {
+            let mut tool = api_tool();
+            change(tool.operation.as_mut().unwrap());
+            err(vec![dax()], vec![tool])
+        };
+        for error in [
+            broken(&|op| op.path = "measures".into()),
+            broken(&|op| op.path = "/measures/{project}/{id}".into()),
+            broken(&|op| op.path = "/measures".into()),
+            broken(&|op| op.parameters[1].name = "body".into()),
+            broken(&|op| op.parameters[1].name = "project".into()),
+        ] {
+            assert!(matches!(error, ToolsetError::InvalidTool { .. }), "{error}");
+        }
+    }
+
+    #[test]
+    fn auth_fits_the_transport() {
+        let stdio = |auth: ToolAuth| {
+            let mut server = McpServer::new(
+                "local",
+                McpTransport::Stdio {
+                    command: "mcp-local".into(),
+                    args: vec![],
+                    env: BTreeMap::from([("MODE".to_owned(), "fast".to_owned())]),
+                },
+            );
+            server.auth = auth;
+            Toolset::new([server], [])
+        };
+        let http = |auth: ToolAuth| {
+            let mut server = github();
+            server.auth = auth;
+            Toolset::new([server], [])
+        };
+        let env = |variable: &str| {
+            ToolAuth::Secret(SecretPlacement::Env {
+                variable: variable.into(),
+            })
+        };
+        let header = |name: &str, format: Option<&str>| {
+            ToolAuth::Secret(SecretPlacement::Header {
+                name: name.into(),
+                format: format.map(str::to_owned),
+                encoding: SecretEncoding::Plain,
+            })
+        };
+        assert!(stdio(env("TOKEN")).is_ok());
+        assert!(stdio(ToolAuth::None).is_ok());
+        assert!(http(ToolAuth::Rewind).is_ok());
+        assert!(http(ToolAuth::Secret(SecretPlacement::bearer())).is_ok());
+        assert!(http(header("X-Api-Key", None)).is_ok());
+        for refused in [
+            stdio(ToolAuth::Rewind),
+            stdio(header("X-Api-Key", None)),
+            stdio(env("MODE")),
+            stdio(env("1TOKEN")),
+            http(env("TOKEN")),
+            http(header("X Api", None)),
+            http(header("Idempotency-Key", None)),
+            http(header("traceparent", None)),
+            http(header("Authorization", Some("Bearer"))),
+        ] {
+            assert!(
+                matches!(refused, Err(ToolsetError::InvalidServer { .. })),
+                "{refused:?}"
+            );
+        }
+        let mut api = dax();
+        api.auth = env("TOKEN");
+        assert!(matches!(
+            Toolset::from_parts([], [api], []),
+            Err(ToolsetError::InvalidApi { .. })
+        ));
+    }
+
+    #[test]
+    fn the_new_fields_are_in_the_document_only_when_used() {
+        let base = Toolset::new([github()], [mcp_tool("github.a")]).unwrap();
+        assert_eq!(
+            Toolset::from_parts([github()], [], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            base.digest(),
+            "no APIs, no auth: the document of before"
+        );
+        let mut signed = github();
+        signed.auth = ToolAuth::Rewind;
+        let mut keyed = github();
+        keyed.auth = ToolAuth::Secret(SecretPlacement::bearer());
+        let mut basic = github();
+        basic.auth = ToolAuth::Secret(SecretPlacement::basic());
+        let mut signed_api = dax();
+        signed_api.auth = ToolAuth::Rewind;
+        let digests = [
+            base.digest(),
+            Toolset::new([signed], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            Toolset::new([keyed], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            Toolset::new([basic], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            Toolset::from_parts([github()], [dax()], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            Toolset::from_parts([github()], [signed_api], [mcp_tool("github.a")])
+                .unwrap()
+                .digest(),
+            Toolset::from_parts([github()], [dax()], [mcp_tool("github.a"), api_tool()])
+                .unwrap()
+                .digest(),
+        ];
+        let unique: BTreeSet<Digest> = digests.iter().copied().collect();
+        assert_eq!(unique.len(), digests.len());
+
+        let toolset = Toolset::from_parts([github()], [dax()], [api_tool()]).unwrap();
+        assert_eq!(
+            canonical_json(&toolset.document()),
+            concat!(
+                r#"{"apis":[{"base_url":"https://api.example.com/v1","concurrency":8,"name":"dax"}],"#,
+                r#""servers":[{"concurrency":8,"name":"github","transport":{"type":"http","#,
+                r#""url":"https://mcp.example.com/github"}}],"tools":[{"name":"dax.createMeasure","#,
+                r#""operation":{"body":true,"idempotency_key":false,"method":"post","parameters":"#,
+                r#"[{"in":"query","name":"dryRun"},{"in":"path","name":"project"}],"#,
+                r#""path":"/measures/{project}"},"policy":{"approval":false,"concurrency":16,"#,
+                r#""execution_timeout_ms":300000,"heartbeat_timeout_ms":60000,"#,
+                r#""on_interruption":"at_most_once"},"route":{"api":"dax","type":"api"},"#,
+                r#""schemas":{"input":{"type":"object"}}}],"v":1}"#
+            )
+        );
+        let mut basic = github();
+        basic.auth = ToolAuth::Secret(SecretPlacement::basic());
+        let document = Toolset::new([basic], []).unwrap().document();
+        assert_eq!(
+            canonical_json(&document["servers"][0]["auth"]),
+            r#"{"encoding":"base64","format":"Basic {secret}","header":"Authorization","type":"secret"}"#
+        );
+    }
+
+    #[test]
+    fn the_servers_taking_secrets_are_listed() {
+        let mut keyed = github();
+        keyed.auth = ToolAuth::Secret(SecretPlacement::bearer());
+        let mut signed = server("crm");
+        signed.auth = ToolAuth::Rewind;
+        let mut api = Api::new("zendesk", "https://zendesk.example.com");
+        api.auth = ToolAuth::Secret(SecretPlacement::header("X-Api-Key"));
+        let toolset = Toolset::from_parts([keyed, signed], [dax(), api], []).unwrap();
+        assert_eq!(
+            toolset.taking_secrets().collect::<Vec<_>>(),
+            ["github", "zendesk"]
+        );
     }
 }

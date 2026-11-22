@@ -1,0 +1,74 @@
+{
+  "description": "A workflow's version attaches the namespace's crm: the run a script starts reads the secret of its own namespace, though the script that started it attached nothing.",
+  "live": true,
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "workflows": {
+    "triage": {
+      "script": "triage.ts",
+      "input": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "customer"
+        ]
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "secrets": {
+        "crm": "ns/crm"
+      }
+    }
+  },
+  "put_secrets": {
+    "ns/crm": "crm-token",
+    "org/crm": "org-token"
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "status": "completed",
+    "output": {
+      "name": "Ada"
+    },
+    "children": [
+      "completed"
+    ],
+    "auth": [
+      "crm-token"
+    ]
+  }
+}

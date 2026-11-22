@@ -14,7 +14,8 @@ use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
 use rewind_engine::ports::{
-    Clock, Dispatched, RunRef, TaskToken, TenantId, ToolCall, ToolDispatcher,
+    CallAuth, Clock, Dispatched, NamespaceName, RunRef, TaskToken, TenantId, ToolCall,
+    ToolDispatcher,
 };
 use rewind_engine::{Adapters, DriveOptions, Engine, EngineConfig, ReplayVerdict, StartRun};
 use rewind_runtime::{MockError, SandboxLimits, TsMocks, V8Executor};
@@ -74,9 +75,12 @@ fn call(tool: &str, args: Value) -> ToolCall {
     let run = RunId::from_u128(7);
     ToolCall {
         run: RunRef::new(TenantId::local(), run),
+        namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
+        labels: Default::default(),
         seq: Seq(3),
         tool: Tool::new(tool, ToolRoute::Host { group: None }, json!({})),
         server: None,
+        api: None,
         args,
         idempotency_key: format!("{run}/3"),
         attempt: 2,
@@ -87,7 +91,7 @@ fn call(tool: &str, args: Value) -> ToolCall {
 }
 
 async fn dispatch(mocks: &TsMocks, tool: &str, args: Value) -> Dispatched {
-    mocks.dispatch(call(tool, args), None).await
+    mocks.dispatch(call(tool, args), CallAuth::None).await
 }
 
 fn failure(dispatched: Dispatched) -> ToolFailure {

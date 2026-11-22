@@ -7,7 +7,8 @@
 //! ├── script, toolset            digests: what its runs execute
 //! ├── schemas                    { input, output, signals: { <name>: schema } }
 //! ├── suite                      parent?, tests, retired, updated: the tests it passed
-//! └── labels                     the scope it was saved under; {} for a tenant-wide save
+//! ├── labels                     the scope it was saved under; {} for a tenant-wide save
+//! └── secrets                    its attachments: { <server>: org/<name> | ns/<name> }
 //!
 //! PinnedWorkflow (what a toolset pins: the interface, without the script)
 //! └── name, version (the Workflow's digest), description?, schemas
@@ -29,6 +30,7 @@ use crate::event::{
 };
 use crate::ids::RunId;
 use crate::payload::Payload;
+use crate::secret::Attachments;
 use crate::state::RunOutcome;
 use crate::toolset::{is_identifier, is_reserved};
 
@@ -83,6 +85,11 @@ impl WorkflowSchemas {
 /// document: the same workflow saved under other labels, or tenant-wide, is another version,
 /// which the other scopes do not see (`archi/06-storage-and-scale.md`, "Tenancy"). A version
 /// without labels has the document, and so the digest, it had before labels were part of it.
+///
+/// A version also carries the secrets its runs attach (`archi/04-tools.md`, "Secrets"): saved
+/// with it and checked against the saver's rights, they are part of its document, and a run of
+/// it reads them without the caller's rights being checked again. A version without attachments
+/// has the document it had before attachments were part of it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Workflow {
     name: String,
@@ -92,6 +99,7 @@ pub struct Workflow {
     schemas: WorkflowSchemas,
     suite: Suite,
     labels: BTreeMap<String, String>,
+    secrets: Attachments,
 }
 
 /// The tests a version passed when it was saved, and how they derive from its parent's
@@ -265,6 +273,7 @@ impl Workflow {
             schemas,
             suite: Suite::default(),
             labels: BTreeMap::new(),
+            secrets: Attachments::new(),
         })
     }
 
@@ -286,12 +295,25 @@ impl Workflow {
         self
     }
 
+    /// The same version attaching `secrets` to its runs. Another version unless `secrets` is
+    /// empty.
+    #[must_use]
+    pub fn with_secrets(mut self, secrets: Attachments) -> Self {
+        self.secrets = secrets;
+        self
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
 
     pub fn description(&self) -> Option<&str> {
         self.description.as_deref()
+    }
+
+    /// The secrets its runs attach, by server or API name.
+    pub fn secrets(&self) -> &Attachments {
+        &self.secrets
     }
 
     /// Digest of the script its runs execute.
@@ -343,6 +365,14 @@ impl Workflow {
         self.suite.insert_into(&mut object);
         if !self.labels.is_empty() {
             object.insert("labels".into(), json!(self.labels));
+        }
+        if !self.secrets.is_empty() {
+            let secrets: Map<String, Value> = self
+                .secrets
+                .iter()
+                .map(|(server, secret)| (server.to_owned(), json!(secret.to_string())))
+                .collect();
+            object.insert("secrets".into(), Value::Object(secrets));
         }
         Value::Object(object)
     }
@@ -656,6 +686,32 @@ mod tests {
         assert_eq!(
             pinned.tool_name(WorkflowOp::Start),
             "workflows.triage.start"
+        );
+    }
+
+    #[test]
+    fn secrets_are_part_of_the_version_only_when_there_are_some() {
+        let base = triage();
+        assert_eq!(
+            base.clone().with_secrets(Attachments::new()).version(),
+            base.version(),
+            "no attachments: the digest of the document without them"
+        );
+        let attach = |secret: &str| {
+            let secret = crate::SecretRef::parse(secret).unwrap();
+            triage().with_secrets([("github".to_owned(), secret)].into_iter().collect())
+        };
+        let of_user = attach("ns/github");
+        let of_org = attach("org/github");
+        assert_ne!(of_user.version(), base.version());
+        assert_ne!(of_user.version(), of_org.version());
+        assert_eq!(
+            of_user.secrets().get("github").map(ToString::to_string),
+            Some("ns/github".to_owned())
+        );
+        assert_eq!(
+            canonical_json(&of_user.document()["secrets"]),
+            r#"{"github":"ns/github"}"#
         );
     }
 

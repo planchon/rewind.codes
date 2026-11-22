@@ -7,7 +7,6 @@ use crate::Error;
 pub const TOOLSETS: &str = "/v1/toolsets";
 pub const TOOLSET_DECLARATIONS: &str = "/v1/toolsets/{id}/declarations";
 pub const TOOLSET_SEARCH: &str = "/v1/toolsets/{id}/search";
-pub const TOOLSET_CREDENTIALS: &str = "/v1/toolsets/{id}/credentials";
 
 pub const WORKFLOWS: &str = "/v1/workflows";
 pub const WORKFLOW: &str = "/v1/workflows/{name}";
@@ -32,7 +31,6 @@ pub const RUN_FORK: &str = "/v1/runs/{id}/fork";
 pub const RUN_JOURNAL: &str = "/v1/runs/{id}/journal";
 pub const RUN_RELEASE: &str = "/v1/runs/{id}/release";
 pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
-pub const RUN_CREDENTIALS: &str = "/v1/runs/{id}/credentials";
 /// The runs of the organization that change, as server-sent events (`crate::events::ChangeEvent`).
 pub const CHANGES: &str = "/v1/changes";
 
@@ -71,7 +69,6 @@ pub const API_KEY: &str = "/v1/api-keys/{id}";
 
 pub const NAMESPACES: &str = "/v1/namespaces";
 pub const NAMESPACE: &str = "/v1/namespaces/{name}";
-pub const NAMESPACE_CREDENTIALS: &str = "/v1/namespaces/{name}/toolsets/{id}/credentials";
 pub const NAMESPACE_TOKENS: &str = "/v1/namespaces/{name}/tokens";
 pub const TOKEN: &str = "/v1/tokens/{id}";
 pub const NAMESPACE_DEFAULTS: &str = "/v1/organization/namespace-defaults";
@@ -80,6 +77,17 @@ pub const QUOTA_ALERTS: &str = "/v1/organization/quota-alerts";
 pub const TOKEN_KEYS: &str = "/v1/organization/token-keys";
 pub const TOKEN_KEY: &str = "/v1/organization/token-keys/{kid}";
 pub const ORGANIZATION_QUOTAS: &str = "/v1/organizations/{tenant}/quotas";
+
+pub const SECRETS: &str = "/v1/secrets";
+pub const SECRET: &str = "/v1/secrets/{name}";
+pub const SECRET_USAGE: &str = "/v1/secrets/{name}/usage";
+pub const NAMESPACE_SECRETS: &str = "/v1/namespaces/{name}/secrets";
+pub const NAMESPACE_SECRET: &str = "/v1/namespaces/{name}/secrets/{secret}";
+pub const NAMESPACE_SECRET_USAGE: &str = "/v1/namespaces/{name}/secrets/{secret}/usage";
+pub const SIGNING_KEYS: &str = "/v1/organization/signing-keys";
+/// The organization's public keys, outside `/v1` and without authentication: what the servers
+/// that receive signed calls check them with.
+pub const JWKS: &str = "/organizations/{tenant}/jwks.json";
 
 pub const CONNECTIONS: &str = "/v1/connections";
 pub const CONNECTION: &str = "/v1/connections/{id}";
@@ -115,12 +123,11 @@ pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server"
 pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 106] = [
+pub const OPERATIONS: [(&str, &str); 114] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
     ("GET", TOOLSET_SEARCH),
-    ("PUT", TOOLSET_CREDENTIALS),
     ("POST", WORKFLOWS),
     ("GET", WORKFLOWS),
     ("GET", WORKFLOW),
@@ -146,7 +153,6 @@ pub const OPERATIONS: [(&str, &str); 106] = [
     ("GET", RUN_JOURNAL),
     ("POST", RUN_RELEASE),
     ("POST", RUN_GIVE_UP),
-    ("PUT", RUN_CREDENTIALS),
     ("GET", TASKS),
     ("POST", TASK_HEARTBEAT),
     ("POST", TASK_DEFER),
@@ -184,7 +190,6 @@ pub const OPERATIONS: [(&str, &str); 106] = [
     ("PUT", NAMESPACE),
     ("PATCH", NAMESPACE),
     ("DELETE", NAMESPACE),
-    ("PUT", NAMESPACE_CREDENTIALS),
     ("GET", NAMESPACE_DEFAULTS),
     ("PUT", NAMESPACE_DEFAULTS),
     ("GET", NAMESPACE_NAMES),
@@ -196,6 +201,17 @@ pub const OPERATIONS: [(&str, &str); 106] = [
     ("POST", TOKEN_KEYS),
     ("DELETE", TOKEN_KEY),
     ("PUT", ORGANIZATION_QUOTAS),
+    ("GET", SECRETS),
+    ("PUT", SECRET),
+    ("DELETE", SECRET),
+    ("GET", SECRET_USAGE),
+    ("GET", NAMESPACE_SECRETS),
+    ("PUT", NAMESPACE_SECRET),
+    ("DELETE", NAMESPACE_SECRET),
+    ("GET", NAMESPACE_SECRET_USAGE),
+    ("GET", SIGNING_KEYS),
+    ("POST", SIGNING_KEYS),
+    ("GET", JWKS),
     ("GET", CONNECTIONS),
     ("PATCH", CONNECTION),
     ("DELETE", CONNECTION),

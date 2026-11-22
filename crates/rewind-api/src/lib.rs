@@ -51,6 +51,7 @@ pub mod reading;
 pub mod routes;
 pub mod runs;
 pub mod scripts;
+pub mod secrets;
 pub mod tasks;
 pub mod testing;
 pub mod toolsets;

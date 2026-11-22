@@ -140,7 +140,7 @@ pub enum WaitKind {
     Host,
     /// A call under the `approval` policy, not approved yet.
     Approval,
-    /// A call parked by a schema change or refused credentials.
+    /// A call parked by a schema change, a refused call or a missing secret.
     Parked,
     /// A host tool's call whose handler answers later.
     Deferred,

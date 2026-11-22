@@ -43,7 +43,7 @@ that is broken. The GitHub workflow (`.github/workflows/release-gate.yml`, start
 
 | Setup | What | Used for |
 | --- | --- | --- |
-| A, deployed | Postgres 17, MinIO, an OpenTelemetry Collector, `--role api`, two `--role worker`, behind an edge that sends `POST /v1/test` to the workers (as `deploy/edge/Caddyfile`); `--allow-internal-mcp 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable | Every area |
+| A, deployed | Postgres 17, MinIO, an OpenTelemetry Collector, `--role api`, two `--role worker`, behind an edge that sends `POST /v1/test` to the workers (as `deploy/edge/Caddyfile`); `--allow-internal-tools 127.0.0.1`, `--allow-private-webhooks`, `--allow-stdio`, so the fixtures are reachable; `--public-url` its edge, so signed calls are checked against its JWKS | Every area |
 | B, strict | One server with both roles on Turso, with a deployed server's defaults: no internal MCP server, no private webhook, no stdio, no WorkOS | Egress and SSRF, hardening |
 | C, local | The CLI and the embedded server it starts in a project directory | CLI |
 | D, lifecycle | A deployed setup of its own, retention in seconds | Lifecycle |
@@ -65,8 +65,10 @@ Specs import `test`, `expect` and the helpers from `support/gate.ts`.
 - **Everything is recorded.** `Api` (raw HTTP) and the SDK clients of `newTenant` record every
   exchange: the test's evidence, and `results/release/exchanges/` for the sweeps. A 5xx the check
   expects is declared first with `allow5xx(slug)`; any other fails the gate.
-- **The canary.** `canary()` is a secret only this run knows. Set it as credentials: it must never
-  come back in an answer, a journal, a trace or a log.
+- **The canary.** `canary()` is a value only this run knows. Put it as a secret, of the
+  organization or of a namespace, that runs attach (`secrets: { fx: "ns/fx" }`): the MCP server or
+  the API receives it, and it must never come back in an answer (a run, a journal, a cassette, an
+  event, a problem), a trace, a log, the database in clear, or the dashboard.
 - **A tenant per file**, made by the operator with `newTenant(prefix, stack)`; tests are
   independent given their file's `beforeAll`.
 - **The spec decides.** Expected behavior comes from `archi/` and `api/README.md`, including the
@@ -90,18 +92,18 @@ later runs reuse.
 | Runs | `areas/runs.spec.ts` | Starts, idempotency, signals, sleeps, cancel, TTL, forks, erasure, exports, the event stream, traces |
 | Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
 | Host tools and tasks | `areas/host-tools.spec.ts` | Claims, heartbeats, deferrals, failures, retries, timeouts, approvals, task tokens |
-| MCP, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio, credentials, schema changes, `fetch`, every refused address |
-| Workflows | `areas/workflows.spec.ts` | Versions, starts by name, from scripts, schemas, label scope |
+| MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
+| Workflows | `areas/workflows.spec.ts` | Versions, a version refused by its own tests or by its suite, starts by name, from scripts, schemas, label scope |
 | Check and test | `areas/check-test.spec.ts` | `/v1/check`, `/v1/test`, refusals at start |
 | Observability | `areas/observability.spec.ts` | Queries, statistics, failure groups, OTLP traces, signed webhooks, quota alerts |
-| Access | `areas/access.spec.ts` | The permission matrix over every operation of `api/openapi.json`, roles, grants, revocation, labels |
-| Namespaces and tokens | `areas/namespaces.spec.ts` | The header, opaque and signed tokens, Alice and Bob, quotas, credentials, erasure |
+| Access | `areas/access.spec.ts` | The permission matrix over every operation of `api/openapi.json` (the 25 permissions of `GET /v1/permissions`, `secrets:*` included), roles, grants, revocation, labels on secrets, `secrets:use` |
+| Namespaces and tokens | `areas/namespaces.spec.ts` | The header, opaque and signed tokens, Alice and Bob, quotas, each end user's secrets (no fallback, a token's `secrets:use`), the dashboard's Secrets, erasure |
 | Tenant isolation | `areas/tenancy.spec.ts` | Everything of one tenant probed from another |
 | Sandbox | `areas/sandbox.spec.ts` | Determinism, removed globals, imports, state across runs, exhaustion |
-| API hardening | `areas/hardening.spec.ts` | Malformed and oversized input, paths, injections, idempotency keys, `/hooks`, cookies, `/auth` |
-| CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay |
+| API hardening | `areas/hardening.spec.ts` | Malformed and oversized input and secrets, paths, injections, idempotency keys, `/hooks`, cookies, `/auth` |
+| CLI and local | `areas/cli.spec.ts` | Exit codes, `--json`, the embedded server, virtual time, replay, an API called over http with the secret `rewind secrets put` wrote and `--secret` attaches |
 | Lifecycle | `lifecycle/lifecycle.spec.ts` | Worker killed, full restart, Postgres paused, archive, erasure |
-| Sweeps | `sweeps/sweeps.spec.ts` | 5xx, panics, the canary, problem types |
+| Sweeps | `sweeps/sweeps.spec.ts` | 5xx, panics, the canary (answers, problems, logs, the Collector's spans), problem types |
 
 ## Report
 

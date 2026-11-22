@@ -21,18 +21,34 @@
 //! "description":…,"schemas":{"input":…,"output":…,"signals":{"approval":…}}}]`; one that pins
 //! none has no `workflows`. The workflows' built-ins are derived from them, never written.
 //!
+//! How calls authenticate (`archi/04-tools.md`, "Authenticating calls") is a server's or an
+//! API's `auth`, left out when calls carry nothing: `{"type":"rewind"}`,
+//! `{"type":"secret","header":"Authorization","format":"Bearer {secret}"}` (with
+//! `"encoding":"base64"` for HTTP basic; `format` left out for the value alone) or
+//! `{"type":"secret","env":"GITHUB_TOKEN"}`. Never a value.
+//!
+//! A toolset with APIs has `"apis":[{"base_url":"https://api.example.com","concurrency":8,
+//! "name":"dax","auth":…}]`; one without has no `apis`. An API tool's route is
+//! `{"type":"api","api":"dax"}`, and it has an `"operation":{"body":true,
+//! "idempotency_key":false,"method":"post","parameters":[{"in":"path","name":"id"}],
+//! "path":"/measures/{id}"}`; no other tool has one.
+//!
 //! The workflow version document (the `workflows` table) is
 //! `{"description":…,"labels":{"env":"dev"},"name":"triage","schemas":{…},"script":"<sha-256>",
 //! "toolset":"<sha-256>","v":1}`, in its canonical form, so that its bytes hash to the version.
 //! `labels`, the scope of a grant limited to labels it was saved under, is omitted when empty:
-//! a version saved tenant-wide keeps the document it had before versions carried labels.
+//! a version saved tenant-wide keeps the document it had before versions carried labels. So is
+//! `secrets`, its attachments (`{"github":"ns/github","zendesk":"org/zendesk"}`): a version
+//! that attaches none keeps the document it had before versions carried them.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
 
 use rewind_core::{
-    Builtin, Digest, Interruption, McpServer, McpTransport, PinnedWorkflow, RetiredTest, Suite,
-    SuiteTest, Tool, ToolPolicy, ToolRoute, Toolset, UpdatedTest, Workflow, WorkflowSchemas,
+    Api, ApiOperation, ApiParameter, Attachments, Builtin, Digest, HttpMethod, Interruption,
+    McpServer, McpTransport, ParameterLocation, PinnedWorkflow, RetiredTest, SecretEncoding,
+    SecretPlacement, SecretRef, Suite, SuiteTest, Tool, ToolAuth, ToolPolicy, ToolRoute, Toolset,
+    UpdatedTest, Workflow, WorkflowSchemas,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,6 +57,8 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 struct ToolsetV1 {
     servers: Vec<ServerV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    apis: Vec<ApiV1>,
     tools: Vec<ToolV1>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     workflows: Vec<PinnedWorkflowV1>,
@@ -83,6 +101,9 @@ struct WorkflowV1 {
     updated: Vec<UpdatedTestV1>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     labels: BTreeMap<String, String>,
+    /// `org/<name>` or `ns/<name>`, by server or API.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    secrets: BTreeMap<String, String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -115,6 +136,83 @@ struct ServerV1 {
     name: String,
     transport: TransportV1,
     concurrency: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<AuthV1>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiV1 {
+    name: String,
+    base_url: String,
+    concurrency: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auth: Option<AuthV1>,
+}
+
+/// No auth is written as no `auth` field.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum AuthV1 {
+    /// A struct variant, so that `deny_unknown_fields` applies to it.
+    Rewind {},
+    /// Exactly one of `header` and `env`.
+    Secret {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        header: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encoding: Option<EncodingV1>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        env: Option<String>,
+    },
+}
+
+/// `plain` is written as no `encoding` field.
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum EncodingV1 {
+    Base64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OperationV1 {
+    method: MethodV1,
+    path: String,
+    parameters: Vec<ParameterV1>,
+    body: bool,
+    idempotency_key: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum MethodV1 {
+    Get,
+    Put,
+    Post,
+    Delete,
+    Options,
+    Head,
+    Patch,
+    Trace,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterV1 {
+    name: String,
+    #[serde(rename = "in")]
+    location: LocationV1,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum LocationV1 {
+    Path,
+    Query,
+    Header,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -136,6 +234,8 @@ struct ToolV1 {
     name: String,
     route: RouteV1,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    operation: Option<OperationV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     schemas: SchemasV1,
     policy: PolicyV1,
@@ -146,6 +246,9 @@ struct ToolV1 {
 enum RouteV1 {
     Mcp {
         server: String,
+    },
+    Api {
+        api: String,
     },
     Host {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -195,6 +298,7 @@ enum InterruptionV1 {
 pub(crate) fn toolset_document(toolset: &Toolset) -> Value {
     let dto = ToolsetV1 {
         servers: toolset.servers().iter().map(server_dto).collect(),
+        apis: toolset.apis().iter().map(api_dto).collect(),
         tools: toolset.tools().iter().map(tool_dto).collect(),
         workflows: toolset.workflows().iter().map(pinned_dto).collect(),
     };
@@ -208,14 +312,37 @@ pub(crate) fn toolset_document(toolset: &Toolset) -> Value {
 /// Decodes the fields of a v1 document, its version already taken out.
 pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
     let dto: ToolsetV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
-    let servers = dto.servers.into_iter().map(|server| McpServer {
-        name: server.name,
-        transport: match server.transport {
-            TransportV1::Http { url } => McpTransport::Http { url },
-            TransportV1::Stdio { command, args, env } => McpTransport::Stdio { command, args, env },
-        },
-        concurrency: server.concurrency,
-    });
+    let servers = dto
+        .servers
+        .into_iter()
+        .map(|server| {
+            Ok(McpServer {
+                auth: auth_from_dto(server.auth)
+                    .map_err(|err| format!("server {:?}: {err}", server.name))?,
+                name: server.name,
+                transport: match server.transport {
+                    TransportV1::Http { url } => McpTransport::Http { url },
+                    TransportV1::Stdio { command, args, env } => {
+                        McpTransport::Stdio { command, args, env }
+                    }
+                },
+                concurrency: server.concurrency,
+            })
+        })
+        .collect::<Result<Vec<McpServer>, String>>()?;
+    let apis = dto
+        .apis
+        .into_iter()
+        .map(|api| {
+            Ok(Api {
+                auth: auth_from_dto(api.auth)
+                    .map_err(|err| format!("API {:?}: {err}", api.name))?,
+                name: api.name,
+                base_url: api.base_url,
+                concurrency: api.concurrency,
+            })
+        })
+        .collect::<Result<Vec<Api>, String>>()?;
     let tools = dto
         .tools
         .into_iter()
@@ -233,7 +360,7 @@ pub(crate) fn decode_toolset(document: Value) -> Result<Toolset, String> {
             })
         })
         .collect::<Result<Vec<PinnedWorkflow>, String>>()?;
-    Toolset::new(servers, tools)
+    Toolset::from_parts(servers, apis, tools)
         .and_then(|toolset| toolset.with_workflows(workflows))
         .map_err(|err| err.to_string())
 }
@@ -277,6 +404,11 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
             })
             .collect(),
         labels: workflow.labels().clone(),
+        secrets: workflow
+            .secrets()
+            .iter()
+            .map(|(server, secret)| (server.to_owned(), secret.to_string()))
+            .collect(),
     };
     let mut document = serde_json::to_value(dto).expect("workflow DTOs always serialize");
     if let Value::Object(fields) = &mut document {
@@ -288,6 +420,15 @@ pub(crate) fn workflow_document(workflow: &Workflow) -> Value {
 /// Decodes the fields of a v1 workflow version document, its version already taken out.
 pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
     let dto: WorkflowV1 = serde_json::from_value(document).map_err(|err| err.to_string())?;
+    let secrets = dto
+        .secrets
+        .into_iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(&secret)
+                .map_err(|err| format!("the secret attached for {server:?}: {err}"))?;
+            Ok((server, secret))
+        })
+        .collect::<Result<Attachments, String>>()?;
     let suite = Suite {
         parent: dto
             .parent
@@ -335,7 +476,7 @@ pub(crate) fn decode_workflow(document: Value) -> Result<Workflow, String> {
         schemas_from_dto(dto.schemas),
     )
     .and_then(|workflow| workflow.with_suite(suite))
-    .map(|workflow| workflow.with_labels(dto.labels))
+    .map(|workflow| workflow.with_labels(dto.labels).with_secrets(secrets))
     .map_err(|err| err.to_string())
 }
 
@@ -380,6 +521,135 @@ fn server_dto(server: &McpServer) -> ServerV1 {
             },
         },
         concurrency: server.concurrency,
+        auth: auth_dto(&server.auth),
+    }
+}
+
+fn api_dto(api: &Api) -> ApiV1 {
+    ApiV1 {
+        name: api.name.clone(),
+        base_url: api.base_url.clone(),
+        concurrency: api.concurrency,
+        auth: auth_dto(&api.auth),
+    }
+}
+
+fn auth_dto(auth: &ToolAuth) -> Option<AuthV1> {
+    Some(match auth {
+        ToolAuth::None => return None,
+        ToolAuth::Rewind => AuthV1::Rewind {},
+        ToolAuth::Secret(SecretPlacement::Header {
+            name,
+            format,
+            encoding,
+        }) => AuthV1::Secret {
+            header: Some(name.clone()),
+            format: format.clone(),
+            encoding: match encoding {
+                SecretEncoding::Plain => None,
+                SecretEncoding::Base64 => Some(EncodingV1::Base64),
+            },
+            env: None,
+        },
+        ToolAuth::Secret(SecretPlacement::Env { variable }) => AuthV1::Secret {
+            header: None,
+            format: None,
+            encoding: None,
+            env: Some(variable.clone()),
+        },
+    })
+}
+
+fn auth_from_dto(dto: Option<AuthV1>) -> Result<ToolAuth, String> {
+    Ok(match dto {
+        None => ToolAuth::None,
+        Some(AuthV1::Rewind {}) => ToolAuth::Rewind,
+        Some(AuthV1::Secret {
+            header: Some(name),
+            format,
+            encoding,
+            env: None,
+        }) => ToolAuth::Secret(SecretPlacement::Header {
+            name,
+            format,
+            encoding: match encoding {
+                None => SecretEncoding::Plain,
+                Some(EncodingV1::Base64) => SecretEncoding::Base64,
+            },
+        }),
+        Some(AuthV1::Secret {
+            header: None,
+            format: None,
+            encoding: None,
+            env: Some(variable),
+        }) => ToolAuth::Secret(SecretPlacement::Env { variable }),
+        Some(AuthV1::Secret { .. }) => {
+            return Err(
+                "a secret's auth has either a \"header\" (with an optional \"format\" and \
+                 \"encoding\") or an \"env\""
+                    .into(),
+            );
+        }
+    })
+}
+
+fn operation_dto(operation: &ApiOperation) -> OperationV1 {
+    OperationV1 {
+        method: match operation.method {
+            HttpMethod::Get => MethodV1::Get,
+            HttpMethod::Put => MethodV1::Put,
+            HttpMethod::Post => MethodV1::Post,
+            HttpMethod::Delete => MethodV1::Delete,
+            HttpMethod::Options => MethodV1::Options,
+            HttpMethod::Head => MethodV1::Head,
+            HttpMethod::Patch => MethodV1::Patch,
+            HttpMethod::Trace => MethodV1::Trace,
+        },
+        path: operation.path.clone(),
+        parameters: operation
+            .parameters
+            .iter()
+            .map(|parameter| ParameterV1 {
+                name: parameter.name.clone(),
+                location: match parameter.location {
+                    ParameterLocation::Path => LocationV1::Path,
+                    ParameterLocation::Query => LocationV1::Query,
+                    ParameterLocation::Header => LocationV1::Header,
+                },
+            })
+            .collect(),
+        body: operation.body,
+        idempotency_key: operation.idempotency_key,
+    }
+}
+
+fn operation_from_dto(dto: OperationV1) -> ApiOperation {
+    ApiOperation {
+        method: match dto.method {
+            MethodV1::Get => HttpMethod::Get,
+            MethodV1::Put => HttpMethod::Put,
+            MethodV1::Post => HttpMethod::Post,
+            MethodV1::Delete => HttpMethod::Delete,
+            MethodV1::Options => HttpMethod::Options,
+            MethodV1::Head => HttpMethod::Head,
+            MethodV1::Patch => HttpMethod::Patch,
+            MethodV1::Trace => HttpMethod::Trace,
+        },
+        path: dto.path,
+        parameters: dto
+            .parameters
+            .into_iter()
+            .map(|parameter| ApiParameter {
+                name: parameter.name,
+                location: match parameter.location {
+                    LocationV1::Path => ParameterLocation::Path,
+                    LocationV1::Query => ParameterLocation::Query,
+                    LocationV1::Header => ParameterLocation::Header,
+                },
+            })
+            .collect(),
+        body: dto.body,
+        idempotency_key: dto.idempotency_key,
     }
 }
 
@@ -388,6 +658,7 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
         ToolRoute::Mcp { server } => RouteV1::Mcp {
             server: server.clone(),
         },
+        ToolRoute::Api { api } => RouteV1::Api { api: api.clone() },
         ToolRoute::Host { group } => RouteV1::Host {
             group: group.clone(),
         },
@@ -407,6 +678,7 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
     ToolV1 {
         name: tool.name.clone(),
         route,
+        operation: tool.operation.as_ref().map(operation_dto),
         description: tool.description.clone(),
         schemas: SchemasV1 {
             input: tool.input_schema.clone(),
@@ -428,6 +700,7 @@ fn tool_dto(tool: &Tool) -> ToolV1 {
 fn tool_from_dto(dto: ToolV1) -> Result<Tool, String> {
     let route = match dto.route {
         RouteV1::Mcp { server } => ToolRoute::Mcp { server },
+        RouteV1::Api { api } => ToolRoute::Api { api },
         RouteV1::Host { group } => ToolRoute::Host { group },
         RouteV1::Builtin {
             builtin: BuiltinV1::Http,
@@ -460,6 +733,7 @@ fn tool_from_dto(dto: ToolV1) -> Result<Tool, String> {
     Ok(Tool {
         name: dto.name,
         route,
+        operation: dto.operation.map(operation_from_dto),
         description: dto.description,
         input_schema: dto.schemas.input,
         output_schema: dto.schemas.output,

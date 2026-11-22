@@ -103,6 +103,12 @@ pub async fn run(world: &World, run: &RunRef) -> Result<Run, EngineError> {
             started.mode.into()
         }),
         labels: Labels::from(record.metadata.labels.clone()),
+        secrets: record
+            .metadata
+            .secrets
+            .iter()
+            .map(|(server, secret)| (server.to_owned(), secret.to_string()))
+            .collect(),
         trace_id: trace.to_string(),
         parent: record.metadata.parent.map(|parent| ForkParent {
             run: parent.run.to_string(),
@@ -184,7 +190,8 @@ async fn waiting(
                 TaskState::Parked,
                 Some(match reason.kind {
                     ParkKind::SchemaChanged => ParkedReason::SchemaChanged,
-                    ParkKind::CredentialsExpired => ParkedReason::CredentialsExpired,
+                    ParkKind::CredentialsRefused => ParkedReason::CredentialsRefused,
+                    ParkKind::SecretMissing => ParkedReason::SecretMissing,
                 }),
             ),
         };
@@ -523,6 +530,11 @@ pub fn workflow(stored: &StoredWorkflow) -> rewind_api::workflows::Workflow {
         output: workflow.schemas().output.clone(),
         signals: workflow.schemas().signals.clone(),
         labels: Labels::from(stored.labels.clone()),
+        secrets: workflow
+            .secrets()
+            .iter()
+            .map(|(server, secret)| (server.to_owned(), secret.to_string()))
+            .collect(),
         created_at: timestamp(stored.created_at),
         declarations: rewind_api::toolsets::Declarations {
             dts: declaration
@@ -590,6 +602,7 @@ fn servers(toolset: &rewind_core::Toolset) -> Vec<rewind_api::toolsets::ServerSu
                 McpTransport::Http { .. } => rewind_api::toolsets::McpTransport::Http,
                 McpTransport::Stdio { .. } => rewind_api::toolsets::McpTransport::Stdio,
             },
+            auth: rewind_api::toolsets::Auth::of_core(&server.auth),
             tools: u32::try_from(
                 toolset
                     .tools()
@@ -610,6 +623,8 @@ pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::tool
     rewind_api::toolsets::Toolset {
         id: toolset.digest().to_hex(),
         servers: servers(toolset),
+        // The evals' world has MCP servers only.
+        apis: Vec::new(),
         tools: toolset
             .tools()
             .iter()
@@ -617,11 +632,16 @@ pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::tool
                 name: tool.name.clone(),
                 route: match tool.route {
                     ToolRoute::Mcp { .. } => Route::Mcp,
+                    ToolRoute::Api { .. } => Route::Api,
                     ToolRoute::Host { .. } => Route::Host,
                     ToolRoute::Builtin(_) => Route::Builtin,
                 },
                 server: match &tool.route {
                     ToolRoute::Mcp { server } => Some(server.clone()),
+                    _ => None,
+                },
+                api: match &tool.route {
+                    ToolRoute::Api { api } => Some(api.clone()),
                     _ => None,
                 },
                 description: tool.description.clone().unwrap_or_default(),
@@ -652,6 +672,7 @@ pub fn toolset(stored: &rewind_engine::ports::StoredToolset) -> rewind_api::tool
             dts: stored.declarations.typescript.clone(),
             prompt: stored.declarations.prompt.clone(),
         },
+        skipped: Vec::new(),
     }
 }
 

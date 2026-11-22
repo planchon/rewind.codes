@@ -1,0 +1,40 @@
+{
+  "description": "The start attaches the organization's secret, and its caller may attach its namespace's secrets only (no secrets:use): it is refused before any run exists.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "put_secrets": {
+    "org/crm": "org-token"
+  },
+  "secrets": {
+    "crm": "org/crm"
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "start_error": "the secret org/crm attached for crm is not yours to attach"
+  }
+}

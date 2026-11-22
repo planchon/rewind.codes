@@ -1,10 +1,11 @@
-//! Toolsets: registering and pinning them, their declarations, search, credentials
-//! (`archi/04-tools.md`, "Toolsets and code generation").
+//! Toolsets: registering and pinning them, their declarations, search (`archi/04-tools.md`,
+//! "Toolsets and code generation", "API tools", "Authenticating calls").
 //!
-//! Registering connects to the MCP servers and lists their tools; the harness's policies, its
+//! Registering connects to the MCP servers and lists their tools, and reads the APIs' OpenAPI
+//! documents; each server's and API's `auth` is pinned with it; the harness's policies, its
 //! host tools and the `http` built-in (with its allow-list) are added, and so is the `webhook`
 //! built-in, always: every script may call `webhook()`. The pinned toolset is content-addressed,
-//! so registering the same toolset again gives the same id.
+//! so registering the same toolset again gives the same id. It holds no secret.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -17,18 +18,24 @@ use axum::response::{IntoResponse, Response};
 use rewind_api::ProblemType;
 use rewind_api::access::Permission;
 use rewind_api::toolsets::{
-    CreateToolset, Credentials, DeclarationFormat, Declarations, DeclarationsQuery,
-    DeclarationsText, McpTransport as ApiTransport, OnInterruption, Route, SearchQuery,
-    ServerSummary, Tool as ApiTool, ToolMatch, ToolPolicy as ApiPolicy, ToolSearchResults,
-    Toolset as ApiToolset, ToolsetList, ToolsetSummary,
+    Api as ApiDeclared, ApiSummary, Auth, CreateToolset, DeclarationFormat, Declarations,
+    DeclarationsQuery, DeclarationsText, McpTransport as ApiTransport, OnInterruption,
+    OpenApiDocument, Route, SearchQuery, ServerSummary, SkippedOperation, Tool as ApiTool,
+    ToolMatch, ToolPolicy as ApiPolicy, ToolSearchResults, Toolset as ApiToolset, ToolsetList,
+    ToolsetSummary,
 };
 use rewind_core::{
-    Digest, Interruption, McpServer, McpTransport, Tool, ToolPolicy, ToolRoute, Toolset,
+    Api, Digest, Interruption, McpServer, McpTransport, SecretRef, SecretScope, Tool, ToolAuth,
+    ToolPolicy, ToolRoute, Toolset,
 };
+use rewind_engine::attachments::{AttachmentProblem, RefusedAttachments};
 use rewind_engine::ports::{
-    JournalStore, ReadModel, Secret, ServerCredentials, StoredToolset, TenantId, ToolDeclarations,
+    Day, JournalStore, ReadModel, Secret, SecretId, SecretNamespace, SecretReader, SecretStore,
+    StoredToolset, TenantId, ToolDeclarations,
 };
 use rewind_engine::text::{TOOLSET_TEXT, refuse_nul};
+use rewind_mcp::ListingAuth;
+use rewind_openapi::{ReadOptions, read};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -44,25 +51,25 @@ pub(super) async fn create(
     Body(mut request): Body<CreateToolset>,
 ) -> Result<Response, ApiError> {
     caller.require(Permission::ToolsetsWrite)?;
-    if request.credentials.is_some() {
-        refuse_scoped_credentials(&caller)?;
-    }
-    let credentials = request.credentials.clone();
     let references = std::mem::take(&mut request.workflows);
-    let mut base_digest = None;
-    let toolset = match request.base.take() {
+    let (toolset, skipped) = match request.base.take() {
         Some(base) => {
-            if !request.mcp.is_empty() || !request.host.is_empty() || request.http.is_some() {
+            if !request.mcp.is_empty()
+                || !request.apis.is_empty()
+                || !request.host.is_empty()
+                || request.http.is_some()
+            {
                 return Err(invalid_toolset(
                     "a toolset derived from a base keeps its servers and tools: give only \
                      workflows with base",
                 ));
             }
-            let base = stored(&app, &caller.tenant, &base).await?.toolset;
-            base_digest = Some(base.digest());
-            base
+            (
+                stored(&app, &caller.tenant, &base).await?.toolset,
+                Vec::new(),
+            )
         }
-        None => pin(&app, &caller.tenant, request).await?,
+        None => pin(&app, &caller, request).await?,
     };
     let toolset =
         workflows::pin(&app, &caller.tenant, &caller.labels, &references, toolset).await?;
@@ -87,16 +94,6 @@ pub(super) async fn create(
     app.store
         .put_toolset(&caller.tenant, &toolset, &declarations)
         .await?;
-    if let Some(credentials) = credentials {
-        app.engine
-            .set_toolset_credentials(&caller.tenant, toolset.digest(), &secrets(credentials))
-            .await?;
-    } else if let Some(base) = base_digest {
-        // A derived toolset calls the same servers: it takes the base's credentials.
-        app.engine
-            .inherit_toolset_credentials(&caller.tenant, base, toolset.digest())
-            .await?;
-    }
     let stored = app
         .store
         .get_toolset(&caller.tenant, toolset.digest())
@@ -107,7 +104,9 @@ pub(super) async fn create(
     } else {
         StatusCode::OK
     };
-    Ok((status, Json(view(&stored))).into_response())
+    let mut answer = view(&stored);
+    answer.skipped = skipped;
+    Ok((status, Json(answer)).into_response())
 }
 
 /// `GET /v1/toolsets`.
@@ -124,6 +123,7 @@ pub(super) async fn list(
         .map(|stored| ToolsetSummary {
             id: stored.toolset.digest().to_hex(),
             servers: servers(&stored.toolset),
+            apis: apis(&stored.toolset),
             tools: stored
                 .toolset
                 .tools()
@@ -244,79 +244,12 @@ pub(super) async fn search(
     Ok(Json(ToolSearchResults { tools }))
 }
 
-/// `PUT /v1/toolsets/{id}/credentials`.
-pub(super) async fn credentials(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Path(id): Path<String>,
-    Body(credentials): Body<Credentials>,
-) -> Result<StatusCode, ApiError> {
-    caller.require(Permission::CredentialsWrite)?;
-    refuse_scoped_credentials(&caller)?;
-    let digest = parse_digest(&id)?;
-    app.engine
-        .set_toolset_credentials(&caller.tenant, digest, &secrets(credentials))
-        .await?;
-    app.record_parked_tasks(&caller.tenant, None, digest).await;
-    app.wake.bump();
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// A toolset's credentials serve every run of the tenant that has none of its own: a key
-/// limited to labels sets only those of its runs.
-fn refuse_scoped_credentials(caller: &Caller) -> Result<(), ApiError> {
-    if caller.token.is_some() {
-        return Err(ApiError::forbidden(
-            "a toolset's credentials serve every end user of the tenant: an end user's token sets \
-             its namespace's (PUT /v1/namespaces/{name}/toolsets/{id}/credentials) or its runs' \
-             (PUT /v1/runs/{id}/credentials)",
-        ));
-    }
-    if caller.scoped() {
-        return Err(ApiError::forbidden(
-            "a toolset's credentials serve every run of the tenant: a key limited to labels sets \
-             the credentials of its own runs (PUT /v1/runs/{id}/credentials)",
-        ));
-    }
-    Ok(())
-}
-
-fn server_secrets(credentials: rewind_api::toolsets::ServerCredentials) -> ServerCredentials {
-    let secret = |values: BTreeMap<String, String>| -> BTreeMap<String, Secret> {
-        values
-            .into_iter()
-            .map(|(name, value)| (name, Secret::new(value)))
-            .collect()
-    };
-    ServerCredentials {
-        headers: secret(credentials.headers),
-        env: secret(credentials.env),
-    }
-}
-
-/// The credentials of the API, as the secret store keeps them.
-pub(crate) fn secrets(credentials: Credentials) -> rewind_engine::ports::Credentials {
-    let secret = |values: BTreeMap<String, String>| -> BTreeMap<String, Secret> {
-        values
-            .into_iter()
-            .map(|(name, value)| (name, Secret::new(value)))
-            .collect()
-    };
-    rewind_engine::ports::Credentials {
-        servers: credentials
-            .servers
-            .into_iter()
-            .map(|(server, credentials)| {
-                (
-                    server,
-                    ServerCredentials {
-                        headers: secret(credentials.headers),
-                        env: secret(credentials.env),
-                    },
-                )
-            })
-            .collect(),
-    }
+/// How the API's `auth` pins (`archi/04-tools.md`, "Authenticating calls"); none when absent.
+fn auth_of(auth: Option<&Auth>, of: &str) -> Result<ToolAuth, ApiError> {
+    auth.map_or(Ok(ToolAuth::None), |auth| {
+        auth.to_core()
+            .map_err(|message| invalid_toolset(format!("{of}: {message}")))
+    })
 }
 
 pub(crate) fn parse_digest(id: &str) -> Result<Digest, ApiError> {
@@ -345,11 +278,21 @@ fn invalid_toolset(detail: impl Into<String>) -> ApiError {
     ApiError::new(ProblemType::InvalidToolset, detail)
 }
 
-/// Pins a toolset: discovery of its MCP servers, the harness's policies, host tools and
-/// built-ins.
-async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Toolset, ApiError> {
+/// Pins a toolset: discovery of its MCP servers, its APIs' operations, the harness's policies,
+/// host tools and built-ins. The operations of its APIs left out are answered beside it.
+async fn pin(
+    app: &App,
+    caller: &Caller,
+    request: CreateToolset,
+) -> Result<(Toolset, Vec<SkippedOperation>), ApiError> {
+    let tenant = &caller.tenant;
+    let mut listing = if request.secrets.is_empty() {
+        BTreeMap::new()
+    } else {
+        attached_for_listing(app, caller, &request).await?
+    };
+    let (apis, mut tools, skipped) = read_apis(app, &request).await?;
     let mut servers = Vec::new();
-    let mut tools = Vec::new();
     let mut names = BTreeSet::new();
     for server in &request.mcp {
         if !names.insert(server.name.clone()) {
@@ -389,19 +332,25 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
                 )));
             }
         };
-        let pinned = McpServer::new(server.name.clone(), transport);
-        let credentials = request
-            .credentials
-            .as_ref()
-            .and_then(|credentials| credentials.servers.get(&server.name))
-            .map(|credentials| server_secrets(credentials.clone()));
-        let listed = app
-            .tools
-            .discover(tenant, &pinned, credentials.as_ref())
-            .await
-            .map_err(|DiscoveryError(message)| {
-                ApiError::new(ProblemType::ToolsetUnavailable, message)
-            })?;
+        let mut pinned = McpServer::new(server.name.clone(), transport);
+        pinned.auth = auth_of(server.auth.as_ref(), &format!("MCP server {}", server.name))?;
+        let secret = listing.remove(&server.name);
+        let attached = secret.is_some();
+        let auth = listing_auth(app, tenant, &pinned, secret).await?;
+        let listed = app.tools.discover(tenant, &pinned, auth).await.map_err(
+            |DiscoveryError(message)| {
+                let hint = if pinned.auth.takes_secret() && !attached {
+                    format!(
+                        "{message} (the listing carried no secret: attach an organization's \
+                         secret for {} in secrets)",
+                        pinned.name
+                    )
+                } else {
+                    message
+                };
+                ApiError::new(ProblemType::ToolsetUnavailable, hint)
+            },
+        )?;
         if let Some(unknown) = server
             .policies
             .keys()
@@ -467,12 +416,251 @@ async fn pin(app: &App, tenant: &TenantId, request: CreateToolset) -> Result<Too
         tools.push(tool);
     }
     tools.push(app.tools.webhook_tool());
-    Toolset::new(servers, tools).map_err(|error| invalid_toolset(error.to_string()))
+    let toolset = Toolset::from_parts(servers, apis, tools)
+        .map_err(|error| invalid_toolset(error.to_string()))?;
+    Ok((toolset, skipped))
+}
+
+/// The organization's secrets `secrets` attaches for the listings, read, by server
+/// (`archi/04-tools.md`, "Secrets": `POST /v1/toolsets` attaches an organization's secrets only,
+/// to list the tools of an MCP server that needs one; no run keeps them). The caller holds
+/// `secrets:use`, and each secret is an organization's it sees (its labels), attached for an
+/// MCP server of the request whose `auth` takes a secret. A read is counted as a registration's,
+/// which names no run.
+async fn attached_for_listing(
+    app: &App,
+    caller: &Caller,
+    request: &CreateToolset,
+) -> Result<BTreeMap<String, Secret>, ApiError> {
+    caller.require(Permission::SecretsUse)?;
+    let mut problems = Vec::new();
+    let mut attached = Vec::new();
+    for (server, text) in &request.secrets {
+        let secret = SecretRef::parse(text)
+            .map_err(|error| ApiError::invalid(format!("secrets.{server}: {error}")))?;
+        if secret.scope != SecretScope::Organization {
+            return Err(ApiError::invalid(format!(
+                "secrets.{server}: {secret} is a namespace's secret, and a registration has no \
+                 namespace: attach an organization's secret (org/<name>) to list the tools"
+            )));
+        }
+        let takes_secret = request
+            .mcp
+            .iter()
+            .find(|mcp| mcp.name == *server)
+            .map(|mcp| auth_of(mcp.auth.as_ref(), &format!("MCP server {server}")))
+            .transpose()?
+            .is_some_and(|auth| auth.takes_secret());
+        if !takes_secret {
+            problems.push(AttachmentProblem::TakesNone {
+                server: server.clone(),
+            });
+            continue;
+        }
+        attached.push((server.clone(), secret));
+    }
+    let today = Day::of(app.now());
+    let mut read = BTreeMap::new();
+    let reader = SecretReader::Registration;
+    for (server, secret) in attached {
+        let id = SecretId::organization(secret.name.clone());
+        let seen = app
+            .engine
+            .secrets()
+            .meta(&caller.tenant, &id, today)
+            .await?
+            .is_some_and(|meta| {
+                caller
+                    .labels
+                    .iter()
+                    .all(|(key, value)| meta.labels.get(key) == Some(value))
+            });
+        let value = if seen {
+            app.engine
+                .secrets()
+                .read(&caller.tenant, &id, &reader, app.now())
+                .await?
+        } else {
+            None
+        };
+        match value {
+            Some(value) => {
+                read.insert(server, value);
+            }
+            None => problems.push(AttachmentProblem::Unknown { server, secret }),
+        }
+    }
+    if problems.is_empty() {
+        return Ok(read);
+    }
+    problems.sort_by(|a, b| a.server().cmp(b.server()));
+    let listed = app
+        .engine
+        .secrets()
+        .list(
+            &caller.tenant,
+            &SecretNamespace::Organization,
+            &caller.labels,
+            today,
+        )
+        .await?;
+    let mut attachable: Vec<SecretRef> = listed.iter().map(|meta| meta.id.to_ref()).collect();
+    attachable.truncate(rewind_engine::attachments::MAX_ATTACHABLE);
+    let refused = RefusedAttachments {
+        problems,
+        attachable,
+    };
+    Err(ApiError::secret_required(refused.to_string(), &refused))
+}
+
+/// How the listing of a server's tools authenticates at registration (`archi/04-tools.md`,
+/// "Authenticating calls"): the organization's secret attached for it, if any; or a JWT signed
+/// with the tenant's key, made with the first toolset that needs it, without the claims of a
+/// call (`iss`, `aud`, `jti`, `htm`, `htu`, `body`, `iat`, `exp`).
+async fn listing_auth(
+    app: &App,
+    tenant: &TenantId,
+    server: &McpServer,
+    secret: Option<Secret>,
+) -> Result<ListingAuth, ApiError> {
+    Ok(match (&server.auth, secret) {
+        (ToolAuth::Secret(_), Some(secret)) => ListingAuth::Secret(secret),
+        (ToolAuth::Rewind, _) => ListingAuth::Signed {
+            key: app.store.signing_key(tenant, app.now()).await?,
+            issuer: issuer(app, tenant, &format!("MCP server {}", server.name))?,
+        },
+        _ => ListingAuth::None,
+    })
+}
+
+/// The issuer of the tenant's JWTs: `{public-url}/organizations/{tenant}`, whose keys are at
+/// `{iss}/jwks.json`. A server without a public URL cannot sign: no one could fetch its keys.
+fn issuer(app: &App, tenant: &TenantId, of: &str) -> Result<String, ApiError> {
+    match &app.settings.public_url {
+        Some(public_url) => Ok(format!("{public_url}/organizations/{}", tenant.as_str())),
+        None => Err(ApiError::new(
+            ProblemType::ToolsetUnavailable,
+            format!(
+                "{of} checks Rewind's signature, and this server has no public URL \
+                 (--public-url) where its keys are published: the issuer of its calls is \
+                 {{public-url}}/organizations/{}",
+                tenant.as_str()
+            ),
+        )),
+    }
+}
+
+/// Reads each API's OpenAPI document into its tools (`archi/04-tools.md`, "API tools"), with
+/// its `auth` or the document's security requirement, its policies, and the operations it
+/// leaves out (`skipped`). A document given by URL is read once, through the egress checks;
+/// what an internal server answered is not quoted.
+async fn read_apis(
+    app: &App,
+    request: &CreateToolset,
+) -> Result<(Vec<Api>, Vec<Tool>, Vec<SkippedOperation>), ApiError> {
+    let mut apis = Vec::new();
+    let mut tools = Vec::new();
+    let mut skipped = Vec::new();
+    for declared in &request.apis {
+        let (read_api, internal) = read_api(app, declared).await?;
+        let read_api = read_api.map_err(|error| {
+            invalid_toolset(if internal {
+                format!(
+                    "API {}: its OpenAPI document, read from an internal address, cannot be \
+                     read as an API; the answer of an internal server is not quoted",
+                    declared.name
+                )
+            } else {
+                error.to_string()
+            })
+        })?;
+        if let Some(unknown) = declared.policies.keys().find(|name| {
+            !read_api
+                .tools
+                .iter()
+                .any(|tool| tool.local_name() == name.as_str())
+        }) {
+            return Err(invalid_toolset(format!(
+                "API {}: a policy names {unknown:?}, which it does not have",
+                declared.name
+            )));
+        }
+        for mut tool in read_api.tools {
+            if let Some(policy) = declared.policies.get(tool.local_name()) {
+                tool.policy = policy_over(tool.policy, *policy, &tool.name)?;
+            }
+            tools.push(tool);
+        }
+        skipped.extend(
+            read_api
+                .skipped
+                .into_iter()
+                .map(|operation| SkippedOperation {
+                    api: declared.name.clone(),
+                    method: operation.method,
+                    path: operation.path,
+                    operation_id: operation.operation_id,
+                    reason: operation.reason,
+                }),
+        );
+        apis.push(read_api.api);
+    }
+    Ok((apis, tools, skipped))
+}
+
+/// One API read from its document: what was read, and whether the document came from an
+/// internal address.
+async fn read_api(
+    app: &App,
+    declared: &ApiDeclared,
+) -> Result<
+    (
+        Result<rewind_openapi::ReadApi, rewind_openapi::ReadError>,
+        bool,
+    ),
+    ApiError,
+> {
+    let auth = declared
+        .auth
+        .as_ref()
+        .map(|auth| {
+            auth.to_core()
+                .map_err(|message| invalid_toolset(format!("API {}: {message}", declared.name)))
+        })
+        .transpose()?;
+    let mut options = ReadOptions::new(declared.name.clone());
+    options.base_url = declared.base_url.clone();
+    options.auth = auth;
+    options.operations = declared.operations.clone();
+    options.concurrency = declared.concurrency;
+    options.allow_http = app.settings.embedded;
+    Ok(match &declared.openapi {
+        OpenApiDocument::Document(document) => (read(document, &options), false),
+        OpenApiDocument::Url(url) => {
+            let fetched = app.tools.fetch_document(url).await.map_err(|error| {
+                ApiError::new(
+                    ProblemType::ToolsetUnavailable,
+                    format!("API {}: {error}", declared.name),
+                )
+            })?;
+            options.document_url = Some(fetched.url.clone());
+            (read(&fetched.document, &options), fetched.internal)
+        }
+    })
 }
 
 /// A policy of the API, with the route's defaults for what it leaves out.
 fn policy_of(route: &ToolRoute, policy: ApiPolicy, tool: &str) -> Result<ToolPolicy, ApiError> {
-    let mut pinned = ToolPolicy::default_for(route);
+    policy_over(ToolPolicy::default_for(route), policy, tool)
+}
+
+/// A policy of the API over `pinned`, the tool's default: its route's, or for an API's
+/// operation its method's.
+fn policy_over(
+    mut pinned: ToolPolicy,
+    policy: ApiPolicy,
+    tool: &str,
+) -> Result<ToolPolicy, ApiError> {
     if let Some(on) = policy.on_interruption {
         pinned.on_interruption = match on {
             OnInterruption::Retry => Interruption::Retry,
@@ -507,6 +695,28 @@ fn policy_of(route: &ToolRoute, policy: ApiPolicy, tool: &str) -> Result<ToolPol
     Ok(pinned)
 }
 
+fn apis(toolset: &Toolset) -> Vec<ApiSummary> {
+    toolset
+        .apis()
+        .iter()
+        .map(|api| ApiSummary {
+            name: api.name.clone(),
+            base_url: api.base_url.clone(),
+            auth: Auth::of_core(&api.auth),
+            tools: u32::try_from(
+                toolset
+                    .tools()
+                    .iter()
+                    .filter(
+                        |tool| matches!(&tool.route, ToolRoute::Api { api: of } if *of == api.name),
+                    )
+                    .count(),
+            )
+            .unwrap_or(u32::MAX),
+        })
+        .collect()
+}
+
 fn servers(toolset: &Toolset) -> Vec<ServerSummary> {
     toolset
         .servers()
@@ -517,6 +727,7 @@ fn servers(toolset: &Toolset) -> Vec<ServerSummary> {
                 McpTransport::Http { .. } => ApiTransport::Http,
                 McpTransport::Stdio { .. } => ApiTransport::Stdio,
             },
+            auth: Auth::of_core(&server.auth),
             tools: u32::try_from(
                 toolset
                     .tools()
@@ -535,6 +746,7 @@ pub(crate) fn view(stored: &StoredToolset) -> ApiToolset {
     ApiToolset {
         id: toolset.digest().to_hex(),
         servers: servers(toolset),
+        apis: apis(toolset),
         tools: toolset
             .tools()
             .iter()
@@ -542,11 +754,16 @@ pub(crate) fn view(stored: &StoredToolset) -> ApiToolset {
                 name: tool.name.clone(),
                 route: match tool.route {
                     ToolRoute::Mcp { .. } => Route::Mcp,
+                    ToolRoute::Api { .. } => Route::Api,
                     ToolRoute::Host { .. } => Route::Host,
                     ToolRoute::Builtin(_) => Route::Builtin,
                 },
                 server: match &tool.route {
                     ToolRoute::Mcp { server } => Some(server.clone()),
+                    _ => None,
+                },
+                api: match &tool.route {
+                    ToolRoute::Api { api } => Some(api.clone()),
                     _ => None,
                 },
                 description: tool.description.clone().unwrap_or_default(),
@@ -577,5 +794,6 @@ pub(crate) fn view(stored: &StoredToolset) -> ApiToolset {
             dts: stored.declarations.typescript.clone(),
             prompt: stored.declarations.prompt.clone(),
         },
+        skipped: Vec::new(),
     }
 }

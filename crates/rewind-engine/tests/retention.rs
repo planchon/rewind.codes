@@ -8,11 +8,10 @@ mod support;
 use rewind_core::{Digest, JournalDocument, Payload, RunStatus, Timestamp};
 use rewind_engine::adapters::{MemoryReadModel, MemorySpanExporter, MemoryWebhooks};
 use rewind_engine::projector::{Projector, ProjectorConfig, run_snapshot};
-use std::collections::BTreeMap;
 
 use rewind_engine::ports::{
-    BlobStore, Clock, Credentials, JournalStore, ProjectedRun, ReadModel, RunOrder, RunQuery,
-    RunRef, Secret, SecretOwner, SecretStore, ServerCredentials, StoreError, VirtualTime,
+    BlobStore, Clock, JournalStore, ProjectedRun, ReadModel, RunOrder, RunQuery, RunRef,
+    StoreError, VirtualTime,
 };
 use rewind_engine::retention::Housekeeper;
 use rewind_engine::{DriveOptions, EngineConfig, PayloadTiers};
@@ -197,20 +196,8 @@ async fn finished_runs_are_archived_then_deleted() {
     assert_eq!(engine.blobs().len(), 0);
 }
 
-fn credentials(token: &str) -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([("Authorization".to_owned(), Secret::new(token))]),
-                env: BTreeMap::new(),
-            },
-        )]),
-    }
-}
-
 #[tokio::test]
-async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() {
+async fn a_run_is_erased_at_any_time_with_its_read_model_rows() {
     let engine = engine_with(echo(), RecordingDispatcher::echo(), tiny_tiers());
     let read_model = MemoryReadModel::new();
     let housekeeper = Housekeeper {
@@ -225,15 +212,6 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
     let kept = finished_run(&engine, shared.clone()).await;
     for run in [&erased, &kept] {
         let record = engine.get_run(run).await.unwrap().unwrap();
-        engine
-            .secrets()
-            .put(
-                &run.tenant,
-                &SecretOwner::Run(run.id),
-                &credentials(&run.id.to_string()),
-            )
-            .await
-            .unwrap();
         let history = engine.history(run).await.unwrap();
         read_model
             .apply(
@@ -268,32 +246,6 @@ async fn a_run_is_erased_at_any_time_with_its_read_model_rows_and_credentials() 
             .unwrap()
     );
     assert_eq!(engine.get_run(&erased).await.unwrap(), None);
-    let toolset = engine.get_run(&kept).await.unwrap().unwrap().toolset;
-    let secrets = engine.secrets();
-    assert_eq!(
-        secrets
-            .resolve(
-                &erased.tenant,
-                erased.id,
-                &rewind_engine::ports::NamespaceName::new("local").unwrap(),
-                toolset
-            )
-            .await
-            .unwrap(),
-        None
-    );
-    assert_eq!(
-        secrets
-            .resolve(
-                &kept.tenant,
-                kept.id,
-                &rewind_engine::ports::NamespaceName::new("local").unwrap(),
-                toolset
-            )
-            .await
-            .unwrap(),
-        Some(credentials(&kept.id.to_string()))
-    );
     let left = read_model
         .search_runs(
             &RunQuery::new(erased.tenant.clone()),

@@ -313,6 +313,7 @@ mod tests {
             epoch: 1,
             mode: RunMode::Live,
             labels: Labels::new(),
+            secrets: Default::default(),
             trace_id: "0".repeat(32),
             parent: None,
             workflow: None,

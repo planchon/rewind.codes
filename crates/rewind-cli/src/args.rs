@@ -96,6 +96,9 @@ pub(crate) enum Command {
     /// Record tests from a workflow's past runs.
     #[command(subcommand)]
     Workflows(WorkflowsCommand),
+    /// The organization's secrets, or a namespace's with --namespace: never a value.
+    #[command(subcommand)]
+    Secrets(SecretsCommand),
     /// Serve the agent tools over MCP on stdin and stdout, to debug them.
     #[command(
         long_about = "Serves the agent tools over MCP on stdin and stdout, against the embedded \
@@ -128,6 +131,29 @@ pub(crate) enum WorkflowsCommand {
     },
 }
 
+/// `rewind secrets`: the organization's secrets, or those of the namespace `--namespace` names
+/// (`archi/04-tools.md`, "Secrets"). A value is read from standard input, never from an
+/// argument, and never printed.
+#[derive(Debug, Subcommand)]
+pub(crate) enum SecretsCommand {
+    /// The secrets, each with its labels, who wrote it and when, and its reads.
+    List,
+    /// Creates or replaces a secret, its value read from standard input (one trailing newline
+    /// dropped): `rewind secrets put github < token.txt`.
+    Put {
+        /// 1 to 64 lowercase letters, digits, - and _, starting with a letter.
+        name: String,
+        /// A label of an organization's secret, key=value. Repeat for several.
+        #[arg(long = "label", value_name = "KEY=VALUE")]
+        labels: Vec<String>,
+    },
+    /// Deletes a secret: the next call of a run that attaches it is parked.
+    Delete { name: String },
+    /// What reads a secret: the active runs that attach it, those waiting on a call it serves,
+    /// the workflows whose latest version attaches it.
+    Usage { name: String },
+}
+
 /// What starts a run: `rewind run` and `rewind fork` share them.
 #[derive(Debug, Clone, Args)]
 pub(crate) struct StartOptions {
@@ -146,6 +172,11 @@ pub(crate) struct StartOptions {
     /// Do not type-check the script before starting it.
     #[arg(long)]
     pub(crate) no_check: bool,
+    /// A secret the run reads, for an MCP server or an API whose calls need one:
+    /// `github=ns/github` (the end user's), `zendesk=org/zendesk` (the organization's). Repeat
+    /// for several. A fork reads its parent's without it.
+    #[arg(long = "secret", value_name = "SERVER=SCOPE/NAME")]
+    pub(crate) secrets: Vec<String>,
 }
 
 #[derive(Debug, Args)]
@@ -417,7 +448,7 @@ pub(crate) enum NamespacesCommand {
     /// Sets a namespace's exceptions to the default limits, or the defaults with --defaults,
     /// and prints the limits. Without a limit to set, prints them.
     Quotas(QuotasArgs),
-    /// Erases a namespace in the background: the end user's tokens, runs, credentials and use.
+    /// Erases a namespace in the background: the end user's tokens, runs, secrets and use.
     Delete { name: String },
 }
 

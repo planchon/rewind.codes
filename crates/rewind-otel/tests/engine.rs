@@ -23,7 +23,7 @@ use rewind_engine::adapters::{
 };
 use rewind_engine::metrics;
 use rewind_engine::ports::{
-    Clock as _, CompiledScript, Credentials, Delivery, Dispatched, Emitted, ExecutorError,
+    CallAuth, Clock as _, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError,
     InvalidScript, ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
 use rewind_engine::projector::{Projector, ProjectorConfig};
@@ -409,7 +409,7 @@ impl Dispatcher {
 }
 
 impl ToolDispatcher for Dispatcher {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         (self.answer)(&call)
     }
 }

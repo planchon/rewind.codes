@@ -5,6 +5,7 @@ mod mcp;
 mod namespaces;
 mod replay;
 mod runs;
+mod secrets;
 mod test;
 mod toolsets;
 mod workflows;
@@ -40,6 +41,7 @@ pub(crate) async fn execute(
         Command::Toolsets(command) => toolsets::toolsets(&server, command, console).await,
         Command::Namespaces(command) => namespaces::namespaces(&server, command, console).await,
         Command::Workflows(command) => workflows::workflows(&server, command, console).await,
+        Command::Secrets(command) => secrets::secrets(&server, command, console).await,
         Command::Mcp => mcp::mcp(&server, console).await,
     }
 }
@@ -80,6 +82,11 @@ impl Server<'_> {
     /// The client of a command across namespaces: bound to one only when `--namespace` names it.
     pub(crate) async fn unbound_client(&self) -> Result<Client, CliError> {
         self.connect(false).await
+    }
+
+    /// The namespace `--namespace` names, if any.
+    pub(crate) fn namespace(&self) -> Option<&str> {
+        self.global.namespace.as_deref()
     }
 
     async fn connect(&self, local_by_default: bool) -> Result<Client, CliError> {

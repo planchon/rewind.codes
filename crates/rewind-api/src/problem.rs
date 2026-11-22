@@ -72,6 +72,11 @@ pub enum ProblemType {
     /// 422: a signal the run does not take: a name starting with `rewind:`, or, for a run of a
     /// workflow, a signal it does not declare or a payload that does not match.
     InvalidSignal,
+    /// 422: a start, a fork or a workflow's save refused before anything exists: the script
+    /// imports a server that needs a secret and none is attached, an attachment names a server
+    /// that takes none or a secret that does not exist, or the caller may not attach it;
+    /// `attachments` says which, with the secrets the caller may attach instead.
+    SecretRequired,
     /// 429: the namespace or the tenant reached its `active_runs`, `runs_per_month` or
     /// `scripts`; `quota` says which, at which scope, and when it frees.
     QuotaExceeded,
@@ -86,7 +91,7 @@ pub enum ProblemType {
 }
 
 impl ProblemType {
-    pub const ALL: [ProblemType; 26] = [
+    pub const ALL: [ProblemType; 27] = [
         ProblemType::InvalidRequest,
         ProblemType::InvalidQuery,
         ProblemType::Unauthorized,
@@ -108,6 +113,7 @@ impl ProblemType {
         ProblemType::InvalidTest,
         ProblemType::TestsFailed,
         ProblemType::InvalidSignal,
+        ProblemType::SecretRequired,
         ProblemType::QuotaExceeded,
         ProblemType::Internal,
         ProblemType::ToolsetUnavailable,
@@ -139,6 +145,7 @@ impl ProblemType {
             ProblemType::TestsFailed => "urn:rewind:problem:tests-failed",
             ProblemType::InvalidInput => "urn:rewind:problem:invalid-input",
             ProblemType::InvalidSignal => "urn:rewind:problem:invalid-signal",
+            ProblemType::SecretRequired => "urn:rewind:problem:secret-required",
             ProblemType::QuotaExceeded => "urn:rewind:problem:quota-exceeded",
             ProblemType::Internal => "urn:rewind:problem:internal",
             ProblemType::ToolsetUnavailable => "urn:rewind:problem:toolset-unavailable",
@@ -169,7 +176,8 @@ impl ProblemType {
             | ProblemType::InvalidTest
             | ProblemType::TestsFailed
             | ProblemType::InvalidInput
-            | ProblemType::InvalidSignal => 422,
+            | ProblemType::InvalidSignal
+            | ProblemType::SecretRequired => 422,
             ProblemType::QuotaExceeded => 429,
             ProblemType::Internal => 500,
             ProblemType::ToolsetUnavailable | ProblemType::IdentityUnavailable => 502,
@@ -201,6 +209,7 @@ impl ProblemType {
             ProblemType::TestsFailed => "Tests did not pass",
             ProblemType::InvalidInput => "The input does not match the workflow",
             ProblemType::InvalidSignal => "The run does not take this signal",
+            ProblemType::SecretRequired => "A secret is missing or cannot be attached",
             ProblemType::QuotaExceeded => "A quota is reached",
             ProblemType::Internal => "Internal error",
             ProblemType::ToolsetUnavailable => "A server of the toolset is unavailable",
@@ -251,6 +260,9 @@ pub struct Problem {
     /// and failures.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tests: Vec<crate::testing::TestResult>,
+    /// With `secret-required`: each attachment at fault, with what the caller may attach.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::secrets::AttachmentProblem>,
     /// With `quota-exceeded`: the quota reached.
     #[serde(default, skip_serializing_if = "Option::is_none", flatten)]
     #[schema(schema_with = quota_reached_fields)]
@@ -319,6 +331,7 @@ impl Problem {
             diagnostics: Vec::new(),
             query: None,
             tests: Vec::new(),
+            attachments: Vec::new(),
             quota: None,
         }
     }

@@ -26,7 +26,7 @@ export default async function globalSetup(): Promise<(() => Promise<void>) | und
       startDeployed({
         name: "A · deployed",
         dir: join(gateResults, "stack-a"),
-        extraArgs: ["--allow-internal-mcp", "127.0.0.1", "--allow-private-webhooks", "--allow-stdio"],
+        extraArgs: ["--allow-internal-tools", "127.0.0.1", "--allow-private-webhooks", "--allow-stdio"],
       }),
       startStrict({ name: "B · strict", dir: join(gateResults, "stack-b") }),
     ]);

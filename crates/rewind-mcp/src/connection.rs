@@ -1,9 +1,13 @@
 //! Connections to MCP servers, kept open between calls.
 //!
-//! A connection belongs to one tenant, one server (as pinned: its transport) and one set of
-//! credentials: credentials are injected into the transport (HTTP headers, or the environment of
-//! a stdio process), so other credentials need another connection. Calls share a connection
-//! concurrently; the store already bounds the calls in flight per server and worker.
+//! A connection belongs to one tenant, one server (as pinned: its transport) and one identity
+//! ([`Credentials`]): the secret a run attached is injected into the transport (an HTTP header,
+//! or the environment of a stdio process), and a signed session signs as one tenant's key for
+//! one end user, so another secret, key or end user needs another connection. The pool tells
+//! them apart by an HMAC of the transport and the credentials under a key drawn when the pool is
+//! made: it never holds a value in clear, nor a digest of one that could be reversed by trying
+//! every short secret. Calls share a connection concurrently; the store already bounds the calls
+//! in flight per server and worker.
 //!
 //! A connection unused for [`McpConfig::idle_timeout`] is closed when the pool is next used, as
 //! is the least recently used one beyond [`McpConfig::max_connections`]; a connection in use is
@@ -24,9 +28,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderName, HeaderValue};
-use rewind_core::{McpServer, McpTransport, ToolFailureKind, canonical_json};
-use rewind_engine::ports::{ServerCredentials, TenantId};
+use hmac::Mac as _;
+use rewind_core::{McpServer, McpTransport, SecretPlacement, ToolFailureKind, canonical_json};
+use rewind_engine::ports::{Secret, SigningKey, TenantId};
+use rewind_outbound::{Placed, Redirects, Signer, place};
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig, Implementation,
     PaginatedRequestParams,
@@ -36,13 +41,13 @@ use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig
 use rmcp::transport::{StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{ClientHandler, RoleClient, ServiceError, ServiceExt};
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::OnceCell;
 
 use crate::McpConfig;
 use crate::failure::{self, Answers, Failure, bounded};
-use crate::transport::{self, Internal};
+use crate::transport::{self, Internal, SessionSigner, SigningClient};
 
 /// Pages of `tools/list` read at most: a server whose list never ends is refused, instead of
 /// being read until the timeout.
@@ -50,23 +55,95 @@ pub(crate) const MAX_TOOL_PAGES: usize = 100;
 /// Tools of one server read at most.
 pub(crate) const MAX_TOOLS: usize = 10_000;
 
-/// The open connections, by tenant, server and credentials.
-#[derive(Debug)]
+/// How a session proves who calls (`archi/04-tools.md`, "Authenticating calls"), built from what
+/// the engine resolved for a call or what the registration gives a listing. Never printed:
+/// `Debug` shows its kind only.
+#[derive(Clone)]
+pub(crate) enum Credentials {
+    /// Nothing: a public server.
+    None,
+    /// The attached secret, put where the server's `auth` says.
+    Secret {
+        placement: SecretPlacement,
+        value: Secret,
+    },
+    /// A JWT per HTTP request, signed with the tenant's key, issued by `issuer`. `subject` is the
+    /// end user of the calls the session carries; `None` for a listing at registration.
+    Signed {
+        key: SigningKey,
+        issuer: String,
+        subject: Option<String>,
+    },
+}
+
+impl std::fmt::Debug for Credentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Credentials::None => "Credentials::None",
+            Credentials::Secret { .. } => "Credentials::Secret(<redacted>)",
+            Credentials::Signed { .. } => "Credentials::Signed(<redacted>)",
+        })
+    }
+}
+
+impl Credentials {
+    /// What tells two sessions apart, values included: only ever hashed with the pool's key.
+    fn identity(&self) -> Value {
+        match self {
+            Credentials::None => Value::Null,
+            Credentials::Secret { placement, value } => {
+                let placement = match placement {
+                    SecretPlacement::Header {
+                        name,
+                        format,
+                        encoding,
+                    } => json!({
+                        "header": name.to_ascii_lowercase(),
+                        "format": format,
+                        "encoding": encoding.as_str(),
+                    }),
+                    SecretPlacement::Env { variable } => json!({ "env": variable }),
+                };
+                json!({ "secret": { "placement": placement, "value": value.expose() } })
+            }
+            Credentials::Signed {
+                key,
+                issuer,
+                subject,
+            } => json!({
+                "signed": { "issuer": issuer, "kid": key.public.kid, "subject": subject }
+            }),
+        }
+    }
+}
+
+/// The open connections, by tenant, server and identity.
 pub(crate) struct Pool {
     config: McpConfig,
+    /// The key of the fingerprints: random, drawn when the pool is made, never printed.
+    fingerprints: [u8; 32],
     entries: Mutex<HashMap<Key, Entry>>,
+}
+
+impl std::fmt::Debug for Pool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Pool")
+            .field("config", &self.config)
+            .field("connections", &self.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
     tenant: String,
     server: String,
-    /// SHA-256 of the transport and the credentials. The secrets themselves are not kept.
+    /// HMAC-SHA-256 of the transport and the credentials under the pool's key. The secrets
+    /// themselves are not kept.
     fingerprint: [u8; 32],
 }
 
-/// Without the fingerprint: an unsalted digest of a short secret can be reversed by trying
-/// every secret.
+/// Without the fingerprint, which is no one's business.
 impl std::fmt::Debug for Key {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Key")
@@ -85,8 +162,19 @@ struct Entry {
 
 impl Pool {
     pub(crate) fn new(config: McpConfig) -> Self {
+        let mut fingerprints = [0u8; 32];
+        if let Err(error) = getrandom::fill(&mut fingerprints) {
+            // Without randomness, the fingerprints are still keyed by the process's start.
+            tracing::warn!(%error, "no random key for the MCP pool's fingerprints");
+            let started = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            fingerprints[..16].copy_from_slice(&started.to_le_bytes());
+        }
         Self {
             config,
+            fingerprints,
             entries: Mutex::new(HashMap::new()),
         }
     }
@@ -100,9 +188,9 @@ impl Pool {
         &self,
         tenant: &TenantId,
         server: &McpServer,
-        credentials: Option<&ServerCredentials>,
+        credentials: &Credentials,
     ) -> Result<Lease<'_>, Failure> {
-        let key = Key::new(tenant, server, credentials);
+        let key = Key::new(&self.fingerprints, tenant, server, credentials);
         // A connection found closed is replaced once.
         for _ in 0..2 {
             let cell = self.entry(&key);
@@ -210,31 +298,26 @@ impl Pool {
 }
 
 impl Key {
-    fn new(tenant: &TenantId, server: &McpServer, credentials: Option<&ServerCredentials>) -> Self {
+    fn new(
+        pool_key: &[u8; 32],
+        tenant: &TenantId,
+        server: &McpServer,
+        credentials: &Credentials,
+    ) -> Self {
         let transport = match &server.transport {
             McpTransport::Http { url } => json!({ "http": url }),
             McpTransport::Stdio { command, args, env } => {
                 json!({ "stdio": { "command": command, "args": args, "env": env } })
             }
         };
-        let secrets = credentials.map(|credentials| {
-            let expose = |map: &std::collections::BTreeMap<
-                String,
-                rewind_engine::ports::Secret,
-            >| {
-                map.iter()
-                    .map(|(name, secret)| (name.clone(), Value::String(secret.expose().to_owned())))
-                    .collect::<serde_json::Map<String, Value>>()
-            };
-            json!({ "headers": expose(&credentials.headers), "env": expose(&credentials.env) })
-        });
-        let fingerprint = Sha256::digest(
-            canonical_json(&json!({ "transport": transport, "credentials": secrets })).as_bytes(),
-        );
+        let identity = json!({ "transport": transport, "credentials": credentials.identity() });
+        let mut mac = <hmac::Hmac<Sha256> as hmac::KeyInit>::new_from_slice(pool_key)
+            .unwrap_or_else(|_| unreachable!("HMAC takes keys of any length"));
+        mac.update(canonical_json(&identity).as_bytes());
         Self {
             tenant: tenant.as_str().to_owned(),
             server: server.name.clone(),
-            fingerprint: fingerprint.into(),
+            fingerprint: mac.finalize().into_bytes().into(),
         }
     }
 }
@@ -266,6 +349,8 @@ pub(crate) struct Connection {
     tools_ttl: Duration,
     /// Whether the session reached an internal server.
     internal: Internal,
+    /// The signer of a signed session's requests.
+    signer: Option<Arc<SessionSigner>>,
 }
 
 #[derive(Debug)]
@@ -290,6 +375,11 @@ impl Connection {
     /// Whether failures may quote what the server answered.
     pub(crate) fn answers(&self) -> Answers {
         self.internal.answers()
+    }
+
+    /// The signer of a signed session, with which a call registers its claims.
+    pub(crate) fn signer(&self) -> Option<&Arc<SessionSigner>> {
+        self.signer.as_ref()
     }
 
     /// The server's tools, by name, as it lists them now. A failure says whether the connection
@@ -392,7 +482,7 @@ impl ClientHandler for Handler {
 /// Opens a session with the server, its credentials injected into the transport.
 async fn connect(
     server: &McpServer,
-    credentials: Option<&ServerCredentials>,
+    credentials: &Credentials,
     config: &McpConfig,
 ) -> Result<Connection, Failure> {
     let changed = Arc::new(AtomicBool::new(false));
@@ -400,21 +490,91 @@ async fn connect(
         changed: changed.clone(),
     };
     let name = server.name.as_str();
-    let internal = Internal::default();
+    let mut internal = Internal::default();
+    let mut signer = None;
     let client = match &server.transport {
         McpTransport::Http { url } => {
-            let headers = headers(name, credentials)?;
-            let http = transport::client(name, url, &config.egress, &internal)?;
-            let transport = StreamableHttpClientTransport::with_client(
-                http,
-                StreamableHttpClientTransportConfig::with_uri(url.as_str()).custom_headers(headers),
-            );
-            handler
-                .serve(transport)
-                .await
-                .map_err(|error| failure::of_initialize(name, &error, internal.answers()))?
+            let transport_config = StreamableHttpClientTransportConfig::with_uri(url.as_str());
+            match credentials {
+                Credentials::Signed { key, issuer, .. } => {
+                    let session = Signer::new(&key.public.kid, key.private.expose())
+                        .map_err(|error| unavailable(error.to_string()))?;
+                    let (http, reached) =
+                        transport::client(name, url, &config.egress, Redirects::Signed)?;
+                    internal = reached;
+                    let session =
+                        Arc::new(SessionSigner::new(session, issuer.clone(), url.clone()));
+                    signer = Some(session.clone());
+                    let client = SigningClient {
+                        inner: http,
+                        signer: session,
+                    };
+                    handler
+                        .serve(StreamableHttpClientTransport::with_client(
+                            client,
+                            transport_config,
+                        ))
+                        .await
+                }
+                Credentials::Secret { placement, value } => {
+                    let Placed::Header {
+                        name: header,
+                        value,
+                    } = place(placement, value.expose())
+                        .map_err(|error| unavailable(format!("{name}: {error}")))?
+                    else {
+                        return Err(unavailable(format!(
+                            "{name} is an HTTP server: its secret goes in a header, not in a \
+                             variable"
+                        )));
+                    };
+                    let (http, reached) =
+                        transport::client(name, url, &config.egress, Redirects::WithinOrigin)?;
+                    internal = reached;
+                    let headers = HashMap::from([(header, value)]);
+                    handler
+                        .serve(StreamableHttpClientTransport::with_client(
+                            http,
+                            transport_config.custom_headers(headers),
+                        ))
+                        .await
+                }
+                Credentials::None => {
+                    let (http, reached) =
+                        transport::client(name, url, &config.egress, Redirects::WithinOrigin)?;
+                    internal = reached;
+                    handler
+                        .serve(StreamableHttpClientTransport::with_client(
+                            http,
+                            transport_config,
+                        ))
+                        .await
+                }
+            }
+            .map_err(|error| failure::of_initialize(name, &error, internal.answers()))?
         }
         McpTransport::Stdio { command, args, env } => {
+            let secret = match credentials {
+                Credentials::None => None,
+                Credentials::Secret { placement, value } => {
+                    match place(placement, value.expose())
+                        .map_err(|error| unavailable(format!("{name}: {error}")))?
+                    {
+                        Placed::Env { variable, value } => Some((variable, value)),
+                        Placed::Header { .. } => {
+                            return Err(unavailable(format!(
+                                "{name} is a stdio server: its secret goes in a variable, not in \
+                                 a header"
+                            )));
+                        }
+                    }
+                }
+                Credentials::Signed { .. } => {
+                    return Err(unavailable(format!(
+                        "{name} is a stdio server, which cannot check a signature"
+                    )));
+                }
+            };
             let mut process = tokio::process::Command::new(command);
             process.args(args).env_clear();
             for variable in &config.inherited_env {
@@ -423,10 +583,8 @@ async fn connect(
                 }
             }
             process.envs(env);
-            if let Some(credentials) = credentials {
-                for (variable, secret) in &credentials.env {
-                    process.env(variable, secret.expose());
-                }
+            if let Some((variable, value)) = secret {
+                process.env(variable, value);
             }
             process.kill_on_drop(true);
             let stderr = if config.log_stderr {
@@ -460,59 +618,90 @@ async fn connect(
         changed,
         tools_ttl: config.tools_ttl,
         internal,
+        signer,
     })
 }
 
-/// The HTTP headers of the credentials, marked sensitive.
-fn headers(
-    server: &str,
-    credentials: Option<&ServerCredentials>,
-) -> Result<HashMap<HeaderName, HeaderValue>, Failure> {
-    let mut headers = HashMap::new();
-    let Some(credentials) = credentials else {
-        return Ok(headers);
-    };
-    for (name, secret) in &credentials.headers {
-        let invalid = || {
-            Failure::permanent(
-                ToolFailureKind::Unavailable,
-                format!("the credentials of {server} hold an invalid HTTP header {name:?}"),
-                None,
-            )
-        };
-        let header = HeaderName::try_from(name.as_str()).map_err(|_| invalid())?;
-        let mut value = HeaderValue::from_str(secret.expose()).map_err(|_| invalid())?;
-        value.set_sensitive(true);
-        headers.insert(header, value);
-    }
-    Ok(headers)
+/// A session that cannot be opened as its credentials say: it will not open by retrying.
+fn unavailable(message: String) -> Failure {
+    Failure::permanent(ToolFailureKind::Unavailable, message, None)
 }
 
 #[cfg(test)]
 mod tests {
-    use rewind_engine::ports::Secret;
+    use rewind_core::{SecretEncoding, Timestamp};
+    use rewind_engine::ports::{PrivateKey, PublicKey};
 
     use super::*;
 
-    #[test]
-    fn a_pool_s_debug_output_holds_no_digest_of_credentials() {
-        let server = McpServer::new(
+    fn server() -> McpServer {
+        McpServer::new(
             "crm",
             McpTransport::Http {
                 url: "https://mcp.example.com".into(),
             },
-        );
-        let credentials = ServerCredentials {
-            headers: BTreeMap::from([("authorization".into(), Secret::new("Bearer 1234"))]),
-            env: BTreeMap::new(),
+        )
+    }
+
+    fn secret(value: &str) -> Credentials {
+        Credentials::Secret {
+            placement: SecretPlacement::bearer(),
+            value: Secret::new(value),
+        }
+    }
+
+    fn signed(kid: &str, subject: Option<&str>) -> Credentials {
+        Credentials::Signed {
+            key: SigningKey {
+                public: PublicKey {
+                    kid: kid.into(),
+                    key: [1; 32],
+                    created_at: Timestamp(0),
+                    retired_at: None,
+                },
+                private: PrivateKey::from_seed([2; 32]),
+            },
+            issuer: "https://rewind.example/organizations/acme".into(),
+            subject: subject.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_pool_tells_identities_apart_without_keeping_them() {
+        let tenant = TenantId::new("acme").unwrap();
+        let pool_key = [5u8; 32];
+        let key = |credentials: &Credentials| Key::new(&pool_key, &tenant, &server(), credentials);
+        let first = key(&secret("1234"));
+        assert_eq!(first, key(&secret("1234")));
+        assert_ne!(first, key(&secret("5678")));
+        assert_ne!(first, key(&Credentials::None));
+        let encoded = Credentials::Secret {
+            placement: SecretPlacement::Header {
+                name: "Authorization".into(),
+                format: Some("Bearer {secret}".into()),
+                encoding: SecretEncoding::Base64,
+            },
+            value: Secret::new("1234"),
         };
-        let key = Key::new(&TenantId::new("acme").unwrap(), &server, Some(&credentials));
-        let debug = format!("{key:?}");
-        // An unsalted digest of a short secret can be reversed by trying them all.
+        assert_ne!(first, key(&encoded));
+        // One session per end user and per key; the listing's apart.
+        let alice = key(&signed("k1", Some("alice")));
+        assert_eq!(alice, key(&signed("k1", Some("alice"))));
+        assert_ne!(alice, key(&signed("k1", Some("bob"))));
+        assert_ne!(alice, key(&signed("k2", Some("alice"))));
+        assert_ne!(alice, key(&signed("k1", None)));
+        // Another pool, another key: a fingerprint says nothing outside its pool.
+        assert_ne!(
+            first.fingerprint,
+            Key::new(&[6u8; 32], &tenant, &server(), &secret("1234")).fingerprint
+        );
+        // Nothing printed holds the fingerprint, nor a secret.
+        let debug = format!("{first:?} {:?}", secret("1234"));
         assert!(
-            !debug.contains(&format!("{:?}", key.fingerprint)),
+            !debug.contains(&format!("{:?}", first.fingerprint)),
             "{debug}"
         );
+        assert!(!debug.contains("1234"), "{debug}");
         assert!(debug.contains("acme") && debug.contains("crm"), "{debug}");
     }
 }

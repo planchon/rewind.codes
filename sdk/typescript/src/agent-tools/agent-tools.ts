@@ -2,11 +2,12 @@ import { toMillis } from "../duration.js";
 import { NamespaceRequiredError, RewindApiError, RewindError, isProblem } from "../errors.js";
 import { isValidIdempotencyKey } from "../http.js";
 import { hasLabels } from "../params.js";
+import type { components } from "../generated/api.js";
 import type { Payloads } from "../resources/admin.js";
 import type { Runs } from "../resources/runs.js";
 import type { Scripts } from "../resources/scripts.js";
 import type { Tests } from "../resources/tests.js";
-import type { Toolsets } from "../resources/toolsets.js";
+import type { RequestOptions, Toolsets } from "../resources/toolsets.js";
 import type { Workflows } from "../resources/workflows.js";
 import type {
   Duration,
@@ -56,6 +57,7 @@ import {
   describeRun,
   describeRuns,
   describeSaveRefused,
+  describeSecrets,
   describeTestResults,
   describeWorkflow,
   describeWorkflowDetails,
@@ -79,6 +81,22 @@ export interface AgentToolsClient {
   workflows: Workflows;
   tests: Tests;
   payloads: Payloads;
+  /** What `list_secrets` reads. Without it, `list_secrets` finds no secret. */
+  secrets?: AgentSecrets | undefined;
+}
+
+/** A secret as the API lists it: its metadata, never its value. */
+export type ListedSecret = components["schemas"]["Secret"];
+
+/** What `list_secrets` reads: the secrets the agent may attach. */
+export interface AgentSecrets {
+  /** The organization's secrets the caller sees, never a value: `GET /v1/secrets`. */
+  list(options?: RequestOptions): Promise<ListedSecret[]>;
+  /**
+   * The secrets of the namespace the client acts for, never a value: `GET /v1/namespaces/{name}/secrets`.
+   * `undefined` when the client names no namespace.
+   */
+  ofNamespace?(options?: RequestOptions): Promise<ListedSecret[] | undefined>;
 }
 
 export interface AgentToolsOptions {
@@ -290,6 +308,8 @@ export class AgentTools {
         return this.retryRun(values, options);
       case "search_tools":
         return this.searchTools(values, options);
+      case "list_secrets":
+        return this.listSecrets(options);
       case "save_workflow":
         return this.saveWorkflow(values, options);
       case "get_workflow":
@@ -302,6 +322,7 @@ export class AgentTools {
   private async runScript(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const code = requireString(input, "code");
     const wait = this.waitOf(input["wait"]);
+    const secrets = optionalAttachments(input);
     const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
     const run = await this.client.runs.start({
       script: code,
@@ -311,6 +332,7 @@ export class AgentTools {
       idempotencyKey,
       labels: this.options.labels,
       ttl: this.options.ttl,
+      ...optionalField("secrets", secrets),
       ...this.traceContext(options),
       signal: options.signal,
     });
@@ -443,6 +465,7 @@ export class AgentTools {
   private async retryRun(input: Values, options: HandleOptions): Promise<AgentToolResult> {
     const runId = requireString(input, "run_id");
     const code = requireString(input, "code");
+    const secrets = optionalAttachments(input);
     const parent = await this.scopedRun(runId, options.signal);
     const idempotencyKey = await runIdempotencyKey(this.options.labels, options.toolCallId);
     let run: Run;
@@ -453,6 +476,7 @@ export class AgentTools {
         wait: this.defaultWaitMs,
         idempotencyKey,
         ttl: this.options.ttl,
+        ...optionalField("secrets", secrets),
         ...this.traceContext(options),
         signal: options.signal,
       });
@@ -470,6 +494,29 @@ export class AgentTools {
     }
     await this.checkAnswered(run, code, idempotencyKey, options.toolCallId);
     return this.report(run, { errorWhenFailed: true, trace: run.status === "failed", signal: options.signal });
+  }
+
+  /**
+   * `list_secrets`: the organization's secrets the caller sees, and those of the namespace the client acts for. A list
+   * the caller may not read (403) is left out: its key may attach none of them.
+   */
+  private async listSecrets(options: HandleOptions): Promise<AgentToolResult> {
+    const secrets = this.client.secrets;
+    const readable = async (listing: () => Promise<ListedSecret[] | undefined>) => {
+      try {
+        return await listing();
+      } catch (error) {
+        if (error instanceof RewindApiError && error.status === 403) {
+          return [];
+        }
+        throw error;
+      }
+    };
+    const organization = secrets ? ((await readable(() => secrets.list({ signal: options.signal }))) ?? []) : [];
+    const ofNamespace = secrets?.ofNamespace
+      ? await readable(() => secrets.ofNamespace!({ signal: options.signal }))
+      : undefined;
+    return { content: describeSecrets(organization, ofNamespace), isError: false };
   }
 
   private async searchTools(input: Values, options: HandleOptions): Promise<AgentToolResult> {
@@ -500,6 +547,7 @@ export class AgentTools {
       ...optionalField("update", optionalUpdates(input)),
       ...optionalField("retire", optionalRetirements(input)),
       ...optionalField("parent", optionalString(input, "parent")),
+      ...optionalField("secrets", optionalAttachments(input)),
     };
     const toolset = this.currentToolset;
     if (toolset === undefined) {
@@ -778,6 +826,20 @@ function optionalString(values: Values, key: string): string | undefined {
     throw new InputError(`\`${key}\` must be a non-empty string.`);
   }
   return value;
+}
+
+/** `secrets`: the secrets a run reads, by MCP server or API, each `org/<name>` or `ns/<name>`. The API checks them. */
+function optionalAttachments(values: Values): Record<string, string> | undefined {
+  const value = values["secrets"];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!isObject(value) || !Object.values(value).every((secret) => typeof secret === "string" && secret !== "")) {
+    throw new InputError(
+      '`secrets` must be an object of secrets by MCP server or API, each "org/<name>" or "ns/<name>", such as {"github": "ns/github"}.',
+    );
+  }
+  return value as Record<string, string>;
 }
 
 function optionalStrings(values: Values, key: string): string[] | undefined {

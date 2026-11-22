@@ -12,6 +12,9 @@
  * - The embedded server: its lock (a second server exits 75), its files' modes, virtual time,
  *   the idle stop, `kill -9` and a resume in the next process.
  * - `rewind replay` of an exported journal, and of tampered ones.
+ * - An API read from its OpenAPI document and called over http, as only the embedded server does
+ *   (`archi/04-tools.md`, "API tools"), with the secret `rewind secrets put` wrote and
+ *   `--secret` attaches; a signed call where no public URL publishes the keys is not sent.
  */
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
@@ -19,7 +22,8 @@ import { join } from "node:path";
 import { rewindBinary } from "../../support/paths.js";
 import { eventually } from "../../support/processes.js";
 import { finish, Project } from "../../support/project.js";
-import { evidence, expect, test } from "../support/gate.js";
+import { startApiFixture } from "../support/fixtures.js";
+import { canary, evidence, expect, test } from "../support/gate.js";
 
 const OK = "export default async function main(input: { n?: number }) { return (input.n ?? 20) + 1; }\n";
 const FAILS = 'export default async function main() { throw new Error("the script gave up"); }\n';
@@ -287,5 +291,80 @@ test("the embedded server stops after its idle timeout", { tag: "@success" }, as
     evidence(`--idle-timeout 2s: exited 0 after ${Date.now() - started} ms`);
   } finally {
     await local.dispose();
+  }
+});
+
+/** `rewind <args…>` in the project, `input` on its standard input. */
+async function piped(project: Project, args: string[], input: string) {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  delete env.REWIND_URL;
+  delete env.REWIND_DIR;
+  delete env.REWIND_API_KEY;
+  const child = spawn(rewindBinary(), args, { cwd: project.root, env, stdio: ["pipe", "pipe", "pipe"] });
+  child.stdin!.end(input);
+  return finish(child, 120_000, args);
+}
+
+const MEASURES = `import { dax } from "rewind:tools";
+
+export default async function main() {
+  const measure = await dax.getMeasure({ id: "m 1" });
+  const created = await dax.createMeasure({ body: { name: "weight" } });
+  return { value: measure.value, created: created.created, key: created.key };
+}
+`;
+
+test("an API is read from its OpenAPI document and called with the secret the run attaches", { tag: "@success" }, async () => {
+  const api = await startApiFixture();
+  try {
+    project.write("measures.ts", MEASURES);
+    project.write("measures.toolset.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl }] }));
+    project.write("signed.toolset.json", JSON.stringify({ apis: [{ name: "dax", openapi: api.documentUrl, auth: { type: "rewind" } }] }));
+    const value = `${canary()}-dax`;
+    // The value goes in on standard input, never as an argument.
+    const put = await piped(project, ["secrets", "put", "dax-key"], `${value}\n`);
+    expect(put.code, said(put)).toBe(0);
+    expect(put.stdout + put.stderr).not.toContain(value);
+
+    // Nothing attached for dax, whose document requires a key: refused before any run exists,
+    // naming what may be attached (a usage error of the command line: 64).
+    const refused = await project.rewind(["run", "measures.ts", "--toolset", "measures.toolset.json"]);
+    expect(refused.code, said(refused)).toBe(64);
+    expect(refused.stderr).toContain("the script imports dax, which needs a secret");
+    expect(refused.stderr).toContain("org/dax-key");
+    expect(api.requests).toEqual([]);
+
+    const ran = await project.json(["run", "measures.ts", "--toolset", "measures.toolset.json", "--secret", "dax=org/dax-key", "--wait", "60s"]);
+    expect(ran.code, said(ran.ran)).toBe(0);
+    const key = `${ran.value.id}/2`;
+    expect(ran.value.output.value).toEqual({ value: 3.5, created: "weight", key });
+    expect(ran.value.secrets).toEqual({ dax: "org/dax-key" });
+    expect(api.requests.map((r) => [r.method, r.url.replace(api.base, ""), r.headers["x-api-key"]])).toEqual([
+      ["GET", "/measures/m%201", value],
+      ["POST", "/measures", value],
+    ]);
+    expect(api.requests[1]!.headers["idempotency-key"]).toBe(key);
+    expect(ran.ran.stdout + ran.ran.stderr).not.toContain(value);
+
+    // Nothing the CLI prints of the run, nor the secrets' list, holds the value.
+    const exported = await project.rewind(["export", ran.value.id]);
+    expect(exported.code, said(exported)).toBe(0);
+    const listed = await project.rewind(["--json", "secrets", "list"]);
+    expect(listed.code, said(listed)).toBe(0);
+    expect(JSON.parse(listed.stdout).secrets.map((s: { reference: string }) => s.reference)).toEqual(["org/dax-key"]);
+    const usage = await project.rewind(["--json", "secrets", "usage", "dax-key"]);
+    expect(usage.code, said(usage)).toBe(0);
+    for (const printed of [exported, listed, usage]) expect(printed.stdout + printed.stderr).not.toContain(value);
+
+    // Signed: the embedded server here has no public URL, so no one could read its keys; the
+    // call fails unavailable and is never sent.
+    const before = api.requests.length;
+    const signed = await project.json(["run", "measures.ts", "--toolset", "signed.toolset.json", "--wait", "60s"]);
+    expect(signed.code, said(signed.ran)).toBe(1);
+    expect(signed.value.error.failedCall).toMatchObject({ tool: "dax.getMeasure", error: { kind: "unavailable" } });
+    expect(api.requests.length, "the signed call was not sent").toBe(before);
+    evidence(`the document read from ${api.documentUrl}; without --secret → 65; with dax=org/dax-key both calls carried X-Api-Key, the POST its Idempotency-Key ${key}; export, list and usage print no value; a signed call without a public URL → unavailable, not sent`);
+  } finally {
+    await api.close();
   }
 });

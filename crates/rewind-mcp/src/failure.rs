@@ -1,10 +1,10 @@
 //! What went wrong talking to an MCP server, sorted the way the engine needs it
-//! (`archi/04-tools.md`, "Tool task lifecycle"): refused credentials park the call, transient
-//! failures are retried under `retry`, the others fail the call for good.
+//! (`archi/04-tools.md`, "Tool task lifecycle"): a refused secret or signature parks the call,
+//! transient failures are retried under `retry`, the others fail the call for good.
 //!
 //! | What happened | Outcome |
 //! | --- | --- |
-//! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_expired` |
+//! | HTTP 401, with or without a `WWW-Authenticate` challenge | parked: `credentials_refused` |
 //! | The server cannot be reached, the connection or the process closed, HTTP 429 or 5xx, JSON-RPC internal error (-32603), a session that could not be recovered | transient: `unavailable` |
 //! | No answer within the execution timeout | transient: `timeout` |
 //! | The tool reported an error (`isError`), any other JSON-RPC error, an answer that is not a tool result, another HTTP 4xx, a command that does not exist | failed |
@@ -28,8 +28,9 @@ use rmcp::transport::streamable_http_client::{
 };
 use serde_json::Value;
 
+use rewind_outbound::{Egress, SigningError};
+
 use crate::McpError;
-use crate::http::Egress;
 
 /// Characters of a message from a server kept in a failure: the script and the model read it.
 const MESSAGE: usize = 2000;
@@ -49,7 +50,7 @@ const WITHHELD: &str = "the answer of an internal server is not quoted";
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Failure {
-    /// The server refused the credentials (HTTP 401).
+    /// The server refused the secret or the signature (HTTP 401).
     Unauthorized(String),
     /// Worth retrying: nothing says the server will refuse again.
     Transient(ToolFailure),
@@ -74,7 +75,7 @@ impl Failure {
     pub(crate) fn into_dispatched(self) -> Dispatched {
         match self {
             Failure::Unauthorized(message) => Dispatched::Park(ParkReason {
-                kind: ParkKind::CredentialsExpired,
+                kind: ParkKind::CredentialsRefused,
                 message,
             }),
             Failure::Transient(failure) => Dispatched::Transient(failure),
@@ -236,6 +237,13 @@ fn of_transport(server: &str, error: &(dyn Error + 'static), answers: Answers) -
             None,
         );
     }
+    if let Some(unsigned) = signing_error(error) {
+        return Failure::permanent(
+            ToolFailureKind::Unavailable,
+            format!("{server}: {unsigned}"),
+            None,
+        );
+    }
     let status = http_status(error);
     // What follows the status, or the place of one: the error's text, or for an internal
     // server, only the client's own error.
@@ -294,6 +302,25 @@ fn client_error<'a>(error: &'a (dyn Error + 'static)) -> Option<&'a reqwest::Err
 fn refusal(error: &(dyn Error + 'static)) -> Option<String> {
     Egress::refusal_of(error)
         .or_else(|| client_error(error).and_then(|client| Egress::refusal_of(client)))
+}
+
+/// Rewind could not sign a request of a signed session: its key is unusable, which retrying
+/// does not change.
+fn signing_error(error: &(dyn Error + 'static)) -> Option<SigningError> {
+    let mut source = Some(error);
+    while let Some(current) = source {
+        if let Some(signing) = current.downcast_ref::<SigningError>() {
+            return Some(signing.clone());
+        }
+        if let Some(StreamableHttpError::Io(io)) =
+            current.downcast_ref::<StreamableHttpError<reqwest::Error>>()
+            && let Some(signing) = io.get_ref().and_then(|inner| inner.downcast_ref())
+        {
+            return Some(SigningError::clone(signing));
+        }
+        source = current.source();
+    }
+    None
 }
 
 /// A stdio server that could not be started. A missing or forbidden program will not appear

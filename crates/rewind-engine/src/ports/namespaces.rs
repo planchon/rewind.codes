@@ -27,8 +27,7 @@ pub struct InvalidNamespace(pub String);
 impl NamespaceName {
     pub const MAX_LEN: usize = 128;
 
-    /// The namespace the migration puts every run, toolset credential and count that existed
-    /// before namespaces in (`archi/08-decisions.md`, "Taken for namespaces").
+    /// The namespace the migration puts every run and count that existed before namespaces in (`archi/08-decisions.md`, "Taken for namespaces").
     pub const MIGRATED: &'static str = "migrated";
 
     /// The namespace the CLI uses against its own embedded server when none is given.
@@ -50,11 +49,6 @@ impl NamespaceName {
     /// [`Self::MIGRATED`].
     pub fn migrated() -> Self {
         Self(Self::MIGRATED.to_owned())
-    }
-
-    /// `*`, which no namespace is named: the credentials resolved for it are a toolset's own.
-    pub(crate) fn none() -> Self {
-        Self("*".to_owned())
     }
 
     pub fn as_str(&self) -> &str {

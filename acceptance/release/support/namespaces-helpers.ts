@@ -14,7 +14,9 @@ export const TOKEN_ALL = [
   "runs:quarantine",
   "runs:delete",
   "toolsets:read",
-  "credentials:write",
+  "secrets:read",
+  "secrets:write",
+  "secrets:use",
   "tasks:work",
   "tasks:approve",
 ];

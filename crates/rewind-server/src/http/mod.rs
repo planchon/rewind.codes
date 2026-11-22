@@ -16,6 +16,7 @@ mod roles;
 pub(crate) mod runs;
 mod scripts;
 mod search;
+mod secrets;
 mod sign_in;
 mod subscriptions;
 mod tasks;
@@ -51,7 +52,6 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::TOOLSETS, post(toolsets::create).get(toolsets::list))
         .route(routes::TOOLSET_DECLARATIONS, get(toolsets::declarations))
         .route(routes::TOOLSET_SEARCH, get(toolsets::search))
-        .route(routes::TOOLSET_CREDENTIALS, put(toolsets::credentials))
         .route(
             routes::WORKFLOWS,
             post(workflows::create).get(workflows::list),
@@ -77,7 +77,6 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_JOURNAL, get(runs::journal))
         .route(routes::RUN_RELEASE, post(runs::release))
         .route(routes::RUN_GIVE_UP, post(runs::give_up))
-        .route(routes::RUN_CREDENTIALS, put(runs::credentials))
         .route(routes::TASKS, get(tasks::claim))
         .route(routes::TASK_HEARTBEAT, post(tasks::heartbeat))
         .route(routes::TASK_DEFER, post(tasks::defer))
@@ -134,7 +133,6 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
                 .patch(namespaces::patch)
                 .delete(namespaces::delete),
         )
-        .route(routes::NAMESPACE_CREDENTIALS, put(namespaces::credentials))
         .route(
             routes::NAMESPACE_DEFAULTS,
             get(namespaces::defaults).put(namespaces::put_defaults),
@@ -142,6 +140,22 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::NAMESPACE_NAMES, get(namespaces::names))
         .route(routes::QUOTA_ALERTS, get(namespaces::alerts))
         .route(routes::ORGANIZATION_QUOTAS, put(namespaces::put_ceiling))
+        .route(routes::SECRETS, get(secrets::list))
+        .route(routes::SECRET, put(secrets::put).delete(secrets::delete))
+        .route(routes::SECRET_USAGE, get(secrets::usage))
+        .route(routes::NAMESPACE_SECRETS, get(secrets::list_of_namespace))
+        .route(
+            routes::NAMESPACE_SECRET,
+            put(secrets::put_of_namespace).delete(secrets::delete_of_namespace),
+        )
+        .route(
+            routes::NAMESPACE_SECRET_USAGE,
+            get(secrets::usage_of_namespace),
+        )
+        .route(
+            routes::SIGNING_KEYS,
+            get(secrets::signing_keys).post(secrets::rotate_signing_key),
+        )
         .route(
             routes::NAMESPACE_TOKENS,
             post(tokens::create).delete(tokens::revoke_namespace),
@@ -217,8 +231,11 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
             get(oauth::authorization_server),
         )
         .with_state(app.clone());
+    // The organizations' public keys, which the servers that check signed calls fetch without
+    // authentication (`archi/04-tools.md`, "Signed calls").
     let public = Router::new()
         .route(routes::HOOK, post(hooks::post))
+        .route(routes::JWKS, get(secrets::jwks))
         .fallback(dashboard::serve)
         .with_state(app.clone())
         .merge(sign_in)

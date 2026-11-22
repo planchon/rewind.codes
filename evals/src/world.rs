@@ -33,7 +33,8 @@ use rewind_engine::testing::TestOptions;
 use rewind_engine::{
     Adapters, DriveOptions, Engine, EngineConfig, EngineError, StartError, StartRun, StartWorkflow,
 };
-use rewind_mcp::{McpConfig, McpDispatcher, McpEgress};
+use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher};
+use rewind_outbound::ToolEgress;
 use rewind_runtime::{SandboxLimits, TsMockLoader, V8Executor};
 use serde_json::Value;
 
@@ -45,7 +46,7 @@ pub type EvalEngine = Engine<
     MemoryJournal,
     MemoryBlobs,
     V8Executor,
-    RoutingDispatcher<McpDispatcher, Unrouted, Unrouted>,
+    RoutingDispatcher<McpDispatcher, Unrouted, Unrouted, Unrouted>,
     SharedClock,
     SeededEntropy,
     MemorySecrets,
@@ -206,7 +207,7 @@ impl World {
 
         // The fake servers listen on 127.0.0.1, as a developer's would for the embedded server.
         let mcp = McpDispatcher::new(McpConfig {
-            egress: McpEgress::open(),
+            egress: ToolEgress::open(),
             ..McpConfig::default()
         });
         let tenant = TenantId::local();
@@ -220,7 +221,7 @@ impl World {
                 },
             );
             let listed = mcp
-                .list_tools(&tenant, &server, None)
+                .list_tools(&tenant, &server, ListingAuth::None)
                 .await
                 .map_err(|err| WorldError::Discovery {
                     server: server.name.clone(),
@@ -251,7 +252,7 @@ impl World {
                 journal: MemoryJournal::new(),
                 blobs: MemoryBlobs::new(),
                 executor,
-                dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted),
+                dispatcher: RoutingDispatcher::new(mcp.clone(), Unrouted, Unrouted, Unrouted),
                 clock: clock.clone(),
                 entropy: SeededEntropy::new(1),
                 secrets: MemorySecrets::new(),
@@ -373,7 +374,6 @@ impl World {
                     ..RunMetadata::default()
                 },
                 idempotency_key: None,
-                credentials: None,
             })
             .await
             .map_err(|error: StartError| refused(error.to_string()))?;

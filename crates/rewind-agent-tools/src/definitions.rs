@@ -14,7 +14,7 @@ use rewind_api::access::Permission;
 use serde_json::{Value, json};
 
 /// The names of the agent tools of the SDK's set, in the SDK's order.
-pub const AGENT_TOOLS: [&str; 12] = [
+pub const AGENT_TOOLS: [&str; 13] = [
     "run_script",
     "check_script",
     "test_script",
@@ -24,6 +24,7 @@ pub const AGENT_TOOLS: [&str; 12] = [
     "cancel_run",
     "retry_run",
     "search_tools",
+    "list_secrets",
     "save_workflow",
     "get_workflow",
     "record_tests",
@@ -69,6 +70,18 @@ fn status() -> Value {
         "enum": ["pending", "active", "completed", "failed", "cancelled", "aborted"]
     })
 }
+
+/// What a run reads: the secrets it attaches, by MCP server or API.
+fn secrets(description: &str) -> Value {
+    json!({
+        "type": "object",
+        "description": description,
+        "additionalProperties": { "type": "string", "description": "org/<name> or ns/<name>." }
+    })
+}
+
+/// The `secrets` of `run_script`.
+const RUN_SECRETS: &str = "The secrets the run reads, by the MCP server or API whose calls need one: {\"github\": \"ns/github\"} for the end user's own secret, read in the namespace the run acts for, or \"org/<name>\" for the organization's. Names only, never a value: list_secrets gives those you may attach. A script that imports a server needing a secret is refused without one.";
 
 fn with_description(mut schema: Value, description: &str) -> Value {
     schema["description"] = json!(description);
@@ -258,7 +271,8 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                 "properties": {
                     "code": code(),
                     "input": { "description": "The input passed to `main`, any JSON value. {} when absent." },
-                    "wait": wait()
+                    "wait": wait(),
+                    "secrets": secrets(RUN_SECRETS)
                 },
                 "required": ["code"],
                 "additionalProperties": false
@@ -346,7 +360,8 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "run_id": with_description(run_id(), "The run to correct."),
-                    "code": with_description(code(), "The corrected TypeScript source.")
+                    "code": with_description(code(), "The corrected TypeScript source."),
+                    "secrets": secrets("The secrets the new run reads, by MCP server or API, as run_script takes them. The failed run's when absent; either way checked again, since the script is new code.")
                 },
                 "required": ["run_id", "code"],
                 "additionalProperties": false
@@ -359,6 +374,15 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                 "type": "object",
                 "properties": { "query": { "type": "string", "description": "Words to look for in tool names and descriptions." } },
                 "required": ["query"],
+                "additionalProperties": false
+            }),
+        },
+        "list_secrets" => ToolDefinition {
+            name: "list_secrets",
+            description: "List the secrets you may attach to a run, by name, never a value: the end user's own (ns/<name>, read in the namespace the run acts for) and the organization's (org/<name>). Give them in `secrets` of run_script, retry_run or save_workflow, by the MCP server or API whose calls need one, such as {\"github\": \"ns/github\"}.",
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
                 "additionalProperties": false
             }),
         },
@@ -419,7 +443,8 @@ pub fn definition(name: &str) -> Option<ToolDefinition> {
                     "parent": {
                         "type": "string",
                         "description": "The version it derives from, whose suite it inherits: name@version, or a version. The latest version of this name when absent."
-                    }
+                    },
+                    "secrets": secrets("The secrets its runs read, by MCP server or API: {\"github\": \"ns/github\"}, the secret github of the namespace each run acts for, or \"org/<name>\", the organization's. Saved with the version: a run of it needs no right on them, only its namespace's ns/ secrets.")
                 },
                 "required": ["name", "description", "code", "input", "output"],
                 "additionalProperties": false
@@ -475,11 +500,12 @@ pub fn definitions() -> Vec<ToolDefinition> {
 
 /// The names of the agent tools of the MCP set, in the order `tools/list` gives them: from an
 /// organization to a run.
-pub const MCP_TOOLS: [&str; 14] = [
+pub const MCP_TOOLS: [&str; 15] = [
     "list_orgs",
     "list_namespaces",
     "list_toolsets",
     "search_tools",
+    "list_secrets",
     "check_script",
     "test_script",
     "run_script",
@@ -604,7 +630,7 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
             return Some(McpTool {
                 name: "list_namespaces",
                 title: "List namespaces",
-                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, credentials and limits are kept apart from the others'. Its name is the organization's id for the end user; a display name (\"Acme Corp\") may follow it in parentheses, to find who is who. check_script, test_script and run_script act in the namespace whose name you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
+                description: "List the namespaces of an organization, the most active first. A namespace is one end user of the organization: their runs, secrets and limits are kept apart from the others'. Its name is the organization's id for the end user; a display name (\"Acme Corp\") may follow it in parentheses, to find who is who. check_script, test_script and run_script act in the namespace whose name you give as `namespace`; get_run and list_runs read every namespace unless you name one.".into(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -647,6 +673,25 @@ pub fn mcp_tool(name: &str) -> Option<McpTool> {
                 Permission::ToolsetsRead,
                 Annotations::READ,
                 "Give the toolset as `toolset`, as list_toolsets gives it.",
+            )
+        }
+        "list_secrets" => {
+            description = description.replace(
+                "run_script, retry_run or save_workflow",
+                "run_script or retry_run",
+            );
+            extra.push((
+                "namespace",
+                json!({
+                    "type": "string",
+                    "description": "The namespace whose own secrets (ns/<name>) to list besides the organization's: the end user the run will act for, as list_namespaces gives it. Only the organization's when absent."
+                }),
+            ));
+            (
+                "List secrets",
+                Permission::SecretsRead,
+                Annotations::READ,
+                "Give the organization as `org`, and the namespace the run will act for as `namespace`.",
             )
         }
         "check_script" => {
@@ -853,6 +898,7 @@ mod tests {
                 "list_namespaces",
                 "list_toolsets",
                 "search_tools",
+                "list_secrets",
                 "check_script",
                 "test_script",
                 "get_run",
@@ -875,6 +921,22 @@ mod tests {
             Some(Permission::NamespacesRead)
         );
         assert_eq!(tool("record_tests").permission, Some(Permission::RunsRead));
+        assert_eq!(
+            tool("list_secrets").permission,
+            Some(Permission::SecretsRead)
+        );
+        assert!(tool("list_secrets").input_schema["properties"]["namespace"].is_object());
+        assert!(
+            !tool("list_namespaces").description.contains("credentials"),
+            "a namespace keeps its secrets"
+        );
+        for name in ["run_script", "retry_run"] {
+            assert_eq!(
+                tool(name).input_schema["properties"]["secrets"]["type"],
+                "object",
+                "{name}"
+            );
+        }
     }
 
     /// The same checks as the SDK's ("describe the test document: its world, its signals and its
@@ -946,6 +1008,7 @@ mod tests {
                 "update",
                 "retire",
                 "parent",
+                "secrets",
             ])
         );
         assert!(save.description.contains("saved only if every test passes"));

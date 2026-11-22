@@ -4,12 +4,14 @@
 //! rewind server --embedded [--dir .rewind] [--virtual-time | --real-time] [--idle-timeout 10m]
 //! rewind server --store turso:<path> [--blobs <dir> | s3://<bucket>] [--listen 127.0.0.1:8080]
 //!            [--role api|worker]… [--public-url https://…] …
+//! rewind server --store … --master-key <new> --previous-master-keys <old> --rewrap-data-keys
 //! ```
 //!
 //! Every option also reads an environment variable (`REWIND_*`), for deployments; WorkOS's four
 //! keep WorkOS's names (`WORKOS_*`, `archi/07-code-architecture.md`, "Sign-in (`/auth`)"). The
-//! secrets (`--master-key`, `--admin-key`, S3 keys, WorkOS's API key and cookie password) are
-//! never printed.
+//! secrets (`--master-key`, `--previous-master-keys`, `--admin-key`, S3 keys, WorkOS's API key
+//! and cookie password) are never printed: a master key is named by its id, the first 8 bytes of
+//! its SHA-256 in hex.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -20,9 +22,9 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use clap::{Parser, ValueEnum};
-use rewind_engine::ports::{Quotas, Retention, TenantId, TenantScope};
+use rewind_engine::ports::{MasterKeyId, Quotas, Retention, TenantId, TenantScope};
 use rewind_engine::{CacheConfig, EngineConfig};
-use rewind_mcp::{InternalAllowList, McpEgress};
+use rewind_outbound::{InternalAllowList, ToolEgress};
 
 use crate::wiring::blobs::{BlobLocation, S3Options};
 use crate::wiring::store::StoreLocation;
@@ -116,6 +118,23 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_MASTER_KEY", hide_env_values = true)]
     pub master_key: Option<String>,
 
+    /// The master keys `--master-key` replaced, 32 bytes in base64 each, separated by commas:
+    /// they only decrypt the data keys still held under them, until `--rewrap-data-keys` has
+    /// run. A server refuses to start while a data key is held under a key it was not given.
+    #[arg(
+        long,
+        env = "REWIND_PREVIOUS_MASTER_KEYS",
+        hide_env_values = true,
+        value_delimiter = ','
+    )]
+    pub previous_master_keys: Vec<String>,
+
+    /// Encrypts with `--master-key` every data key held under one of `--previous-master-keys`,
+    /// one tenant at a time, prints how many it changed, and exits without serving. The secrets
+    /// and the private keys are not encrypted again; servers may keep running meanwhile.
+    #[arg(long)]
+    pub rewrap_data_keys: bool,
+
     /// An API key (`rewind_sk_…`) with the role `operator`, registered at start: the first key,
     /// from which the others are made with `POST /v1/api-keys`.
     #[arg(long, env = "REWIND_ADMIN_KEY", hide_env_values = true)]
@@ -188,17 +207,18 @@ pub struct ServerArgs {
     #[arg(long, env = "REWIND_ALLOW_STDIO")]
     pub allow_stdio: bool,
 
-    /// An internal host or network whose MCP servers toolsets may name: a host name
+    /// An internal host or network whose MCP servers and APIs toolsets may name: a host name
     /// (`mcp.internal.example`), its subdomains (`*.svc.cluster.local`), an address or a CIDR
     /// network (`10.20.0.0/16`). Repeat, or separate with commas. Without it, a server reaches
-    /// MCP servers only at public addresses: private, loopback, link-local and cloud-metadata
-    /// addresses are refused. The embedded server reaches any address.
+    /// MCP servers, APIs and OpenAPI documents only at public addresses: private, loopback,
+    /// link-local and cloud-metadata addresses are refused. What such an internal server
+    /// answers is never quoted to the tenant. The embedded server reaches any address.
     #[arg(
-        long = "allow-internal-mcp",
-        env = "REWIND_ALLOW_INTERNAL_MCP",
+        long = "allow-internal-tools",
+        env = "REWIND_ALLOW_INTERNAL_TOOLS",
         value_delimiter = ','
     )]
-    pub allow_internal_mcp: Vec<String>,
+    pub allow_internal_tools: Vec<String>,
 
     /// Send lifecycle webhooks to private, loopback and link-local addresses too, over
     /// `http://` or `https://`: for a harness on the same trusted network. Without it, a server
@@ -405,6 +425,54 @@ impl ServerArgs {
     }
 }
 
+/// The master keys of the secret store (`archi/04-tools.md`, "Secrets": the master key can be
+/// replaced): the current one, which encrypts, and the previous ones, which only decrypt. `Debug`
+/// shows their ids, never a key.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct MasterKeyRing {
+    pub(crate) current: [u8; 32],
+    /// Never the current one, and no key twice.
+    pub(crate) previous: Vec<[u8; 32]>,
+}
+
+impl MasterKeyRing {
+    pub(crate) fn new(current: [u8; 32]) -> Self {
+        Self {
+            current,
+            previous: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_previous(mut self, previous: impl IntoIterator<Item = [u8; 32]>) -> Self {
+        for key in previous {
+            if key != self.current && !self.previous.contains(&key) {
+                self.previous.push(key);
+            }
+        }
+        self
+    }
+
+    pub(crate) fn current_id(&self) -> MasterKeyId {
+        MasterKeyId::of(&self.current)
+    }
+
+    pub(crate) fn previous_ids(&self) -> Vec<MasterKeyId> {
+        self.previous
+            .iter()
+            .map(|key| MasterKeyId::of(key))
+            .collect()
+    }
+}
+
+impl fmt::Debug for MasterKeyRing {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MasterKeyRing")
+            .field("current", &self.current_id())
+            .field("previous", &self.previous_ids())
+            .finish()
+    }
+}
+
 /// How the server listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Listen {
@@ -424,7 +492,9 @@ pub(crate) struct Config {
     pub(crate) store: StoreLocation,
     pub(crate) blobs: BlobLocation,
     /// `None` for the embedded server, which keeps its own.
-    pub(crate) master_key: Option<[u8; 32]>,
+    pub(crate) master_keys: Option<MasterKeyRing>,
+    /// `--rewrap-data-keys`: rewrap, print, exit.
+    pub(crate) rewrap_data_keys: bool,
     pub(crate) admin_key: Option<String>,
     pub(crate) admin_tenant: TenantId,
     pub(crate) public_url: Option<String>,
@@ -435,10 +505,10 @@ pub(crate) struct Config {
     /// The ceiling of the tenants this server creates.
     pub(crate) ceiling: Quotas,
     pub(crate) allow_stdio: bool,
-    /// Where MCP servers may be: anywhere for the embedded server; public addresses and the
-    /// internal hosts of `--allow-internal-mcp` for a deployed one.
-    pub(crate) mcp_egress: McpEgress,
-    /// The internal hosts and networks of `--allow-internal-mcp`: MCP servers, and the
+    /// Where MCP servers, APIs and OpenAPI documents may be: anywhere for the embedded server;
+    /// public addresses and the internal hosts of `--allow-internal-tools` for a deployed one.
+    pub(crate) tool_egress: ToolEgress,
+    /// The internal hosts and networks of `--allow-internal-tools`: MCP servers, APIs, and the
     /// metadata documents of OAuth clients, may be there.
     pub(crate) internal_hosts: InternalAllowList,
     /// Lifecycle webhooks may go to the private network, over `http://` too.
@@ -553,6 +623,12 @@ impl ServerArgs {
         }
 
         if self.embedded {
+            if self.rewrap_data_keys {
+                return Err(ConfigError::new(
+                    "the embedded server keeps its master key in --dir: --rewrap-data-keys does \
+                     not apply to it",
+                ));
+            }
             if !self.roles.is_empty() {
                 return Err(ConfigError::new(
                     "the embedded server takes both roles: --role does not apply to it",
@@ -564,10 +640,10 @@ impl ServerArgs {
                      apply to it",
                 ));
             }
-            if !self.allow_internal_mcp.is_empty() {
+            if !self.allow_internal_tools.is_empty() {
                 return Err(ConfigError::new(
-                    "the embedded server reaches MCP servers at any address: \
-                     --allow-internal-mcp does not apply to it",
+                    "the embedded server reaches MCP servers and APIs at any address: \
+                     --allow-internal-tools does not apply to it",
                 ));
             }
             let dir = self.dir.clone();
@@ -577,7 +653,8 @@ impl ServerArgs {
                 listen: Listen::Embedded { dir },
                 api: true,
                 worker: true,
-                master_key: None,
+                master_keys: None,
+                rewrap_data_keys: false,
                 admin_key: None,
                 admin_tenant: TenantId::local(),
                 public_url: self
@@ -589,7 +666,7 @@ impl ServerArgs {
                 dispatches: self.dispatches,
                 ceiling: Quotas::default(),
                 allow_stdio: true,
-                mcp_egress: McpEgress::open(),
+                tool_egress: ToolEgress::open(),
                 internal_hosts: InternalAllowList::default(),
                 allow_private_webhooks: true,
                 virtual_time,
@@ -610,8 +687,8 @@ impl ServerArgs {
         if !api && !worker {
             return Err(ConfigError::new("--role takes api, worker, or both"));
         }
-        let internal_mcp = InternalAllowList::parse(&self.allow_internal_mcp)
-            .map_err(|error| ConfigError::new(format!("--allow-internal-mcp: {error}")))?;
+        let internal_tools = InternalAllowList::parse(&self.allow_internal_tools)
+            .map_err(|error| ConfigError::new(format!("--allow-internal-tools: {error}")))?;
         let store = if self.in_memory {
             StoreLocation::Memory
         } else {
@@ -656,6 +733,22 @@ impl ServerArgs {
             )
         })?;
         let master_key = parse_master_key(master_key)?;
+        let previous = self
+            .previous_master_keys
+            .iter()
+            .map(|key| key.trim())
+            .filter(|key| !key.is_empty())
+            .enumerate()
+            .map(|(at, key)| {
+                parse_master_key(key).map_err(|error| {
+                    ConfigError::new(format!(
+                        "--previous-master-keys (REWIND_PREVIOUS_MASTER_KEYS), key {}: {error}",
+                        at + 1
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let master_keys = MasterKeyRing::new(master_key).with_previous(previous);
         let admin_tenant = TenantId::new(self.admin_tenant.clone())
             .map_err(|error| ConfigError::new(error.to_string()))?;
         if let Some(key) = &self.admin_key
@@ -678,7 +771,8 @@ impl ServerArgs {
             worker,
             store,
             blobs,
-            master_key: Some(master_key),
+            master_keys: Some(master_keys),
+            rewrap_data_keys: self.rewrap_data_keys,
             admin_key: self.admin_key,
             admin_tenant,
             public_url: self
@@ -697,8 +791,8 @@ impl ServerArgs {
                 max_script_lines: self.quota_max_script_lines,
             },
             allow_stdio: self.allow_stdio,
-            mcp_egress: McpEgress::checked(internal_mcp.clone()),
-            internal_hosts: internal_mcp,
+            tool_egress: ToolEgress::checked(internal_tools.clone()),
+            internal_hosts: internal_tools,
             allow_private_webhooks: self.allow_private_webhooks,
             virtual_time,
             idle_timeout: self.idle_timeout,
@@ -714,11 +808,11 @@ impl ServerArgs {
     }
 }
 
-/// Reads a master key: 32 bytes in base64.
+/// Reads a master key: 32 bytes in base64. An error never quotes the text, which may be a key.
 pub(crate) fn parse_master_key(text: &str) -> Result<[u8; 32], ConfigError> {
     let bytes = BASE64
         .decode(text.trim())
-        .map_err(|error| ConfigError::new(format!("the master key is not base64: {error}")))?;
+        .map_err(|_| ConfigError::new("the master key is not base64"))?;
     <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
         ConfigError::new(format!(
             "the master key has {} bytes: it must have 32",
@@ -782,7 +876,8 @@ mod tests {
         ])
         .unwrap_or_else(|error| panic!("{error}"));
         assert!(config.api && !config.worker);
-        assert_eq!(config.master_key, Some([7u8; 32]));
+        assert_eq!(config.master_keys, Some(MasterKeyRing::new([7u8; 32])));
+        assert!(!config.rewrap_data_keys);
         assert!(
             parse(&["--store", "postgres://x", "--master-key", &key]).is_err(),
             "Postgres needs --blobs"
@@ -926,6 +1021,67 @@ mod tests {
     }
 
     #[test]
+    fn previous_master_keys_only_decrypt_and_are_never_printed() {
+        let (current, old, older) = (
+            BASE64.encode([7u8; 32]),
+            BASE64.encode([8u8; 32]),
+            BASE64.encode([9u8; 32]),
+        );
+        let previous = format!("{old}, {older},{current},{old}");
+        let config = parse(&[
+            "--store",
+            "turso:/tmp/j.db",
+            "--master-key",
+            &current,
+            "--previous-master-keys",
+            &previous,
+            "--rewrap-data-keys",
+        ])
+        .unwrap_or_else(|error| panic!("{error}"));
+        let keys = config.master_keys.clone().expect("master keys");
+        assert_eq!(keys.current, [7u8; 32]);
+        assert_eq!(
+            keys.previous,
+            [[8u8; 32], [9u8; 32]],
+            "in order, without the current key nor twice the same"
+        );
+        assert!(config.rewrap_data_keys);
+        let printed = format!("{config:?}");
+        for key in [&current, &old, &older] {
+            assert!(!printed.contains(key.as_str()), "{printed}");
+        }
+        assert!(!printed.contains("[7, 7, 7"), "{printed}");
+        assert!(
+            printed.contains(MasterKeyId::of(&[8u8; 32]).as_str()),
+            "{printed}"
+        );
+
+        let invalid = parse(&[
+            "--store",
+            "turso:/tmp/j.db",
+            "--master-key",
+            &current,
+            "--previous-master-keys",
+            "c2VjcmV0LWJ1dC1zaG9ydA==",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(invalid.contains("key 1"), "{invalid}");
+        assert!(
+            !invalid.contains("c2VjcmV0"),
+            "the key is not printed: {invalid}"
+        );
+        let not_base64 = parse(&["--store", "turso:/tmp/j.db", "--master-key", "s3cr3t!!"])
+            .unwrap_err()
+            .to_string();
+        assert!(!not_base64.contains("s3cr3t"), "{not_base64}");
+        assert!(
+            parse(&["--embedded", "--rewrap-data-keys"]).is_err(),
+            "the embedded server keeps its master key"
+        );
+    }
+
+    #[test]
     fn sizes_take_binary_units() {
         assert_eq!(parse_bytes("1024"), Ok(1024));
         assert_eq!(parse_bytes("4GiB"), Ok(4 << 30));
@@ -937,7 +1093,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_deployed_server_checks_where_its_mcp_servers_are() {
+    fn only_a_deployed_server_checks_where_its_mcp_servers_and_apis_are() {
         let key = BASE64.encode([7u8; 32]);
         let deployed = |extra: &[&str]| {
             let mut args = vec!["--store", "turso:/tmp/j.db", "--master-key", &key];
@@ -945,25 +1101,25 @@ mod tests {
             parse(&args)
         };
         let checked = deployed(&[]).unwrap_or_else(|error| panic!("{error}"));
-        assert!(!checked.mcp_egress.is_open());
+        assert!(!checked.tool_egress.is_open());
         let allowed = deployed(&[
-            "--allow-internal-mcp",
+            "--allow-internal-tools",
             "mcp.internal.example,10.20.0.0/16",
-            "--allow-internal-mcp",
+            "--allow-internal-tools",
             "*.svc.cluster.local",
         ])
         .unwrap_or_else(|error| panic!("{error}"));
-        assert!(!allowed.mcp_egress.is_open());
-        let invalid = deployed(&["--allow-internal-mcp", "10.0.0.0/33"]).unwrap_err();
+        assert!(!allowed.tool_egress.is_open());
+        let invalid = deployed(&["--allow-internal-tools", "10.0.0.0/33"]).unwrap_err();
         assert!(
             invalid
                 .to_string()
-                .starts_with("--allow-internal-mcp: \"10.0.0.0/33\""),
+                .starts_with("--allow-internal-tools: \"10.0.0.0/33\""),
             "{invalid}"
         );
 
         let embedded = parse(&["--embedded"]).unwrap_or_else(|error| panic!("{error}"));
-        assert!(embedded.mcp_egress.is_open());
-        assert!(parse(&["--embedded", "--allow-internal-mcp", "10.0.0.0/8"]).is_err());
+        assert!(embedded.tool_egress.is_open());
+        assert!(parse(&["--embedded", "--allow-internal-tools", "10.0.0.0/8"]).is_err());
     }
 }

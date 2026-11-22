@@ -498,8 +498,9 @@ function Practices() {
           tools may be "Always allow".
         </li>
         <li>
-          <strong>Secrets stay in Rewind.</strong> The credentials of your MCP servers live in the
-          toolset, never in the chat.
+          <strong>Secrets stay in Rewind.</strong> Their values are written in{" "}
+          <Link to="/secrets">Secrets</Link>, never in the chat: Claude attaches a secret by its
+          name, and a script never sees it.
         </li>
         <li>
           <strong>Revoke</strong> a connection you no longer use from{" "}

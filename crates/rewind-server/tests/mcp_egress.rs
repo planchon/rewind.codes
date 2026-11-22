@@ -1,7 +1,7 @@
 //! Where a server's MCP client goes (`archi/04-tools.md`, "Toolsets and code generation";
 //! `archi/06-storage-and-scale.md`, "Security"). The MCP servers of these tests listen on
 //! 127.0.0.1: for a deployed server, an internal service, refused unless the operator allows it
-//! (`--allow-internal-mcp`), and never quoted to the tenant once allowed. The embedded server
+//! (`--allow-internal-tools`), and never quoted to the tenant once allowed. The embedded server
 //! reaches any address.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -113,8 +113,8 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
     assert_eq!(refused.kind(), Some(ProblemType::ToolsetUnavailable));
     assert_eq!(
         refused.detail,
-        "finder cannot be reached: 127.0.0.1 is a loopback address: MCP servers are not reached \
-         there unless the operator allows it"
+        "finder cannot be reached: 127.0.0.1 is a loopback address: MCP servers and APIs are not \
+         reached there unless the operator allows it"
     );
     let metadata = problem(
         harness
@@ -137,7 +137,7 @@ async fn a_deployed_server_refuses_mcp_servers_on_internal_addresses() {
 async fn an_operator_allows_internal_mcp_servers_whose_answers_stay_unquoted() {
     let finder = Finder::default();
     let (url, admin) = serve(finder.clone()).await;
-    let server = TestServer::start(&["--allow-internal-mcp", "127.0.0.1"]).await;
+    let server = TestServer::start(&["--allow-internal-tools", "127.0.0.1"]).await;
     let harness = server.key(BuiltInRole::Harness, &[]).await;
 
     let registered = harness.create_toolset(&toolset(&url)).await.unwrap();

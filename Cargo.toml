@@ -20,6 +20,8 @@ rewind-engine = { path = "crates/rewind-engine" }
 rewind-format = { path = "crates/rewind-format" }
 rewind-mcp = { path = "crates/rewind-mcp" }
 rewind-mcp-server = { path = "crates/rewind-mcp-server" }
+rewind-openapi = { path = "crates/rewind-openapi" }
+rewind-outbound = { path = "crates/rewind-outbound" }
 rewind-otel = { path = "crates/rewind-otel" }
 rewind-runtime = { path = "crates/rewind-runtime" }
 rewind-server = { path = "crates/rewind-server" }
@@ -28,7 +30,8 @@ rewind-store-turso = { path = "crates/rewind-store-turso" }
 rewind-workos = { path = "crates/rewind-workos" }
 rewind-cli = { path = "crates/rewind-cli" }
 
-# The RSA keys rewind-workos's tests sign access tokens with: the crypto `workos` already builds.
+# The RSA keys rewind-workos's tests sign access tokens with, and the Ed25519 signing keys of the
+# memory SecretStore: the crypto `workos` and rustls already build.
 aws-lc-rs = "1"
 axum = "0.8"
 base64 = "0.23"
@@ -55,7 +58,9 @@ hmac = "0.13"
 # The request parts rewind-mcp-server reads its caller from (rmcp's streamable HTTP server
 # gives them to its handler), the version rmcp and axum build.
 http = "1"
-# The networks of the internal MCP servers an operator allows (`--allow-internal-mcp 10.0.0.0/8`).
+# `Retry-After` as an HTTP date, in rewind-openapi's answers (the crate hyper already builds).
+httpdate = "1"
+# The networks of the internal MCP servers and APIs an operator allows (`--allow-internal-tools 10.0.0.0/8`).
 ipnet = "2"
 # Timestamps of the HTTP API (RFC 3339).
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
@@ -89,6 +94,8 @@ serde_html_form = "0.2"
 # a value going through JS and Rust could change by one ULP, and its digest with it.
 serde_json = { version = "1", features = ["float_roundtrip", "raw_value"] }
 sha2 = "0.11"
+# The path parameters of API calls, percent-encoded (the crate url already builds).
+percent-encoding = "2"
 # The production store (rewind-store-postgres): Postgres through sqlx, without its macros (queries are
 # built at run time) and with rustls on aws-lc-rs, the provider the HTTP clients already use. 0.8:
 # sqlx 0.9 needs Rust 1.94, above the workspace's 1.88.

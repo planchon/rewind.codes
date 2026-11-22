@@ -2,9 +2,10 @@
 // Over a month: how its runs went (started, completed, failed, waiting, durations, by day, what
 // fails most, the tools they call), its CPU time added up against its quota, its use of every
 // limit, the alerts of the month, its tokens in use, its exceptions to the defaults; then its runs
-// of the month and the scripts its runs ran. What the caller's permissions allow, each in a
-// dialog: rename it and change its limits (`namespaces:write`), revoke its tokens
-// (`tokens:write`), erase it (`namespaces:write`, confirmed by typing its id). Each shows on the page
+// of the month, the scripts its runs ran, and its secrets (`secrets:read`). What the caller's
+// permissions allow, each in a dialog: rename it and change its limits (`namespaces:write`), revoke
+// its tokens (`tokens:write`), write and delete its secrets (`secrets:write`), erase it
+// (`namespaces:write`, confirmed by typing its id). Each change of the namespace shows on the page
 // at once, and is undone if the server refuses it, its message in the dialog
 // (`state/namespaces.ts`).
 import {
@@ -63,6 +64,7 @@ import { useScriptList } from "../../state/scripts";
 import { ConfirmButton } from "../org/bits";
 import { ScopedRuns } from "../ScopedRuns";
 import { ScriptTable } from "../ScriptsView";
+import { SecretList } from "../secrets/SecretList";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
 
 const POLL = 30_000;
@@ -220,8 +222,8 @@ function Erase({
       description={
         <>
           The end user leaves: their tokens are revoked and their active runs cancelled, then their
-          runs, journals, credentials and use are erased. This cannot be undone, and the namespace
-          takes no run or token meanwhile. The organization's totals keep what it used.
+          runs, journals, secrets and use are erased. This cannot be undone, and the namespace takes
+          no run or token meanwhile. The organization's totals keep what it used.
         </>
       }
       submit={`Erase ${label}`}
@@ -513,6 +515,31 @@ function ScriptList({ name, scope, count }: { name: string; scope: string; count
   );
 }
 
+/** The end user's own secrets, which its runs attach as `ns/<name>`. */
+function NamespaceSecrets({ name }: { name: string }) {
+  const access = useAccess();
+  return (
+    <section className="ns-section" aria-label="Its secrets">
+      <header className="ns-section-head">
+        <h2>Secrets</h2>
+      </header>
+      <SecretList
+        namespace={name}
+        intro={
+          <>
+            This end user's own values, such as their GitHub token: only the runs of this namespace
+            attach them, as <code>ns/&lt;name&gt;</code>, and nothing falls back on the
+            organization's.
+            {access.can("secrets:write") && access.limited
+              ? " Your grant is limited to labels: it reads them, and never writes one."
+              : ""}
+          </>
+        }
+      />
+    </section>
+  );
+}
+
 function NamespacePage({ name }: { name: string }) {
   const [params, setParams] = useSearchParams();
   const access = useAccess();
@@ -637,7 +664,7 @@ function NamespacePage({ name }: { name: string }) {
       {erased && (
         <div className="notice" role="status">
           The erasure of <span className="mono">{ns.name}</span> started: its tokens are revoked and
-          its active runs cancelled; its runs, credentials and use are erased in the background.
+          its active runs cancelled; its runs, secrets and use are erased in the background.
         </div>
       )}
       <FormDialog open={renaming && canWrite} onOpenChange={setRenaming}>
@@ -817,6 +844,7 @@ function NamespacePage({ name }: { name: string }) {
 
       <MonthRunList runs={runs} month={month} label={label} />
       <ScriptList name={ns.name} scope={runs.scope} count={ns.usage.scripts} />
+      {access.can("secrets:read") && <NamespaceSecrets name={ns.name} />}
     </div>
   );
 }

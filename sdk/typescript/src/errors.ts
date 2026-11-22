@@ -1,4 +1,4 @@
-import type { Diagnostic, Problem, QuerySpan, QuotaReached, TestResult } from "./types.js";
+import type { AttachmentProblem, Diagnostic, Problem, QuerySpan, QuotaReached, TestResult } from "./types.js";
 
 /** The kinds of problem the API answers with: the slug of `urn:rewind:problem:<slug>`. */
 export type ProblemSlug =
@@ -23,6 +23,7 @@ export type ProblemSlug =
   | "tests-failed"
   | "invalid-input"
   | "invalid-signal"
+  | "secret-required"
   | "quota-exceeded"
   | "internal"
   | "toolset-unavailable"
@@ -72,6 +73,16 @@ export class RewindApiError extends RewindError {
    */
   get tests(): TestResult[] {
     return this.problem.tests ?? [];
+  }
+
+  /**
+   * With `secret-required`: each attachment that refused the start, the fork or the save, by MCP server or API, with
+   * why (`missing`: nothing attached for a server whose `auth` takes a secret; `takes_none`: the server takes none;
+   * `unknown`: no such secret; `forbidden`: the caller may not attach it) and the secrets the caller may attach for
+   * that server instead (`attachable`). Empty otherwise.
+   */
+  get attachments(): AttachmentProblem[] {
+    return this.problem.attachments ?? [];
   }
 
   /** With `invalid-query`: where the term at fault is in the query, in characters. */

@@ -142,8 +142,8 @@ heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)    ne
 defer_tool_task(token, until)      park_tool_task(token, reason)
 complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
 approve_tool_task(task, now) / reject_tool_task(task, failure, now)
-resume_parked(Secret { tenant, namespace, name }, now)
-secret_usage(tenant, SecretRef { namespace, name }) -> { active_runs, waiting_runs, versions }
+resume_parked(Secret { tenant, secret: SecretId { namespace, name } }, now)
+secret_usage(tenant, SecretId, labels, limit) -> { active_runs, active_total, waiting_runs, waiting_total, versions }
 tool_tasks(run)                    tool_task(token)
 create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
@@ -281,7 +281,8 @@ Contracts, all covered by the conformance suite:
   put again (for a namespace's secret, the runs of that namespace). `secret_usage` reads, for a
   secret, the active runs that attach it, those of them with a call to a server it serves that
   is parked or not yet sent, and the latest version of each workflow that attaches it; a
-  version attaching `ns/<name>` counts for every namespace's secret of that name.
+  version attaching `ns/<name>` counts for every namespace's secret of that name. Only the runs
+  carrying `labels` count, so a caller limited to labels learns nothing of the others.
   `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
   failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
   `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.
@@ -359,10 +360,13 @@ Contracts, all covered by the conformance suite:
 - **`ToolDispatcher`**: `dispatch(call, auth) -> Dispatched`. The call carries the run, its
   namespace and labels, the `seq`, the pinned tool and its server or API, the args, the
   idempotency key, the attempt, whether the harness approved a schema change (then the call is
-  sent without checking the schema again), the claim's token and the trace context. `auth` is what
-  the server's `auth` asks ([authenticating calls](04-tools.md#authenticating-calls)): nothing,
-  the attached secret's value, or the tenant's signing key, with which the dispatcher signs each
-  request it builds, since the JWT covers the method, the URL and the body. `Dispatched` is one of: `Result` and `Failed` (the
+  sent without checking the schema again), the claim's token and the trace context. `auth`
+  (`CallAuth`) is what the server's `auth` asks ([authenticating
+  calls](04-tools.md#authenticating-calls)): nothing, the attached secret's value with where it
+  goes, or the tenant's signing key with the claims the engine knows (`iss`, `sub`, `labels`,
+  `run`, `tool`, `idempotency_key`, the attempt), with which the dispatcher signs each request it
+  builds, adding `aud`, `htm`, `htu`, `body`, `iat`, `exp` and `jti`, since the JWT covers the
+  method, the URL and the body. Mock mode passes nothing. `Dispatched` is one of: `Result` and `Failed` (the
   outcome); `Transient`, after which the engine puts the task back to `ready` with backoff, or
   fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
   token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher
@@ -395,12 +399,15 @@ Contracts, all covered by the conformance suite:
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
 - **`SecretStore`**: secrets are keyed by tenant, namespace (`*` for the organization's) and
-  name. `put(tenant, namespace, name, value, labels, by, now)` creates or replaces one;
-  `list(tenant, namespace, labels) -> [SecretMeta]` and `meta(…)` answer names, labels, who wrote
-  them and when, reads per day and the last read, never a value; `read(tenant, namespace, name,
-  run, now) -> Option<Secret>` answers the value and counts the read, for the dispatcher only;
-  `delete(tenant, namespace, name)`, and `delete_namespace(tenant, namespace)` for an erased end
-  user. Signing keys: `signing_key(tenant, now) -> SigningKey`, made at the first call;
+  name: a `SecretId`, what an attachment names once resolved in the run's namespace.
+  `put(tenant, NewSecret { id, value, labels, by }, now) -> Created | Replaced` creates or
+  replaces one; `list(tenant, namespace, labels, since) -> [SecretMeta]` and `meta(tenant, id,
+  since)` answer names, labels, who wrote them and when, reads per day from `since` and the last
+  read (by a run, with its namespace, or by a registration; date), never a value; `read(tenant,
+  id, SecretReader::Run { run, namespace } | SecretReader::Registration, now) -> Option<Secret>`
+  answers the value and counts the read, for the dispatcher's path and a registration's listing
+  only;
+  `delete(tenant, id)`, and `delete_namespace(tenant, namespace)` for an erased end user. Signing keys: `signing_key(tenant, now) -> SigningKey`, made at the first call;
   `rotate_signing_key(tenant, now)`; `public_keys(tenant, now) -> [Jwk]`, the current key and
   those retired less than 24 hours ago. Envelope encryption: each tenant has a data key, itself
   encrypted by a master key from the deployment's configuration; a value is bound to its tenant,
@@ -950,7 +957,7 @@ Its build is what `rewind-server` serves:
 | --- | --- |
 | Build | `pnpm --dir dashboard install --frozen-lockfile && pnpm --dir dashboard build` |
 | Output | `dashboard/dist/`: `index.html`, `favicon.svg`, `assets/` (scripts, styles, fonts, named by content hash). Not committed: `rewind-server` embeds the directory when it is compiled |
-| Serving | At the root of its origin. The routes are paths (`/runs/…`): the server, and Vercel for the hosted dashboard, answer `index.html` for any path that is neither a file of the build nor under a root of the API (`/v1`, `/auth`, `/oauth`, `/.well-known`, `/mcp`, `/hooks`, `/assets`); the server answers 404 for a missing file name at the root (`/favicon.ico`). An old link with a fragment (`/#/runs/…`) is rewritten by the app at load. `index.html` is not cached; `assets/` is immutable |
+| Serving | At the root of its origin. The routes are paths (`/runs/…`): the server, and Vercel for the hosted dashboard, answer `index.html` for any path that is neither a file of the build nor under a root of the API (`/v1`, `/auth`, `/oauth`, `/.well-known`, `/mcp`, `/hooks`, `/assets`, `/organizations`); the server answers 404 for a missing file name at the root (`/favicon.ico`). An old link with a fragment (`/#/runs/…`) is rewritten by the app at load. `index.html` is not cached; `assets/` is immutable |
 | Sign-in | With WorkOS: its own pages, GitHub or a code by email, through `/auth` on the same origin ([sign-in](#sign-in-auth)); onboarding (create an organization, accept an invitation), the organization picker, the waitlist, which someone new also opens from the first page. Without WorkOS: an API key typed by the operator, kept for the tab, or on the device when asked |
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read`, Secrets to whoever holds `secrets:read`, and their writes to whoever holds `secrets:write`; a value is a field that is written and never read back |
 | Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |

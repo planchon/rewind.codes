@@ -25,15 +25,17 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, Interruption, JsonValue, Lifecycle, Next,
-    NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunStarted, RunStatus, Script, Seq,
-    ToolFailure, ToolFailureKind, Toolset,
+    Attachments, Command, Completion, Event, HistoryEntry, Interruption, JsonValue, Lifecycle,
+    Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunMode, RunStarted, RunStatus,
+    Script, Seq, ToolFailure, ToolFailureKind, Toolset,
 };
 
 use crate::activation::{Batch, Grace, abort_reason};
 use crate::adapters::StaticTypeChecker;
+use crate::attachments::AttachRights;
 use crate::engine::{
-    Engine, EngineError, StartError, idempotency_key, refuse_nul_in_metadata, type_check,
+    AttachedScript, Engine, EngineError, StartError, idempotency_key, refuse_nul_in_metadata,
+    type_check,
 };
 use crate::payloads;
 use crate::ports::{
@@ -61,6 +63,11 @@ pub struct ForkRun {
     pub trace_context: Option<TraceContext>,
     /// A retried request with the same key returns the same fork.
     pub idempotency_key: Option<String>,
+    /// The fork's attachments; the parent's when `None`. Either way they are checked against
+    /// `attach`: the script is new code (`archi/04-tools.md`, "Secrets").
+    pub secrets: Option<Attachments>,
+    /// What the caller may attach.
+    pub attach: AttachRights,
 }
 
 impl ForkRun {
@@ -74,6 +81,8 @@ impl ForkRun {
             labels: None,
             trace_context: None,
             idempotency_key: None,
+            secrets: None,
+            attach: AttachRights::NamespaceOnly,
         }
     }
 }
@@ -263,6 +272,10 @@ where
             workflow: None,
             started_by: None,
             scope: record.metadata.scope.clone(),
+            secrets: request
+                .secrets
+                .clone()
+                .unwrap_or_else(|| record.metadata.secrets.clone()),
         };
         refuse_nul_in_metadata(&metadata, request.idempotency_key.as_deref()).map_err(refused)?;
         let stored = self.toolset(&parent.tenant, record.toolset).await?;
@@ -271,6 +284,20 @@ where
             .executor
             .compile(&request.script, &toolset)
             .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
+        // The script is new code: even the parent's attachments are checked against the caller
+        // (`archi/04-tools.md`, "Secrets"). A fork of a test reads no secret.
+        if parent_started.mode == RunMode::Live {
+            self.check_script_attachments(AttachedScript {
+                tenant: &parent.tenant,
+                namespace: &record.namespace,
+                script: &request.script,
+                toolset: &toolset,
+                attachments: &metadata.secrets,
+                rights: &request.attach,
+            })
+            .await
+            .map_err(ForkError::Start)?;
+        }
         if let Some(checker) = checker {
             type_check(checker, &request.script, &stored.declarations)
                 .await

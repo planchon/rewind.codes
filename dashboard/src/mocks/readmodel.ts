@@ -93,6 +93,7 @@ export function deriveRun(fixture: RunFixture, now: number): Run {
   if (fixture.parent) run.parent = { run: fixture.parent.run, at: fixture.parent.at ?? null };
   if (fixture.workflow) run.workflow = fixture.workflow;
   if (fixture.startedBy) run.startedBy = fixture.startedBy;
+  if (fixture.secrets) run.secrets = fixture.secrets;
   if (fixture.quarantine && status === "active") run.quarantine = fixture.quarantine;
   const end = model.end;
   if (end) run.endedAt = new Date(end.at).toISOString();

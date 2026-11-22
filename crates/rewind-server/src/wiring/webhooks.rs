@@ -23,12 +23,11 @@ use rewind_api::webhooks::{
     CredentialsExpired, RunEvent, ToolSchemaChanged, WEBHOOK_ID, WEBHOOK_SIGNATURE,
     WEBHOOK_TIMESTAMP, WebhookSecret,
 };
-use rewind_core::ToolRoute;
 use rewind_engine::ports::{
-    JournalStore, RunRef, Subscription, TaskRef, WebhookError, WebhookEvent, WebhookEventKind,
-    WebhookSender,
+    CredentialsExpiredReason, JournalStore, RunRef, Subscription, TaskRef, WebhookError,
+    WebhookEvent, WebhookEventKind, WebhookSender,
 };
-use rewind_mcp::{Egress, NameResolver, SystemResolver};
+use rewind_outbound::{Egress, NameResolver, SystemResolver};
 use tokio::time::Instant;
 
 use crate::views::{Views, task_id};
@@ -323,22 +322,35 @@ impl Render for ServerRender {
                     },
                 }
             }
-            WebhookEventKind::CredentialsExpired { seq, tool, message } => {
-                rewind_api::webhooks::WebhookEvent::CredentialsExpired {
-                    timestamp: at,
-                    data: CredentialsExpired {
-                        run_id: run.id.to_string(),
-                        namespace: crate::views::namespace(&record.namespace),
-                        labels: Labels::from(event.labels.clone()),
-                        task_id: task(*seq),
-                        seq: seq.0,
-                        tool: tool.clone(),
-                        server: mcp_server(&self.store, &record, tool).await,
-                        toolset: record.toolset.to_hex(),
-                        message: message.clone(),
+            WebhookEventKind::CredentialsExpired {
+                seq,
+                tool,
+                message,
+                reason,
+                secret,
+            } => rewind_api::webhooks::WebhookEvent::CredentialsExpired {
+                timestamp: at,
+                data: CredentialsExpired {
+                    run_id: run.id.to_string(),
+                    namespace: crate::views::namespace(&record.namespace),
+                    labels: Labels::from(event.labels.clone()),
+                    task_id: task(*seq),
+                    seq: seq.0,
+                    tool: tool.clone(),
+                    server: mcp_server(&self.store, &record, tool).await,
+                    toolset: record.toolset.to_hex(),
+                    reason: match reason {
+                        CredentialsExpiredReason::Refused => {
+                            rewind_api::webhooks::CredentialsExpiredReason::Refused
+                        }
+                        CredentialsExpiredReason::Missing => {
+                            rewind_api::webhooks::CredentialsExpiredReason::Missing
+                        }
                     },
-                }
-            }
+                    secret: secret.as_ref().map(ToString::to_string),
+                    message: message.clone(),
+                },
+            },
             kind => {
                 let views = Views {
                     store: &self.store,
@@ -394,10 +406,7 @@ async fn mcp_server(
         .get_toolset(&record.run.tenant, record.toolset)
         .await
         .ok()??;
-    match &stored.toolset.tool(tool)?.route {
-        ToolRoute::Mcp { server } => Some(server.clone()),
-        _ => None,
-    }
+    stored.toolset.tool(tool)?.route.server().map(str::to_owned)
 }
 
 #[cfg(test)]
@@ -628,8 +637,8 @@ mod tests {
     #[derive(Debug)]
     struct Fixed(Vec<std::net::IpAddr>);
 
-    impl rewind_mcp::NameResolver for Fixed {
-        fn resolve(&self, _host: &str) -> rewind_mcp::Resolving {
+    impl rewind_outbound::NameResolver for Fixed {
+        fn resolve(&self, _host: &str) -> rewind_outbound::Resolving {
             let addresses = self.0.clone();
             Box::pin(async move { Ok(addresses) })
         }

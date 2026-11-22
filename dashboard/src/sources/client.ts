@@ -36,6 +36,7 @@ import type {
   PutNamespace,
   PutNamespaceDefaults,
   PutRole,
+  PutSecret,
   paths,
   QuotaAlertList,
   QuotaAlertsQuery,
@@ -47,9 +48,13 @@ import type {
   RunStatsQuery,
   Script,
   ScriptPage,
+  Secret,
+  SecretUsage,
   ServerInfo,
   SetGrant,
   SignalAccepted,
+  SigningKey,
+  SigningKeyList,
   Test,
   ToolStatsPage,
   ToolStatsQuery,
@@ -632,7 +637,7 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/organization/namespace-names", { signal }));
   }
 
-  /** Erases the end user in the background: its tokens, runs, credentials and use. */
+  /** Erases the end user in the background: its tokens, runs, secrets and use. */
   async deleteNamespace(name: string): Promise<void> {
     this.unwrap(await this.client.DELETE("/v1/namespaces/{name}", { params: { path: { name } } }));
   }
@@ -658,5 +663,66 @@ export class Api {
     return this.unwrap(
       await this.client.GET("/v1/organization/quota-alerts", { params: { query }, signal }),
     );
+  }
+  // Secrets: the organization's (`namespace` null) and a namespace's. Write-only: no answer holds
+  // a value.
+
+  async secrets(namespace: string | null, signal?: AbortSignal): Promise<Secret[]> {
+    const answer =
+      namespace === null
+        ? await this.client.GET("/v1/secrets", { signal })
+        : await this.client.GET("/v1/namespaces/{name}/secrets", {
+            params: { path: { name: namespace } },
+            signal,
+          });
+    return this.unwrap(answer).secrets;
+  }
+
+  /** Creates or replaces a secret: its value, and an organization's secret's labels. */
+  async putSecret(namespace: string | null, name: string, body: PutSecret): Promise<Secret> {
+    return this.unwrap(
+      namespace === null
+        ? await this.client.PUT("/v1/secrets/{name}", { params: { path: { name } }, body })
+        : await this.client.PUT("/v1/namespaces/{name}/secrets/{secret}", {
+            params: { path: { name: namespace, secret: name } },
+            body,
+          }),
+    );
+  }
+
+  async deleteSecret(namespace: string | null, name: string): Promise<void> {
+    this.unwrap(
+      namespace === null
+        ? await this.client.DELETE("/v1/secrets/{name}", { params: { path: { name } } })
+        : await this.client.DELETE("/v1/namespaces/{name}/secrets/{secret}", {
+            params: { path: { name: namespace, secret: name } },
+          }),
+    );
+  }
+
+  /** What reads a secret, and what deleting it would stop. */
+  async secretUsage(
+    namespace: string | null,
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<SecretUsage> {
+    return this.unwrap(
+      namespace === null
+        ? await this.client.GET("/v1/secrets/{name}/usage", { params: { path: { name } }, signal })
+        : await this.client.GET("/v1/namespaces/{name}/secrets/{secret}/usage", {
+            params: { path: { name: namespace, secret: name } },
+            signal,
+          }),
+    );
+  }
+
+  /** The signing keys, the issuer of the JWTs and the address of the public keys. */
+  async signingKeys(signal?: AbortSignal): Promise<SigningKeyList> {
+    return this.unwrap(await this.client.GET("/v1/organization/signing-keys", { signal }));
+  }
+
+  /** Replaces the signing key: the old one stops signing and stays published 24 hours. */
+  async rotateSigningKey(): Promise<SigningKey> {
+    return this.unwrap(await this.client.POST("/v1/organization/signing-keys"));
   }
 }

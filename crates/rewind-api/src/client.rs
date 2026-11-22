@@ -41,12 +41,15 @@ use crate::runs::{
     TraceQuery,
 };
 use crate::scripts::{CheckRequest, CheckResult, Script, ScriptFilter, ScriptPage, TestRequest};
+use crate::secrets::{
+    Jwks, PutSecret, Secret, SecretList, SecretUsage, SigningKey, SigningKeyList,
+};
 use crate::tasks::{
     CompleteTask, DeferTask, FailTask, HeartbeatAck, RejectTask, TaskBatch, TaskQuery,
 };
 use crate::toolsets::{
-    CreateToolset, Credentials, DeclarationFormat, DeclarationsQuery, DeclarationsText,
-    SearchQuery, ToolSearchResults, Toolset, ToolsetList,
+    CreateToolset, DeclarationFormat, DeclarationsQuery, DeclarationsText, SearchQuery,
+    ToolSearchResults, Toolset, ToolsetList,
 };
 use crate::webhooks::{CreateSubscription, Subscription, SubscriptionList};
 
@@ -247,18 +250,6 @@ impl Client {
     ) -> Result<ToolSearchResults, Error> {
         let request = self.request_with(Method::GET, routes::TOOLSET_SEARCH, &[toolset], query)?;
         self.json(request).await
-    }
-
-    /// `PUT /v1/toolsets/{id}/credentials`.
-    pub async fn set_toolset_credentials(
-        &self,
-        toolset: &str,
-        credentials: &Credentials,
-    ) -> Result<(), Error> {
-        let request = self
-            .request(Method::PUT, routes::TOOLSET_CREDENTIALS, &[toolset])?
-            .json(credentials);
-        self.empty(request).await
     }
 
     // ---------------------------------------------------------------------------------------
@@ -481,18 +472,6 @@ impl Client {
     pub async fn give_up_run(&self, run: &str) -> Result<Run, Error> {
         let request = self.request(Method::POST, routes::RUN_GIVE_UP, &[run])?;
         self.json(request).await
-    }
-
-    /// `PUT /v1/runs/{id}/credentials`.
-    pub async fn set_run_credentials(
-        &self,
-        run: &str,
-        credentials: &Credentials,
-    ) -> Result<(), Error> {
-        let request = self
-            .request(Method::PUT, routes::RUN_CREDENTIALS, &[run])?
-            .json(credentials);
-        self.empty(request).await
     }
 
     // ---------------------------------------------------------------------------------------
@@ -803,21 +782,107 @@ impl Client {
         self.empty(request).await
     }
 
-    /// `PUT /v1/namespaces/{name}/toolsets/{id}/credentials`.
-    pub async fn set_namespace_credentials(
+    // ---------------------------------------------------------------------------------------
+    // Secrets
+
+    /// `GET /v1/secrets`: the organization's secrets the caller sees, never a value.
+    pub async fn secrets(&self) -> Result<SecretList, Error> {
+        let request = self.request(Method::GET, routes::SECRETS, &[])?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/secrets/{name}`: creates or replaces an organization's secret.
+    pub async fn put_secret(&self, name: &str, secret: &PutSecret) -> Result<Secret, Error> {
+        let request = self
+            .request(Method::PUT, routes::SECRET, &[name])?
+            .json(secret);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/secrets/{name}`.
+    pub async fn delete_secret(&self, name: &str) -> Result<(), Error> {
+        let request = self.request(Method::DELETE, routes::SECRET, &[name])?;
+        self.empty(request).await
+    }
+
+    /// `GET /v1/secrets/{name}/usage`.
+    pub async fn secret_usage(&self, name: &str) -> Result<SecretUsage, Error> {
+        let request = self.request(Method::GET, routes::SECRET_USAGE, &[name])?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/namespaces/{name}/secrets`: an end user's secrets, never a value.
+    pub async fn namespace_secrets(&self, namespace: &NamespaceName) -> Result<SecretList, Error> {
+        let request = self.request(
+            Method::GET,
+            routes::NAMESPACE_SECRETS,
+            &[namespace.as_str()],
+        )?;
+        self.json(request).await
+    }
+
+    /// `PUT /v1/namespaces/{name}/secrets/{secret}`: creates or replaces an end user's secret.
+    pub async fn put_namespace_secret(
         &self,
-        name: &NamespaceName,
-        toolset: &str,
-        credentials: &Credentials,
-    ) -> Result<(), Error> {
+        namespace: &NamespaceName,
+        name: &str,
+        secret: &PutSecret,
+    ) -> Result<Secret, Error> {
         let request = self
             .request(
                 Method::PUT,
-                routes::NAMESPACE_CREDENTIALS,
-                &[name.as_str(), toolset],
+                routes::NAMESPACE_SECRET,
+                &[namespace.as_str(), name],
             )?
-            .json(credentials);
+            .json(secret);
+        self.json(request).await
+    }
+
+    /// `DELETE /v1/namespaces/{name}/secrets/{secret}`.
+    pub async fn delete_namespace_secret(
+        &self,
+        namespace: &NamespaceName,
+        name: &str,
+    ) -> Result<(), Error> {
+        let request = self.request(
+            Method::DELETE,
+            routes::NAMESPACE_SECRET,
+            &[namespace.as_str(), name],
+        )?;
         self.empty(request).await
+    }
+
+    /// `GET /v1/namespaces/{name}/secrets/{secret}/usage`.
+    pub async fn namespace_secret_usage(
+        &self,
+        namespace: &NamespaceName,
+        name: &str,
+    ) -> Result<SecretUsage, Error> {
+        let request = self.request(
+            Method::GET,
+            routes::NAMESPACE_SECRET_USAGE,
+            &[namespace.as_str(), name],
+        )?;
+        self.json(request).await
+    }
+
+    /// `GET /v1/organization/signing-keys`.
+    pub async fn signing_keys(&self) -> Result<SigningKeyList, Error> {
+        let request = self.request(Method::GET, routes::SIGNING_KEYS, &[])?;
+        self.json(request).await
+    }
+
+    /// `POST /v1/organization/signing-keys`: replaces the signing key.
+    pub async fn rotate_signing_key(&self) -> Result<SigningKey, Error> {
+        let request = self.request(Method::POST, routes::SIGNING_KEYS, &[])?;
+        self.json(request).await
+    }
+
+    /// `GET /organizations/{tenant}/jwks.json`: the organization's public keys. The server
+    /// answers it without authentication.
+    pub async fn jwks(&self, tenant: &str) -> Result<Jwks, Error> {
+        let request = self.request(Method::GET, routes::JWKS, &[tenant])?;
+        self.json(request).await
     }
 
     /// `GET /v1/organization/namespace-defaults`.
@@ -1068,6 +1133,7 @@ fn untyped_problem(status: StatusCode, body: &str) -> Problem {
         diagnostics: Vec::new(),
         query: None,
         tests: Vec::new(),
+        attachments: Vec::new(),
         quota: None,
     }
 }

@@ -1,6 +1,6 @@
 use rewind_core::{ToolFailure, ToolFailureKind, ToolRoute};
 
-use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
 
 /// Sends each call to the dispatcher of its route, so that a composition root plugs a real
 /// adapter or a mock per route (`archi/04-tools.md`, "Routes"):
@@ -8,39 +8,44 @@ use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
 /// | Route | Dispatcher |
 /// | --- | --- |
 /// | MCP tools | `mcp`: `rewind-mcp`, or mocks |
+/// | API tools | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
 /// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpTool`, or mocks |
 /// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are claimed by the harness's worker and never dispatched |
 ///
-/// [`Unrouted`] stands for a route without a dispatcher. Credentials go only to the dispatcher
-/// of the call's route.
+/// [`Unrouted`] stands for a route without a dispatcher. A call's [`CallAuth`] goes only to the
+/// dispatcher of its route.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RoutingDispatcher<M, B, H> {
+pub struct RoutingDispatcher<M, A, B, H> {
     pub mcp: M,
+    pub api: A,
     pub builtins: B,
     pub host: H,
 }
 
-impl<M, B, H> RoutingDispatcher<M, B, H> {
-    pub fn new(mcp: M, builtins: B, host: H) -> Self {
+impl<M, A, B, H> RoutingDispatcher<M, A, B, H> {
+    pub fn new(mcp: M, api: A, builtins: B, host: H) -> Self {
         Self {
             mcp,
+            api,
             builtins,
             host,
         }
     }
 }
 
-impl<M, B, H> ToolDispatcher for RoutingDispatcher<M, B, H>
+impl<M, A, B, H> ToolDispatcher for RoutingDispatcher<M, A, B, H>
 where
     M: ToolDispatcher,
+    A: ToolDispatcher,
     B: ToolDispatcher,
     H: ToolDispatcher,
 {
-    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
         match call.tool.route {
-            ToolRoute::Mcp { .. } => self.mcp.dispatch(call, credentials).await,
-            ToolRoute::Builtin(_) => self.builtins.dispatch(call, credentials).await,
-            ToolRoute::Host { .. } => self.host.dispatch(call, credentials).await,
+            ToolRoute::Mcp { .. } => self.mcp.dispatch(call, auth).await,
+            ToolRoute::Api { .. } => self.api.dispatch(call, auth).await,
+            ToolRoute::Builtin(_) => self.builtins.dispatch(call, auth).await,
+            ToolRoute::Host { .. } => self.host.dispatch(call, auth).await,
         }
     }
 }
@@ -51,9 +56,10 @@ where
 pub struct Unrouted;
 
 impl ToolDispatcher for Unrouted {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         let route = match call.tool.route {
             ToolRoute::Mcp { .. } => "MCP tools",
+            ToolRoute::Api { .. } => "API tools",
             ToolRoute::Builtin(_) => "built-in tools",
             ToolRoute::Host { .. } => "host tools",
         };
@@ -76,19 +82,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ports::{RunRef, TaskToken, TenantId};
+    use crate::ports::{NamespaceName, RunRef, Secret, TaskToken, TenantId};
 
-    /// Answers with its name, and records the credentials it received.
+    /// Answers with its name, and records the authentication it received.
     #[derive(Debug, Clone, Default)]
     struct Named {
         name: &'static str,
-        credentials: Arc<Mutex<Vec<Option<Credentials>>>>,
+        auth: Arc<Mutex<Vec<CallAuth>>>,
     }
 
     impl ToolDispatcher for Named {
-        async fn dispatch(&self, _call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
-            if let Ok(mut seen) = self.credentials.lock() {
-                seen.push(credentials);
+        async fn dispatch(&self, _call: ToolCall, auth: CallAuth) -> Dispatched {
+            if let Ok(mut seen) = self.auth.lock() {
+                seen.push(auth);
             }
             Dispatched::Result(json!(self.name))
         }
@@ -99,9 +105,12 @@ mod tests {
         ToolCall {
             idempotency_key: format!("{}/1", run.id),
             run,
+            namespace: NamespaceName::new("alice").unwrap(),
+            labels: Default::default(),
             seq: Seq(1),
             tool: Tool::new(name, route, json!({})),
             server: None,
+            api: None,
             args: json!({}),
             attempt: 1,
             schema_change_approved: false,
@@ -118,6 +127,10 @@ mod tests {
         };
         let router = RoutingDispatcher::new(
             mcp.clone(),
+            Named {
+                name: "api",
+                ..Named::default()
+            },
             Named {
                 name: "builtins",
                 ..Named::default()
@@ -136,9 +149,16 @@ mod tests {
         let mcp_route = ToolRoute::Mcp {
             server: server.name.clone(),
         };
-        let credentials = Credentials::default();
+        let auth = CallAuth::Secret {
+            value: Secret::new("ghp_123"),
+            placement: rewind_core::SecretPlacement::bearer(),
+        };
         let answered = [
             (call(mcp_route, "github.list_issues"), "mcp"),
+            (
+                call(ToolRoute::Api { api: "dax".into() }, "dax.createMeasure"),
+                "api",
+            ),
             (
                 call(
                     ToolRoute::Builtin(Builtin::Http {
@@ -151,23 +171,31 @@ mod tests {
             (call(ToolRoute::Host { group: None }, "ask_user"), "host"),
         ];
         for (call, expected) in answered {
+            let auth = if expected == "mcp" {
+                auth.clone()
+            } else {
+                CallAuth::None
+            };
             assert_eq!(
-                router.dispatch(call, Some(credentials.clone())).await,
+                router.dispatch(call, auth).await,
                 Dispatched::Result(json!(expected))
             );
         }
         assert_eq!(
-            *mcp.credentials.lock().unwrap(),
-            [Some(credentials)],
-            "the credentials reach the route's dispatcher"
+            *mcp.auth.lock().unwrap(),
+            [auth],
+            "the authentication reaches the route's dispatcher"
         );
     }
 
     #[tokio::test]
     async fn a_route_without_a_dispatcher_fails_its_calls() {
-        let router = RoutingDispatcher::new(Unrouted, Unrouted, Unrouted);
+        let router = RoutingDispatcher::new(Unrouted, Unrouted, Unrouted, Unrouted);
         let Dispatched::Failed(failure) = router
-            .dispatch(call(ToolRoute::Host { group: None }, "ask_user"), None)
+            .dispatch(
+                call(ToolRoute::Host { group: None }, "ask_user"),
+                CallAuth::None,
+            )
             .await
         else {
             panic!("an unrouted call fails");

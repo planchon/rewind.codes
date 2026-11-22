@@ -129,7 +129,8 @@ fn api_exit(error: &rewind_api::Error) -> Exit {
                 | ProblemType::InvalidWorkflow
                 | ProblemType::InvalidInput
                 | ProblemType::InvalidTest
-                | ProblemType::InvalidSignal,
+                | ProblemType::InvalidSignal
+                | ProblemType::SecretRequired,
             ) => Exit::Usage,
             Some(ProblemType::TestsFailed) => Exit::Failed,
             Some(ProblemType::InvalidScript) => Exit::ScriptRefused,
@@ -184,6 +185,7 @@ mod tests {
                 diagnostics: Vec::new(),
                 query: None,
                 tests: Vec::new(),
+                attachments: Vec::new(),
                 quota: None,
             }
             .into(),

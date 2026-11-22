@@ -1587,6 +1587,7 @@ dependencies = [
  "rewind-engine",
  "rewind-format",
  "rewind-mcp",
+ "rewind-outbound",
  "rewind-runtime",
  "rmcp",
  "serde",
@@ -4214,7 +4215,9 @@ dependencies = [
  "rewind-format",
  "rewind-mcp",
  "rewind-mcp-server",
+ "rewind-openapi",
  "rewind-otel",
+ "rewind-outbound",
  "rewind-runtime",
  "rmcp",
  "rustix 1.1.6",
@@ -4266,6 +4269,8 @@ dependencies = [
 name = "rewind-engine"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
+ "base64 0.23.1",
  "futures-util",
  "getrandom 0.3.4",
  "jiff",
@@ -4313,15 +4318,18 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "futures-util",
- "ipnet",
+ "getrandom 0.3.4",
+ "hmac 0.13.0",
  "jsonschema",
  "libtest-mimic",
  "reqwest 0.13.5",
  "rewind-core",
  "rewind-engine",
+ "rewind-outbound",
  "rmcp",
  "serde_json",
  "sha2 0.11.1",
+ "sse-stream 0.2.6",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -4347,6 +4355,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rewind-openapi"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "httpdate",
+ "percent-encoding",
+ "reqwest 0.13.5",
+ "rewind-core",
+ "rewind-engine",
+ "rewind-outbound",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "rewind-otel"
 version = "0.1.0"
 dependencies = [
@@ -4362,6 +4389,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "rewind-outbound"
+version = "0.1.0"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.23.1",
+ "getrandom 0.3.4",
+ "ipnet",
+ "jsonwebtoken",
+ "reqwest 0.13.5",
+ "rewind-core",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -4409,7 +4454,9 @@ dependencies = [
  "rewind-format",
  "rewind-mcp",
  "rewind-mcp-server",
+ "rewind-openapi",
  "rewind-otel",
+ "rewind-outbound",
  "rewind-runtime",
  "rewind-store-postgres",
  "rewind-store-turso",
@@ -4423,12 +4470,14 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
 name = "rewind-store-postgres"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "chacha20poly1305",
  "futures-util",
  "getrandom 0.3.4",
@@ -4447,6 +4496,7 @@ dependencies = [
 name = "rewind-store-turso"
 version = "0.1.0"
 dependencies = [
+ "aws-lc-rs",
  "chacha20poly1305",
  "getrandom 0.3.4",
  "rewind-core",

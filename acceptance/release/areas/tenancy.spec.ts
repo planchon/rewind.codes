@@ -3,7 +3,8 @@
  * the tenant is part of every storage key). Two tenants of setup A, acme and globex, each made by
  * the operator. Everything acme holds is probed with globex's owner key: runs and their journals,
  * scripts, toolsets, payloads (also when both hold the same bytes), host-tool tasks and
- * approvals, subscriptions, keys, roles, tokens and token keys, workflows, and inbound webhooks.
+ * approvals, subscriptions, keys, roles, tokens and token keys, secrets (the organization's and a
+ * namespace's) and signing keys, workflows, and inbound webhooks.
  * Each is not found (404, never 403, which would confirm it exists), and acme's state does not
  * move.
  */
@@ -104,6 +105,10 @@ interface Acme {
   role: string;
   token: { token: string; id: string };
   kid: string;
+  /** The name of its secrets: the organization's, and its namespace NS's. */
+  secret: string;
+  /** Its signing key's `kid`. */
+  signingKid: string;
 }
 
 let acme: Acme;
@@ -164,6 +169,11 @@ test.beforeAll(async () => {
   const signer = await signingKey("EdDSA");
   const registered = await tenant.api.post("/v1/organization/token-keys", { name: `${MARK} signer`, jwk: signer.publicJwk });
   expectOk(registered, 201);
+  const secret = `${MARK}-github`;
+  expectOk(await tenant.api.put(`/v1/secrets/${secret}`, { value: `${MARK}-organization-value`, labels: { owner: MARK } }), 201);
+  expectOk(await tenant.api.put(`/v1/namespaces/${NS}/secrets/${secret}`, { value: `${MARK}-alice-value` }), 201);
+  const rotated = await tenant.api.post("/v1/organization/signing-keys");
+  expectOk(rotated, 200);
 
   acme = {
     tenant,
@@ -179,6 +189,8 @@ test.beforeAll(async () => {
     role,
     token,
     kid: registered.json.kid,
+    secret,
+    signingKid: rotated.json.kid,
   };
 });
 
@@ -200,6 +212,7 @@ function expectNothingOf(reply: Reply, what: string): void {
     acme.subscription,
     acme.key.id,
     acme.kid,
+    acme.signingKid,
     acme.approval.runId,
     acme.task.runId,
   ];
@@ -239,7 +252,6 @@ test("another tenant's run is not found, whatever is asked of it", { tag: "@atta
     ["fork", () => asGlobex.ns(NS).post(`/v1/runs/${id}/fork`, { script: "export default async function main() { return 'stolen'; }" })],
     ["release", () => asGlobex.post(`/v1/runs/${id}/release`)],
     ["give up", () => asGlobex.post(`/v1/runs/${id}/give-up`)],
-    ["set credentials", () => asGlobex.put(`/v1/runs/${id}/credentials`, { servers: {} })],
     ["erase", () => asGlobex.delete(`/v1/runs/${id}`)],
   ];
   const seen: string[] = [];
@@ -276,6 +288,9 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
     ["token keys", "/v1/organization/token-keys"],
     ["quota alerts", "/v1/organization/quota-alerts"],
     ["namespace defaults", "/v1/organization/namespace-defaults"],
+    ["secrets", "/v1/secrets"],
+    ["secrets of acme's namespace's name", `/v1/namespaces/${NS}/secrets`],
+    ["signing keys", "/v1/organization/signing-keys"],
   ];
   for (const [what, path, query] of queries) {
     const api = what === "runs of acme's namespace" ? globex.api.ns(NS) : globex.api;
@@ -286,7 +301,7 @@ test("another tenant's lists, statistics and failure groups hold nothing of it",
   // acme's own failure groups do hold its failure: the check above is not vacuous.
   const own = await acme.tenant.api.get("/v1/runs/failures");
   expect(own.text).toContain(MARK);
-  evidence(`${queries.length} lists of globex (runs, stats, failures, scripts, tool stats, toolsets, namespaces, subscriptions, keys, roles, token keys, alerts) hold no id, digest or name of acme's`);
+  evidence(`${queries.length} lists of globex (runs, stats, failures, scripts, tool stats, toolsets, namespaces, subscriptions, keys, roles, token keys, alerts, secrets, signing keys) hold no id, digest or name of acme's`);
 });
 
 test("another tenant's script and toolset are not found, and its toolset starts nothing", { tag: "@attack" }, async () => {
@@ -294,8 +309,16 @@ test("another tenant's script and toolset are not found, and its toolset starts 
   expectProblem(await globex.api.get(`/v1/scripts/${acme.completed.script}`), 404, "not-found");
   expectProblem(await globex.api.get(`/v1/toolsets/${acme.toolset}/declarations`), 404, "not-found");
   expectProblem(await globex.api.get(`/v1/toolsets/${acme.toolset}/search`, { query: { query: "refund" } }), 404, "not-found");
-  expectProblem(await globex.api.put(`/v1/toolsets/${acme.toolset}/credentials`, { servers: {} }), 404, "not-found");
-  expectProblem(await globex.api.put(`/v1/namespaces/${NS}/toolsets/${acme.toolset}/credentials`, { servers: {} }), 404, "not-found");
+  // acme's secrets: their usage and their deletion are another tenant's, not found.
+  const acmeSecrets = async () => (await acme.tenant.api.get("/v1/secrets")).json.secrets.map((s: { reference: string }) => s.reference);
+  for (const path of [`/v1/secrets/${acme.secret}/usage`, `/v1/namespaces/${NS}/secrets/${acme.secret}/usage`]) {
+    expectProblem(await globex.api.get(path), 404, "not-found");
+  }
+  for (const path of [`/v1/secrets/${acme.secret}`, `/v1/namespaces/${NS}/secrets/${acme.secret}`]) {
+    await expectRefused({ attempt: () => globex.api.delete(path), status: 404, slug: "not-found", probe: acmeSecrets });
+  }
+  expect(await acmeSecrets()).toEqual([`org/${acme.secret}`]);
+  expect((await acme.tenant.api.get(`/v1/namespaces/${NS}/secrets`)).json.secrets.map((s: { reference: string }) => s.reference)).toEqual([`ns/${acme.secret}`]);
   await expectRefused({ attempt: () => startRun(globex.api, "globex-ns", { script: TASK_SCRIPT, toolset: acme.toolset }), status: 404, slug: "not-found", probe: runs });
   await expectRefused({ attempt: () => globex.api.ns("globex-ns").post("/v1/check", { script: TASK_SCRIPT, toolset: acme.toolset }), status: 404, slug: "not-found" });
   const derived = await globex.api.post("/v1/toolsets", { base: acme.toolset, host: [] });
@@ -303,7 +326,7 @@ test("another tenant's script and toolset are not found, and its toolset starts 
   // acme still reads them.
   expectOk(await acme.tenant.api.get(`/v1/scripts/${acme.completed.script}`), 200);
   expectOk(await acme.tenant.api.get(`/v1/toolsets/${acme.toolset}/declarations`), 200);
-  evidence("globex: acme's script, toolset declarations, search, credentials (toolset and namespace), a run, a check and a derived toolset from acme's toolset id → 404; acme still reads them");
+  evidence("globex: acme's script, toolset declarations, search, secrets' usage and deletion (the organization's and a namespace's), a run, a check and a derived toolset from acme's toolset id → 404; acme still reads them and keeps its secrets");
 });
 
 test("another tenant's workflow is not found, and starts nothing", { tag: "@attack" }, async () => {

@@ -295,15 +295,6 @@ describe("rewind.namespaces", () => {
     await expect(rewind.namespaces.rename("a/b", "x")).rejects.toThrow(RewindError);
   });
 
-  it("sets an end user's credentials for a toolset", async () => {
-    server.on("PUT", "/v1/namespaces/{name}/toolsets/{id}/credentials", noContent);
-    await rewind.namespaces.setCredentials("alice", TOOLSET, {
-      servers: { github: { headers: { Authorization: "Bearer gho_alice" } } },
-    });
-    const request = server.calls("PUT", `/v1/namespaces/alice/toolsets/${TOOLSET}/credentials`)[0];
-    expect(request?.body).toEqual({ servers: { github: { headers: { Authorization: "Bearer gho_alice" } } } });
-  });
-
   it("reads and sets the default limits", async () => {
     const defaults = {
       defaults: { activeRuns: 5, maxTtl: "7d" },

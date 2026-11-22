@@ -6,12 +6,14 @@
  * - Leases (`archi/06-storage-and-scale.md`, "Leases, fencing, workers"): a worker killed in the
  *   middle of an activation, or while a host tool holds the run's call, loses the run to the
  *   other worker once its lease expires, and no tool runs twice.
- * - A full restart: a timer due during the outage fires, a signal sent before is kept.
+ * - A full restart: a timer due during the outage fires, a signal sent before is kept, and a run's
+ *   attached secret is read again (the data keys opened with the same master key).
  * - An outage of Postgres: requests wait or answer 503 `unavailable`, and nothing is lost.
  * - Retention (`archi/06-storage-and-scale.md`, "Retention and deletion"): a finished run past its
  *   journal retention is archived to S3 and still read; an erased run leaves no row, and its
  *   payload's blob is deleted after the grace.
  * - The api role runs no script: `POST /v1/test` answers 503 `unavailable` there (08).
+ * - An erased namespace takes its secrets and their reads with it.
  */
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -33,6 +35,7 @@ import {
   test,
   unique,
 } from "../support/gate.js";
+import { type McpFixture, startMcpFixture } from "../support/fixtures.js";
 import { ended, eventTypes, journal, replayDocument, runScript } from "../support/sandbox-helpers.js";
 import { type Stack, startDeployed } from "../support/stack.js";
 
@@ -52,7 +55,17 @@ test.beforeAll(async () => {
     dir: join(gateResults, "stack-d"),
     // Retention in seconds, for the tenants these servers create; the housekeeping runs when a
     // worker starts.
-    extraArgs: ["--journal-retention", "2s", "--archive-retention", "1h", "--payload-grace", "1s"],
+    extraArgs: [
+      "--journal-retention",
+      "2s",
+      "--archive-retention",
+      "1h",
+      "--payload-grace",
+      "1s",
+      // The MCP fixture of the restart listens on 127.0.0.1.
+      "--allow-internal-tools",
+      "127.0.0.1",
+    ],
   });
   tenant = await newTenant("lifecycle", stack.info);
   const created = await tenant.api.post("/v1/toolsets", {
@@ -218,9 +231,22 @@ test("a worker killed while a host tool holds the run's call: the run completes 
   }
 });
 
-test("a full restart: a timer due during the outage fires, a signal sent before is kept", { tag: "@success" }, async () => {
+test("a full restart: a timer due during the outage fires, a signal sent before is kept, a secret is read again", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
   const api = tenant.api.ns("restart");
+  const mcp: McpFixture = await startMcpFixture();
+  const value = `${canary()}-restart`;
+  expectOk(await tenant.api.put("/v1/namespaces/restart/secrets/fx", { value }), 201);
+  const keyed = await tenant.api.post("/v1/toolsets", {
+    mcp: [{ name: "fx", url: mcp.url, auth: { type: "secret", header: "authorization", format: "Bearer {secret}" } }],
+  });
+  expectOk(keyed);
+  const reading = await runScript(
+    api,
+    'import { signal } from "rewind";\nimport { fx } from "rewind:tools";\nexport default async function main() { await signal("go"); return (await fx.echo({ text: "after the restart" })).text(); }\n',
+    { namespace: "restart", toolset: keyed.json.id, extra: { wait: "1s", secrets: { fx: "ns/fx" } } },
+  );
+  expect(reading.waitingFor?.[0]).toMatchObject({ kind: "signal", name: "go" });
   const timer = await runScript(api, 'import { sleep } from "rewind";\nexport default async function main() { await sleep("4s"); return "timer fired"; }\n', {
     namespace: "restart",
     extra: { wait: "1s" },
@@ -237,6 +263,7 @@ test("a full restart: a timer due during the outage fires, a signal sent before 
   // The api server takes the signal while no worker runs.
   const sent = await api.post(`/v1/runs/${signal.id}/signals/go`, "sent before the restart", { headers: { "idempotency-key": unique("go-") } });
   expectOk(sent);
+  expectOk(await api.post(`/v1/runs/${reading.id}/signals/go`, {}));
   await stack.kill("api", "SIGTERM");
   // Everything is down past the timer's due time.
   await new Promise((resolve) => setTimeout(resolve, 5_000));
@@ -247,8 +274,12 @@ test("a full restart: a timer due during the outage fires, a signal sent before 
   expect(firedLate.output?.value, JSON.stringify(firedLate)).toBe("timer fired");
   const signalled = await ended(tenant.api, signal.id, 60_000);
   expect(signalled.output?.value, JSON.stringify(signalled)).toEqual({ got: "sent before the restart" });
+  const read = await ended(tenant.api, reading.id, 60_000);
+  expect(read.output?.value, JSON.stringify(read)).toBe("after the restart");
+  expect(mcp.calls.map((c) => c.headers.authorization)).toEqual([`Bearer ${value}`]);
+  await mcp.close();
   await expectHealthy(tenant);
-  evidence("api and both workers stopped 5 s; the due timer fired at restart and the signal sent meanwhile was delivered");
+  evidence("api and both workers stopped 5 s; the due timer fired at restart, the signal sent meanwhile was delivered, and the run's attached ns/fx was read again for its call");
 });
 
 test("Postgres paused: requests wait or answer 503, and nothing is lost", { tag: "@failure" }, async () => {
@@ -378,6 +409,7 @@ test("an erased namespace leaves nothing: its runs, usage, script counts and blo
   const minted = await tenant.api.post(`/v1/namespaces/${name}/tokens`, {});
   expectOk(minted, 201);
   const token: string = minted.json.token;
+  expectOk(await tenant.api.put(`/v1/namespaces/${name}/secrets/github`, { value: `${canary()}-erased` }), 201);
   // A finished run with a payload in the blob store, and one still waiting for a signal.
   const big = randomBytes(64 * 1024).toString("hex");
   const done = await runScript(api, "export default async function main(input: { big: string }) { return input.big.length; }\n", {
@@ -410,7 +442,9 @@ test("an erased namespace leaves nothing: its runs, usage, script counts and blo
       const left = sql(
         `SELECT (SELECT count(*) FROM namespaces WHERE tenant = '${tenant.id}' AND name = '${name}') +
                 (SELECT count(*) FROM runs WHERE tenant = '${tenant.id}' AND namespace = '${name}') +
-                (SELECT count(*) FROM namespace_scripts WHERE tenant = '${tenant.id}' AND namespace = '${name}')`,
+                (SELECT count(*) FROM namespace_scripts WHERE tenant = '${tenant.id}' AND namespace = '${name}') +
+                (SELECT count(*) FROM secrets WHERE tenant = '${tenant.id}' AND namespace = '${name}') +
+                (SELECT count(*) FROM secret_reads WHERE tenant = '${tenant.id}' AND namespace = '${name}')`,
       )[0];
       return left === "0" ? true : undefined;
     },
@@ -434,7 +468,7 @@ test("an erased namespace leaves nothing: its runs, usage, script counts and blo
     90_000,
     1_500,
   );
-  evidence("DELETE /v1/namespaces → 202; starts and tokens 409 namespace-deleting; its token 401; the waiting run cancelled; then no namespace, run, script count or usage row, its token refused, and its blob deleted; the tenant's usage kept");
+  evidence("DELETE /v1/namespaces → 202; starts and tokens 409 namespace-deleting; its token 401; the waiting run cancelled; then no namespace, run, script count, secret, secret read or usage row, its token refused, and its blob deleted; the tenant's usage kept");
 });
 
 test("the api role runs no script: /v1/test answers 503 there", { tag: "@failure" }, async () => {

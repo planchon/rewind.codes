@@ -855,6 +855,7 @@ fn derive_effects(
                 let pinned = toolset.tool(tool).ok_or_else(|| tool.clone())?;
                 let server_concurrency = match &pinned.route {
                     ToolRoute::Mcp { server } => toolset.server(server).map(|s| s.concurrency),
+                    ToolRoute::Api { api } => toolset.api(api).map(|api| api.concurrency),
                     _ => None,
                 };
                 activation.tool_calls.push(NewToolTask {

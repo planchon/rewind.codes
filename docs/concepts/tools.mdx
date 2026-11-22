@@ -1,13 +1,14 @@
 ---
 title: "Tools and toolsets"
-description: "MCP servers, host tools and built-ins; how a toolset pins them, how each call is made, retried and protected."
+description: "MCP servers, APIs from OpenAPI, host tools and built-ins; how a toolset pins them, how each call is made, authenticated, retried and protected."
 ---
 
-## Three kinds of tools
+## Four kinds of tools
 
 | Kind | Called by | For |
 | --- | --- | --- |
 | **MCP tools** | Rewind's dispatcher, an MCP client over streamable HTTP | Every tool of the MCP servers you list |
+| **API tools** | Rewind's dispatcher, from the API's OpenAPI document | Every operation of your backend's API, or another's: Rewind calls it, your backend runs no worker |
 | **Host tools** | Your [worker](/sdk/host-tools), which long-polls their calls | Functions that live in your harness: ask the user, call another model, query your database |
 | **Built-ins** | Rewind itself | `http` (the script's only network), `webhook(name)`, and `workflows.<name>.start` and `.signal` for each workflow the toolset pins |
 
@@ -15,9 +16,10 @@ Results go back to the script, never to the model. Your harness is on the path o
 
 ## A toolset pins its tools
 
-A **toolset** is the list of what scripts may call: MCP servers, host tools, the `http` tool and its allowed hosts,
-and the workflows scripts may start, with a policy per tool. Registering it connects to the servers, lists their tools
-and **pins** their schemas.
+A **toolset** is the list of what scripts may call: MCP servers, APIs, host tools, the `http` tool and its allowed
+hosts, and the workflows scripts may start, with a policy per tool and, for each server and API, how its calls
+authenticate. Registering it connects to the servers, lists their tools, reads the APIs' OpenAPI documents (one tool per
+operation) and **pins** their schemas. A toolset holds no secret.
 
 - A toolset is **content-addressed**: its id is the digest of what it pins. Registering the same toolset twice returns
   the same id, and every run records the toolset it started with.
@@ -60,7 +62,8 @@ values), and uses it in the declarations, marked `@observed`.
 ## Every call has an idempotency key
 
 Each call carries a key, `{run_id}/{seq}`, the same on every attempt: in MCP `_meta` (`codes.rewind/idempotency-key`),
-and in your worker's context (`ctx.idempotencyKey`). A tool that recognizes it does not repeat its effect when a call is
+in an API's `Idempotency-Key` header when its operation declares one, in a signed call's `idempotency_key`, and in
+your worker's context (`ctx.idempotencyKey`). A tool that recognizes it does not repeat its effect when a call is
 sent again after an interruption. Calls also carry the W3C trace context, so your server's spans join the run's trace.
 
 ## Policies
@@ -71,25 +74,68 @@ Each tool has a policy, set when the toolset is registered:
 | --- | --- | --- |
 | `onInterruption` | `retry`: an interrupted call is sent again with the same key, up to 5 attempts. `at_most_once`: it fails with `outcomeUnknown` | `retry` |
 | `approval` | The call waits for your harness to approve it before it is sent | Off |
-| `timeout` | How long one attempt may take | 5 minutes for MCP tools |
+| `timeout` | How long one attempt may take | 5 minutes for MCP and API tools |
 | `heartbeatTimeout` | How long a host tool's worker may go without a heartbeat | 60 seconds |
 | `concurrency` | Calls of this tool in flight per run | The run's limit, 16 |
 
 Declare `at_most_once` for a tool that ignores the idempotency key and must not run twice: sending an email, a payment
-without a key. The script sees every failure as a `ToolError`, and decides what to do.
+without a key. An API's `POST` and `PATCH` are `at_most_once` unless the operation declares an `Idempotency-Key` header;
+its other methods, which HTTP defines as idempotent, are `retry`. The script sees every failure as a `ToolError`, and
+decides what to do.
 
-## Credentials
+## How calls prove who calls
 
-Rewind stores credentials encrypted, resolves them at call time and injects them into the connection to your MCP
-server. A call uses, in this order and never merged:
+Each MCP server and API of a toolset says, in its `auth`, how its calls authenticate. `auth` is pinned with the
+toolset; no value is.
 
-1. the run's own credentials, if it has some;
-2. the credentials of the run's end user for this toolset ([namespace](/concepts/end-users));
-3. the toolset's credentials.
+| `auth` | The request carries | For |
+| --- | --- | --- |
+| none | Nothing | Public servers |
+| `rewind` | A JWT signed with your organization's key | Your own APIs and MCP servers: they check the signature and learn the end user |
+| `secret` | The secret the run attached, in a header (`Authorization: Bearer {secret}`) or, for a stdio server, an environment variable | Other servers: GitHub, Linear, an API with a key |
 
-Credentials never enter the sandbox, the journal, a cassette or a trace. If a token expires during a long pause, the
-call is **parked** and your harness gets the webhook `credentials.expired`; once you renew them, the call is sent
-again with the same key.
+### Secrets
+
+A **secret** is a named value, encrypted at rest, that only the dispatcher reads, for the runs that attached it. It
+belongs to the organization (`org/zendesk`, shared by every end user) or to one [end user](/concepts/end-users)
+(`ns/github`: Alice's GitHub token in Alice's runs, Bob's in Bob's).
+
+- **Attached at start, never in the script.** A run reads a secret only if the request that starts it attaches it,
+  server by server: `secrets: { github: "ns/github", zendesk: "org/zendesk" }`. A workflow version carries its own,
+  checked when it is saved. Who reads what is known: attachments are run metadata.
+- **Checked before any run exists.** A script that imports a server whose `auth` takes a secret, with nothing attached
+  for it, or an attachment the caller may not make, is refused at start (`secret-required`), with what may be attached
+  instead.
+- **Write-only.** No answer of the API holds a value. Secrets never enter the sandbox, the journal, a cassette or a
+  trace.
+- **Nothing falls back.** Alice's run that attaches `ns/github` never calls with the organization's token, nor with
+  Bob's.
+
+If a token expires during a long pause, the call is **parked** and your harness gets the webhook
+`credentials.expired`; put the secret again under the same name, and the call is sent again with the same key. See
+[Secrets](/sdk/secrets).
+
+### Signed calls
+
+With `auth: rewind`, Rewind signs each request with your organization's Ed25519 key: a JWT naming the end user
+(`sub`), the run, its labels, the tool, the idempotency key, and the request's method, URL and body. Your server checks
+it with the public keys Rewind publishes, as any JWT library does with a JWKS, and the SDK's
+[`verifyRewindCall`](/sdk/signed-calls) does every check for you. Rewind then keeps no secret of yours, and your server
+learns the end user from a signature, not from an argument.
+
+## Your backend: called, or pulling its calls
+
+A tool that lives in your backend can reach it two ways, and both are first-class:
+
+| | API tools | Host tools |
+| --- | --- | --- |
+| Who connects | Rewind calls your API, from its OpenAPI document | Your [worker](/sdk/host-tools) long-polls its calls from Rewind |
+| Your backend | Exposes HTTPS, and checks the signature | Opens no port: it only makes outgoing requests |
+| How long a call may take | Within the tool's timeout | Days: a worker may hand a call to a person and answer later |
+| For | Your product's API, called as any client calls it | What lives in the harness: the user's answer, Claude Code, a call that waits |
+
+Choose toolset by toolset. A backend that cannot be reached from outside, or that already runs a worker, keeps its
+host tools.
 
 ## When a server changes during a run
 
@@ -97,6 +143,9 @@ A run can pause for days while the MCP server behind it changes. The dispatcher 
 current schema. A call that no longer matches is not failed silently: it is **parked**, and your harness gets the
 webhook `tool.schema_changed`. You then approve it (continue against the new schema), reject it (the script gets a
 `ToolError`), cancel the run, or fork it with a corrected script.
+
+An API has no listing to ask: its pinned OpenAPI document is the contract, and a call the API no longer accepts fails
+with its 4xx.
 
 ## The `http` tool
 
@@ -112,3 +161,14 @@ Each request is a journaled tool call, sent by the dispatcher, never from the sa
 5. The response is bounded to 5 MB and 30 seconds.
 
 A refused request rejects with a `ToolError`.
+
+The `http` tool carries no secret and no signature: a call that needs one is an API tool.
+
+## Where MCP servers and APIs may be
+
+Rewind connects to the URLs your toolsets name: at registration, to list a server's tools or read an OpenAPI
+document, and at each call. On a deployed server these connections go through the same checks: a name resolved once,
+private, loopback, link-local and cloud-metadata addresses refused, the connection to the checked address. A redirect
+is followed only within the server's origin (307 or 308), since the secret or the signature would follow it. A
+self-hosted server lets chosen internal hosts and networks through with
+[`--allow-internal-tools`](/self-hosting#configuration); the embedded server reaches any address.

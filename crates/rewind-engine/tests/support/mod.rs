@@ -3,7 +3,7 @@
 
 #![allow(dead_code, unreachable_pub)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ use rewind_engine::adapters::{
     MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
 use rewind_engine::ports::{
-    CompiledScript, Credentials, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
+    CallAuth, CompiledScript, Delivery, Dispatched, Emitted, ExecutorError, InvalidScript,
     ScriptExecutor, ScriptInstance, StartScript, ToolCall, ToolDispatcher,
 };
 use rewind_engine::{Adapters, Engine, EngineConfig, StartRun};
@@ -207,10 +207,12 @@ impl FakeRun {
 }
 
 /// Programs by name: a script's source is the name of its program. A source starting with
-/// `syntax error` does not compile; the program `unloadable` fails to load.
+/// `syntax error` does not compile; the program `unloadable` fails to load. A program imports
+/// every name of `rewind:tools` unless [`FakeExecutor::importing`] says which.
 #[derive(Clone, Default)]
 pub struct FakeExecutor {
     programs: HashMap<String, Arc<dyn Program>>,
+    imports: HashMap<String, BTreeSet<String>>,
     starts: Arc<Mutex<usize>>,
 }
 
@@ -233,6 +235,15 @@ impl FakeExecutor {
     ) -> Self {
         self.programs
             .insert(name.into(), Arc::new(FnProgram { start, deliver }));
+        self
+    }
+
+    /// The program `name` imports only these names from `rewind:tools`.
+    pub fn importing(mut self, name: &str, imports: &[&str]) -> Self {
+        self.imports.insert(
+            name.into(),
+            imports.iter().map(|name| (*name).to_owned()).collect(),
+        );
         self
     }
 
@@ -270,6 +281,10 @@ impl ScriptExecutor for FakeExecutor {
             javascript: script.source().into(),
             source_map: String::new(),
         })
+    }
+
+    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        self.imports.get(script.source()).cloned()
     }
 
     async fn start(
@@ -335,10 +350,10 @@ impl ScriptInstance for FakeInstance {
 // -------------------------------------------------------------------------------------------
 // Dispatcher
 
-type Handler = dyn Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync;
-type Calls = Arc<Mutex<Vec<(ToolCall, Option<Credentials>)>>>;
+type Handler = dyn Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync;
+type Calls = Arc<Mutex<Vec<(ToolCall, CallAuth)>>>;
 
-/// Answers with a handler and records every call, with the credentials it was given.
+/// Answers with a handler and records every call, with the authentication it was given.
 #[derive(Clone)]
 pub struct RecordingDispatcher {
     handler: Arc<Handler>,
@@ -362,10 +377,10 @@ impl RecordingDispatcher {
         })
     }
 
-    /// Answers with whatever the handler says, given the call and its credentials: transient
+    /// Answers with whatever the handler says, given the call and its authentication: transient
     /// failures, deferrals, parked calls.
     pub fn dispatching(
-        handler: impl Fn(&ToolCall, Option<&Credentials>) -> Dispatched + Send + Sync + 'static,
+        handler: impl Fn(&ToolCall, &CallAuth) -> Dispatched + Send + Sync + 'static,
     ) -> Self {
         Self {
             handler: Arc::new(handler),
@@ -383,20 +398,17 @@ impl RecordingDispatcher {
         calls.iter().map(|(call, _)| call.clone()).collect()
     }
 
-    /// The credentials each call was dispatched with, in order.
-    pub fn credentials(&self) -> Vec<Option<Credentials>> {
+    /// The authentication each call was dispatched with, in order.
+    pub fn auth(&self) -> Vec<CallAuth> {
         let calls = self.calls.lock().unwrap();
-        calls
-            .iter()
-            .map(|(_, credentials)| credentials.clone())
-            .collect()
+        calls.iter().map(|(_, auth)| auth.clone()).collect()
     }
 }
 
 impl ToolDispatcher for RecordingDispatcher {
-    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
-        let outcome = (self.handler)(&call, credentials.as_ref());
-        self.calls.lock().unwrap().push((call, credentials));
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+        let outcome = (self.handler)(&call, &auth);
+        self.calls.lock().unwrap().push((call, auth));
         outcome
     }
 }

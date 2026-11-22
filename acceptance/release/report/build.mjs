@@ -36,7 +36,7 @@ const AREAS = {
   runs: "Runs",
   endings: "Endings and limits",
   "host-tools": "Host tools and tasks",
-  "mcp-egress": "MCP, http tool, egress",
+  "mcp-egress": "MCP, APIs, http tool, egress",
   workflows: "Workflows",
   "check-test": "Check and test",
   observability: "Observability",

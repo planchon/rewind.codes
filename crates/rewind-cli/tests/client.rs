@@ -63,6 +63,7 @@ fn base_run(id: &str, status: RunStatus) -> Run {
         epoch: 1,
         mode: RunMode::Live,
         labels: Labels::new(),
+        secrets: Default::default(),
         trace_id: "0".repeat(32),
         parent: None,
         workflow: None,
@@ -397,12 +398,14 @@ async fn create_toolset(
     axum::Json(Toolset {
         id: TOOLSET_ID.into(),
         servers: Vec::new(),
+        apis: Vec::new(),
         tools: Vec::new(),
         workflows: Vec::new(),
         declarations: Declarations {
             dts: "declare module \"rewind:tools\" {}\n".into(),
             prompt: String::new(),
         },
+        skipped: Vec::new(),
     })
     .into_response()
 }
@@ -515,6 +518,10 @@ async fn run_starts_a_run_and_waits_for_it() {
             "start-1",
             "--wait",
             "2m",
+            "--secret",
+            "github=ns/github",
+            "--secret",
+            "zendesk=org/zendesk",
         ])
         .await;
     assert_eq!(exit, Exit::Success, "{out}{err}");
@@ -533,6 +540,11 @@ async fn run_starts_a_run_and_waits_for_it() {
         "against its own embedded server, the namespace local"
     );
     assert_eq!(start.body["labels"], json!({"agent": "triage"}));
+    assert_eq!(
+        start.body["secrets"],
+        json!({ "github": "ns/github", "zendesk": "org/zendesk" }),
+        "--secret attaches by server, names only"
+    );
     // The start answers at once; a wait above 50 s is split into reads of 50 s at most.
     assert_eq!(start.body.get("wait"), None);
     assert!(requests[1..].iter().all(|seen| seen.what == "get run-1"));
@@ -774,6 +786,40 @@ async fn status_runs_trace_fork_and_release() {
         .unwrap();
     assert_eq!(fork.body["at"], 3);
     assert_eq!(fork.idempotency_key.as_deref(), Some("fork-1"));
+    assert_eq!(
+        fork.body.get("secrets"),
+        None,
+        "the parent's when none is given"
+    );
+    let (exit, _, err) = server
+        .rewind(&[
+            "fork",
+            "run-1",
+            "--script",
+            fixed.to_str().unwrap(),
+            "--secret",
+            "github=org/github",
+        ])
+        .await;
+    assert_eq!(exit, Exit::Success, "{err}");
+    let fork = server
+        .requests()
+        .into_iter()
+        .rfind(|seen| seen.what == "fork run-1")
+        .unwrap();
+    assert_eq!(fork.body["secrets"], json!({ "github": "org/github" }));
+    let (exit, _, err) = server
+        .rewind(&[
+            "fork",
+            "run-1",
+            "--script",
+            fixed.to_str().unwrap(),
+            "--secret",
+            "github",
+        ])
+        .await;
+    assert_eq!(exit, Exit::Usage, "{err}");
+    assert!(err.contains("expected <server>=<scope>/<name>"), "{err}");
 
     let (exit, _, err) = server.rewind(&["release", "run-1"]).await;
     assert_eq!(exit, Exit::Refused, "{err}");

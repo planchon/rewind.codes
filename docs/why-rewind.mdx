@@ -55,12 +55,14 @@ What still changes is Rewind itself, and a [determinism epoch](/concepts/journal
 
 ## Built for products with many users
 
-- **Namespaces.** Each end user of your product has one: their runs, scripts, credentials and use, invisible to
+- **Namespaces.** Each end user of your product has one: their runs, scripts, secrets and use, invisible to
   everyone else. An agent acting for one user holds a token of their namespace only.
 - **Quotas.** Active runs, runs and CPU per month, distinct scripts, the longest TTL and script, per end user, so one
   user cannot exhaust your platform.
 - **Permission gates.** A tool with the `approval` policy waits for your harness before each call. Scripts never see
-  credentials.
+  a secret: a run attaches secrets by name at start, and only the dispatcher reads them.
+- **Calls your backend can trust.** Rewind signs each call to your own APIs with your organization's key, naming the
+  end user: your backend checks it with [`verifyRewindCall`](/sdk/signed-calls), and Rewind keeps no secret of yours.
 
 ## How it compares
 

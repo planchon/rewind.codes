@@ -4,8 +4,10 @@ The TypeScript SDK of Rewind, for agent harness developers. It has three parts:
 
 - **the client** of the HTTP API `/v1`
   ([`api/openapi.json`](https://github.com/planchon/rewind.codes/blob/main/api/openapi.json)): toolsets, workflows,
-  runs, signals, forks, traces, journals, credentials, webhooks, and the end users of the harness (namespaces, their
+  runs, signals, forks, traces, journals, secrets, webhooks, and the end users of the harness (namespaces, their
   tokens and their quotas);
+- **`verifyRewindCall`**, for the harness's own APIs and MCP servers: it checks the calls Rewind signs with the
+  organization's key, and says which end user each acts for;
 - **the host-tool worker**, which executes the harness's own tools when scripts call them;
 - **the agent tools**, ready-made tools for the model (`run_script`, `get_run`, `save_workflow`…), with adapters for
   the Anthropic and OpenAI tool formats.
@@ -113,25 +115,28 @@ const next = await rewind.workflows.create({
 const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSource, workflow: "triage" });
 ```
 
-| Resource                     | Calls                                                                                                                                                                                                                                                                                   |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rewind.toolsets`            | `create` (`workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`, `setCredentials`                                                                                                                                                                        |
-| `rewind.workflows`           | `create` (through the gate of its suite: `parent`, `tests`, `update`, `retire`), `list` and `listAll` (the latest version of each; `script`: the versions whose script it is), `versions` (newest first), `record` (tests from past runs)                                               |
-| `rewind.tests`               | `get`: a stored test, by digest                                                                                                                                                                                                                                                         |
-| `rewind.scripts`             | `check`, `test` (tests in mock mode, virtual time, and the suite of a `workflow`), `list`, `listAll`, `get`                                                                                                                                                                             |
-| `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `setCredentials`, `delete` |
-| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                  |
-| `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                             |
-| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                                                                                   |
-| `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `delete`, `setCredentials`, `alerts`                                                                                                                                                             |
-| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                                                                                    |
-| `rewind.namespaces.tokens`   | `create` (its answer holds the token, once), `revoke`, `revokeAll`                                                                                                                                                                                                                      |
-| `rewind.tokenKeys`           | `create`, `list`, `delete`: the keys the harness signs end users' tokens with                                                                                                                                                                                                           |
-| `rewind.subscriptions`       | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                                                                          |
-| `rewind.webhooks`            | `verify`                                                                                                                                                                                                                                                                                |
-| `rewind.tools`               | `stats`                                                                                                                                                                                                                                                                                 |
-| `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                                                                      |
-| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                                                                          |
+| Resource                     | Calls                                                                                                                                                                                                                                                                                                    |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rewind.toolsets`            | `create` (`mcp`, `apis` from OpenAPI documents, `host`, `http`; `workflows` pins workflows, `base` derives from a toolset), `declarations`, `search`                                                                                                                                                     |
+| `rewind.workflows`           | `create` (through the gate of its suite: `parent`, `tests`, `update`, `retire`), `list` and `listAll` (the latest version of each; `script`: the versions whose script it is), `versions` (newest first), `record` (tests from past runs)                                                                |
+| `rewind.tests`               | `get`: a stored test, by digest                                                                                                                                                                                                                                                                          |
+| `rewind.scripts`             | `check`, `test` (tests in mock mode, virtual time, and the suite of a `workflow`), `list`, `listAll`, `get`                                                                                                                                                                                              |
+| `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `delete`; `start` and `fork` take `secrets` |
+| `rewind.tasks`               | `claim`, `heartbeat`, `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                                   |
+| `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                                              |
+| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                                                                                                    |
+| `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `rename`, `delete`, `alerts`                                                                                                                                                                                      |
+| `rewind.namespaces.secrets`  | `list`, `put`, `delete`, `usage`: an end user's own secrets, attached as `ns/<name>`                                                                                                                                                                                                                     |
+| `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                                                                                                     |
+| `rewind.namespaces.tokens`   | `create` (its answer holds the token, once), `revoke`, `revokeAll`                                                                                                                                                                                                                                       |
+| `rewind.tokenKeys`           | `create`, `list`, `delete`: the keys the harness signs end users' tokens with                                                                                                                                                                                                                            |
+| `rewind.secrets`             | `list`, `put`, `delete`, `usage`: the organization's secrets, attached as `org/<name>`                                                                                                                                                                                                                   |
+| `rewind.signingKeys`         | `list` (with the `issuer` and the `jwksUrl`), `rotate`, `jwks`: the keys Rewind signs its calls with                                                                                                                                                                                                     |
+| `rewind.subscriptions`       | `create` (its answer holds the secret, once), `list`, `delete`                                                                                                                                                                                                                                           |
+| `rewind.webhooks`            | `verify`                                                                                                                                                                                                                                                                                                 |
+| `rewind.tools`               | `stats`                                                                                                                                                                                                                                                                                                  |
+| `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                                                                                       |
+| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                                                                                           |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
@@ -139,6 +144,7 @@ exported under their names (`Run`, `Toolset`, `Task`, `WebhookEvent`…).
 **Errors.** The API answers errors as `application/problem+json`. The client throws them as `RewindApiError`, with
 `status`, `slug` (`"run-ended"`, `"invalid-script"`, `"invalid-workflow"`, `"tests-failed"`, `"invalid-signal"`…),
 `detail` (written for a model), `diagnostics` (for a refused script), `tests` (for `tests-failed`: each test's outcome),
+`attachments` (for `secret-required`: each attachment at fault, why, and the secrets that may be attached instead),
 `query` (for a query that cannot be read: where the term at fault is) and `quota` (for `quota-exceeded`: which quota,
 at which scope, its limit, the use and when it frees). `isProblem(error, "task-gone")` tests the kind. A key's client that starts a run, checks or tests a script
 without naming a namespace gets the server's 400 as a `NamespaceRequiredError`. A server that cannot be reached gives a
@@ -236,11 +242,91 @@ try {
 }
 ```
 
-- An end user's own credentials for a toolset (their GitHub token): `rewind.namespaces.setCredentials(user.id,
-toolset.id, credentials)`. A run uses its own credentials if it has some, else its namespace's, else the toolset's.
-- `rewind.namespaces.delete(user.id)` erases the end user in the background: their tokens, runs, credentials and use.
+- An end user's own secrets (their GitHub token): `rewind.namespaces.secrets.put(user.id, "github", { value })`, which
+  their runs attach as `ns/github` ([secrets](#secrets-and-signed-calls)).
+- `rewind.namespaces.delete(user.id)` erases the end user in the background: their tokens, runs, secrets and use.
 - Toolsets and webhook subscriptions stay the harness's: register the tools once, receive every end user's events,
   each naming its `namespace`.
+
+## Secrets and signed calls
+
+Each MCP server and API of a toolset says in its `auth` how its calls prove who calls: nothing, a **secret** the run
+attaches, or a **signature** of the organization's key. A toolset holds no secret.
+
+```ts
+const toolset = await rewind.toolsets.create({
+  mcp: [
+    {
+      name: "github",
+      url: "https://api.githubcopilot.com/mcp/",
+      auth: { type: "secret", header: "Authorization", format: "Bearer {secret}" },
+    },
+  ],
+  apis: [{ name: "dax", openapi: "https://api.dax.example/openapi.json", auth: { type: "rewind" } }],
+});
+
+// Secrets are written, never read back: the organization's, and each end user's own.
+await rewind.secrets.put("zendesk", { value: process.env.ZENDESK_TOKEN!, labels: { env: "prod" } });
+await rewind.namespaces.secrets.put(user.id, "github", { value: githubTokenOf(user) });
+
+// A run reads only the secrets it attaches, server by server, in the request, never in the script.
+const run = await rewind.namespace(user.id).runs.start({
+  toolset: toolset.id,
+  script,
+  secrets: { github: "ns/github" },
+});
+```
+
+- `org/<name>` is the organization's secret, `ns/<name>` the run's namespace's. Attaching an organization's secret
+  needs `secrets:use`, and a key limited to labels sees, writes and attaches only the secrets carrying them; a
+  namespace's secret is attached by whoever starts a run in it.
+- A workflow version carries its attachments (`workflows.create({ …, secrets })`), checked against the saver; its runs
+  give none. A fork keeps the parent's unless it gives its own (`runs.fork(id, { script, secrets })`).
+- A start that misses an attachment, names a secret that does not exist, or one the caller may not attach is refused
+  before any run exists: `secret-required`, whose `error.attachments` say which server and what may be attached.
+- `secrets.usage(name)` says what deleting a secret would stop: the active runs that attach it, those waiting on a call
+  it serves, the workflows whose latest version attaches it. A call whose secret was deleted or refused is parked
+  (webhook `credentials.expired`); putting the secret again sends it again, with the same idempotency key.
+
+**Checking a signed call.** With `auth: { type: "rewind" }`, every request carries a JWT signed with the organization's
+Ed25519 key. `verifyRewindCall` does every check the receiving server must do: the signature against
+`{issuer}/jwks.json` (cached, an unknown `kid` fetched again at most every 10 s), the issuer and the audience, `exp` and
+`iat` with 5 s of leeway, the method, the URL and the SHA-256 of the raw body, and the run's labels when given. It
+takes a Fetch `Request`, or `{ method, url, headers, body }` with the raw body for Express or NestJS:
+
+```ts
+import express from "express";
+import { RewindSignatureError, verifyRewindCall } from "@rewind.codes/sdk";
+
+const { issuer } = await rewind.signingKeys.list(); // https://api.rewind.codes/organizations/org_…
+
+app.set("trust proxy", true);
+app.post("/v1/measures", express.raw({ type: "application/json" }), async (req, res) => {
+  let call;
+  try {
+    call = await verifyRewindCall(
+      {
+        method: req.method,
+        url: `${req.protocol}://${req.get("host")}${req.originalUrl}`,
+        headers: req.headers,
+        body: req.body,
+      },
+      { issuer, audience: "https://api.dax.example", labels: { env: "prod" } },
+    );
+  } catch (error) {
+    if (error instanceof RewindSignatureError) return res.status(401).json({ error: error.check }); // Rewind parks the call
+    throw error; // the keys could not be fetched: a 5xx, which Rewind retries
+  }
+  // call.namespace is the end user; call.idempotencyKey is the same for every attempt of the call.
+  res.json(await createMeasure(call.namespace, JSON.parse(req.body.toString()), call.idempotencyKey));
+});
+```
+
+One key signs every run of the organization: an organization whose development and production share it gives
+`labels: { env: "prod" }`, so a production server refuses the calls of a development run. A `RewindSignatureError` names
+the check that failed (`check`: `signature`, `kid`, `iss`, `aud`, `exp`, `iat`, `htm`, `htu`, `body`, `labels`…). An
+MCP server passes `session: true`: the requests of the session outside a call (`initialize`, the listing of the tools)
+are answered `null`. `signingKeys.rotate()` replaces the key; the old one stays published 24 hours.
 
 ## The host-tool worker
 
@@ -356,8 +442,8 @@ messages.push({ role: "assistant", content: answer.content }, { role: "user", co
   `result.workflow` and `result.toolset` hold what was saved and derived. A harness that creates the agent tools for
   each turn keeps `agentTools.toolset` with the conversation and passes it as `toolset` the next time. The derived
   toolset has another id: a worker that claims tasks `toolset: <id>` does not claim those of its runs (start it
-  without `toolset`, with its `tools`), and credentials set on the first toolset are not carried over (set them on the
-  derived one with `toolsets.setCredentials`). A refused script comes back with its diagnostics.
+  without `toolset`, with its `tools`); the secrets its runs attach do not depend on the toolset. A refused script
+  comes back with its diagnostics.
 - `save_workflow` and `retry_run` (of a run of a workflow) run the suite first. When a test does not pass, the model
   reads each test's problem (`stale`, `incompatible` or `failed`), its failures and the trace of the run, and is told
   that there is no way around the gate: it fixes the script, or retires or updates the test with a reason.

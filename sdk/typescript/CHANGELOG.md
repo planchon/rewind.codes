@@ -2,7 +2,33 @@
 
 Every version of `@rewind.codes/sdk`. The package follows [Semantic Versioning](https://semver.org).
 
-## Unreleased
+## 0.3.0 (2026-11-22)
+
+For named secrets attached to runs, API tools from OpenAPI documents, and calls signed with a key per organization.
+
+- `rewind.secrets` (`list`, `put`, `delete`, `usage`): the organization's secrets, with their labels, who wrote them
+  and when, their reads per day and their last read; never a value. A last read's `run` and `namespace` are `null`
+  when a toolset's registration read the secret to list a server's tools. `rewind.namespaces.secrets` (`list`, `put`,
+  `delete`, `usage`): an end user's own. `isSecretName` checks a name.
+- `runs.start`, `runs.fork` and `workflows.create` take `secrets`, the attachments by MCP server or API
+  (`{ github: "ns/github", zendesk: "org/zendesk" }`); `Run` and `Workflow` have them. The problem slug
+  `secret-required`, and `RewindApiError.attachments`: each attachment at fault and what may be attached instead.
+- `toolsets.create` takes `apis` (OpenAPI documents, one tool per operation) and an `auth` per server and API.
+- `rewind.signingKeys` (`list`, with the `issuer` and the `jwksUrl`; `rotate`; `jwks`), `rewindIssuer` and
+  `rewindJwksUrl`.
+- `verifyRewindCall(request, { issuer, audience, labels?, session? })` checks a call Rewind signed (`auth: { type:
+"rewind" }`) and answers `{ namespace, labels, run, tool, idempotencyKey }`, or throws a `RewindSignatureError`
+  naming the check that failed. It depends on `jose`.
+- The types `Secret`, `SecretUsage`, `PutSecret`, `SecretScope`, `LastRead`, `DailyReads`, `WorkflowAttaching`,
+  `SigningKey`, `SigningKeyList`, `Jwk`, `Jwks`, `AttachmentProblem`, `AttachmentProblemKind`, `Api`, `ApiSummary`,
+  `Auth`, `SecretEncoding`, `SkippedOperation`, `CredentialsExpiredReason`.
+
+Breaking changes:
+
+- `StartRunParams.credentials` is `secrets`, which names secrets rather than giving values;
+  `toolsets.setCredentials`, `runs.setCredentials` and `namespaces.setCredentials` are gone: put a secret
+  (`secrets.put`, `namespaces.secrets.put`) and attach it.
+- A parked call's reason is `credentials_refused` or `secret_missing` (was `credentials_expired`).
 
 For workflow test suites: tests that describe the world a run meets and what the outside must see at the end, the
 suite a workflow version carries and every derived version must pass, and tests recorded from past runs.

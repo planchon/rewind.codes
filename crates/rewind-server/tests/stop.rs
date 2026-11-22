@@ -75,7 +75,7 @@ impl ServerHandler for Slow {
 }
 
 /// The MCP server listens on 127.0.0.1, which a deployed server reaches only when allowed.
-const INTERNAL_MCP: &[&str] = &["--allow-internal-mcp", "127.0.0.1"];
+const INTERNAL_MCP: &[&str] = &["--allow-internal-tools", "127.0.0.1"];
 
 /// Serves `slow` over streamable HTTP on 127.0.0.1; returns its URL.
 async fn serve(slow: Slow) -> String {

@@ -7,6 +7,7 @@ import { type AccessOptions, type AccessWorld, createAccessWorld } from "./acces
 import { type ConnectionWorld, createConnectionWorld } from "./connections";
 import { fakeDigest, JournalBuilder } from "./journal";
 import { createNamespaceWorld, type NamespaceWorld } from "./namespaces";
+import { createSecretWorld, type SecretWorld } from "./secrets";
 import { createWorkflowWorld, type RecordedRun, type WorkflowWorld } from "./workflows";
 
 const SECOND = 1_000;
@@ -42,6 +43,22 @@ export interface RunFixture {
   taskStates?: Record<number, Pick<Extract<Waiting, { kind: "tool_call" }>, "state" | "parked">>;
   /** Dispatcher attempts beyond the first, by `seq`. */
   retries?: Record<number, number>;
+  /** The secrets it attached at start, by server (`ns/github`, `org/slack`). */
+  secrets?: Record<string, string>;
+}
+
+/**
+ * The secrets a run of this script attaches: each end user's GitHub for triage, the organization's
+ * for the digest, the organization's Slack and CRM; `dax` is signed, `llm` and `weather` take none.
+ */
+function attachmentsOf(s: ScriptFixture): Record<string, string> {
+  const imported = /import \{([^}]*)\} from "rewind:tools"/.exec(s.source)?.[1] ?? "";
+  const servers = new Set(imported.split(",").map((name) => name.trim()));
+  const out: Record<string, string> = {};
+  if (servers.has("github")) out.github = s.name.startsWith("digest") ? "org/github" : "ns/github";
+  if (servers.has("slack")) out.slack = "org/slack";
+  if (servers.has("crm")) out.crm = "org/crm";
+  return out;
 }
 
 export interface World {
@@ -60,6 +77,8 @@ export interface World {
   workflows: WorkflowWorld;
   /** People's connections, the requests waiting for their consent, the toolsets, `/mcp`. */
   connections: ConnectionWorld;
+  /** The secrets of each tenant, the organization's and its namespaces', and its signing keys. */
+  secrets: Map<string, SecretWorld>;
 }
 
 function script(name: string, source: string): ScriptFixture {
@@ -1266,6 +1285,11 @@ export function createWorld(options: WorldOptions): World {
     ...(options.githubEmail !== undefined ? { githubEmail: options.githubEmail } : {}),
     ...(options.log ? { log: options.log } : {}),
   });
+  for (const r of runs) {
+    const attached = attachmentsOf(r.script);
+    if (Object.keys(attached).length > 0) r.secrets = attached;
+  }
+
   const world: World = {
     now,
     scripts: [
@@ -1300,6 +1324,20 @@ export function createWorld(options: WorldOptions): World {
       ...(options.mcp ? { mcp: options.mcp } : {}),
       ...(options.live ? { live: true } : {}),
     }),
+    secrets: new Map([
+      [
+        access.tenant,
+        createSecretWorld({
+          now,
+          runs: runs.map((r) => ({
+            id: r.id,
+            namespace: r.namespace,
+            start: Date.parse(r.journal.entries[0]?.recordedAt ?? new Date(now).toISOString()),
+            secrets: r.secrets ?? {},
+          })),
+        }),
+      ],
+    ]),
   };
   if (options.requireKey) world.requireKey = options.requireKey;
   return world;

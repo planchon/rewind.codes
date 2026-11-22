@@ -1,0 +1,34 @@
+[package]
+name = "rewind-outbound"
+description = "What leaves Rewind for a tenant's servers: the egress checks, the HTTP client built on them, placing a secret, and the JWT signing of signed calls."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Adapter support: among internal crates, rewind-outbound depends only on rewind-core
+# (archi/07-code-architecture.md, "Dependency rules"). The tool dispatchers (rewind-mcp,
+# rewind-openapi) and the server's webhooks use it.
+[dependencies]
+rewind-core.workspace = true
+# The tenant's Ed25519 seed loaded as a PKCS#8 document for jsonwebtoken.
+aws-lc-rs.workspace = true
+base64.workspace = true
+# The jti of the requests of an MCP session that belong to no call.
+getrandom.workspace = true
+ipnet.workspace = true
+# EdDSA JWTs of signed calls, on aws-lc-rs.
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["net"] }
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+
+[lints]
+workspace = true

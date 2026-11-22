@@ -1,7 +1,8 @@
 //! What the conformance suites cannot see: the database itself. Its schema version and
 //! migrations, the keys of version 1 becoming keys and grants, the runs of version 2 moving to the
 //! namespace `migrated`, servers starting together, what a
-//! call dropped half-way leaves, secrets at rest, the byte order of tenants, claims that read
+//! call dropped half-way leaves, secrets at rest, the master key replaced and the credentials of
+//! version 9 dropped, the byte order of tenants, claims that read
 //! several pages of due tasks, owners demoting each other at once, projectors applying the same
 //! runs at once, and the percentiles of Postgres.
 //!
@@ -15,16 +16,16 @@ use std::time::Duration;
 use futures_util::future::join_all;
 use rewind_core::{
     Annotation, Command, Digest, Epoch, Event, HistoryEntry, Lifecycle, LogLevel, RunId, RunMode,
-    RunStarted, RunStatus, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
+    RunStarted, RunStatus, SecretName, Seed, Seq, Timestamp, ToolPolicy, ToolRoute,
 };
 use rewind_engine::ports::{
-    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Credentials, Grant, GrantDeletion,
-    GrantWrite, JournalStore, NewRun, NewToolTask, Predicate, Principal, ProjectedRun,
-    QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery, RunRef,
-    RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials,
+    AccessStore, AcquireRunnable, Activation, ApiKey, CreateRun, Grant, GrantDeletion, GrantWrite,
+    JournalStore, NamespaceName, NewRun, NewSecret, NewToolTask, Predicate, Principal,
+    ProjectedRun, QuarantineKind, QuarantineNote, ReadModel, RunMetadata, RunOrder, RunQuery,
+    RunRef, RunSnapshot, STICKY_GRACE, Secret, SecretError, SecretId, SecretReader, SecretStore,
     TaskFilter, TaskPhase, TaskProgress, Tenant, TenantId, TenantScope, Wait, WaitKind,
 };
-use rewind_store_postgres::{Config, Error, MasterKey, PostgresStore, SCHEMA_VERSION};
+use rewind_store_postgres::{Config, Error, MasterKey, MasterKeys, PostgresStore, SCHEMA_VERSION};
 use serde_json::json;
 use support::Postgres;
 
@@ -62,9 +63,9 @@ fn new_run(run: RunRef) -> NewRun {
 async fn connect(
     postgres: &Postgres,
     database: &str,
-    key: MasterKey,
+    keys: impl Into<MasterKeys>,
 ) -> Result<PostgresStore, Error> {
-    PostgresStore::connect(&Config::new(postgres.url(database)), key).await
+    PostgresStore::connect(&Config::new(postgres.url(database)), keys).await
 }
 
 fn key() -> MasterKey {
@@ -90,7 +91,6 @@ async fn the_database_behind_the_store() {
     check!(servers_starting_together_migrate_once);
     check!(runs_survive_a_restart);
     check!(a_call_dropped_half_way_writes_nothing);
-    check!(secrets_are_encrypted_at_rest);
     check!(tenants_are_in_byte_order);
     check!(a_claim_reads_past_tasks_without_a_free_slot);
     check!(a_drawn_tenant_whose_runs_are_all_taken_yields_to_the_next);
@@ -100,6 +100,10 @@ async fn the_database_behind_the_store() {
     check!(concurrent_starts_never_take_the_same_last_place);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
+    check!(secrets_are_encrypted_at_rest);
+    check!(the_master_key_is_replaced_by_a_rewrap);
+    check!(two_rewraps_at_once_change_each_data_key_once);
+    check!(the_credentials_of_version_9_are_dropped);
     check!(a_changed_run_that_cannot_be_read_is_left_out);
 }
 
@@ -600,90 +604,332 @@ async fn a_call_dropped_half_way_writes_nothing(postgres: &Postgres) {
     assert!(committed, "a commit with enough time succeeds");
 }
 
-fn credentials() -> Credentials {
-    Credentials {
-        servers: BTreeMap::from([(
-            "github".to_owned(),
-            ServerCredentials {
-                headers: BTreeMap::from([(
-                    "Authorization".to_owned(),
-                    Secret::new("Bearer ghp_plaintext_token"),
-                )]),
-                env: BTreeMap::new(),
-            },
-        )]),
+fn github_token(name: &str) -> NewSecret {
+    NewSecret {
+        id: SecretId::organization(SecretName::new(name).expect("valid")),
+        value: Secret::new("ghp_plaintext_token"),
+        labels: BTreeMap::new(),
+        by: "user:ada".into(),
+    }
+}
+
+fn reader() -> SecretReader {
+    SecretReader::Run {
+        run: RunId::from_u128(1),
+        namespace: NamespaceName::migrated(),
     }
 }
 
 async fn secrets_are_encrypted_at_rest(postgres: &Postgres) {
     let database = postgres.create_database();
-    let owner = SecretOwner::Toolset(Digest::of(b"toolset"));
     let store = postgres.connect(&database).await;
     // Two servers storing a tenant's first secrets at once agree on its data key.
     let other = postgres.connect(&database).await;
-    let (local, credentials) = (TenantId::local(), credentials());
-    let run_owner = SecretOwner::Run(RunId::from_u128(9));
-    let (first, second) = tokio::join!(
-        store.put(&local, &owner, &credentials),
-        other.put(&local, &run_owner, &credentials),
+    let local = TenantId::local();
+    let (first, second) = (github_token("github"), github_token("linear"));
+    let (put_first, put_second) = tokio::join!(
+        store.put(&local, &first, T0),
+        other.put(&local, &second, T0),
     );
-    first.expect("put");
-    second.expect("put");
+    put_first.expect("put");
+    put_second.expect("put");
     assert_eq!(
         postgres.psql(&database, "SELECT count(*) FROM data_keys"),
         "1"
     );
+    assert_eq!(
+        postgres.psql(&database, "SELECT master_key FROM data_keys"),
+        key().id().as_str(),
+        "a data key names the master key that holds it"
+    );
+    let signing = store.signing_key(&local, T0).await.expect("signing_key");
 
-    // No column holds the secret in clear.
+    // No column holds the secret or the private key in clear.
     let clear = postgres.psql(
         &database,
         "SELECT count(*) FROM secrets WHERE position('ghp_plaintext_token'::bytea IN ciphertext) > 0",
     );
     assert_eq!(clear, "0", "a secret is stored in clear");
-
-    for reader in [&store, &other] {
-        assert_eq!(
-            reader
-                .resolve(
-                    &TenantId::local(),
-                    RunId::from_u128(1),
-                    &rewind_engine::ports::NamespaceName::migrated(),
-                    Digest::of(b"toolset")
-                )
-                .await
-                .expect("resolve"),
-            Some(credentials.clone())
-        );
-    }
-    assert_eq!(
-        store
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(9),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"other")
-            )
-            .await
-            .expect("resolve"),
-        Some(credentials),
-        "the run's own credentials"
+    let seed: String = signing
+        .private
+        .expose()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let clear = postgres.psql(
+        &database,
+        &format!(
+            "SELECT count(*) FROM signing_keys \
+             WHERE position('\\x{seed}'::bytea IN private_ciphertext) > 0"
+        ),
     );
+    assert_eq!(clear, "0", "a private key is stored in clear");
+
+    for reader_store in [&store, &other] {
+        for secret in [&first, &second] {
+            assert_eq!(
+                reader_store
+                    .read(&local, &secret.id, &reader(), T0)
+                    .await
+                    .expect("read"),
+                Some(secret.value.clone())
+            );
+        }
+    }
 
     // Another master key reads nothing.
     let stranger = connect(postgres, &database, MasterKey::from_bytes([4; 32]))
         .await
         .expect("connect");
-    assert!(matches!(
-        stranger
-            .resolve(
-                &TenantId::local(),
-                RunId::from_u128(1),
-                &rewind_engine::ports::NamespaceName::migrated(),
-                Digest::of(b"toolset")
+    assert_eq!(
+        stranger.read(&local, &first.id, &reader(), T0).await,
+        Err(SecretError::UnknownMasterKey(key().id()))
+    );
+}
+
+fn secret_of(tenant: &str, value: &str) -> (TenantId, NewSecret) {
+    let secret = NewSecret {
+        id: SecretId::of_namespace(
+            NamespaceName::new("alice").expect("valid"),
+            SecretName::new("github").expect("valid"),
+        ),
+        value: Secret::new(value),
+        labels: BTreeMap::new(),
+        by: "token:alice".into(),
+    };
+    (TenantId::new(tenant).expect("tenant"), secret)
+}
+
+async fn value_of(store: &PostgresStore, (tenant, secret): &(TenantId, NewSecret)) -> Secret {
+    store
+        .read(tenant, &secret.id, &reader(), T0)
+        .await
+        .expect("read")
+        .expect("the secret exists")
+}
+
+/// The operator gives a new master key and the old one as a previous key, rewraps the data keys,
+/// then removes the old key: the secrets and private keys are never encrypted again, and read
+/// the same throughout.
+async fn the_master_key_is_replaced_by_a_rewrap(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let (old, new) = (
+        MasterKey::from_bytes([1; 32]),
+        MasterKey::from_bytes([2; 32]),
+    );
+    let secrets = [secret_of("acme", "a-1"), secret_of("globex", "g-1")];
+    let acme = &secrets[0].0;
+    let before = connect(postgres, &database, old.clone())
+        .await
+        .expect("connect");
+    for (tenant, secret) in &secrets {
+        before.put(tenant, secret, T0).await.expect("put");
+    }
+    let signing = before.signing_key(acme, T0).await.expect("signing_key");
+    assert_eq!(
+        before
+            .master_keys_in_use()
+            .await
+            .expect("master_keys_in_use"),
+        [old.id()]
+    );
+    before.close().await;
+    let sealed = || {
+        postgres.psql(
+            &database,
+            "SELECT string_agg(encode(ciphertext, 'hex'), ',' ORDER BY tenant, name) FROM secrets \
+             WHERE tenant IN ('acme', 'globex') \
+             UNION ALL SELECT encode(private_ciphertext, 'hex') FROM signing_keys",
+        )
+    };
+    let sealed_before = sealed();
+
+    let ring = MasterKeys::new(new.clone()).with_previous([old.clone()]);
+    let during = connect(postgres, &database, ring).await.expect("connect");
+    for secret in &secrets {
+        assert_eq!(
+            value_of(&during, secret).await,
+            secret.1.value,
+            "read through a previous key"
+        );
+    }
+    let initech = secret_of("initech", "i-1");
+    during.put(&initech.0, &initech.1, T0).await.expect("put");
+    let mut in_use = vec![old.id(), new.id()];
+    in_use.sort();
+    assert_eq!(
+        during
+            .master_keys_in_use()
+            .await
+            .expect("master_keys_in_use"),
+        in_use,
+        "a new data key is made under the current key"
+    );
+    assert_eq!(during.rewrap_data_keys().await, Ok(2));
+    assert_eq!(during.rewrap_data_keys().await, Ok(0), "nothing left");
+    assert_eq!(
+        during
+            .master_keys_in_use()
+            .await
+            .expect("master_keys_in_use"),
+        [new.id()]
+    );
+    assert_eq!(sealed(), sealed_before, "nothing is encrypted again");
+    during.close().await;
+
+    let after = connect(postgres, &database, new.clone())
+        .await
+        .expect("connect");
+    for secret in secrets.iter().chain([&initech]) {
+        assert_eq!(value_of(&after, secret).await, secret.1.value);
+    }
+    assert_eq!(after.signing_key(acme, T0).await, Ok(signing));
+    let stale = connect(postgres, &database, old).await.expect("connect");
+    assert_eq!(
+        stale.read(acme, &secrets[0].1.id, &reader(), T0).await,
+        Err(SecretError::UnknownMasterKey(new.id())),
+        "the old key alone no longer reads"
+    );
+}
+
+/// Two servers rewrapping at once change each data key once between them.
+async fn two_rewraps_at_once_change_each_data_key_once(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let (old, new) = (
+        MasterKey::from_bytes([1; 32]),
+        MasterKey::from_bytes([2; 32]),
+    );
+    let before = connect(postgres, &database, old.clone())
+        .await
+        .expect("connect");
+    let secrets: Vec<_> = (0..24)
+        .map(|n| secret_of(&format!("tenant-{n}"), &format!("v-{n}")))
+        .collect();
+    for (tenant, secret) in &secrets {
+        before.put(tenant, secret, T0).await.expect("put");
+    }
+    before.close().await;
+    let ring = MasterKeys::new(new.clone()).with_previous([old]);
+    let first = connect(postgres, &database, ring.clone())
+        .await
+        .expect("connect");
+    let second = connect(postgres, &database, ring).await.expect("connect");
+    let (one, two) = tokio::join!(
+        tokio::spawn(async move { first.rewrap_data_keys().await }),
+        tokio::spawn(async move { second.rewrap_data_keys().await }),
+    );
+    let (one, two) = (
+        one.expect("join").expect("rewrap"),
+        two.expect("join").expect("rewrap"),
+    );
+    assert_eq!(one + two, secrets.len(), "{one} + {two}");
+    let after = connect(postgres, &database, new.clone())
+        .await
+        .expect("connect");
+    assert_eq!(
+        after
+            .master_keys_in_use()
+            .await
+            .expect("master_keys_in_use"),
+        [new.id()]
+    );
+    for secret in &secrets {
+        assert_eq!(value_of(&after, secret).await, secret.1.value);
+    }
+}
+
+/// Migrations 1 to 9: a database as a build of schema version 9 left it, with credentials.
+#[derive(Debug)]
+struct Version9;
+
+impl<'s> sqlx::migrate::MigrationSource<'s> for Version9 {
+    fn resolve(
+        self,
+    ) -> futures_util::future::BoxFuture<
+        's,
+        Result<Vec<sqlx::migrate::Migration>, sqlx::error::BoxDynError>,
+    > {
+        Box::pin(async {
+            let migrations = [
+                include_str!("../migrations/0001_schema.sql"),
+                include_str!("../migrations/0002_access.sql"),
+                include_str!("../migrations/0003_workflows.sql"),
+                include_str!("../migrations/0004_run_workflows.sql"),
+                include_str!("../migrations/0005_namespaces.sql"),
+                include_str!("../migrations/0006_tests.sql"),
+                include_str!("../migrations/0007_connections.sql"),
+                include_str!("../migrations/0008_namespace_display_names.sql"),
+                include_str!("../migrations/0009_park_kinds.sql"),
+            ];
+            Ok(migrations
+                .iter()
+                .zip(1..)
+                .map(|(sql, version)| {
+                    sqlx::migrate::Migration::new(
+                        version,
+                        format!("version {version}").into(),
+                        sqlx::migrate::MigrationType::Simple,
+                        (*sql).to_owned().into(),
+                        false,
+                    )
+                })
+                .collect())
+        })
+    }
+}
+
+/// The credentials of version 9 cannot be named, and are dropped with their data keys; the runs
+/// attach nothing.
+async fn the_credentials_of_version_9_are_dropped(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let pool = sqlx::PgPool::connect(&postgres.url(&database))
+        .await
+        .expect("connect");
+    sqlx::migrate::Migrator::new(Version9)
+        .await
+        .expect("migrations 1 to 9")
+        .run(&pool)
+        .await
+        .expect("apply migrations 1 to 9");
+    for statement in [
+        "INSERT INTO data_keys (tenant, wrapped_key) VALUES ('acme', '\\x00')",
+        "INSERT INTO secrets (tenant, owner, ciphertext) VALUES ('acme', 'toolset:ab', '\\x00')",
+        "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
+         created_at, updated_at, namespace) \
+         VALUES ('acme', '00000000-0000-0000-0000-000000000001', decode(repeat('ab', 32), 'hex'), \
+         decode(repeat('cd', 32), 'hex'), 'pending', 1, 2, '{}', 1, 1, 'alice')",
+    ] {
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .expect("a row of version 9");
+    }
+    pool.close().await;
+
+    let store = postgres.connect(&database).await;
+    assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+    let acme = TenantId::new("acme").expect("tenant");
+    assert_eq!(store.master_keys_in_use().await, Ok(Vec::new()));
+    assert_eq!(
+        store
+            .list(
+                &acme,
+                &rewind_engine::ports::SecretNamespace::Organization,
+                &BTreeMap::new(),
+                rewind_engine::ports::Day(0)
             )
             .await,
-        Err(SecretError::Crypto(_))
-    ));
+        Ok(Vec::new())
+    );
+    let run = store
+        .get_run(&RunRef::new(acme.clone(), RunId::from_u128(1)))
+        .await
+        .expect("get_run")
+        .expect("the run is kept");
+    assert!(run.metadata.secrets.is_empty());
+    let (tenant, secret) = secret_of("acme", "a-1");
+    store.put(&tenant, &secret, T0).await.expect("put");
+    assert_eq!(store.master_keys_in_use().await, Ok(vec![key().id()]));
 }
 
 /// Tenants are ordered by their bytes, as the domain orders them, whatever the database's

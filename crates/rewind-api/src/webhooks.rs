@@ -180,7 +180,8 @@ pub enum WebhookEvent {
         timestamp: Timestamp,
         data: ToolSchemaChanged,
     },
-    /// A call was parked because the server refused the credentials (401).
+    /// A call was parked because the server refused the secret or the signature (401), or
+    /// because the secret the run attached no longer exists.
     #[serde(rename = "credentials.expired")]
     CredentialsExpired {
         timestamp: Timestamp,
@@ -258,8 +259,10 @@ pub struct ToolSchemaChanged {
     pub message: String,
 }
 
-/// A call parked because the server refused the credentials. Renew them with
-/// `PUT /v1/runs/{id}/credentials` or `PUT /v1/toolsets/{id}/credentials`: the call is then
+/// A call parked because its server refused the secret or the signature (`refused`), or
+/// because the secret the run attached no longer exists (`missing`, nothing was sent). Put the
+/// secret again (`PUT /v1/secrets/{name}`, `PUT /v1/namespaces/{name}/secrets/{secret}`), or,
+/// for a refused signature, approve the call once the server accepts the key: the call is then
 /// sent again with the same idempotency key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -270,12 +273,27 @@ pub struct CredentialsExpired {
     pub task_id: String,
     pub seq: u32,
     pub tool: String,
-    /// The tool's MCP server.
+    /// The tool's MCP server or API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
     pub toolset: String,
-    /// What the server answered.
+    pub reason: CredentialsExpiredReason,
+    /// The secret the run attached for the server, as attached (`org/<name>`, `ns/<name>`);
+    /// absent for a signed call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<String>,
+    /// What the server answered, or which secret is missing.
     pub message: String,
+}
+
+/// Why a call waits in `credentials.expired`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CredentialsExpiredReason {
+    /// The server answered 401 to the secret or to the signature.
+    Refused,
+    /// The secret the run attached no longer exists: nothing was sent.
+    Missing,
 }
 
 // -------------------------------------------------------------------------------------------
@@ -431,7 +449,8 @@ mod tests {
             "data": {
                 "runId": "r1", "namespace": "alice", "labels": {}, "taskId": "t1", "seq": 2,
                 "tool": "github.list_issues",
-                "server": "github", "toolset": "ab", "message": "401 Unauthorized"
+                "server": "github", "toolset": "ab", "reason": "refused", "secret": "ns/github",
+                "message": "401 Unauthorized"
             }
         }))
         .unwrap()

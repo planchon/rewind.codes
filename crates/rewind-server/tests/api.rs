@@ -1188,51 +1188,9 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
         "a run given is checked for every key"
     );
 
-    // Credentials: those of its own runs only, never a toolset's.
-    let credentials = rewind_api::toolsets::Credentials::default();
-    scoped
-        .set_run_credentials(&mine.id, &credentials)
-        .await
-        .unwrap();
-    assert_eq!(
-        problem(
-            scoped
-                .set_run_credentials(&theirs.id, &credentials)
-                .await
-                .unwrap_err()
-        )
-        .kind(),
-        Some(ProblemType::NotFound)
-    );
-    let toolset = harness
-        .create_toolset(&ask_toolset(ToolPolicy::default()))
-        .await
-        .unwrap();
-    assert_eq!(
-        problem(
-            scoped
-                .set_toolset_credentials(&toolset.id, &credentials)
-                .await
-                .unwrap_err()
-        )
-        .kind(),
-        Some(ProblemType::Forbidden)
-    );
-    let mut with_credentials = ask_toolset(ToolPolicy::default());
-    with_credentials.credentials = Some(credentials.clone());
-    assert_eq!(
-        problem(scoped.create_toolset(&with_credentials).await.unwrap_err()).kind(),
-        Some(ProblemType::Forbidden),
-        "registering a toolset with credentials sets the toolset's credentials"
-    );
-    scoped
-        .create_toolset(&ask_toolset(ToolPolicy::default()))
-        .await
-        .unwrap();
-    harness
-        .set_toolset_credentials(&toolset.id, &credentials)
-        .await
-        .unwrap();
+    // Who writes and attaches which secrets is the engine-server workstream's
+    // (`archi/09-roadmap.md`): its tests come with it.
+    let _ = (&harness, &theirs);
     server.stop().await;
 }
 

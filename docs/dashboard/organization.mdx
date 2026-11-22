@@ -1,6 +1,6 @@
 ---
 title: "Organization"
-description: "Members, invitations, roles, API keys and connections: who may see and do what."
+description: "Members, invitations, roles, API keys, signing keys and connections: who may see and do what."
 ---
 
 Open your organization from the account menu at the bottom of the sidebar. Each part is shown to whoever holds its
@@ -38,14 +38,15 @@ A role is a set of permissions. The built-in roles never change; your organizati
 | Built-in role | For |
 | --- | --- |
 | `owner` | Every permission: administers the organization |
-| `harness` | A harness and its agent tools: runs, toolsets, credentials, tasks, subscriptions, namespaces and tokens |
+| `harness` | A harness and its agent tools: runs, toolsets, secrets, tasks, subscriptions, namespaces and tokens |
 | `worker` | A host-tool worker only: `tasks:work` |
-| `reader` | Reading runs, toolsets, subscriptions, members and roles: a dashboard |
+| `reader` | Reading runs, toolsets, the secrets' metadata, subscriptions, members and roles: a dashboard |
 
 | Permissions | Allow |
 | --- | --- |
 | `runs:read`, `runs:start`, `runs:control`, `runs:quarantine`, `runs:delete` | Reading runs; starting them; signalling, cancelling and forking them; releasing them from quarantine; erasing them |
-| `toolsets:read`, `toolsets:write`, `credentials:write` | Reading and registering toolsets and workflows; setting credentials |
+| `toolsets:read`, `toolsets:write` | Reading and registering toolsets and workflows |
+| `secrets:read`, `secrets:write`, `secrets:use` | Listing the [secrets](/dashboard/secrets) and their usage (never a value) and the signing keys; putting and deleting secrets; attaching an organization's secret to a run or a workflow |
 | `tasks:work`, `tasks:approve` | Executing host tools; approving and rejecting calls |
 | `subscriptions:read`, `subscriptions:write` | Webhook subscriptions |
 | `namespaces:read`, `namespaces:write`, `tokens:write` | The end users: reading them; their limits and erasure; minting and revoking their tokens |
@@ -72,6 +73,21 @@ before you close the panel.
   Give each process the smallest role it needs: `harness` for your backend, `worker` for a host-tool worker, a key
   limited to an agent's labels for that agent's tools. End users' agents get [tokens](/sdk/end-users#tokens), not keys.
 </Tip>
+
+## Signing keys
+
+Rewind signs each call to a server or an API whose `auth` is `rewind` with your organization's Ed25519 key; the
+server checks it with [`verifyRewindCall`](/sdk/signed-calls). This part, shown with `secrets:read`, gives what that
+server needs:
+
+- **Issuer**, `https://api.rewind.codes/organizations/<your organization>`: what `verifyRewindCall` takes as `issuer`.
+  Copy it into your server's configuration.
+- **Public keys**, `{issuer}/jwks.json`: served without authentication, cached 5 minutes.
+- **The keys**: each one's id (the `kid` of the JWTs it signs), when it was made, and for a retired one until when it
+  stays published.
+
+**Rotate the key**, with `organization:write`, asks first in a dialog. The new key signs every call from then on; the
+old one stops signing at once and stays published for 24 hours, so the calls it signed are still accepted.
 
 ## Connections
 

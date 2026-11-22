@@ -1,7 +1,7 @@
-//! Where a deployed server's MCP client goes (`McpEgress::checked`). The servers of these tests
+//! Where a deployed server's MCP client goes (`ToolEgress::checked`). The servers of these tests
 //! listen on 127.0.0.1: for a deployment, internal services. They are refused unless the
 //! operator's allow-list lets them through, and once let through, what they answer is never
-//! quoted to the tenant. The embedded server's configuration (`McpEgress::open`) reaches them.
+//! quoted to the tenant. The embedded server's configuration (`ToolEgress::open`) reaches them.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::net::IpAddr;
@@ -12,21 +12,20 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use rewind_core::{Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::ToolDispatcher;
-use rewind_mcp::{
-    InternalAllowList, McpConfig, McpDispatcher, McpEgress, McpError, NameResolver, Resolving,
-};
+use rewind_engine::ports::{CallAuth, ToolDispatcher};
+use rewind_mcp::{ListingAuth, McpConfig, McpDispatcher, McpError};
+use rewind_outbound::{InternalAllowList, NameResolver, Resolving, ToolEgress};
 use serde_json::json;
 
 use crate::fixture::{self, Auth, Fixture};
 use crate::{call, failed, http_server, open, result, tenant};
 
-const REFUSAL: &str = "MCP servers are not reached there unless the operator allows it";
+const REFUSAL: &str = "MCP servers and APIs are not reached there unless the operator allows it";
 
 /// A deployed server's dispatcher, letting `internal` through, resolving with the system.
 fn deployed(internal: &[&str]) -> McpDispatcher {
     McpDispatcher::new(McpConfig {
-        egress: McpEgress::checked(InternalAllowList::parse(internal).unwrap()),
+        egress: ToolEgress::checked(InternalAllowList::parse(internal).unwrap()),
         ..McpConfig::default()
     })
 }
@@ -34,7 +33,7 @@ fn deployed(internal: &[&str]) -> McpDispatcher {
 /// A deployed server's dispatcher resolving with `resolver`.
 fn deployed_with(resolver: Arc<Scripted>, internal: &[&str]) -> McpDispatcher {
     McpDispatcher::new(McpConfig {
-        egress: McpEgress::checked_with(resolver, InternalAllowList::parse(internal).unwrap()),
+        egress: ToolEgress::checked_with(resolver, InternalAllowList::parse(internal).unwrap()),
         ..McpConfig::default()
     })
 }
@@ -123,7 +122,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
 
     // Its address, at registration.
     let error = dispatcher
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert_eq!(
@@ -136,7 +135,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     // A name resolving to it.
     let by_name = http_server(&server.url.replace("127.0.0.1", "localhost"));
     let error = dispatcher
-        .list_tools(&tenant(), &by_name, None)
+        .list_tools(&tenant(), &by_name, ListingAuth::None)
         .await
         .unwrap_err();
     let message = refused_message(&error);
@@ -155,7 +154,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     );
     let failure = failed(
         dispatcher
-            .dispatch(call(&mcp, &lookup, json!({ "id": "c-1" })), None)
+            .dispatch(call(&mcp, &lookup, json!({ "id": "c-1" })), CallAuth::None)
             .await,
     );
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
@@ -166,7 +165,7 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     // The cloud metadata endpoint, without even trying.
     let metadata = http_server("http://169.254.169.254/latest/meta-data/");
     let error = dispatcher
-        .list_tools(&tenant(), &metadata, None)
+        .list_tools(&tenant(), &metadata, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -176,7 +175,10 @@ pub(crate) async fn a_local_server_is_refused_by_a_deployed_server() {
     assert_eq!(fixture.state().sessions, 0, "nothing reached the server");
 
     // The embedded server's configuration reaches it.
-    let tools = open().list_tools(&tenant(), &mcp, None).await.unwrap();
+    let tools = open()
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
+        .await
+        .unwrap();
     assert_eq!(tools.len(), 8);
     assert_eq!(fixture.state().sessions, 1);
 }
@@ -188,12 +190,15 @@ pub(crate) async fn an_allowed_internal_server_is_reached() {
 
     // By network: discovery, then a call.
     let dispatcher = deployed(&["127.0.0.0/8"]);
-    let tools = dispatcher.list_tools(&tenant(), &mcp, None).await.unwrap();
+    let tools = dispatcher
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
+        .await
+        .unwrap();
     assert_eq!(tools.len(), 8);
     let lookup = tools.iter().find(|tool| tool.name == "fx.lookup").unwrap();
     result(
         dispatcher
-            .dispatch(call(&mcp, lookup, json!({ "id": "c-1" })), None)
+            .dispatch(call(&mcp, lookup, json!({ "id": "c-1" })), CallAuth::None)
             .await,
     );
 
@@ -202,14 +207,14 @@ pub(crate) async fn an_allowed_internal_server_is_reached() {
     let by_name = http_server(&server.url.replace("127.0.0.1", "localhost"));
     assert_eq!(
         dispatcher
-            .list_tools(&tenant(), &by_name, None)
+            .list_tools(&tenant(), &by_name, ListingAuth::None)
             .await
             .unwrap()
             .len(),
         8
     );
     let error = dispatcher
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -219,7 +224,7 @@ pub(crate) async fn an_allowed_internal_server_is_reached() {
 
     // Another network lets nothing through here.
     let error = deployed(&["10.0.0.0/8"])
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -241,7 +246,7 @@ pub(crate) async fn an_internal_server_s_answers_are_not_quoted() {
     for port in [page, json, failing] {
         let mcp = http_server(&format!("http://127.0.0.1:{port}/admin"));
         let internal = deployed(&["127.0.0.1"])
-            .list_tools(&tenant(), &mcp, None)
+            .list_tools(&tenant(), &mcp, ListingAuth::None)
             .await
             .unwrap_err();
         assert!(
@@ -264,7 +269,10 @@ pub(crate) async fn an_internal_server_s_answers_are_not_quoted() {
         }
         // The embedded server shows its developer what their own server answered (rmcp does
         // not read the body of a 5xx that is not JSON).
-        let local = open().list_tools(&tenant(), &mcp, None).await.unwrap_err();
+        let local = open()
+            .list_tools(&tenant(), &mcp, ListingAuth::None)
+            .await
+            .unwrap_err();
         assert_eq!(
             local.to_string().contains("hunter2"),
             port != failing,
@@ -276,7 +284,7 @@ pub(crate) async fn an_internal_server_s_answers_are_not_quoted() {
     let resolver = Scripted::new(&[("payments.internal", &["127.0.0.1"])]);
     let mcp = http_server(&format!("http://payments.internal:{page}/admin"));
     let internal = deployed_with(resolver, &["payments.internal"])
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(!internal.to_string().contains("hunter2"), "{internal:?}");
@@ -299,7 +307,7 @@ pub(crate) async fn redirects_go_nowhere_else() {
     let resolver = Scripted::new(&[("mcp.test", &["127.0.0.1"])]);
     let moved = http_server(&format!("http://mcp.test:{port}/moved"));
     let tools = deployed_with(resolver, &["mcp.test"])
-        .list_tools(&tenant(), &moved, None)
+        .list_tools(&tenant(), &moved, ListingAuth::None)
         .await
         .unwrap();
     assert_eq!(tools.len(), 8);
@@ -310,18 +318,18 @@ pub(crate) async fn redirects_go_nowhere_else() {
     let resolver = Scripted::new(&[("mcp.test", &["127.0.0.1"])]);
     let mcp = http_server(&format!("http://mcp.test:{redirecting}/mcp"));
     let error = deployed_with(resolver, &["mcp.test"])
-        .list_tools(&tenant(), &mcp, None)
+        .list_tools(&tenant(), &mcp, ListingAuth::None)
         .await
         .unwrap_err();
     assert_eq!(
         refused_message(&error),
-        "fx cannot be reached: it redirects to another origin: MCP requests go to the server's \
+        "fx cannot be reached: it redirects to another origin: requests go to the server's own \
          URL only"
     );
     // The embedded server does not follow it either: the credentials would go with it.
     let by_address = http_server(&format!("http://127.0.0.1:{redirecting}/mcp"));
     let error = open()
-        .list_tools(&tenant(), &by_address, None)
+        .list_tools(&tenant(), &by_address, ListingAuth::None)
         .await
         .unwrap_err();
     assert!(
@@ -339,7 +347,7 @@ pub(crate) async fn redirects_go_nowhere_else() {
     ]);
     let moved = http_server(&format!("http://rebind.test:{port}/moved"));
     let error = deployed_with(resolver, &["127.0.0.1"])
-        .list_tools(&tenant(), &moved, None)
+        .list_tools(&tenant(), &moved, ListingAuth::None)
         .await
         .unwrap_err();
     assert_eq!(

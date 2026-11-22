@@ -94,6 +94,7 @@ function Home() {
   const access = useAccess();
   if (access.can("runs:read")) return <Navigate to="/overview" replace />;
   if (access.can("namespaces:read")) return <Navigate to="/namespaces" replace />;
+  if (access.can("secrets:read")) return <Navigate to="/secrets" replace />;
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
   return <CannotRead />;
 }
@@ -158,6 +159,13 @@ export const routes: RouteObject[] = [
           Component: (await import("../views/namespaces/NamespaceView")).NamespaceView,
         }),
       },
+      // The organization's secrets; a namespace's are on its page. The view checks `secrets:read`.
+      {
+        path: "secrets",
+        lazy: async () => ({
+          Component: (await import("../views/secrets/SecretsView")).SecretsView,
+        }),
+      },
       {
         path: "organization",
         lazy: async () => ({
@@ -190,6 +198,12 @@ export const routes: RouteObject[] = [
             path: "api-keys",
             lazy: async () => ({
               Component: (await import("../views/org/ApiKeysView")).ApiKeysView,
+            }),
+          },
+          {
+            path: "signing-keys",
+            lazy: async () => ({
+              Component: (await import("../views/org/SigningKeysView")).SigningKeysView,
             }),
           },
           {

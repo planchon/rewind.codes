@@ -28,8 +28,8 @@ pub use runs::{
     RunRecord, TraceContext,
 };
 pub use tasks::{
-    ClaimedTask, ParkKind, ParkReason, ParkedScope, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, ToolTask, deferred_timeout_failure,
+    ClaimedTask, ParkKind, ParkReason, ParkedScope, SecretUsage, TaskFilter, TaskRef, TaskState,
+    TaskToken, TaskUpdate, ToolTask, WorkflowAttaching, deferred_timeout_failure,
 };
 pub use workflows::{
     RunWorkflow, StartedBy, StoredWorkflow, TEST_GRACE, TestRecord, Watched, WorkflowFilter,
@@ -41,6 +41,7 @@ use super::namespaces::{
     DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
     NamespacePage, NamespaceWrite, QuotaAlert, QuotaAlertKey, Quotas, Usage, UsageDelta, UsageOf,
 };
+use super::secrets::SecretId;
 use super::tenancy::{RunRef, Tenant, TenantId, TenantScope};
 use super::webhooks::Subscription;
 
@@ -503,13 +504,29 @@ pub trait JournalStore: Send + Sync {
         now: Timestamp,
     ) -> impl Future<Output = Result<TaskUpdate, StoreError>> + Send;
 
-    /// Makes `ready` at `now` the tasks parked by `credentials_expired` in the scope, once the
-    /// credentials were renewed. Returns how many.
+    /// Makes `ready` at `now` the tasks parked by `credentials_refused` or `secret_missing` in
+    /// the scope: those of the runs that attach the secret put again, for the server or API the
+    /// task calls (for a namespace's secret, the runs of that namespace). Sent again with the
+    /// same idempotency key. Returns how many.
     fn resume_parked(
         &self,
         scope: &ParkedScope,
         now: Timestamp,
     ) -> impl Future<Output = Result<usize, StoreError>> + Send;
+
+    /// What reads `secret` in `tenant`: the active runs that attach it (an organization's
+    /// secret in every namespace, a namespace's in its own), those of them with a call to a
+    /// server or an API it serves that is parked or not yet sent, and the latest version of each
+    /// workflow that attaches it. Only the runs carrying every one of `labels` count: a caller
+    /// limited to labels learns nothing of the others. Each list of runs holds at most `limit`;
+    /// the totals count them all.
+    fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        labels: &BTreeMap<String, String>,
+        limit: usize,
+    ) -> impl Future<Output = Result<SecretUsage, StoreError>> + Send;
 
     /// Ends up to `limit` deferred tasks whose deadline passed at `now`, with
     /// [`deferred_timeout_failure`]. Returns how many.

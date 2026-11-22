@@ -19,7 +19,7 @@
 //! In production, egress also goes through an egress proxy: a rule of the network the workers
 //! run in, not a setting of this client.
 
-mod egress;
+mod allow;
 mod wire;
 
 use std::sync::Arc;
@@ -28,16 +28,15 @@ use std::time::Duration;
 use reqwest::header::{self, HeaderName};
 use reqwest::{Method, StatusCode};
 use rewind_core::{Builtin, Tool, ToolFailureKind, ToolRoute};
-use rewind_engine::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use rewind_engine::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
+use rewind_outbound::{AddressPolicy, Egress, NameResolver, Refused, SystemResolver};
 use url::Url;
 
-pub use egress::{Egress, InternalAllowList, NameResolver, Resolving, SystemResolver};
 pub use wire::{http_input_schema, http_output_schema};
 
 use crate::McpError;
 use crate::failure::{Failure, human};
-use egress::{AllowList, CheckedResolver, HTTP_TOOL, Policy, Rules};
-pub(crate) use egress::{Reach, Refused};
+use allow::{AllowList, HTTP_TOOL};
 use wire::Request;
 
 /// The bounds of the `http` tool.
@@ -88,7 +87,7 @@ pub fn http_tool(allowed_hosts: Vec<String>) -> Tool {
 pub struct HttpTool {
     client: reqwest::Client,
     config: Arc<HttpConfig>,
-    policy: Policy,
+    policy: AddressPolicy,
 }
 
 impl HttpTool {
@@ -102,22 +101,19 @@ impl HttpTool {
         config: HttpConfig,
         resolver: Arc<dyn NameResolver>,
     ) -> Result<Self, McpError> {
-        Self::build(config, resolver, egress::forbidden)
+        Self::build(config, resolver, rewind_outbound::forbidden)
     }
 
     fn build(
         config: HttpConfig,
         resolver: Arc<dyn NameResolver>,
-        policy: Policy,
+        policy: AddressPolicy,
     ) -> Result<Self, McpError> {
-        let client = reqwest::Client::builder()
+        // The egress checks without exceptions: the operator's internal hosts are for MCP
+        // servers and APIs, never for the http tool.
+        let client = Egress::with_policy(resolver, policy, HTTP_TOOL)
+            .apply(reqwest::Client::builder())
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .dns_resolver(Arc::new(CheckedResolver {
-                resolver,
-                rules: Rules::strict(policy, HTTP_TOOL),
-                reached_internal: None,
-            }))
             .user_agent(config.user_agent.as_str())
             .connect_timeout(config.timeout)
             .build()
@@ -141,7 +137,7 @@ impl HttpTool {
         let mut redirected = false;
         let mut redirects = 0;
         loop {
-            if let Err(Refused(reason)) = egress::check(&url, allowed, self.policy) {
+            if let Err(Refused(reason)) = allow::check(&url, allowed, self.policy) {
                 return refused(reason);
             }
             let mut builder = self.client.request(request.method.clone(), url.clone());
@@ -218,7 +214,7 @@ impl HttpTool {
 }
 
 impl ToolDispatcher for HttpTool {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match &call.tool.route {
             ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
                 let request = match wire::request(&call.args) {

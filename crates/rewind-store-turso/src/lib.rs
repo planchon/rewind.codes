@@ -13,8 +13,10 @@
 //!   (`run_summaries` with each run's snapshot, `run_labels`, `run_waits`, `run_texts`,
 //!   `tool_calls`), with the task states and quarantine recorded by whoever changes them
 //!   (`tool_calls.task_*`, `run_quarantine`);
-//! - `SecretStore`: credentials per toolset, per namespace and toolset, and per run, encrypted with a data key per tenant,
-//!   itself encrypted by the deployment's [`MasterKey`].
+//! - `SecretStore`: named secrets of the organization and of each namespace, their reads per
+//!   day, and each tenant's Ed25519 signing keys; values and private keys encrypted with a data
+//!   key per tenant, itself encrypted by one of the deployment's [`MasterKeys`], whose id it
+//!   records.
 //!
 //! History and inbox rows hold the `rewind-format` v1 JSON of their event. The `meta` table holds
 //! the schema version and the server's settings, such as virtual time.
@@ -49,7 +51,7 @@ use tokio::sync::{Mutex, MutexGuard};
 use turso::Connection;
 
 pub use schema::SCHEMA_VERSION;
-pub use secrets::MasterKey;
+pub use secrets::{MasterKey, MasterKeys};
 
 /// The errors of this crate. The port methods convert them into the port's own error type.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -96,7 +98,7 @@ struct Inner {
     /// The one connection. Every call holds it for its whole duration: calls never interleave
     /// inside a transaction.
     connection: Mutex<Connection>,
-    master_key: MasterKey,
+    master_keys: MasterKeys,
 }
 
 impl std::fmt::Debug for TursoStore {
@@ -115,8 +117,13 @@ const VIRTUAL_TIME: &str = "virtual_time";
 
 impl TursoStore {
     /// Opens the database at `path`, creating it if needed, and brings its schema to
-    /// [`SCHEMA_VERSION`]. A database with a newer schema is refused.
-    pub async fn open(path: impl AsRef<Path>, master_key: MasterKey) -> Result<Self, Error> {
+    /// [`SCHEMA_VERSION`]. A database with a newer schema is refused. `master_keys` is the
+    /// current master key, which encrypts, and the previous ones, which only decrypt (a
+    /// [`MasterKey`] alone has none).
+    pub async fn open(
+        path: impl AsRef<Path>,
+        master_keys: impl Into<MasterKeys>,
+    ) -> Result<Self, Error> {
         let path = path.as_ref();
         let utf8 = path
             .to_str()
@@ -129,7 +136,7 @@ impl TursoStore {
             inner: Arc::new(Inner {
                 _database: database,
                 connection: Mutex::new(connection),
-                master_key,
+                master_keys: master_keys.into(),
             }),
         })
     }

@@ -1,5 +1,5 @@
 //! Namespaces: the end users of the organization, their limits, their use and their alerts,
-//! their credentials, and the operator's ceiling of a tenant (`archi/06-storage-and-scale.md`,
+//! and the operator's ceiling of a tenant (`archi/06-storage-and-scale.md`,
 //! "Namespaces", "Quotas"; `archi/07-code-architecture.md`, "HTTP API `/v1`").
 //!
 //! A request bound to a namespace (`Rewind-Namespace`) reads that namespace only: another one in
@@ -19,7 +19,6 @@ use rewind_api::namespaces::{
     NamespaceQuery, PutCeiling, PutNamespace, PutNamespaceDefaults, QuotaAlertList,
     QuotaAlertQuery,
 };
-use rewind_api::toolsets::Credentials;
 use rewind_core::RunStatus;
 use rewind_engine::ports::{
     AccessStore, DeleteNamespace, DisplayName, JournalStore, Month, Namespace, NamespaceCursor,
@@ -32,7 +31,6 @@ use crate::auth::Caller;
 use crate::error::ApiError;
 use crate::extract::{Body, OptionalBody, Query};
 use crate::http::refuse_nul_in_filter;
-use crate::http::toolsets::{parse_digest, secrets};
 use crate::views::{self, engine_quotas, quotas};
 
 /// Namespaces a page of `GET /v1/namespaces` holds by default, and at most.
@@ -83,7 +81,7 @@ pub(crate) fn reach(caller: &Caller, name: &NamespaceName) -> Result<(), ApiErro
 pub(crate) fn deleting() -> ApiError {
     ApiError::new(
         ProblemType::NamespaceDeleting,
-        "this namespace is being erased: it takes no run, no token and no credentials any more",
+        "this namespace is being erased: it takes no run, no token and no secret any more",
     )
 }
 
@@ -334,7 +332,7 @@ pub(super) async fn patch(
 
 /// `DELETE /v1/namespaces/{name}`: erases the end user. The namespace takes no run and no token
 /// from now on, its tokens are revoked and its active runs cancelled through the normal path;
-/// the worker role erases its runs, credentials and use in the background.
+/// the worker role erases its runs, secrets and use in the background.
 pub(super) async fn delete(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -381,42 +379,6 @@ pub(super) async fn delete(
     }
     app.wake.bump();
     Ok(StatusCode::ACCEPTED)
-}
-
-/// `PUT /v1/namespaces/{name}/toolsets/{id}/credentials`: an end user's credentials for a
-/// toolset. The calls of the namespace's runs parked by `credentials.expired` are ready again.
-pub(super) async fn credentials(
-    State(app): State<Arc<App>>,
-    caller: Caller,
-    Path((text, id)): Path<(String, String)>,
-    Body(credentials): Body<Credentials>,
-) -> Result<StatusCode, ApiError> {
-    caller.require(Permission::CredentialsWrite)?;
-    if caller.scoped() {
-        return Err(ApiError::forbidden(format!(
-            "a namespace's credentials serve every run of the end user: {} is limited to labels, \
-             and sets the credentials of its own runs (PUT /v1/runs/{{id}}/credentials)",
-            caller.who()
-        )));
-    }
-    let name = name(&text)?;
-    reach(&caller, &name)?;
-    let toolset = parse_digest(&id)?;
-    if app
-        .store
-        .get_namespace(&caller.tenant, &name)
-        .await?
-        .is_some_and(|namespace| namespace.deleting_since.is_some())
-    {
-        return Err(deleting());
-    }
-    app.engine
-        .set_namespace_credentials(&caller.tenant, &name, toolset, &secrets(credentials))
-        .await?;
-    app.record_parked_tasks(&caller.tenant, Some(&name), toolset)
-        .await;
-    app.wake.bump();
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The defaults, the ceiling and the tenant's use of `month`.

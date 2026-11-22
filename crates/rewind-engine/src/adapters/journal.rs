@@ -14,10 +14,10 @@ use crate::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, InboxItem, JournalStore, Lease,
     NewRun, PAYLOAD_DELETION_TIMEOUT, ParkKind, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, RunCursor, RunFilter, RunRecord, RunRef,
-    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter,
-    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
-    ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    SecretId, SecretUsage, StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription,
+    TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId,
+    TenantScope, TestRecord, ToolDeclarations, ToolTask, Trigger, Watched, WebhookTarget,
+    WebhookToken, WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use crate::ports::{
     Day, DayUsage, DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter,
@@ -1720,29 +1720,22 @@ impl JournalStore for MemoryJournal {
         scope: &ParkedScope,
         now: Timestamp,
     ) -> Result<usize, StoreError> {
+        let ParkedScope::Secret { tenant, secret } = scope;
         let mut state = self.lock()?;
         let mut resumed = 0;
         for run in state.runs.values_mut() {
-            let in_scope = match scope {
-                ParkedScope::Run(target) => run.record.run == *target,
-                ParkedScope::Toolset { tenant, toolset } => {
-                    run.record.run.tenant == *tenant && run.record.toolset == *toolset
-                }
-                ParkedScope::Namespace {
-                    tenant,
-                    namespace,
-                    toolset,
-                } => {
-                    run.record.run.tenant == *tenant
-                        && run.record.namespace == *namespace
-                        && run.record.toolset == *toolset
-                }
-            };
-            if !in_scope {
+            if run.record.run.tenant != *tenant {
                 continue;
             }
+            let (attached, namespace) = (&run.record.metadata.secrets, &run.record.namespace);
             for task in run.tasks.values_mut() {
-                if matches!(&task.state, TaskState::Parked(reason) if reason.kind == ParkKind::CredentialsExpired)
+                let reads_it = task
+                    .route
+                    .server()
+                    .and_then(|server| attached.get(server))
+                    .is_some_and(|attached| SecretId::resolve(attached, namespace) == *secret);
+                if reads_it
+                    && matches!(&task.state, TaskState::Parked(reason) if reason.kind.resumed_by_secret())
                 {
                     task.state = TaskState::Ready {
                         next_attempt_at: now,
@@ -1752,6 +1745,99 @@ impl JournalStore for MemoryJournal {
             }
         }
         Ok(resumed)
+    }
+
+    async fn secret_usage(
+        &self,
+        tenant: &TenantId,
+        secret: &SecretId,
+        labels: &BTreeMap<String, String>,
+        limit: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        let state = self.lock()?;
+        // The active runs that attach the secret, oldest first, with whether one of their calls
+        // to a server it serves is parked or not yet sent.
+        let mut active: Vec<(Timestamp, RunId, bool)> = Vec::new();
+        for run in state.runs.values() {
+            let record = &run.record;
+            if record.run.tenant != *tenant
+                || record.status.is_terminal()
+                || !labels
+                    .iter()
+                    .all(|(key, value)| record.metadata.labels.get(key) == Some(value))
+            {
+                continue;
+            }
+            let serves: BTreeSet<&str> = record
+                .metadata
+                .secrets
+                .iter()
+                .filter(|(_, attached)| SecretId::resolve(attached, &record.namespace) == *secret)
+                .map(|(server, _)| server)
+                .collect();
+            if serves.is_empty() {
+                continue;
+            }
+            let waiting = run.tasks.values().any(|task| {
+                task.route
+                    .server()
+                    .is_some_and(|server| serves.contains(server))
+                    && matches!(
+                        task.state,
+                        TaskState::Ready { .. } | TaskState::Approval | TaskState::Parked(_)
+                    )
+            });
+            active.push((record.created_at, record.run.id, waiting));
+        }
+        active.sort();
+        let reference = secret.to_ref();
+        let mut latest: BTreeMap<&str, &(u64, StoredWorkflow)> = BTreeMap::new();
+        for ((owner, _), row) in &state.workflows {
+            if owner != tenant {
+                continue;
+            }
+            let (order, stored) = row;
+            let name = stored.workflow.name();
+            let newer = latest.get(name).is_none_or(|(known_order, known)| {
+                (stored.created_at, order) > (known.created_at, known_order)
+            });
+            if newer {
+                latest.insert(name, row);
+            }
+        }
+        let versions = latest
+            .into_values()
+            .filter_map(|(_, stored)| {
+                let servers: Vec<String> = stored
+                    .workflow
+                    .secrets()
+                    .servers_reading(&reference)
+                    .map(str::to_owned)
+                    .collect();
+                (!servers.is_empty()).then(|| WorkflowAttaching {
+                    name: stored.workflow.name().to_owned(),
+                    version: stored.workflow.version(),
+                    servers,
+                })
+            })
+            .collect();
+        let run_ref = |id: RunId| RunRef::new(tenant.clone(), id);
+        let waiting: Vec<RunId> = active
+            .iter()
+            .filter(|(_, _, waiting)| *waiting)
+            .map(|(_, id, _)| *id)
+            .collect();
+        Ok(SecretUsage {
+            active_total: active.len() as u64,
+            active_runs: active
+                .iter()
+                .take(limit)
+                .map(|(_, id, _)| run_ref(*id))
+                .collect(),
+            waiting_total: waiting.len() as u64,
+            waiting_runs: waiting.into_iter().take(limit).map(run_ref).collect(),
+            versions,
+        })
     }
 
     async fn expire_deferred_tool_tasks(

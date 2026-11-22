@@ -50,6 +50,7 @@ pub(super) async fn create(
 ) -> Result<Response, ApiError> {
     caller.require(Permission::ToolsetsWrite)?;
     let toolset = toolsets::parse_digest(&request.toolset)?;
+    let secrets = super::runs::attachments(&request.secrets)?;
     let schemas = WorkflowSchemas {
         input: request.input,
         output: request.output,
@@ -131,6 +132,8 @@ pub(super) async fn create(
                 toolset,
                 schemas,
                 labels: caller.labels.clone(),
+                secrets,
+                attach: super::runs::attach_rights(&caller),
                 declarations: WorkflowDeclarations {
                     signals: generated.signals,
                     entry: generated.entry,
@@ -320,6 +323,11 @@ pub(crate) fn view(stored: &StoredWorkflow) -> ApiWorkflow {
         output: workflow.schemas().output.clone(),
         signals: workflow.schemas().signals.clone(),
         labels: Labels::from(stored.labels.clone()),
+        secrets: workflow
+            .secrets()
+            .iter()
+            .map(|(server, secret)| (server.to_owned(), secret.to_string()))
+            .collect(),
         created_at: timestamp(stored.created_at),
         declarations: Declarations {
             dts: declaration
@@ -376,6 +384,10 @@ fn register_error(error: RegisterError) -> ApiError {
         RegisterError::Invalid(_) | RegisterError::Schema { .. } => {
             ApiError::new(ProblemType::InvalidWorkflow, error.to_string())
         }
+        RegisterError::SecretRequired(ref refused) => {
+            ApiError::secret_required(error.to_string(), refused)
+        }
+        RegisterError::Secret(error) => error.into(),
         RegisterError::ToolsetNotFound(digest) => ApiError::not_found(format!(
             "no toolset {digest} for this tenant: register it with POST /v1/toolsets"
         )),

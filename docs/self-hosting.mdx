@@ -22,8 +22,9 @@ after its release.
     ```
   </Step>
   <Step title="Start the server">
-    The master key encrypts the secrets the server stores (credentials, webhook secrets): generate it once and keep
-    it. The admin key is the first API key, with the `operator` role.
+    The master key encrypts what the server stores encrypted (the organizations' and end users'
+    [secrets](/sdk/secrets), the keys that sign calls, webhook secrets): generate it once and keep it. The admin key is
+    the first API key, with the `operator` role.
 
     ```bash
     export REWIND_MASTER_KEY="$(openssl rand -base64 32)"   # keep it: secrets are unreadable without it
@@ -56,18 +57,48 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | --- | --- | --- |
 | `--listen` | `REWIND_LISTEN` | Where the HTTP API listens. `127.0.0.1:8080` by default |
 | `--store` | `REWIND_STORE` | `turso:<path>` for one machine, or `postgres://…` for a deployment |
-| `--blobs` | `REWIND_BLOBS` | Large payloads and archives: a directory, or `s3://<bucket>` (with `--s3-endpoint` and credentials for MinIO or R2) |
+| `--blobs` | `REWIND_BLOBS` | Large payloads and archives: a directory, or `s3://<bucket>` (with `--s3-endpoint` and the access keys of MinIO or R2) |
 | `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
+| `--previous-master-keys` | `REWIND_PREVIOUS_MASTER_KEYS` | Master keys replaced, which only decrypt: while [rotating the master key](#rotate-the-master-key) |
 | `--admin-key` | `REWIND_ADMIN_KEY` | The first API key, registered at start |
 | `--public-url` | `REWIND_PUBLIC_URL` | The URL clients reach the server at. Without it, scripts cannot get a `webhook(name)` URL, and `/mcp` has no OAuth sign-in |
 | `--role` | | `api`, `worker`, or both (the default) |
 | `--virtual-time` | | Timers fire as soon as nothing else can advance: for tests and demos |
 | `--allow-private-webhooks` | `REWIND_ALLOW_PRIVATE_WEBHOOKS` | Deliver lifecycle webhooks to private addresses and `http://`, for local development |
-| `--allow-internal-mcp` | `REWIND_ALLOW_INTERNAL_MCP` | Let toolsets reach MCP servers on these internal hosts or networks |
+| `--allow-internal-tools` | `REWIND_ALLOW_INTERNAL_TOOLS` | Let toolsets reach MCP servers and APIs on these internal hosts (`mcp.internal.example`, `*.svc.cluster.local`) or networks (`10.20.0.0/16`); never the whole private network. What such a server answers is never quoted to the tenant: an error gives its status, not its body |
 | `--quota-*` | `REWIND_QUOTA_*` | The ceiling of the tenants this server creates: active runs, runs and CPU per month, scripts, TTL, script length |
 | `--otlp-endpoint` | `REWIND_OTLP_ENDPOINT` | Export traces, metrics and logs over OTLP |
 
 The sandbox requires `TZ=UTC`: the server refuses to start otherwise.
+
+## Rotate the master key
+
+Each organization's secrets and signing keys are encrypted with a data key of its own, itself encrypted by the master
+key. Each data key records which master key encrypted it, by the key's id (the first 8 bytes of its SHA-256, in hex),
+so the master key can be replaced without encrypting a secret again:
+
+<Steps>
+  <Step title="Start with the new key, the old one as a previous key">
+    ```bash
+    export REWIND_PREVIOUS_MASTER_KEYS="$REWIND_MASTER_KEY"
+    export REWIND_MASTER_KEY="$(openssl rand -base64 32)"
+    ```
+
+    Restart every server with both: a previous key only decrypts, and anything encrypted from now on uses the new one.
+  </Step>
+  <Step title="Encrypt the data keys again">
+    ```bash
+    TZ=UTC rewind server --store "$REWIND_STORE" --rewrap-data-keys
+    ```
+
+    It encrypts each data key still held under a previous key with the current one, one organization at a time,
+    prints how many it changed, and exits. The secrets themselves are not touched.
+  </Step>
+  <Step title="Drop the old key">
+    Remove it from `REWIND_PREVIOUS_MASTER_KEYS` and restart. A server refuses to start (exit 70) while a data key is
+    held under a master key it was not given, and names that key's id: the old key cannot be removed too early.
+  </Step>
+</Steps>
 
 ## Production
 
@@ -85,8 +116,8 @@ docker compose up -d --build    # builds the image from the repository
 | Service | Role |
 | --- | --- |
 | `edge` | The only published port, in front of the API |
-| `api` | `rewind server --role api`: the HTTP API, keys, the dashboard. No V8 |
-| `worker-1`, `worker-2` | `rewind server --role worker`: script execution, tool dispatch, timers, projections. Their only way out is the egress proxy |
+| `api` | `rewind server --role api`: the HTTP API, keys, the dashboard, each organization's public keys (`/organizations/{tenant}/jwks.json`, without authentication). No V8 |
+| `worker-1`, `worker-2` | `rewind server --role worker`: script execution, tool dispatch (with the secrets the runs attach, and the signature of signed calls), timers, projections. Their only way out is the egress proxy |
 | `egress` | Forwards the workers' traffic to the addresses of allowed names only |
 | `postgres` | The journal, the read model and the encrypted secrets |
 | `minio` | Large payloads and archived journals (S3) |

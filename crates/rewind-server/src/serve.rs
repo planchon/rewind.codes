@@ -10,7 +10,10 @@ use rewind_api::Problem;
 use rewind_api::access::OPERATOR;
 use rewind_api::admin::ServerRole;
 use rewind_engine::adapters::{MemoryIdentity, SystemClock, SystemEntropy, VirtualClock};
-use rewind_engine::ports::{AccessStore, ApiKey, Clock, Grant, Principal, StoreError, TaskFilter};
+use rewind_engine::ports::{
+    AccessStore, ApiKey, Clock, Grant, MasterKeyId, Principal, SecretError, SecretStore,
+    StoreError, TaskFilter,
+};
 use rewind_engine::projector::ProjectorConfig;
 use rewind_engine::{Adapters, Engine, EngineConfig};
 use rewind_runtime::{SandboxLimits, V8Executor};
@@ -18,7 +21,7 @@ use tokio::task::JoinHandle;
 
 use crate::app::{App, Settings, SignIn};
 use crate::auth::key_hash;
-use crate::config::{Config, Listen, ServerArgs};
+use crate::config::{Config, Listen, MasterKeyRing, ServerArgs};
 use crate::connections::{self, McpCaller};
 use crate::deliveries::{Background, Deliveries, PER_SUBSCRIPTION};
 use crate::embedded::Directory;
@@ -137,6 +140,76 @@ pub async fn start(args: ServerArgs) -> Result<Running, StartupError> {
     start_wired(args, None).await
 }
 
+/// What `rewind server --rewrap-data-keys` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rewrapped {
+    /// The data keys it encrypted again: those held under a previous master key.
+    pub changed: usize,
+    /// The id of the master key every data key is now held under.
+    pub master_key: MasterKeyId,
+}
+
+/// `rewind server --rewrap-data-keys` (`archi/04-tools.md`, "Secrets": the master key can be
+/// replaced): opens the store with `--master-key` and `--previous-master-keys`, encrypts with the
+/// current key every data key held under a previous one, one tenant at a time, and closes the
+/// store. Servers may keep running meanwhile, and two rewraps at once change each data key once.
+pub async fn rewrap_data_keys(args: ServerArgs) -> Result<Rewrapped, StartupError> {
+    let config = args.resolve()?;
+    let keys = config
+        .master_keys
+        .clone()
+        .ok_or_else(|| StartupError::Config("--rewrap-data-keys needs --master-key".into()))?;
+    let store = Store::open(&config.store, &keys).await?;
+    let rewrapped = async {
+        check_master_keys(&store, &keys).await?;
+        let changed = store.rewrap_data_keys().await.map_err(secret_setup)?;
+        tracing::info!(changed, master_key = %keys.current_id(), "rewrapped the data keys");
+        Ok(Rewrapped {
+            changed,
+            master_key: keys.current_id(),
+        })
+    }
+    .await;
+    store.close().await;
+    rewrapped
+}
+
+fn secret_setup(error: SecretError) -> StartupError {
+    StartupError::Setup(error.to_string())
+}
+
+/// Refuses to start while a data key is held under a master key this server was not given
+/// (`archi/04-tools.md`, "Secrets"), naming its id: the operator gives it in
+/// `--previous-master-keys` until `--rewrap-data-keys` has run, so that it is not removed too
+/// early.
+async fn check_master_keys(store: &Store, keys: &MasterKeyRing) -> Result<(), StartupError> {
+    let in_use = store.master_keys_in_use().await.map_err(secret_setup)?;
+    let current = keys.current_id();
+    let previous = keys.previous_ids();
+    if let Some(unknown) = in_use
+        .iter()
+        .find(|id| **id != current && !previous.contains(id))
+    {
+        return Err(secret_setup(SecretError::UnknownMasterKey(unknown.clone())));
+    }
+    for id in &previous {
+        if in_use.contains(id) {
+            tracing::warn!(
+                master_key = %id,
+                "data keys are still held under a previous master key: run rewind server \
+                 --rewrap-data-keys"
+            );
+        } else {
+            tracing::info!(
+                master_key = %id,
+                "no data key is held under this previous master key: it can be removed from \
+                 --previous-master-keys"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Starts a server in this process whose identity provider is `identity`, the engine's fake of
 /// WorkOS, instead of WorkOS: the server's tests. The four `WORKOS_*` are still required for
 /// the sign-in to exist (the cookie password and the redirect URI are used; the client id and
@@ -187,22 +260,30 @@ async fn start_wired(
     memory: Option<MemoryIdentity>,
 ) -> Result<Running, StartupError> {
     let config = args.resolve()?;
+    if config.rewrap_data_keys {
+        return Err(StartupError::Config(
+            "--rewrap-data-keys rewraps the data keys and exits: it does not serve \
+             (rewind_server::rewrap_data_keys)"
+                .into(),
+        ));
+    }
     let sign_in = sign_in(&config, memory)?;
     let directory = match &config.listen {
         Listen::Embedded { dir } => Some(Directory::open(dir)?),
         Listen::Tcp(_) => None,
     };
-    let master_key = match (&directory, config.master_key) {
-        (Some(directory), _) => directory.master_key,
-        (None, Some(key)) => key,
+    let master_keys = match (&directory, &config.master_keys) {
+        (Some(directory), _) => MasterKeyRing::new(directory.master_key),
+        (None, Some(keys)) => keys.clone(),
         (None, None) => return Err(StartupError::Config("no master key".into())),
     };
-    let store = Store::open(&config.store, master_key).await?;
+    let store = Store::open(&config.store, &master_keys).await?;
+    check_master_keys(&store, &master_keys).await?;
     let blobs = Blobs::open(&config.blobs)?;
     let clock = clock(&config, &store).await?;
     let executor = V8Executor::new(SandboxLimits::default())
         .map_err(|error| StartupError::Setup(error.to_string()))?;
-    let tools = Tools::new(config.mcp_egress.clone()).map_err(StartupError::Setup)?;
+    let tools = Tools::new(config.tool_egress.clone()).map_err(StartupError::Setup)?;
     let exporter = Exporter::new(
         config.otlp.as_ref(),
         &telemetry::service(&config.worker_name),

@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use rewind_core::{JsonValue, ToolFailure, ToolFailureKind};
-use rewind_engine::ports::{
-    Credentials, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher,
-};
+use rewind_engine::ports::{CallAuth, Dispatched, ParkKind, ParkReason, ToolCall, ToolDispatcher};
 use serde_json::Value;
 
 /// Answers tool calls from the `tools` of a scenario. A superset of `rewind.tools.json`:
@@ -17,7 +15,7 @@ use serde_json::Value;
 /// | `{"$echo": true}` | the call's arguments |
 /// | `{"$error": "message", "$kind": "timeout", "$data": …}` | a failure (`$kind` defaults to `error`) |
 /// | `{"$transient": "message", "$kind": …}` | a transient failure: retried with backoff under `retry` |
-/// | `{"$unauthorized": "message"}` | the server refuses the credentials: the call is parked until they are renewed |
+/// | `{"$unauthorized": "message"}` | the server answers 401: the call is parked (`credentials_refused`) until the secret is put again or the harness approves it |
 /// | `{"$crash": true}` | the worker dies with the call (with `host_worker` only): its claim expires |
 /// | `{"$sequence": [r1, r2, …]}` | `r1` to the first call, `r2` to the second… |
 /// | `{"$defer": true}` | no answer: the call stays without an outcome |
@@ -26,6 +24,9 @@ pub struct ScenarioTools {
     responses: Mutex<BTreeMap<String, Responses>>,
     /// The calls dispatched, by tool, and the idempotency keys they carried.
     dispatched: Mutex<Vec<(String, String)>>,
+    /// How each call the dispatcher answered authenticated: the secret's value, `signed` or
+    /// `none`.
+    auth: Mutex<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -62,7 +63,17 @@ impl ScenarioTools {
         Self {
             responses: Mutex::new(responses),
             dispatched: Mutex::new(Vec::new()),
+            auth: Mutex::new(Vec::new()),
         }
+    }
+
+    /// How each call the dispatcher answered authenticated, in order: the secret's value,
+    /// `signed`, or `none`.
+    pub fn auth(&self) -> Vec<String> {
+        self.auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// How many times each tool was dispatched.
@@ -163,14 +174,23 @@ fn failure(kind: ToolFailureKind, message: String, data: Option<Value>) -> ToolF
 }
 
 impl ToolDispatcher for ScenarioTools {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
+        let carried = match &auth {
+            CallAuth::None => "none".to_owned(),
+            CallAuth::Secret { value, .. } => value.expose().to_owned(),
+            CallAuth::Signed { .. } => "signed".to_owned(),
+        };
+        self.auth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(carried);
         match self.answer(&call.tool.name, &call.args, &call.idempotency_key) {
             Answer::Result(result) => Dispatched::Result(result),
             Answer::Deferred => Dispatched::Deferred,
             Answer::Failed(failure) => Dispatched::Failed(failure),
             Answer::Transient(failure) => Dispatched::Transient(failure),
             Answer::Unauthorized(message) => Dispatched::Park(ParkReason {
-                kind: ParkKind::CredentialsExpired,
+                kind: ParkKind::CredentialsRefused,
                 message,
             }),
             Answer::Crash => Dispatched::Failed(failure(

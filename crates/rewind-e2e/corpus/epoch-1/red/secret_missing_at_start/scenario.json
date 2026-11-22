@@ -1,0 +1,37 @@
+{
+  "description": "The script imports a server whose calls need a secret, and the start attaches none: it is refused before any run exists, with the secrets the caller may attach.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "auth": {
+    "crm": "secret"
+  },
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "put_secrets": {
+    "ns/crm": "crm-token"
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "start_error": "the script imports crm, which needs a secret: attach one in \"secrets\" (\"crm\": \"org/<name>\" or \"ns/<name>\"). The secrets you may attach: ns/crm"
+  }
+}

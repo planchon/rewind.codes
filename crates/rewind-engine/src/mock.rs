@@ -24,7 +24,7 @@ use rewind_core::{
 };
 
 use crate::adapters::{StaticDispatcher, StaticResponsesError};
-use crate::ports::{Credentials, Dispatched, ToolCall, ToolDispatcher};
+use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
 
 /// Characters of the args shown when no source answers a call.
 const ARGS_CHARS: usize = 80;
@@ -185,7 +185,7 @@ impl CassetteDispatcher {
 }
 
 impl ToolDispatcher for CassetteDispatcher {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         match self.answer(&call) {
             Some(outcome) => dispatched(outcome),
             None => Dispatched::Failed(no_response(&call)),
@@ -234,7 +234,7 @@ pub struct MockDispatcher<M> {
 pub struct NoMocks;
 
 impl ToolDispatcher for NoMocks {
-    async fn dispatch(&self, call: ToolCall, _credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, _auth: CallAuth) -> Dispatched {
         Dispatched::Failed(no_response(&call))
     }
 }
@@ -316,14 +316,14 @@ impl<M> MockDispatcher<M> {
 }
 
 impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
-    async fn dispatch(&self, call: ToolCall, credentials: Option<Credentials>) -> Dispatched {
+    async fn dispatch(&self, call: ToolCall, auth: CallAuth) -> Dispatched {
         if let Some(outcome) = self.rules.as_ref().and_then(|rules| rules.answer(&call)) {
             return dispatched(outcome);
         }
         if let Some(mocks) = &self.mocks
             && mocks.tools.contains(&call.tool.name)
         {
-            return mocks.handlers.dispatch(call, credentials).await;
+            return mocks.handlers.dispatch(call, auth).await;
         }
         if let Some(outcome) = self
             .cassette
@@ -333,7 +333,7 @@ impl<M: ToolDispatcher> ToolDispatcher for MockDispatcher<M> {
             return dispatched(outcome);
         }
         if self.static_tools.contains(&call.tool.name) {
-            return self.statics.dispatch(call, credentials).await;
+            return self.statics.dispatch(call, auth).await;
         }
         // A signal to a mocked run has nowhere to go: it is accepted (`archi/03-execution.md`,
         // "Workflows across runs").
@@ -354,14 +354,17 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::ports::{RunRef, TaskToken, TenantId};
+    use crate::ports::{NamespaceName, RunRef, TaskToken, TenantId};
 
     fn call(seq: u32, tool: &str, args: JsonValue) -> ToolCall {
         ToolCall {
             run: RunRef::new(TenantId::local(), RunId::from_u128(1)),
+            namespace: NamespaceName::new(NamespaceName::LOCAL).unwrap(),
+            labels: Default::default(),
             seq: Seq(seq),
             tool: Tool::new(tool, ToolRoute::Host { group: None }, json!({})),
             server: None,
+            api: None,
             args,
             idempotency_key: format!("r/{seq}"),
             attempt: 1,
@@ -444,7 +447,7 @@ mod tests {
             )
             .unwrap()
             .with_mocks(mocks);
-        let answer = |call| dispatcher.dispatch(call, None);
+        let answer = |call| dispatcher.dispatch(call, CallAuth::None);
         assert_eq!(
             answer(call(1, "a", json!({ "n": 1 }))).await,
             Dispatched::Result(json!("first"))
@@ -489,7 +492,7 @@ mod tests {
         let dispatcher = MockDispatcher::new()
             .with_cassette(cassette(Matching::ByArgs))
             .with_rules(rules);
-        let answer = |call| dispatcher.dispatch(call, None);
+        let answer = |call| dispatcher.dispatch(call, CallAuth::None);
         // The cassette has { n: 1 } too: the rule wins.
         assert_eq!(
             answer(call(1, "a", json!({ "n": 1, "m": 2 }))).await,

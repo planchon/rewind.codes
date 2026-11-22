@@ -1,29 +1,27 @@
 import type { Transport } from "../http.js";
-import type {
-  CreateToolset,
-  Credentials,
-  DeclarationFormat,
-  DeclarationsText,
-  Toolset,
-  ToolSearchResults,
-} from "../types.js";
+import type { CreateToolset, DeclarationFormat, DeclarationsText, Toolset, ToolSearchResults } from "../types.js";
 
 export interface RequestOptions {
   signal?: AbortSignal | undefined;
 }
 
-/** Toolsets: MCP servers, host tools and the `http` tool, pinned. */
+/** Toolsets: MCP servers, APIs from their OpenAPI documents, host tools and the `http` tool, pinned. */
 export class Toolsets {
   constructor(private readonly transport: Transport) {}
 
   /**
    * Registers and pins a toolset: Rewind connects to its MCP servers, lists their tools and
-   * pins their schemas, and pins the workflows it names (`workflows: ["triage"]` the latest
+   * pins their schemas, reads its APIs' OpenAPI documents (`apis`: one tool per operation, the
+   * operations it leaves out in `skipped`), and pins the workflows it names (`workflows: ["triage"]` the latest
    * version, `"triage@<version>"` one), which its scripts import from `rewind:workflows`. With
    * `base`, the toolset is derived from a registered one: its servers, tools and workflows are
    * kept as pinned, and `workflows` adds or pins again; `mcp`, `host` and `http` must then be
    * empty. Returns the toolset with its declarations for the model's prompt. The toolset is
-   * content-addressed: registering it again returns the same one.
+   * content-addressed: registering it again returns the same one. Each server and API says in
+   * its `auth` how its calls prove who calls: nothing, a signature of the organization's key
+   * (`{ type: "rewind" }`), or a secret the run attaches (`{ type: "secret", header }`). A
+   * toolset holds no secret; `secrets` attaches organization's secrets only to list the tools of
+   * an MCP server that needs one, and no run keeps them.
    */
   create(toolset: CreateToolset, options: RequestOptions = {}): Promise<Toolset> {
     return this.transport.send(
@@ -50,22 +48,6 @@ export class Toolsets {
       () =>
         this.transport.api.GET("/v1/toolsets/{id}/search", {
           params: { path: { id }, query: { query, limit: options.limit } },
-          signal: options.signal,
-        }),
-      { retry: true, signal: options.signal },
-    );
-  }
-
-  /**
-   * Sets or renews the toolset's credentials. Calls parked by `credentials.expired` are sent
-   * again with the same idempotency key.
-   */
-  async setCredentials(id: string, credentials: Credentials, options: RequestOptions = {}): Promise<void> {
-    await this.transport.send(
-      () =>
-        this.transport.api.PUT("/v1/toolsets/{id}/credentials", {
-          params: { path: { id } },
-          body: credentials,
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },

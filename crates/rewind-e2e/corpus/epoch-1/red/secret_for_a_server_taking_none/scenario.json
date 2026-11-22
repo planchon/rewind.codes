@@ -1,0 +1,37 @@
+{
+  "description": "The start attaches a secret for a server whose calls carry none: it is refused before any run exists.",
+  "live": true,
+  "input": {
+    "customer": "c-7"
+  },
+  "mcp_servers": [
+    "crm"
+  ],
+  "output_schemas": {
+    "crm.lookup": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    }
+  },
+  "put_secrets": {
+    "ns/crm": "crm-token"
+  },
+  "secrets": {
+    "crm": "ns/crm"
+  },
+  "tools": {
+    "crm.lookup": {
+      "name": "Ada"
+    }
+  },
+  "expect": {
+    "start_error": "crm takes no secret"
+  }
+}

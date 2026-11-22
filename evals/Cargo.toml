@@ -18,6 +18,7 @@ rewind-core.workspace = true
 rewind-engine.workspace = true
 rewind-format.workspace = true
 rewind-mcp.workspace = true
+rewind-outbound.workspace = true
 rewind-runtime.workspace = true
 axum.workspace = true
 clap.workspace = true

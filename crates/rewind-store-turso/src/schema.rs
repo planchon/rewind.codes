@@ -6,7 +6,9 @@
 //! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
 //! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
 //! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
-//! the namespaces' display names; version 9 when each run's summary last changed).
+//! the namespaces' display names; version 9 named secrets, their reads, the signing keys, the
+//! master key of each data key and the runs' attachments; version 10 when each run's summary last
+//! changed).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -22,8 +24,11 @@
 //! - a run keeps its oldest inbox item (`inbox_head`, received at `runnable_at`), and a task
 //!   when it can be claimed (`due_at`): the picks of `acquire_runnable` and `claim_tool_tasks`
 //!   read an index instead of grouping the inbox or scanning the tasks;
-//! - `data_keys` holds each tenant's data key, encrypted by the master key, apart from
-//!   `tenants`: a tenant without settings (the embedded `local`) still has secrets;
+//! - `data_keys` holds each tenant's data key, encrypted by a master key whose id `master_key`
+//!   records, apart from `tenants`: a tenant without settings (the embedded `local`) still has
+//!   secrets;
+//! - `signing_keys.public_key` holds the 32 bytes of an Ed25519 public key, which the API writes
+//!   as a JWK; a run's `secrets`, like its `labels`, is a JSON object;
 //! - `tool_calls.result_shape` holds the shape of a result whose value was projected, which
 //!   `observed_shapes` merges per tool;
 //! - `roles.permissions` holds a role's permissions as a JSON array of strings, sorted, and
@@ -46,7 +51,7 @@
 //!   (`snapshot_len`), mode and ending, the ending's `fingerprint` among them. `wakes_at` is the
 //!   earliest `until` of its waits while the run is active, kept for the `wakes` order;
 //!   `changed_at` when a write last changed the summary, in milliseconds of the system clock,
-//!   for the change stream (0 for the summaries of version 8, which no stream reads again);
+//!   for the change stream (0 for the summaries of version 9, which no stream reads again);
 //! - `run_labels` holds one row per label, for equality, prefix and presence;
 //! - `run_waits` holds the kept snapshot's waits by `position`, the snapshot's order, without
 //!   task states;
@@ -63,13 +68,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -735,10 +740,63 @@ const V8: &str = r#"
 ALTER TABLE namespaces ADD COLUMN display_name TEXT;
 "#;
 
+/// Named secrets attached to runs, and each tenant's signing keys (`archi/04-tools.md`, "Secrets"
+/// and "Signed calls"). The credentials per toolset, per namespace and toolset, and per run are
+/// dropped, with the data keys that encrypted them: nothing is encrypted under those any more, and
+/// a tenant's next secret or signing key makes a data key under the current master key, whose id
+/// `data_keys.master_key` records. An organization's secrets are kept under the namespace `*`.
+const V9: &str = r#"
+DROP TABLE secrets;
+DROP TABLE data_keys;
+
+CREATE TABLE data_keys (
+    tenant TEXT PRIMARY KEY,
+    wrapped_key BLOB NOT NULL,
+    master_key TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE secrets (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    labels TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_by TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    last_read_at INTEGER,
+    last_read_run TEXT,
+    last_read_namespace TEXT,
+    PRIMARY KEY (tenant, namespace, name)
+) STRICT;
+
+CREATE TABLE secret_reads (
+    tenant TEXT NOT NULL,
+    namespace TEXT NOT NULL,
+    name TEXT NOT NULL,
+    day INTEGER NOT NULL,
+    reads INTEGER NOT NULL,
+    PRIMARY KEY (tenant, namespace, name, day)
+) STRICT;
+
+CREATE TABLE signing_keys (
+    tenant TEXT NOT NULL,
+    kid TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    private_ciphertext BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    retired_at INTEGER,
+    PRIMARY KEY (tenant, kid)
+) STRICT;
+
+ALTER TABLE runs ADD COLUMN secrets TEXT NOT NULL DEFAULT '{}';
+"#;
+
 /// When each run's summary last changed (`archi/08-decisions.md`, "Taken for the live
 /// dashboard"): the change stream reads the summaries stamped since its last pass. The summaries
 /// kept are stamped 0, before any stream.
-const V9: &str = r#"
+const V10: &str = r#"
 ALTER TABLE run_summaries ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 "#;
@@ -1173,6 +1231,67 @@ mod tests {
                 .expect("watch_run"),
             Some(Watched { ended: false })
         );
+    }
+
+    #[tokio::test]
+    async fn the_credentials_of_version_8_are_dropped() {
+        use rewind_core::SecretName;
+        use rewind_engine::ports::{
+            Day, NewSecret, Secret, SecretId, SecretNamespace, SecretStore,
+        };
+
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let path = dir.path().join("journal.db");
+        let tenant = TenantId::local();
+        {
+            // The database as a build of version 8 left it, with a credential and its data key.
+            let database = turso::Builder::new_local(path.to_str().expect("UTF-8 path"))
+                .build()
+                .await
+                .expect("create the file");
+            let connection = database.connect().expect("connect");
+            migrate_to(&connection, 8).await.expect("version 8");
+            sql::execute(
+                &connection,
+                "INSERT INTO data_keys (tenant, wrapped_key) VALUES (?, ?)",
+                vec![sql::tenant(&tenant), turso::Value::Blob(vec![0; 40])],
+            )
+            .await
+            .expect("a data key");
+            sql::execute(
+                &connection,
+                "INSERT INTO secrets (tenant, owner, ciphertext) VALUES (?, 'toolset:ab', ?)",
+                vec![sql::tenant(&tenant), turso::Value::Blob(vec![0; 40])],
+            )
+            .await
+            .expect("a credential");
+        }
+
+        let key = MasterKey::from_bytes([1; 32]);
+        let store = TursoStore::open(&path, key.clone())
+            .await
+            .expect("open and migrate");
+        assert_eq!(store.schema_version().await, Ok(SCHEMA_VERSION));
+        assert_eq!(store.master_keys_in_use().await, Ok(Vec::new()));
+        assert_eq!(
+            store
+                .list(
+                    &tenant,
+                    &SecretNamespace::Organization,
+                    &BTreeMap::new(),
+                    Day(0)
+                )
+                .await,
+            Ok(Vec::new())
+        );
+        let secret = NewSecret {
+            id: SecretId::organization(SecretName::new("github").expect("valid")),
+            value: Secret::new("v"),
+            labels: BTreeMap::new(),
+            by: "user:ada".into(),
+        };
+        store.put(&tenant, &secret, T0).await.expect("put");
+        assert_eq!(store.master_keys_in_use().await, Ok(vec![key.id()]));
     }
 
     #[tokio::test]

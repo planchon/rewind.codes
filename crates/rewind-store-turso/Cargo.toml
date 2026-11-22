@@ -11,6 +11,7 @@ license.workspace = true
 rewind-core.workspace = true
 rewind-engine.workspace = true
 rewind-format.workspace = true
+aws-lc-rs.workspace = true
 chacha20poly1305 = "0.11"
 getrandom.workspace = true
 serde_json.workspace = true

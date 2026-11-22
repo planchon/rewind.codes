@@ -15,10 +15,11 @@ use axum::http::{HeaderMap, Method as AxumMethod, StatusCode as AxumStatus};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use rewind_core::{RunId, Seq, ToolFailure};
-use rewind_engine::ports::{RunRef, TaskToken, TenantId};
+use rewind_engine::ports::{NamespaceName, RunRef, TaskToken, TenantId};
 use serde_json::{Value, json};
 
 use super::*;
+use rewind_outbound::Resolving;
 
 const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 
@@ -118,9 +119,12 @@ fn call(hosts: &[&str], args: Value) -> ToolCall {
     ToolCall {
         idempotency_key: format!("{}/1", run.id),
         run,
+        namespace: NamespaceName::new("alice").unwrap(),
+        labels: BTreeMap::new(),
         seq: Seq(1),
         tool: http_tool(hosts.iter().map(|host| (*host).to_owned()).collect()),
         server: None,
+        api: None,
         args,
         attempt: 1,
         schema_change_approved: false,
@@ -160,7 +164,7 @@ async fn a_request_reaches_an_allowed_host_and_returns_the_response() {
                     "body": "{\"a\":1}"
                 }),
             ),
-            None,
+            CallAuth::None,
         )
         .await,
     );
@@ -199,8 +203,11 @@ async fn a_dns_answer_that_changes_after_the_check_is_never_used() {
     let http = tool(resolver.clone(), HttpConfig::default());
     let url = format!("http://rebind.test:{}/", address.port());
     let response = result(
-        http.dispatch(call(&["rebind.test"], json!({ "url": url })), None)
-            .await,
+        http.dispatch(
+            call(&["rebind.test"], json!({ "url": url })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert_eq!(response["body"], "public");
     assert_eq!(resolver.calls(), 1, "the name is resolved once");
@@ -210,7 +217,10 @@ async fn a_dns_answer_that_changes_after_the_check_is_never_used() {
     let fresh = tool(resolver.clone(), HttpConfig::default());
     let (transient, refused) = failure(
         fresh
-            .dispatch(call(&["rebind.test"], json!({ "url": url })), None)
+            .dispatch(
+                call(&["rebind.test"], json!({ "url": url })),
+                CallAuth::None,
+            )
             .await,
     );
     assert!(!transient);
@@ -231,7 +241,7 @@ async fn a_name_with_any_internal_address_is_refused() {
     let (transient, refused) = failure(
         http.dispatch(
             call(&["mixed.test"], json!({ "url": "http://mixed.test/" })),
-            None,
+            CallAuth::None,
         )
         .await,
     );
@@ -280,7 +290,7 @@ async fn redirects_are_checked_again() {
         async move {
             let url = format!("http://api.test:{}{path}", address.port());
             let (transient, failure) = failure(
-                http.dispatch(call(&hosts, json!({ "url": url })), None)
+                http.dispatch(call(&hosts, json!({ "url": url })), CallAuth::None)
                     .await,
             );
             assert!(!transient, "{path}");
@@ -322,15 +332,21 @@ async fn five_redirects_are_followed_and_a_sixth_is_refused() {
     let http = tool(resolver, HttpConfig::default());
     let url = |n: u32| format!("http://api.test:{}/hop/{n}", address.port());
     let response = result(
-        http.dispatch(call(&["api.test"], json!({ "url": url(5) })), None)
-            .await,
+        http.dispatch(
+            call(&["api.test"], json!({ "url": url(5) })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert_eq!(response["body"], "arrived");
     assert_eq!(response["redirected"], true);
     assert_eq!(response["url"], url(0));
     let (_, refused) = failure(
-        http.dispatch(call(&["api.test"], json!({ "url": url(6) })), None)
-            .await,
+        http.dispatch(
+            call(&["api.test"], json!({ "url": url(6) })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert_eq!(
         refused.message,
@@ -366,7 +382,7 @@ async fn redirects_change_the_method_and_drop_credentials_as_fetch_does() {
         });
         async move {
             let response = result(
-                http.dispatch(call(&["api.test", "other.test"], args), None)
+                http.dispatch(call(&["api.test", "other.test"], args), CallAuth::None)
                     .await,
             );
             serde_json::from_str::<Value>(response["body"].as_str().unwrap()).unwrap()
@@ -399,7 +415,7 @@ async fn redirects_change_the_method_and_drop_credentials_as_fetch_does() {
                     "headers": [["authorization", "Bearer s3cret"]]
                 }),
             ),
-            None,
+            CallAuth::None,
         )
         .await,
     );
@@ -444,8 +460,11 @@ async fn responses_are_bounded_in_size_and_time() {
     let url = |path: &str| format!("http://api.test:{}{path}", address.port());
     for path in ["/big", "/streamed"] {
         let (transient, refused) = failure(
-            http.dispatch(call(&["api.test"], json!({ "url": url(path) })), None)
-                .await,
+            http.dispatch(
+                call(&["api.test"], json!({ "url": url(path) })),
+                CallAuth::None,
+            )
+            .await,
         );
         assert!(!transient);
         assert_eq!(
@@ -457,8 +476,11 @@ async fn responses_are_bounded_in_size_and_time() {
         );
     }
     let (transient, timed_out) = failure(
-        http.dispatch(call(&["api.test"], json!({ "url": url("/slow") })), None)
-            .await,
+        http.dispatch(
+            call(&["api.test"], json!({ "url": url("/slow") })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert!(transient, "a GET is sent again");
     assert_eq!(timed_out.kind, ToolFailureKind::Timeout);
@@ -468,7 +490,7 @@ async fn responses_are_bounded_in_size_and_time() {
                 &["api.test"],
                 json!({ "url": url("/slow"), "method": "POST", "body": "x" }),
             ),
-            None,
+            CallAuth::None,
         )
         .await,
     );
@@ -488,14 +510,20 @@ async fn statuses_are_results_and_binary_bodies_are_base64() {
     let http = tool(resolver, HttpConfig::default());
     let url = |path: &str| format!("http://api.test:{}{path}", address.port());
     let missing = result(
-        http.dispatch(call(&["api.test"], json!({ "url": url("/missing") })), None)
-            .await,
+        http.dispatch(
+            call(&["api.test"], json!({ "url": url("/missing") })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert_eq!(missing["status"], 404);
     assert_eq!(missing["body"], "no");
     let bytes = result(
-        http.dispatch(call(&["api.test"], json!({ "url": url("/bytes") })), None)
-            .await,
+        http.dispatch(
+            call(&["api.test"], json!({ "url": url("/bytes") })),
+            CallAuth::None,
+        )
+        .await,
     );
     assert_eq!(bytes["body"], "AJ+Slg==");
     assert_eq!(bytes["bodyEncoding"], "base64");
@@ -514,7 +542,7 @@ async fn a_host_that_cannot_be_reached_is_a_transient_failure() {
                 &["down.test"],
                 json!({ "url": format!("http://down.test:{port}/"), "method": "POST" }),
             ),
-            None,
+            CallAuth::None,
         )
         .await,
     );
@@ -548,7 +576,7 @@ async fn the_real_policy_refuses_local_and_internal_addresses() {
         ),
     ] {
         let (transient, refused) = failure(
-            http.dispatch(call(hosts, json!({ "url": url })), None)
+            http.dispatch(call(hosts, json!({ "url": url })), CallAuth::None)
                 .await,
         );
         assert!(!transient, "{url}");
@@ -561,7 +589,7 @@ async fn webhook_and_other_routes_are_not_answered_here() {
     let http = HttpTool::new(HttpConfig::default()).unwrap();
     let mut webhook = call(&["a.test"], json!({ "name": "x" }));
     webhook.tool = Tool::new("webhook", ToolRoute::Builtin(Builtin::Webhook), json!({}));
-    let (transient, failure) = failure(http.dispatch(webhook, None).await);
+    let (transient, failure) = failure(http.dispatch(webhook, CallAuth::None).await);
     assert!(!transient);
     assert_eq!(failure.kind, ToolFailureKind::Unavailable);
 }

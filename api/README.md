@@ -54,6 +54,7 @@ change of the API shows in its diff.
 | Event stream | `GET /v1/runs/{id}/events` is server-sent events: `event` is the `type` of the `StreamEvent` in `data`, `id` is the entry's index |
 | Payloads | `{ digest, bytes, preview, value? }`; `value` is left out above 256 KiB, read it with `GET /v1/payloads/{digest}?run=<id>` (`run` is required with a token, a `Rewind-Namespace` header, or a grant limited to labels) |
 | Webhooks | Standard Webhooks: headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64 HMAC-SHA256>`), secret `whsec_…`; every event about a run names its `namespace`; `quota.alert` reports a limit crossed |
+| Secrets | `secret-required` adds `attachments` |
 | Quotas | `quota-exceeded` adds `quota`, `scope` (`namespace` or `organization`), `limit`, `used` and `resetsAt`, with `Retry-After` for a monthly quota |
 
 The problem types:
@@ -79,6 +80,7 @@ The problem types:
 | `invalid-workflow` | 422 | A workflow's name, a signal's name or a schema that cannot be used |
 | `invalid-test` | 422 | A test or a suite refused: an invalid test, a stored test that does not exist, a retired or updated test that is not inherited or has no reason, two tests of the same name |
 | `tests-failed` | 422 | Tests did not pass: the version was not saved, or the fork not created; `tests` holds each test's outcome |
+| `secret-required` | 422 | A run, a fork or a workflow version refused before it exists for its secrets: a server or an API the script imports takes one and none is attached, an attachment names a server that takes none or a secret that does not exist, or the caller may not attach it; also a toolset's listing secret. `attachments` gives each one at fault (`server`, `problem`, `secret`) and what the caller may attach (`attachable`) |
 | `invalid-input` | 422 | The input of a run of a workflow does not match its input schema |
 | `invalid-signal` | 422 | A signal name starting with `rewind:`; for a run of a workflow, a signal it does not declare or a payload that does not match |
 | `quota-exceeded` | 429 | The namespace or the tenant reached its `activeRuns`, `runsPerMonth` or `scripts` |

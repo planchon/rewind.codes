@@ -5,6 +5,7 @@
 //! channels and never handles a V8 type: `V8Instance` is a `Send` handle that sends
 //! deliveries to the thread and awaits the replies.
 
+use std::collections::BTreeSet;
 use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
@@ -75,6 +76,10 @@ impl ScriptExecutor for V8Executor {
 
     fn compile(&self, script: &Script, toolset: &Toolset) -> Result<CompiledScript, InvalidScript> {
         compile::compile(script, toolset, epochs::latest())
+    }
+
+    fn tool_imports(&self, script: &Script) -> Option<BTreeSet<String>> {
+        compile::tool_imports(script)
     }
 
     async fn start(&self, start: StartScript) -> Result<(V8Instance, Vec<Emitted>), ExecutorError> {

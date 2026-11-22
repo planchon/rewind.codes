@@ -87,20 +87,15 @@ describe("the client", () => {
     expect(server.requests[0]?.headers["content-type"]).toBe("application/json");
   });
 
-  it("reads declarations, searches tools and sets credentials", async () => {
+  it("reads declarations and searches tools", async () => {
     server
       .on("GET", "/v1/toolsets/{id}/declarations", (r) => json({ format: r.query.get("format") ?? "dts", text: "x" }))
-      .on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }))
-      .on("PUT", "/v1/toolsets/{id}/credentials", noContent);
+      .on("GET", "/v1/toolsets/{id}/search", json({ tools: [] }));
     expect((await rewind.toolsets.declarations(TOOLSET, { format: "prompt" })).format).toBe("prompt");
     await rewind.toolsets.search(TOOLSET, "close issue", { limit: 3 });
-    await rewind.toolsets.setCredentials(TOOLSET, { servers: { github: { headers: { Authorization: "Bearer x" } } } });
     const search = server.calls("GET", `/v1/toolsets/${TOOLSET}/search`)[0];
     expect(search?.query.get("query")).toBe("close issue");
     expect(search?.query.get("limit")).toBe("3");
-    expect(server.calls("PUT", `/v1/toolsets/${TOOLSET}/credentials`)[0]?.body).toEqual({
-      servers: { github: { headers: { Authorization: "Bearer x" } } },
-    });
   });
 
   it("starts a run with its idempotency key, labels, trace context and ttl", async () => {
@@ -373,7 +368,6 @@ describe("the client", () => {
       .on("POST", "/v1/runs/{id}/fork", json(run({ id: "fork-1", parent: { run: RUN_ID, at: 5 } }), 201))
       .on("POST", "/v1/runs/{id}/release", json(run({ status: "active" })))
       .on("POST", "/v1/runs/{id}/give-up", json(run({ status: "aborted" })))
-      .on("PUT", "/v1/runs/{id}/credentials", noContent)
       .on("DELETE", "/v1/runs/{id}", noContent);
     expect((await rewind.runs.cancel(RUN_ID, { reason: "not needed", wait: "5s" })).status).toBe("cancelled");
     expect(server.requests[0]?.body).toEqual({ reason: "not needed", wait: "5s" });
@@ -390,14 +384,12 @@ describe("the client", () => {
 
     await rewind.runs.release(RUN_ID);
     await rewind.runs.giveUp(RUN_ID);
-    await rewind.runs.setCredentials(RUN_ID, { servers: {} });
     await rewind.runs.delete(RUN_ID);
     expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       `POST /v1/runs/${RUN_ID}/cancel`,
       `POST /v1/runs/${RUN_ID}/fork`,
       `POST /v1/runs/${RUN_ID}/release`,
       `POST /v1/runs/${RUN_ID}/give-up`,
-      `PUT /v1/runs/${RUN_ID}/credentials`,
       `DELETE /v1/runs/${RUN_ID}`,
     ]);
   });

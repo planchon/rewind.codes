@@ -8,10 +8,10 @@
 //! | expiry | an archive past its retention (1 year) is deleted with its run |
 //! | payload cleanup | a payload no run has referenced for its grace (24 h) is deleted, blob then row |
 //! | read model | runs that ended before its retention (90 days) leave the read model |
-//! | erasure | a namespace marked for erasure (`DELETE /v1/namespaces/{name}`) has its active runs cancelled, then its runs erased, then its credentials, use, alerts and itself |
+//! | erasure | a namespace marked for erasure (`DELETE /v1/namespaces/{name}`) has its active runs cancelled, then its runs erased, then its secrets and their reads, its use, alerts and itself |
 //!
 //! `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-//! rows, its credentials, its payload references and its count in its namespace's scripts.
+//! rows, its payload references and its count in its namespace's scripts.
 //!
 //! Erasing a namespace (`archi/06-storage-and-scale.md`, "Retention and deletion"):
 //!
@@ -21,7 +21,7 @@
 //!         ended or quarantined → erased as DELETE /v1/runs/{id} erases it
 //!         active               → cancel_requested, once (an ordinary cancellation, its grace
 //!                                included): erased by the next round once it has ended
-//!     no run left → its credentials, then drop_namespace: its use, alerts and script counts
+//!     no run left → its secrets, then drop_namespace: its use, alerts and script counts
 //! ```
 //!
 //! The tenant's own use (`*`) keeps what the namespace consumed.
@@ -33,8 +33,8 @@ use rewind_core::{CancelReason, Completion, Digest, JournalDocument, Timestamp};
 
 use crate::ports::{
     BlobError, BlobStore, DropNamespace, Enqueued, JournalStore, NamespaceName, ReadModel,
-    ReadModelError, Retention, RunCursor, RunFilter, RunRef, SecretError, SecretOwner, SecretStore,
-    StoreError, TenantId, TenantScope,
+    ReadModelError, Retention, RunCursor, RunFilter, RunRef, SecretError, SecretStore, StoreError,
+    TenantId, TenantScope,
 };
 
 /// The idempotency key of the cancellation an erasure sends to an active run: one per run,
@@ -81,7 +81,7 @@ pub struct Erased {
     pub runs: usize,
     /// Active runs a cancellation was sent to.
     pub cancelled: usize,
-    /// Namespaces erased, with their use, alerts and credentials.
+    /// Namespaces erased, with their use, alerts and secrets.
     pub namespaces: usize,
     /// Tests recorded from their runs, erased.
     pub tests: usize,
@@ -95,7 +95,7 @@ pub struct Housekeeper<'a, J, B, R, S> {
     pub journal: &'a J,
     pub blobs: &'a B,
     pub read_model: &'a R,
-    /// A deleted run's credentials are deleted with it.
+    /// An erased namespace's secrets are deleted with it.
     pub secrets: &'a S,
     /// Runs or payloads handled per call to the store.
     pub batch: usize,
@@ -129,7 +129,7 @@ where
 
     /// Goes on erasing the namespaces marked for erasure, up to `batch` of them: cancels their
     /// active runs, erases their other runs, and once a namespace has no run left, erases its
-    /// credentials, then its use, alerts and script counts with it. A run cancelled here is
+    /// secrets, then its use, alerts and script counts with it. A run cancelled here is
     /// erased by a following round, once it has ended.
     pub async fn erase_namespaces(&self, now: Timestamp) -> Result<Erased, RetentionError> {
         let mut erased = Erased::default();
@@ -277,7 +277,7 @@ where
     }
 
     /// Erases a run: its record, history and everything the store keeps for it, its archive,
-    /// its read model rows, its credentials and its payload references. The payloads it leaves
+    /// its read model rows and its payload references. The payloads it leaves
     /// unreferenced are deleted after their grace. Returns whether the run existed.
     pub async fn delete_run(&self, run: &RunRef, now: Timestamp) -> Result<bool, RetentionError> {
         let archive = self
@@ -290,9 +290,6 @@ where
             self.blobs.delete(&run.tenant, archive.document).await?;
         }
         self.read_model.delete_run(run).await?;
-        self.secrets
-            .delete(&run.tenant, &SecretOwner::Run(run.id))
-            .await?;
         if existed {
             tracing::info!(%run, "run deleted");
         }

@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
-    Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode, RunStatus, Shape,
-    ToolFailureKind, ToolRoute, WorkflowOp, canonical_json,
+    Attachments, Builtin, Event, Field, Interruption, JsonValue, Lifecycle, Payload, RunMode,
+    RunStatus, SecretRef, Shape, ToolFailureKind, ToolRoute, WorkflowOp, canonical_json,
 };
 use rewind_engine::ports::{
     ParkKind, Principal, QuarantineKind, TaskPhase, Trigger, WaitKind, WebhookEventType,
@@ -53,14 +53,18 @@ pub(crate) fn parse_quarantine_kind(name: &str) -> Result<QuarantineKind, Error>
 pub(crate) fn park_kind(kind: ParkKind) -> &'static str {
     match kind {
         ParkKind::SchemaChanged => "schema_changed",
-        ParkKind::CredentialsExpired => "credentials_expired",
+        ParkKind::CredentialsRefused => "credentials_refused",
+        ParkKind::SecretMissing => "secret_missing",
     }
 }
 
 pub(crate) fn parse_park_kind(name: &str) -> Result<ParkKind, Error> {
     Ok(match name {
         "schema_changed" => ParkKind::SchemaChanged,
-        "credentials_expired" => ParkKind::CredentialsExpired,
+        // `credentials_expired` is what a 401 parked a task as before secrets were attached to
+        // runs: the same refusal.
+        "credentials_refused" | "credentials_expired" => ParkKind::CredentialsRefused,
+        "secret_missing" => ParkKind::SecretMissing,
         other => return Err(corrupt("park kind", other)),
     })
 }
@@ -186,6 +190,27 @@ pub(crate) fn decode_labels(json: &str) -> Result<BTreeMap<String, String>, Erro
         .collect()
 }
 
+/// A run's attachments (`runs.secrets`), as a JSON object from a server's or an API's name to
+/// the secret it reads, `org/<name>` or `ns/<name>`: never a value.
+pub(crate) fn encode_attachments(secrets: &Attachments) -> String {
+    let object: Map<String, Value> = secrets
+        .iter()
+        .map(|(server, secret)| (server.to_owned(), Value::String(secret.to_string())))
+        .collect();
+    canonical_json(&Value::Object(object))
+}
+
+pub(crate) fn decode_attachments(json: &str) -> Result<Attachments, Error> {
+    decode_labels(json)?
+        .into_iter()
+        .map(|(server, secret)| {
+            let secret = SecretRef::parse(&secret)
+                .map_err(|err| Error::Corrupt(format!("attachment of {server:?}: {err}")))?;
+            Ok((server, secret))
+        })
+        .collect()
+}
+
 // -------------------------------------------------------------------------------------------
 // Events
 
@@ -216,12 +241,13 @@ pub(crate) fn decode_trigger(json: &str) -> Result<Trigger, Error> {
 // -------------------------------------------------------------------------------------------
 // Tool routes
 
-/// `{"mcp":"github"}`, `{"host":null}`, `{"host":"group"}`, `{"builtin":"webhook"}`,
+/// `{"mcp":"github"}`, `{"api":"dax"}`, `{"host":null}`, `{"host":"group"}`, `{"builtin":"webhook"}`,
 /// `{"builtin":"http","allowed_hosts":[…]}`,
 /// `{"builtin":"workflow","workflow":"triage","op":"start"}`.
 pub(crate) fn encode_route(route: &ToolRoute) -> String {
     let value = match route {
         ToolRoute::Mcp { server } => json!({ "mcp": server }),
+        ToolRoute::Api { api } => json!({ "api": api }),
         ToolRoute::Host { group } => json!({ "host": group }),
         ToolRoute::Builtin(Builtin::Webhook) => json!({ "builtin": "webhook" }),
         ToolRoute::Builtin(Builtin::Http { allowed_hosts }) => {
@@ -241,6 +267,12 @@ pub(crate) fn decode_route(json: &str) -> Result<ToolRoute, Error> {
         let server = server.as_str().ok_or_else(invalid)?;
         return Ok(ToolRoute::Mcp {
             server: server.to_owned(),
+        });
+    }
+    if let Some(api) = value.get("api") {
+        let api = api.as_str().ok_or_else(invalid)?;
+        return Ok(ToolRoute::Api {
+            api: api.to_owned(),
         });
     }
     if let Some(group) = value.get("host") {
@@ -283,12 +315,10 @@ pub(crate) fn decode_route(json: &str) -> Result<ToolRoute, Error> {
     }
 }
 
-/// The MCP server of a route, which the claim limits per worker.
+/// The MCP server or the API of a route, which the claim limits per worker. A toolset never
+/// names an API as one of its servers.
 pub(crate) fn mcp_server(route: &ToolRoute) -> Option<&str> {
-    match route {
-        ToolRoute::Mcp { server } => Some(server),
-        _ => None,
-    }
+    route.server()
 }
 
 // -------------------------------------------------------------------------------------------
@@ -449,6 +479,7 @@ mod tests {
             ToolRoute::Mcp {
                 server: "github".into(),
             },
+            ToolRoute::Api { api: "dax".into() },
             ToolRoute::Host { group: None },
             ToolRoute::Host {
                 group: Some("ui".into()),

@@ -103,7 +103,7 @@ pub enum WaitingFor {
     Host,
     /// A call under the `approval` policy, not approved yet.
     Approval,
-    /// A call parked by a schema change or refused credentials.
+    /// A call parked by a schema change, a refused call or a missing secret.
     Parked,
     /// A host tool's call whose handler answers later.
     Deferred,
@@ -161,7 +161,7 @@ pub enum TaskPhase {
     Claimed,
     /// A host tool's handler answers later.
     Deferred,
-    /// Waits for the harness after a schema change or a refusal of the credentials.
+    /// Waits for the harness after a schema change, a refused call or a missing secret.
     Parked,
 }
 

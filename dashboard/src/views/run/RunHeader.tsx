@@ -11,6 +11,7 @@ import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
 import type { Run, Waiting } from "../../model/types";
 import { endedRunOf, workflowRef } from "../../model/workflows";
+import { useAccess } from "../../state/access";
 import { type JournalState, useRunExport } from "../../state/runs";
 import { endingOf, RunEndBanner } from "./RunEnd";
 
@@ -236,6 +237,14 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
           </span>
         </dd>
       </div>
+      {Object.keys(run.secrets ?? {}).length > 0 && (
+        <div>
+          <dt>Secrets</dt>
+          <dd>
+            <AttachedSecrets run={run} />
+          </dd>
+        </div>
+      )}
       {Object.keys(run.labels).length > 0 && (
         <div className="run-details-labels">
           <dt>Labels</dt>
@@ -253,6 +262,35 @@ export function RunDetails({ run, model }: { run: Run; model: RunModel }) {
         </div>
       )}
     </dl>
+  );
+}
+
+/** The secrets the run attached, by server: names, never values; each opens where it is listed. */
+function AttachedSecrets({ run }: { run: Run }) {
+  const access = useAccess();
+  const reads = access.can("secrets:read");
+  return (
+    <ul className="attached-secrets">
+      {Object.entries(run.secrets ?? {})
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([server, ref]) => {
+          const to = ref.startsWith("org/")
+            ? "/secrets"
+            : `/namespaces/${encodeURIComponent(run.namespace)}`;
+          return (
+            <li key={server}>
+              <span className="muted">{server}</span>{" "}
+              {reads ? (
+                <Link className="mono" to={to} title="Where the secret is listed">
+                  {ref}
+                </Link>
+              ) : (
+                <span className="mono">{ref}</span>
+              )}
+            </li>
+          );
+        })}
+    </ul>
   );
 }
 
@@ -286,8 +324,10 @@ function waitingHint(w: Waiting): string | null {
     return `Approve: POST /v1/tasks/${w.taskId}/approve · reject: …/reject`;
   if (w.kind === "tool_call" && w.parked === "schema_changed")
     return `The tool no longer matches its pinned schema: approve or reject task ${w.taskId}, fork or cancel the run.`;
-  if (w.kind === "tool_call" && w.parked === "credentials_expired")
-    return "The server refused the credentials: renew them with PUT /v1/runs/{id}/credentials.";
+  if (w.kind === "tool_call" && w.parked === "credentials_refused")
+    return "The server refused the call: put the secret the run attached again, or approve the call once the server accepts the key.";
+  if (w.kind === "tool_call" && w.parked === "secret_missing")
+    return "The secret the run attached no longer exists: put it again.";
   if (w.kind === "signal" && endedRunOf(w.name) !== null) return null;
   if (w.kind === "signal") return `Send it: POST /v1/runs/{id}/signals/${w.name}`;
   return null;

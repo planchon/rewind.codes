@@ -3,7 +3,6 @@ import { checkNamespaceName, type Transport } from "../http.js";
 import type {
   CreateToken,
   CreateTokenKey,
-  Credentials,
   Namespace,
   NamespaceDefaults,
   NamespaceDetail,
@@ -16,6 +15,7 @@ import type {
   Token,
   TokenKey,
 } from "../types.js";
+import { NamespaceSecrets } from "./secrets.js";
 import type { RequestOptions } from "./toolsets.js";
 
 export interface ListNamespacesParams extends RequestOptions {
@@ -56,7 +56,7 @@ export type CreatedToken = Token & {
 };
 
 /**
- * Namespaces: the end users of the customer. Each has its runs, the scripts they ran, its credentials, its use and its
+ * Namespaces: the end users of the customer. Each has its runs, the scripts they ran, its secrets, its use and its
  * limits; nothing of one end user is visible to another. A namespace is created at its first use (a run, a token), with
  * the tenant's default limits.
  */
@@ -65,10 +65,13 @@ export class Namespaces {
   readonly tokens: Tokens;
   /** The default limits of every namespace, and the tenant's ceiling. */
   readonly defaults: DefaultLimits;
+  /** Each end user's own secrets (Alice's GitHub token), attached as `ns/<name>` by the runs of its namespace. */
+  readonly secrets: NamespaceSecrets;
 
   constructor(private readonly transport: Transport) {
     this.tokens = new Tokens(transport);
     this.defaults = new DefaultLimits(transport);
+    this.secrets = new NamespaceSecrets(transport);
   }
 
   /**
@@ -156,7 +159,7 @@ export class Namespaces {
 
   /**
    * Erases the end user, in the background: the namespace takes no run and no token from now on
-   * (`namespace-deleting`), its tokens are revoked and its active runs cancelled, then its runs, credentials, use and
+   * (`namespace-deleting`), its tokens are revoked and its active runs cancelled, then its runs, secrets, use and
    * alerts are erased. The tenant's own use keeps what the namespace consumed.
    */
   async delete(name: string, options: RequestOptions = {}): Promise<void> {
@@ -165,29 +168,6 @@ export class Namespaces {
       () =>
         this.transport.api.DELETE("/v1/namespaces/{name}", {
           params: { path: { name } },
-          signal: options.signal,
-        }),
-      { retry: true, signal: options.signal },
-    );
-  }
-
-  /**
-   * Sets or renews the end user's own credentials for a toolset (Alice's GitHub token). A run uses its own
-   * credentials if it has some, else its namespace's for its toolset, else the toolset's. Calls parked by
-   * `credentials.expired` go on.
-   */
-  async setCredentials(
-    name: string,
-    toolset: string,
-    credentials: Credentials,
-    options: RequestOptions = {},
-  ): Promise<void> {
-    checkNamespaceName(name);
-    await this.transport.send(
-      () =>
-        this.transport.api.PUT("/v1/namespaces/{name}/toolsets/{id}/credentials", {
-          params: { path: { name, id: toolset } },
-          body: credentials,
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },

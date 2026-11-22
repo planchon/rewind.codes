@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use rewind_core::{
     CancelReason, Completion, Digest, Epoch, HistoryEntry, JsonValue, Payload, RunId, RunStatus,
-    Script, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
+    Script, SecretRef, Seq, Timestamp, ToolFailure, ToolOutcome, ToolPolicy, Toolset, Workflow,
     end_signal_name, starter_ended,
 };
 use rewind_engine::ports::{
@@ -32,11 +32,11 @@ use rewind_engine::ports::{
     Enqueued, ExpiredRuns, Failures, FeedConsumer, FeedItem, ForkParent, InboxItem, JournalStore,
     Lease, NewRun, PAYLOAD_DELETION_TIMEOUT, ParkReason, ParkedScope, PayloadRecord,
     QUARANTINE_AFTER_FAILURES, Quarantine, QuarantineKind, Retention, RunFilter, RunMetadata,
-    RunRecord, RunRef, RunWorkflow, Secret, StartedBy, StoreError, StoredScript, StoredToolset,
-    StoredWorkflow, Subscription, TEST_GRACE, TaskFilter, TaskRef, TaskState, TaskToken,
-    TaskUpdate, Tenant, TenantId, TenantScope, TestRecord, ToolDeclarations, ToolTask,
-    TraceContext, Trigger, Watched, WebhookTarget, WebhookToken, WorkflowFilter,
-    deferred_timeout_failure,
+    RunRecord, RunRef, RunWorkflow, Secret, SecretId, SecretNamespace, SecretUsage, StartedBy,
+    StoreError, StoredScript, StoredToolset, StoredWorkflow, Subscription, TEST_GRACE, TaskFilter,
+    TaskRef, TaskState, TaskToken, TaskUpdate, Tenant, TenantId, TenantScope, TestRecord,
+    ToolDeclarations, ToolTask, TraceContext, Trigger, Watched, WebhookTarget, WebhookToken,
+    WorkflowAttaching, WorkflowFilter, deferred_timeout_failure,
 };
 use rewind_engine::ports::{
     DeleteNamespace, DisplayName, DropNamespace, Month, Namespace, NamespaceFilter, NamespaceName,
@@ -91,7 +91,8 @@ macro_rules! run_columns {
          quarantine_reason, quarantine_since, quarantine_retried_by, failures, sticky_worker, \
          labels::text, traceparent, tracestate, parent, idempotency_key, created_at, updated_at, \
          ended_at, archive_document, archived_at, parent_at, attempts, workflow, \
-         workflow_version, started_by, started_seq, detached, scope::text, namespace"
+         workflow_version, started_by, started_seq, detached, scope::text, namespace, \
+         secrets::text"
     };
 }
 
@@ -226,6 +227,7 @@ fn record_from_row(row: &PgRow) -> Result<RunRecord, Error> {
                 })
                 .transpose()?,
             scope: decode_labels(&row.text(31)?)?,
+            secrets: codec::decode_attachments(&row.text(33)?)?,
         },
         idempotency_key: row.opt_text(18)?,
         created_at: row.ts(19)?,
@@ -768,9 +770,10 @@ impl PostgresStore {
         let inserted: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO runs (tenant, id, script, toolset, status, epoch, expires_at, labels, \
              traceparent, tracestate, parent, parent_at, idempotency_key, created_at, updated_at, \
-             workflow, workflow_version, started_by, started_seq, detached, scope, namespace) \
+             workflow, workflow_version, started_by, started_seq, detached, scope, namespace, \
+             secrets) \
              VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $13, \
-                 $14, $15, $16, $17, $18, $19::jsonb, $20) \
+                 $14, $15, $16, $17, $18, $19::jsonb, $20, $21::jsonb) \
              ON CONFLICT (tenant, namespace, idempotency_key) DO NOTHING RETURNING id",
         )
         .bind(tenant(tenant_id))
@@ -793,6 +796,7 @@ impl PostgresStore {
         .bind(started_by.map(|started_by| started_by.detached))
         .bind(encode_labels(&run.metadata.scope))
         .bind(run.namespace.as_str())
+        .bind(codec::encode_attachments(&run.metadata.secrets))
         .fetch_optional(&mut *tx)
         .await?;
         if inserted.is_none() {
@@ -1621,48 +1625,43 @@ impl PostgresStore {
     }
 
     async fn resume_parked_once(&self, scope: &ParkedScope, now: Timestamp) -> Result<usize, Fail> {
+        let ParkedScope::Secret {
+            tenant: tenant_id,
+            secret,
+        } = scope;
+        let (attached, namespace) = attached_as(secret);
+        // The tasks parked by a refusal or by a missing secret (`credentials_expired` before
+        // version 9), whose run attaches the secret for the task's server or API.
+        let parked = "t.tenant = $1 AND t.state = 'parked' \
+             AND t.parked_kind IN ('credentials_refused', 'secret_missing', 'credentials_expired') \
+             AND r.tenant = t.tenant AND r.id = t.run_id \
+             AND r.secrets ->> t.mcp_server = $2 AND ($3::text IS NULL OR r.namespace = $3)";
         let mut tx = self.pool.begin().await?;
-        let (tenant_id, toolset, run, namespace) = match scope {
-            ParkedScope::Run(run) => (&run.tenant, None, Some(uuid(run.id)), None),
-            ParkedScope::Toolset { tenant, toolset } => (tenant, Some(bytes(*toolset)), None, None),
-            ParkedScope::Namespace {
-                tenant,
-                namespace,
-                toolset,
-            } => (
-                tenant,
-                Some(bytes(*toolset)),
-                None,
-                Some(namespace.as_str()),
-            ),
-        };
-        let parked = "tenant = $1 AND ($2::bytea IS NULL OR toolset = $2) \
-                      AND ($3::uuid IS NULL OR run_id = $3) \
-                      AND ($4::text IS NULL OR run_id IN \
-                          (SELECT id FROM runs WHERE tenant = $1 AND namespace = $4)) \
-                      AND state = 'parked' AND parked_kind = 'credentials_expired'";
         let runs: Vec<Uuid> = sqlx::query_scalar(&format!(
-            "SELECT DISTINCT run_id FROM tool_tasks WHERE {parked}"
+            "SELECT DISTINCT t.run_id FROM tool_tasks t, runs r WHERE {parked}"
         ))
         .bind(tenant(tenant_id))
-        .bind(toolset.clone())
-        .bind(run)
+        .bind(attached.as_str())
         .bind(namespace)
         .fetch_all(&mut *tx)
         .await?;
         if runs.is_empty() {
             return Ok(0);
         }
-        lock_runs(&mut tx, &runs.into_iter().collect()).await?;
+        // The tasks of the runs locked only: a run's row is locked before its tasks, in the
+        // order a commit locks them.
+        lock_runs(&mut tx, &runs.iter().copied().collect()).await?;
         let resumed = sqlx::query(&format!(
-            "UPDATE tool_tasks SET state = 'ready', next_attempt_at = $5, due_at = $5, \
-                 parked_kind = NULL, parked_reason = NULL WHERE {parked}"
+            "UPDATE tool_tasks t SET state = 'ready', token = NULL, next_attempt_at = $4, \
+                 due_at = $4, lease_owner = NULL, lease_until = NULL, parked_kind = NULL, \
+                 parked_reason = NULL \
+             FROM runs r WHERE {parked} AND t.run_id = ANY($5)"
         ))
         .bind(tenant(tenant_id))
-        .bind(toolset)
-        .bind(run)
+        .bind(attached.as_str())
         .bind(namespace)
         .bind(ts(now))
+        .bind(&runs)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -3275,6 +3274,82 @@ impl JournalStore for PostgresStore {
         Ok(retrying(|| self.resume_parked_once(scope, now)).await?)
     }
 
+    async fn secret_usage(
+        &self,
+        tenant_id: &TenantId,
+        secret: &SecretId,
+        labels: &BTreeMap<String, String>,
+        max: usize,
+    ) -> Result<SecretUsage, StoreError> {
+        let (attached, namespace) = attached_as(secret);
+        let labels =
+            serde_json::to_string(labels).map_err(|error| Error::Corrupt(error.to_string()))?;
+        // The active runs that attach the secret, and those of them with a call to a server or
+        // an API it serves that is parked or not yet sent.
+        let active = concat!(
+            "r.tenant = $1 AND r.status NOT IN ",
+            terminal!(),
+            " AND ($3::text IS NULL OR r.namespace = $3) AND r.labels @> $5::jsonb \
+             AND EXISTS (SELECT 1 FROM jsonb_each_text(r.secrets) a WHERE a.value = $2)"
+        );
+        let waiting = " AND EXISTS (SELECT 1 FROM tool_tasks t \
+             WHERE t.run_id = r.id AND t.tenant = r.tenant \
+             AND t.state IN ('approval', 'ready', 'parked') AND r.secrets ->> t.mcp_server = $2)";
+        let mut usage = SecretUsage::default();
+        for (filter, runs, total) in [
+            (
+                active.to_owned(),
+                &mut usage.active_runs,
+                &mut usage.active_total,
+            ),
+            (
+                format!("{active}{waiting}"),
+                &mut usage.waiting_runs,
+                &mut usage.waiting_total,
+            ),
+        ] {
+            let ids: Vec<Uuid> = sqlx::query_scalar(&format!(
+                "SELECT r.id FROM runs r WHERE {filter} ORDER BY r.created_at, r.id LIMIT $4"
+            ))
+            .bind(tenant(tenant_id))
+            .bind(attached.as_str())
+            .bind(namespace)
+            .bind(limit(max))
+            .bind(labels.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(Error::from)?;
+            let count: i64 =
+                sqlx::query_scalar(&format!("SELECT count(*) FROM runs r WHERE {filter}"))
+                    .bind(tenant(tenant_id))
+                    .bind(attached.as_str())
+                    .bind(namespace)
+                    .bind(None::<i64>)
+                    .bind(labels.as_str())
+                    .fetch_one(&self.pool)
+                    .await
+                    .map_err(Error::from)?;
+            *runs = ids
+                .into_iter()
+                .map(|id| RunRef::new(tenant_id.clone(), RunId::from_uuid(id)))
+                .collect();
+            *total = u64::try_from(count).unwrap_or_default();
+        }
+        // A tenant has few workflows: the attachments are read from their latest versions.
+        let latest = JournalStore::latest_workflows(
+            self,
+            &WorkflowFilter {
+                tenant: tenant_id.clone(),
+                labels: BTreeMap::new(),
+                after: None,
+                limit: None,
+            },
+        )
+        .await?;
+        usage.versions = workflows_attaching(&latest, &secret.to_ref());
+        Ok(usage)
+    }
+
     async fn expire_deferred_tool_tasks(
         &self,
         now: Timestamp,
@@ -3929,4 +4004,34 @@ impl PostgresStore {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(not_applied(task_by_token(&mut conn, token).await?))
     }
+}
+
+/// How a run's attachments name `secret`, and the namespace whose runs may attach it: `org/<name>`
+/// in every namespace, `ns/<name>` in the secret's own.
+fn attached_as(secret: &SecretId) -> (String, Option<&str>) {
+    let namespace = match &secret.namespace {
+        SecretNamespace::Organization => None,
+        SecretNamespace::Namespace(namespace) => Some(namespace.as_str()),
+    };
+    (secret.to_ref().to_string(), namespace)
+}
+
+/// The versions of `latest` that attach `secret`, with the servers and APIs they attach it for.
+fn workflows_attaching(latest: &[StoredWorkflow], secret: &SecretRef) -> Vec<WorkflowAttaching> {
+    latest
+        .iter()
+        .filter_map(|stored| {
+            let servers: Vec<String> = stored
+                .workflow
+                .secrets()
+                .servers_reading(secret)
+                .map(str::to_owned)
+                .collect();
+            (!servers.is_empty()).then(|| WorkflowAttaching {
+                name: stored.workflow.name().to_owned(),
+                version: stored.workflow.version(),
+                servers,
+            })
+        })
+        .collect()
 }

@@ -8,6 +8,7 @@ import {
   FileCode,
   FlaskConical,
   LayoutGrid,
+  LockKeyhole,
   Search,
   Users,
   Wrench,
@@ -132,6 +133,14 @@ function MainNav() {
           icon={<Users size={16} />}
           label="Namespaces"
           current={pathname.startsWith("/namespaces")}
+        />
+      )}
+      {access.can("secrets:read") && (
+        <NavItem
+          to="/secrets"
+          icon={<LockKeyhole size={16} />}
+          label="Secrets"
+          current={pathname.startsWith("/secrets")}
         />
       )}
     </div>

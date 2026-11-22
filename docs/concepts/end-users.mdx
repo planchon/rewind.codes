@@ -1,10 +1,10 @@
 ---
 title: "End users and namespaces"
-description: "Each user of your product has a namespace: their runs, scripts, credentials and use, isolated from everyone else's, with their own limits."
+description: "Each user of your product has a namespace: their runs, scripts, secrets and use, isolated from everyone else's, with their own limits."
 ---
 
 Your harness serves its own users: the **end users** of your product. In Rewind, each one has a **namespace**. Their
-runs, the scripts those runs ran, their credentials and their use live there, and nothing of one end user is visible to
+runs, the scripts those runs ran, their secrets and their use live there, and nothing of one end user is visible to
 another.
 
 ## Naming the end user
@@ -61,7 +61,11 @@ Toolsets and webhook subscriptions belong to your organization, not to a namespa
 receive every end user's events, each naming its namespace. One host-tool worker with your key serves every end user:
 each task says which one it acts for.
 
-An end user's own credentials (their GitHub token) can be set on their namespace for a toolset. A run uses its own
-credentials first, then its namespace's, then the toolset's: Alice's token is never sent for a run of Bob's.
+An end user's own [secrets](/sdk/secrets) (their GitHub token) belong to their namespace. A run of Alice's that
+attaches `ns/github` reads Alice's, never Bob's nor the organization's: nothing falls back on another secret. Your
+organization's secrets (`org/…`) are shared by every end user's runs that attach them.
+
+The calls Rewind [signs](/sdk/signed-calls) for your own APIs name the end user in `sub`, from the run, never from the
+script: your API learns whom it acts for from the signature.
 
 See [End users in the SDK](/sdk/end-users) and the [Namespaces view](/dashboard/namespaces) of the dashboard.

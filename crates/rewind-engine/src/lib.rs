@@ -4,8 +4,9 @@
 //!   them; the engine never names Postgres, S3, V8, MCP or OpenTelemetry.
 //! - [`Engine`]: the use cases (start, signal, cancel, activate with sticky execution, fire
 //!   timers, expire runs, quarantine, replay, fork, export), the tool tasks' (dispatch,
-//!   host-tool workers, approvals, parked tasks and credentials, backoff), and the driver
-//!   (`run_until_idle`, in real or virtual time).
+//!   host-tool workers, approvals, parked tasks and the secrets that resume them, backoff), and
+//!   the driver (`run_until_idle`, in real or virtual time).
+//! - [`attachments`]: the secrets a run attaches, and who may attach them.
 //! - [`replay`]: rebuilding a script from its history.
 //! - [`projector`]: the feed's consumers: read model, run telemetry ([`telemetry`]) and
 //!   lifecycle webhooks, projected from committed entries; the snapshot of a run and the
@@ -36,6 +37,7 @@
 
 mod activation;
 pub mod adapters;
+pub mod attachments;
 mod cache;
 #[cfg(any(test, feature = "conformance"))]
 pub mod conformance;

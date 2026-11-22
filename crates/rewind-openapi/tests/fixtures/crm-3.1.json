@@ -1,0 +1,44 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "CRM", "version": "2" },
+  "servers": [{ "url": "/api" }],
+  "security": [{ "query": [] }, { "key": [] }],
+  "components": {
+    "securitySchemes": {
+      "key": { "type": "apiKey", "in": "header", "name": "X-Api-Key" },
+      "query": { "type": "apiKey", "in": "query", "name": "key" }
+    },
+    "schemas": {
+      "Contact": {
+        "$id": "https://crm.example.com/schemas/contact",
+        "type": "object",
+        "properties": {
+          "name": { "type": ["string", "null"] },
+          "manager": { "$ref": "#/components/schemas/Contact" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/contacts/{contactId}/notes": {
+      "post": {
+        "summary": "Add a note.",
+        "parameters": [
+          { "name": "contactId", "in": "path", "required": true, "schema": { "type": "integer" } },
+          { "name": "X-Api-Key", "in": "header", "schema": { "type": "string" } },
+          { "name": "X-Request-Source", "in": "header", "schema": { "type": "string" } }
+        ],
+        "requestBody": { "content": { "application/json; charset=utf-8": { "schema": { "type": "object", "properties": { "text": { "type": "string" } } } } } },
+        "responses": {
+          "2XX": { "description": "The contact.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Contact" } } } }
+        }
+      }
+    },
+    "/contacts": {
+      "get": {
+        "operationId": "contacts.list",
+        "responses": { "200": { "description": "A CSV.", "content": { "text/csv": {} } } }
+      }
+    }
+  }
+}

@@ -15,7 +15,9 @@ export const PERMISSIONS = [
   "runs:delete",
   "toolsets:read",
   "toolsets:write",
-  "credentials:write",
+  "secrets:read",
+  "secrets:write",
+  "secrets:use",
   "tasks:work",
   "tasks:approve",
   "subscriptions:read",
@@ -44,7 +46,9 @@ export const BUILT_IN: Record<string, readonly string[]> = {
     "runs:delete",
     "toolsets:read",
     "toolsets:write",
-    "credentials:write",
+    "secrets:read",
+    "secrets:write",
+    "secrets:use",
     "tasks:work",
     "tasks:approve",
     "subscriptions:read",
@@ -56,7 +60,7 @@ export const BUILT_IN: Record<string, readonly string[]> = {
     "tokens:write",
   ],
   worker: ["tasks:work"],
-  reader: ["runs:read", "toolsets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"],
+  reader: ["runs:read", "toolsets:read", "secrets:read", "subscriptions:read", "members:read", "roles:read", "namespaces:read"],
 };
 
 /** What a grant limited to labels may not use (06: "Labels"). */

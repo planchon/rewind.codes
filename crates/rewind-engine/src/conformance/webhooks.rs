@@ -9,13 +9,14 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 
-use rewind_core::{Payload, RunId, RunStatus, Seq, Timestamp};
+use rewind_core::{Payload, RunId, RunStatus, SecretRef, Seq, Timestamp};
 use serde_json::json;
 
 use super::{T0, tenant};
 use crate::ports::{
-    Month, NamespaceName, QuotaAlert, QuotaAlertKey, QuotaKind, Subscription, TenantId, Threshold,
-    WebhookError, WebhookEvent, WebhookEventKind, WebhookEventType, WebhookSender,
+    CredentialsExpiredReason, Month, NamespaceName, QuotaAlert, QuotaAlertKey, QuotaKind,
+    Subscription, TenantId, Threshold, WebhookError, WebhookEvent, WebhookEventKind,
+    WebhookEventType, WebhookSender,
 };
 
 /// The receiving side of a sender under test.
@@ -147,6 +148,8 @@ pub async fn every_kind_of_event_is_delivered<S: WebhookSender, R: Receiver>(
             seq: Seq(3),
             tool: "github.list_issues".into(),
             message: "401 Unauthorized".into(),
+            reason: CredentialsExpiredReason::Refused,
+            secret: Some(SecretRef::parse("ns/github").expect("valid")),
         },
         WebhookEventKind::QuotaAlert(QuotaAlert {
             key: QuotaAlertKey {

@@ -1,6 +1,6 @@
 ---
 title: "Webhooks"
-description: "Receive signed lifecycle events: a run completed, failed or waits; a tool changed; credentials expired; an end user nears a limit."
+description: "Receive signed lifecycle events: a run completed, failed or waits; a tool changed; a secret was refused or is missing; an end user nears a limit."
 ---
 
 Rewind tells your harness when something happens to a run, so it can resume a conversation when a long run ends,
@@ -86,7 +86,7 @@ createServer(async (req, res) => {
 | `run.suspended` | An activation left the run waiting for something else than its calls in flight: a signal, a timer, an approval | `run`, with its `waitingFor` |
 | `run.quarantined` | The run was quarantined: release it or give it up | `run`, with its `quarantine` |
 | `tool.schema_changed` | A call was parked because the tool's schema changed during the run | The run, the call and the change |
-| `credentials.expired` | A call was parked because the server answered 401 | The run, the call and the server |
+| `credentials.expired` | A call was parked: its server refused the secret or the signature (`reason: "refused"`), or the secret the run attached no longer exists (`"missing"`, nothing was sent). Put the [secret](/sdk/secrets) again, or approve a refused signed call | The run, the call, the server, the `secret` attached (`org/…`, `ns/…`; absent for a signed call), the `reason` and the server's answer |
 | `quota.alert` | An end user, or your organization, crossed 80 % or 100 % of a limit | `namespace` (`null` for the ceiling), `quota`, `threshold`, `used`, `limit`, `period` |
 
 Every event about a run carries the run's state as the event left it, its `namespace` and its `labels`.
