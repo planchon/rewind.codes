@@ -93,7 +93,7 @@ later runs reuse.
 | Endings and limits | `areas/endings.spec.ts` | How a script ends; CPU, heap, array buffers, commands, payload sizes |
 | Host tools and tasks | `areas/host-tools.spec.ts` | Claims, heartbeats, deferrals, failures, retries, timeouts, approvals, task tokens |
 | MCP, APIs, http tool, egress | `areas/mcp-egress.spec.ts` | MCP over HTTP and stdio; secrets attached per run (`org/`, `ns/`, never another's), deleted mid-run (`secret_missing`) or refused (401), put again with the same key; signed calls checked by `verifyRewindCall`, a replaced key, labels refused then approved; an API read from its OpenAPI document; schema changes, `fetch`, every refused address; no value in clear in the database |
-| Workflows | `areas/workflows.spec.ts` | Versions, starts by name, from scripts, schemas, label scope |
+| Workflows | `areas/workflows.spec.ts` | Versions, a version refused by its own tests or by its suite, starts by name, from scripts, schemas, label scope |
 | Check and test | `areas/check-test.spec.ts` | `/v1/check`, `/v1/test`, refusals at start |
 | Observability | `areas/observability.spec.ts` | Queries, statistics, failure groups, OTLP traces, signed webhooks, quota alerts |
 | Access | `areas/access.spec.ts` | The permission matrix over every operation of `api/openapi.json` (the 25 permissions of `GET /v1/permissions`, `secrets:*` included), roles, grants, revocation, labels on secrets, `secrets:use` |

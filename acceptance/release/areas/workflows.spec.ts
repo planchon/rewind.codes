@@ -214,6 +214,35 @@ test("a script that does not match its workflow's schemas is 422 invalid-script,
   expect(messages.some((m: string) => m.startsWith("the default export does not match the workflow's schemas")), messages.join("\n")).toBe(true);
 });
 
+/** Approved, it closes `closed` issues: a test of TRIAGE, which closes three. */
+const closes = (closed: number, name = `closes ${closed} once approved`) => ({
+  name,
+  input: { repo: "acme/api" },
+  signals: [{ name: "approval", payload: { close: true } }],
+  expect: { status: "completed", output: { closed } },
+});
+
+test("a version whose tests do not pass is 422 tests-failed with each outcome, and nothing is saved", { tag: "@failure" }, async () => {
+  const name = fresh();
+  const reply = await tenant.api.post("/v1/workflows", { ...triage(name), tests: [closes(3), closes(5)] });
+  expectProblem(reply, 422, "tests-failed");
+  expect(reply.json.detail).toContain('"closes 5 once approved"');
+  const outcomes = Object.fromEntries((reply.json.tests ?? []).map((t: any) => [t.name, t]));
+  expect(Object.keys(outcomes).sort(), reply.text).toEqual(["closes 3 once approved", "closes 5 once approved"]);
+  expect(outcomes["closes 3 once approved"].passed).toBe(true);
+  expect(outcomes["closes 5 once approved"].problem).toBe("failed");
+  expect(outcomes["closes 5 once approved"].failures.join("\n")).toContain('{"closed":5}');
+  expectProblem(await tenant.api.get(`/v1/workflows/${name}`), 404, "not-found");
+});
+
+test("a suite with two tests of the same name is 422 invalid-test, and nothing is saved", { tag: "@failure" }, async () => {
+  const name = fresh();
+  const reply = await tenant.api.post("/v1/workflows", { ...triage(name), tests: [closes(3, "approved"), closes(3, "approved")] });
+  expectProblem(reply, 422, "invalid-test");
+  expect(reply.json.detail).toContain('"approved"');
+  expectProblem(await tenant.api.get(`/v1/workflows/${name}`), 404, "not-found");
+});
+
 test("a run of a workflow refuses an input that does not match its schema, and no run starts", { tag: "@failure" }, async () => {
   const name = fresh();
   await save(tenant.api, triage(name));

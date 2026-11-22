@@ -231,7 +231,8 @@ test.describe("criterion 7: the dashboard", () => {
     await line(7).locator(".hv-binding").first().hover();
     const value = page.getByRole("tooltip");
     await expect(value).toContainText("= the result of #1 crm.lookup");
-    await expect(value).toContainText('"id": "cus_ada"');
+    // The value is a JSON tree: each key and its value, with no space between them.
+    await expect(value).toContainText('"id":"cus_ada"');
     // A click watches it; at the first step it is not assigned yet.
     await line(7).locator(".hv-binding").first().click();
     const watches = page.getByRole("list", { name: "Watches" });

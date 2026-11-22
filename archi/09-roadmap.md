@@ -174,11 +174,14 @@ operation with the 25 permissions, and the gate adds signed calls checked by `ve
 an API read from its OpenAPI document and called by the CLI's embedded server, labels and
 `secrets:use` on attachments, malformed secrets, the dashboard's Secrets, a `pg_dump` holding no
 value, and a secret read across a full restart and erased with its namespace. `api/README.md`
-gains `secret-required`. The gate's run on the branch: NO-GO, 343 of 345 checks, 0 unexpected
-5xx, 0 canary leaks; both failures predate secrets: criterion 7 expects a value's text as
-pretty-printed JSON, which the foldable tree of November 17 no longer gives, and no check of the
-gate provokes `invalid-test` nor `tests-failed`. `acceptance/run.sh`: criteria 1 to 6 pass, 7
-fails on the same check, 8 is not run without WorkOS Staging's keys.
+gains `secret-required`. The gate's first run on the branch was NO-GO, 343 of 345 checks, on two
+failures older than secrets: criterion 7 expected a value's text as pretty-printed JSON, which the
+foldable tree of November 17 no longer gives, and no check provoked `invalid-test` nor
+`tests-failed`. Criterion 7 now reads the tree's text, and the Workflows area saves a version whose
+test fails (`tests-failed`, nothing saved) and a suite with two tests of one name
+(`invalid-test`). The gate's run of November 22: GO, 347 of 347 checks, 0 unexpected 5xx, 0
+canary leaks. `acceptance/run.sh` was not run again: criterion 7 is the gate's check, and 8 needs
+WorkOS Staging's keys.
 
 | Crate | State |
 | --- | --- |
