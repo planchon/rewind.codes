@@ -208,12 +208,13 @@ commit(Batch) -> ()                   # atomic and durable; Fenced once another 
 A `Batch` is a list of changes, of one or many runs, applied together:
 
 ```
-CreateRun { run, head, start_key?, entries?, payloads }      # entries: a fork's copied history
+CreateRun { run, head, start_key?, entries?, payloads, summary }   # entries: a fork's copied history
 Enqueue { run, item, signal_key? }
 Activation { run, attempt, entries, consumed, payloads, tasks, timers, head, summary, counters, outbox }
 Task { run, seq, change }             Timer(Set | Cancel)
 Failure { run, error }                Quarantine { run, kind, reason } | Release { run }
-Seal { run, attempt }                 Erase { run }
+Seal { run, attempt }                 Erase { run }             EraseNamespace { tenant, namespace }
+Interrupted { run }                   Watch { run, watcher }
 Outbox(Add | Remove)                  Counters([CounterDelta])
 WebhookToken { run, name, hash }      Organization { tenant, state }
 ```
@@ -388,8 +389,8 @@ NodeLink::activate(node, ActivationRequest) -> ActivationResult      # a remote 
   `credentials.expired` (with its reason, `refused` or `missing`, and the attached secret's scope
   and name when there is one) and `quota.alert`, with a deterministic id for receivers to deduplicate;
   every event about a run names its namespace. Subscriptions are kept by the `CatalogStore`.
-- **`Clock`** and **`Entropy`**: unchanged. `Entropy` draws a run id for a partition: a UUID v7
-  whose 16 bits after the variant hold it.
+- **`Clock`** and **`Entropy`**: unchanged. `Entropy` draws a run id for a partition: a UUID of version 8, laid
+  out as a version 7, whose 16 bits after the variant hold it.
 
 Port style: traits whose methods return `impl Future<Output = …> + Send`; adapters may
 implement them with `async fn`. The engine is generic over its adapters (static

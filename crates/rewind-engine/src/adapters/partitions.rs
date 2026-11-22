@@ -239,6 +239,22 @@ impl PartitionState {
                 self.erase(&run);
                 Ok(())
             }
+            Change::EraseNamespace { tenant, namespace } => {
+                if self.runs.values().any(|records| {
+                    records.head.run.tenant == tenant && records.head.namespace == namespace
+                }) {
+                    return Err(conflict(format!(
+                        "the namespace {namespace} still holds runs in this partition"
+                    )));
+                }
+                self.hours
+                    .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
+                self.shapes
+                    .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
+                self.start_keys
+                    .retain(|(of, name, _), _| !(*of == tenant && *name == namespace));
+                Ok(())
+            }
             Change::Outbox(OutboxChange::Add(entry)) => self.add_outbox(*entry),
             Change::Outbox(OutboxChange::Remove(id)) => {
                 if let Some(entry) = self.outbox.remove(&id) {
@@ -286,11 +302,11 @@ impl PartitionState {
             start_key,
             entries,
             payloads,
+            summary,
         } = create;
-        if head.run != run {
+        if head.run != run || summary.summary.run != run {
             return Err(conflict(format!(
-                "the head of run {run} names the run {}",
-                head.run
+                "the head or the summary of the creation of run {run} names another run"
             )));
         }
         if self.runs.contains_key(&run.id) {
@@ -314,7 +330,7 @@ impl PartitionState {
             run.id,
             RunRecords {
                 head,
-                summary: None,
+                summary: Some(summary),
                 history: BTreeMap::from([(attempt, entries)]),
                 inbox: BTreeMap::new(),
                 signal_keys: BTreeSet::new(),

@@ -59,6 +59,8 @@ pub async fn run_all<S: PartitionStore>(new_store: impl Fn() -> S) {
     partition_check!(erase_deletes_everything_of_the_run);
     partition_check!(search_reads_the_scope_in_order_by_pages);
     partition_check!(search_stops_at_its_budget_with_a_cursor);
+    partition_check!(a_pending_run_is_listed);
+    partition_check!(erase_namespace_drops_its_counters_once_it_holds_no_run);
     partition_check!(counters_sum_whole_hours_of_the_scope);
     partition_check!(gauges_count_what_holds_now);
     partition_check!(shapes_merge_per_tool);
@@ -144,12 +146,15 @@ fn head(run: &RunRef, namespace: &NamespaceName) -> RunHead {
 }
 
 fn create_with(head: RunHead, start_key: Option<&str>) -> Change {
+    let mut summary = summary_of(&head.run, &head.namespace, RunStatus::Completed);
+    summary.summary.status = RunStatus::Pending;
     CreateRun {
         run: head.run.clone(),
         head,
         start_key: start_key.map(str::to_owned),
         entries: Vec::new(),
         payloads: Vec::new(),
+        summary,
     }
     .into()
 }
@@ -1798,7 +1803,11 @@ pub async fn erase_deletes_everything_of_the_run<S: PartitionStore>(store: &S) {
         )
         .await
         .expect("search");
-    assert!(found.summaries.is_empty(), "and in the index");
+    assert_eq!(
+        ids(&found.summaries),
+        vec![kept.clone()],
+        "and in the index: only the run kept is left"
+    );
     commit(
         &log,
         vec![
@@ -1849,7 +1858,6 @@ pub async fn search_reads_the_scope_in_order_by_pages<S: PartitionStore>(store: 
         )
         .await;
     }
-    commit(&log, vec![create(&run(7))]).await;
     let other = run_of(&tenant("other"), 8);
     index(
         &log,
@@ -1877,7 +1885,7 @@ pub async fn search_reads_the_scope_in_order_by_pages<S: PartitionStore>(store: 
     assert_eq!(
         ids(&all.summaries),
         runs.iter().rev().cloned().collect::<Vec<_>>(),
-        "newest first; a run without a summary is not indexed; another tenant's is not in scope"
+        "newest first; another tenant's is not in scope"
     );
     assert_eq!(all.cursor, None, "the whole scope was read");
     let oldest = search(
@@ -2000,6 +2008,73 @@ pub async fn search_reads_the_scope_in_order_by_pages<S: PartitionStore>(store: 
         [ids(&first.summaries), ids(&rest.summaries)].concat(),
         ids(&by_calls.summaries),
         "pages keep the order asked"
+    );
+}
+
+/// A run is listed from its creation, `pending` until its first activation.
+pub async fn a_pending_run_is_listed<S: PartitionStore>(store: &S) {
+    let log = open(store, "n1").await;
+    let pending = run(1);
+    commit(&log, vec![create(&pending)]).await;
+    let found = log
+        .search(
+            &Scope::Tenant(acme()),
+            &RunQuery::new(acme()).with(Predicate::Status([RunStatus::Pending].into())),
+            RunOrder::Started,
+            &Page::first(10),
+        )
+        .await
+        .expect("search");
+    assert_eq!(ids(&found.summaries), vec![pending.clone()]);
+    let summary = log
+        .summary(&pending)
+        .await
+        .expect("summary")
+        .expect("summary");
+    assert_eq!(summary.summary.status, RunStatus::Pending);
+}
+
+/// A namespace's counters, shapes and start keys go once the partition holds none of its runs.
+pub async fn erase_namespace_drops_its_counters_once_it_holds_no_run<S: PartitionStore>(store: &S) {
+    let log = open(store, "n1").await;
+    let kept = run(1);
+    commit(
+        &log,
+        vec![create_with(head(&kept, &alice()), Some("start-1"))],
+    )
+    .await;
+    let erase_alice = Change::EraseNamespace {
+        tenant: acme(),
+        namespace: alice(),
+    };
+    let refused = log.commit(Batch::new().with(erase_alice.clone())).await;
+    assert!(
+        matches!(refused, Err(PartitionError::Conflict(_))),
+        "a namespace that still holds a run is not erased: {refused:?}"
+    );
+    commit(&log, vec![Change::Erase { run: kept.clone() }]).await;
+    commit(&log, vec![erase_alice]).await;
+    assert_eq!(
+        log.started(&acme(), &alice(), "start-1")
+            .await
+            .expect("started"),
+        None
+    );
+    let window = Window::covering(T0, later(T0, DAY));
+    let counters = log
+        .counters(
+            &Scope::Namespace {
+                tenant: acme(),
+                namespace: alice(),
+            },
+            window,
+        )
+        .await
+        .expect("counters");
+    assert_eq!(
+        counters,
+        Counters::default(),
+        "nothing is left of alice's counters"
     );
 }
 

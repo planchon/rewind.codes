@@ -364,6 +364,13 @@ pub enum Change {
     Erase {
         run: RunRef,
     },
+    /// Erases what the partition keeps of a namespace beside its runs: its hourly counters, its
+    /// observed shapes and its start keys. A `Conflict` while a run of the namespace is kept
+    /// (`archi/06-storage-and-scale.md`, "Retention and deletion").
+    EraseNamespace {
+        tenant: TenantId,
+        namespace: NamespaceName,
+    },
     Outbox(OutboxChange),
     Counters(Vec<CounterDelta>),
     /// Binds a webhook token, by its SHA-256, to the run's signal `name`.
@@ -390,6 +397,9 @@ pub struct CreateRun {
     pub entries: Vec<HistoryEntry>,
     /// The payload records of the copied entries.
     pub payloads: Vec<PayloadRecord>,
+    /// The run's summary from its creation, `pending` until its first activation: a pending
+    /// run is listed and searched as any other.
+    pub summary: IndexedSummary,
 }
 
 /// Everything one activation of a run commits (`archi/02-journal.md`, "The commit invariant"):

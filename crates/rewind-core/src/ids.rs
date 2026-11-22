@@ -32,15 +32,18 @@ impl fmt::Display for PartitionId {
 /// The core only names runs. Generating an id is non-deterministic, so it happens behind the
 /// `Entropy` port, in the engine.
 ///
-/// A run id is a UUID version 7 (RFC 9562) whose 16 bits right after the variant hold the run's
-/// [`PartitionId`] (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes"): any
-/// process finds a run's partition from its id alone. From the most significant bit:
+/// A run id is a UUID version 8 (RFC 9562, the custom layout) laid out as a version 7 is, whose 16
+/// bits right after the variant hold the run's [`PartitionId`]
+/// (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes"): any process finds a run's
+/// partition from its id alone. From the most significant bit:
 ///
 /// ```text
-/// unix_ts_ms (48) · version 7 (4) · rand_a (12) · variant 0b10 (2) · partition (16) · rand_b (46)
+/// unix_ts_ms (48) · version 8 (4) · rand_a (12) · variant 0b10 (2) · partition (16) · rand_b (46)
 /// ```
 ///
-/// The time comes first, so ids sort by the millisecond they were drawn at.
+/// The time comes first, so ids sort by the millisecond they were drawn at. A run id of another
+/// version, a run moved from the tables of the previous design, carries no partition: the
+/// control plane knows where it lives ([`RunId::partition`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RunId(Uuid);
 
@@ -69,7 +72,7 @@ impl RunId {
         let rand_a = (random >> RAND_B_BITS) as u128;
         let rand_b = (random & ((1 << RAND_B_BITS) - 1)) as u128;
         let value = (millis << 80)
-            | (0x7 << 76)
+            | (0x8 << 76)
             | (rand_a << 64)
             | (0b10 << 62)
             | ((partition.0 as u128) << PARTITION_SHIFT)
@@ -77,9 +80,14 @@ impl RunId {
         Self(Uuid::from_u128(value))
     }
 
-    /// The partition the run lives in: the 16 bits after the variant.
-    pub const fn partition(&self) -> PartitionId {
-        PartitionId(((self.0.as_u128() >> PARTITION_SHIFT) & 0xFFFF) as u16)
+    /// The partition the run lives in, the 16 bits after the variant, when the id is of version 8;
+    /// `None` for an id of another version, whose partition the control plane keeps.
+    pub const fn partition(&self) -> Option<PartitionId> {
+        let value = self.0.as_u128();
+        if (value >> 76) & 0xF != 0x8 {
+            return None;
+        }
+        Some(PartitionId(((value >> PARTITION_SHIFT) & 0xFFFF) as u16))
     }
 
     pub const fn as_uuid(&self) -> Uuid {
@@ -193,6 +201,13 @@ mod tests {
     }
 
     #[test]
+    fn an_id_of_another_version_carries_no_partition() {
+        let v7 = RunId::from_u128(0x0190_0000_0000_7000_8000_0000_0000_0001);
+        assert_eq!(v7.as_uuid().get_version_num(), 7);
+        assert_eq!(v7.partition(), None);
+    }
+
+    #[test]
     fn partitions_print_as_their_number() {
         let partition = PartitionId::new(63);
         assert_eq!(partition.get(), 63);
@@ -209,8 +224,8 @@ mod tests {
         assert_eq!(text.matches('-').count(), 4);
         let parsed: RunId = text.parse().unwrap();
         assert_eq!(parsed, id);
-        assert_eq!(parsed.partition(), PartitionId::new(0x1234));
-        assert_eq!(id.as_uuid().get_version_num(), 7);
+        assert_eq!(parsed.partition(), Some(PartitionId::new(0x1234)));
+        assert_eq!(id.as_uuid().get_version_num(), 8);
         assert_eq!(id.as_uuid().get_variant(), uuid::Variant::RFC4122);
     }
 
@@ -221,8 +236,8 @@ mod tests {
             let partition = PartitionId::new(partition);
             for random in [0, u64::MAX, 0x0155_5555_5555_5555] {
                 let id = RunId::in_partition(partition, at, random);
-                assert_eq!(id.partition(), partition);
-                assert_eq!(id.as_uuid().get_version_num(), 7);
+                assert_eq!(id.partition(), Some(partition));
+                assert_eq!(id.as_uuid().get_version_num(), 8);
                 assert_eq!(id.as_uuid().get_variant(), uuid::Variant::RFC4122);
                 let millis = u64::try_from(id.as_uuid().as_u128() >> 80).unwrap();
                 assert_eq!(millis, at.as_millis(), "the time is kept");
@@ -243,7 +258,7 @@ mod tests {
             RunId::in_partition(PartitionId::new(7), at, 0),
             "only the low 58 bits of the random value are used"
         );
-        assert_eq!(c.partition(), PartitionId::new(7));
+        assert_eq!(c.partition(), Some(PartitionId::new(7)));
     }
 
     #[test]

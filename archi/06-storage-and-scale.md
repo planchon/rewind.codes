@@ -77,6 +77,7 @@ signing_keys (tenant, kid, public_key, private_ciphertext, created_at, retired_a
 subscriptions (tenant, id, url, secret, events)
 nodes      (id PK, address, build, epochs, pool, executors_only, joined_at)
 partitions (id PK, pool, node, epoch)                      -- epoch: bumped at each move
+legacy_runs (id PK, tenant, partition)                     -- runs moved by migrate-runs, whose ids carry no partition
 meta       (key PK, value)                                 -- schema version; virtual time (embedded)
 ```
 
@@ -150,9 +151,11 @@ read forever after, so every process caches it without asking again.
 - **Partitions.** A deployment has a fixed number of partitions: 64 in production, 1 embedded. A
   namespace's partition is chosen when the namespace is created, from its tenant and name, and
   kept in its row: every run of a namespace lives in that partition, so its idempotency keys,
-  lists and counters stay in one place. A run id is a UUID v7 whose 16 bits after the variant
-  hold its partition: any process finds a run's partition from its id alone, and so from a task's
-  token or a webhook token, which carry their run's id.
+  lists and counters stay in one place. A run id is a UUID of version 8, laid out as a version 7
+  (the time first), whose 16 bits after the variant hold its partition: any process finds a run's
+  partition from its id alone, and so from a task's token or a webhook token, which carry their
+  run's id. A run moved from the tables of the previous design keeps its version 7 id, and
+  `legacy_runs` in the control plane says where it lives.
 - **One owner per partition.** The owner is the only writer of its partition. Opening a partition
   fences the previous writer: SlateDB raises the writer epoch, and a commit of the old one fails.
   An owner whose commit is refused that way drops the partition at once. Correctness never depends

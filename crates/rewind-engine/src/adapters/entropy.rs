@@ -178,8 +178,11 @@ mod tests {
     fn run_ids_are_drawn_for_their_partition() {
         let seeded = SeededEntropy::new(7);
         for partition in [0, 1, 63, u16::MAX].map(PartitionId::new) {
-            assert_eq!(seeded.run_id_in(partition).partition(), partition);
-            assert_eq!(SystemEntropy.run_id_in(partition).partition(), partition);
+            assert_eq!(seeded.run_id_in(partition).partition(), Some(partition));
+            assert_eq!(
+                SystemEntropy.run_id_in(partition).partition(),
+                Some(partition)
+            );
         }
         assert_eq!(
             SeededEntropy::new(3).run_id_in(PartitionId::new(5)),

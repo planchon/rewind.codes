@@ -1562,3 +1562,17 @@ The stream's contract and the dashboard's layers stay.
 | The node link is HTTP/2 with JSON, on its own port, authenticated by a secret of the deployment (`--cluster-secret`) | gRPC; mTLS | The stack the server already has; Railway's private network carries it. |
 | The migration: the new build's Postgres migration moves the run tables into a schema `legacy`; `rewind server migrate-runs` writes the ended runs to the archive with their summaries and retention timers, the live ones into their partitions, their payloads into their runs, then drops `legacy` | A migration inside the server's start | A one-shot command is run once, watched, and can be run again: each run it moved is skipped. |
 | The embedded control plane is `.rewind/control.db` | Keeping `journal.db` | It holds the control plane only. |
+
+### Taken while freezing the run plane's contracts in code (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| A run id is a UUID of version 8, laid out as a version 7, with the partition in the 16 bits after the variant; `RunId::partition` is `None` for an id of another version, and `legacy_runs` maps the version 7 ids that `migrate-runs` moved | Version 7 with the partition bits; new ids for migrated runs | The bits of an old id are random, so they would name a partition that is not its namespace's; the harnesses keep the ids they were given. |
+| A namespace's partition is the first 8 bytes, big-endian, of SHA-256(`{tenant}/{name}`), modulo the partition count; the home partition of a tenant hashes its id the same way | Any other hash | Stable across builds and languages. |
+| `CatalogStore` has its own error type, `CatalogError` | `StoreError` | `Fenced`, `RunNotFound` and `Archived` mean nothing in the catalog. |
+| The store owns a run head's `history_len` and `sealed`; the engine writes the rest of the head as it is | The store deriving the head from the entries | The owner is the only writer; the store checks what a single writer may get wrong. |
+| A run's summary is written with its creation, `pending`; a pending run is listed and searched | A summary from the first activation | A run waiting for its first activation is a run. |
+| `EraseNamespace` drops a namespace's counters, shapes and start keys once the partition holds none of its runs; hourly counters otherwise never expire, and erasing a run does not take back what it counted | Counters erased with each run | A tenant's totals keep what its end users consumed; an erased end user leaves no trace. |
+| A timer is identified by its kind and run (or outbox entry): setting it again moves it, cancelling one not set changes nothing; a terminal activation clears the run's timers but its retention | Timers by id | One timer of each kind per run is all an owner needs. |
+| Counters are kept per hour; a day and a month are windows of hours. A latency sketch has 16 buckets per power of two, about 6 % of error | Counters per day; exact percentiles | One shape answers every window. |
+| The owner-based blob methods are `put_in`, `get_in`, `delete_in`, `copy` and `delete_run`, beside the tenant-keyed ones until the run plane replaces their callers | Overloading the names | Rust has no overloading. |
