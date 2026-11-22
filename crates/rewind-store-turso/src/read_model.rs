@@ -12,6 +12,9 @@
 //! Task states and quarantine are kept by run id alone, so they can be recorded before the run
 //! is projected; what is recorded for a run projected under another tenant is ignored.
 //!
+//! Every write that changes a summary stamps its `changed_at` with the system clock, at least a
+//! millisecond after its previous stamp, for the change stream ([`ReadModel::changed_runs`]).
+//!
 //! A query is a `WHERE` clause over the tenant's summaries ([`query`]); statistics, facets and
 //! failure groups are counted in Rust over the runs it matches ([`stats`]).
 
@@ -24,11 +27,12 @@ use rewind_core::{
     Callsite, Command, Completion, Digest, Event, HistoryEntry, Lifecycle, Payload, RunId,
     RunStatus, ScriptError, Seq, Shape, Timestamp, ToolFailureKind,
 };
+use rewind_engine::adapters::SystemClock;
 use rewind_engine::ports::{
-    Ending, FailureGroups, FailureWindow, ProjectedRun, QuarantineNote, ReadModel, ReadModelError,
-    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
-    SearchCursor, StatsWindow, TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter,
-    Wait, WaitKind,
+    ChangedRun, Clock, Ending, FailureGroups, FailureWindow, ProjectedRun, QuarantineNote,
+    ReadModel, ReadModelError, RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary,
+    ScriptFilter, ScriptSummary, SearchCursor, StatsWindow, TaskProgress, TenantId, TenantScope,
+    ToolStats, ToolStatsFilter, Wait, WaitKind,
 };
 use turso::{Connection, Row, Value};
 
@@ -60,12 +64,34 @@ const RUN_TABLES: [&str; 5] = [
     "run_quarantine",
 ];
 
-/// The columns a summary is read from, in the order of [`summary_of`].
+/// The columns a summary is read from, in the order of [`summary_of`], then when it last
+/// changed ([`CHANGED_AT`]).
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.headline, s.toolset, s.status, \
      s.mode, s.labels, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
      s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.ending_error, \
      s.ending_message, s.ending_line, s.ending_signature, s.fingerprint, q.kind, q.reason, \
-     q.since, s.namespace FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
+     q.since, s.namespace, s.changed_at \
+     FROM run_summaries s LEFT JOIN run_quarantine q ON q.run_id = s.run_id";
+
+/// The column of [`SUMMARY_COLUMNS`] that holds `changed_at`.
+const CHANGED_AT: usize = 27;
+
+/// Now, as `changed_at` is stamped: the system clock, never virtual time.
+fn now_ms() -> Value {
+    int(SystemClock.now().as_millis())
+}
+
+/// Stamps the run's summary as changed now, at least a millisecond after its previous stamp: a
+/// run not projected yet has none to stamp.
+async fn stamp(connection: &Connection, run: RunId) -> Result<(), Error> {
+    sql::execute(
+        connection,
+        "UPDATE run_summaries SET changed_at = MAX(?, changed_at + 1) WHERE run_id = ?",
+        vec![now_ms(), run_id(run)],
+    )
+    .await?;
+    Ok(())
+}
 
 /// The status a terminal entry gives its run.
 fn status_of(event: &Event) -> Option<RunStatus> {
@@ -380,7 +406,7 @@ async fn summaries(
     let mut params = filter.params;
     if let Some(order) = order {
         statement.push_str(" ORDER BY ");
-        statement.push_str(query::order_by(order));
+        statement.push_str(&query::order_by(order));
     }
     if let Some(count) = count {
         statement.push_str(" LIMIT ?");
@@ -388,19 +414,24 @@ async fn summaries(
     }
     let rows = sql::query_dynamic(connection, &statement, params).await?;
     let mut found = rows.iter().map(summary_of).collect::<Result<Vec<_>, _>>()?;
-    // Only an active run waits.
-    let active: Vec<RunId> = found
+    attach_waits(connection, &mut found).await?;
+    Ok(found)
+}
+
+/// Gives the active runs among `summaries` their waits: only an active run waits.
+async fn attach_waits(connection: &Connection, summaries: &mut [RunSummary]) -> Result<(), Error> {
+    let active: Vec<RunId> = summaries
         .iter()
         .filter(|summary| summary.status == RunStatus::Active)
         .map(|summary| summary.run.id)
         .collect();
     let mut waits = waits_of(connection, &active).await?;
-    for summary in &mut found {
+    for summary in summaries {
         if let Some(run_waits) = waits.remove(&summary.run.id) {
             summary.waits = run_waits;
         }
     }
-    Ok(found)
+    Ok(())
 }
 
 /// The waits of these runs, in their snapshot's order, each call's with its task's furthest
@@ -510,13 +541,14 @@ impl ReadModel for TursoStore {
                 connection,
                 "INSERT INTO run_summaries (run_id, tenant, script, headline, toolset, status, \
                  labels, parent, workflow, started_by, last_activity_at, tool_calls, errors, \
-                 history_len, snapshot_len, namespace) \
-                 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?) \
+                 history_len, snapshot_len, namespace, changed_at) \
+                 VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?) \
                  ON CONFLICT (run_id) DO UPDATE SET tenant = excluded.tenant, \
                  script = excluded.script, headline = excluded.headline, \
                  toolset = excluded.toolset, labels = excluded.labels, parent = excluded.parent, \
                  workflow = excluded.workflow, started_by = excluded.started_by, \
-                 namespace = excluded.namespace",
+                 namespace = excluded.namespace, \
+                 changed_at = MAX(excluded.changed_at, run_summaries.changed_at + 1)",
                 vec![
                     id.clone(),
                     tenant(&run.run.tenant),
@@ -528,6 +560,7 @@ impl ReadModel for TursoStore {
                     opt_text(run.workflow.as_deref()),
                     run.started_by.map_or(Value::Null, run_id),
                     text(run.namespace.as_str()),
+                    now_ms(),
                 ],
             )
             .await?;
@@ -819,6 +852,7 @@ impl ReadModel for TursoStore {
             if foreign(connection, run).await? {
                 return Ok(());
             }
+            let mut changed = false;
             for task in tasks {
                 let seq = int(u64::from(task.seq.0));
                 let kept = sql::query_row(
@@ -852,6 +886,10 @@ impl ReadModel for TursoStore {
                     ],
                 )
                 .await?;
+                changed = true;
+            }
+            if changed {
+                stamp(connection, run.id).await?;
             }
             Ok(())
         })
@@ -917,9 +955,58 @@ impl ReadModel for TursoStore {
                 ],
             )
             .await?;
+            stamp(connection, run.id).await?;
             Ok(())
         })
         .await
+    }
+
+    async fn changed_runs(
+        &self,
+        tenants: &[TenantId],
+        since: u64,
+        count: usize,
+    ) -> Result<Vec<ChangedRun>, ReadModelError> {
+        if tenants.is_empty() || count == 0 {
+            return Ok(Vec::new());
+        }
+        let connection = self.connection().await?;
+        let mut params: Vec<Value> = tenants.iter().map(tenant).collect();
+        params.push(int(since));
+        params.push(limit(count));
+        let rows = sql::query_dynamic(
+            &connection,
+            &format!(
+                "SELECT {SUMMARY_COLUMNS} WHERE s.tenant IN ({}) AND s.changed_at >= ? \
+                 ORDER BY s.changed_at, s.run_id LIMIT ?",
+                placeholders(tenants.len())
+            ),
+            params,
+        )
+        .await?;
+        let mut found = Vec::with_capacity(rows.len());
+        let mut stamps = Vec::with_capacity(rows.len());
+        for row in &rows {
+            // A row that cannot be read is left out: one bad summary must not hide the others.
+            match summary_of(row).and_then(|summary| Ok((summary, row.u64(CHANGED_AT)?))) {
+                Ok((summary, stamp)) => {
+                    found.push(summary);
+                    stamps.push(stamp);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "a changed run cannot be read: it is left out");
+                }
+            }
+        }
+        attach_waits(&connection, &mut found).await?;
+        Ok(found
+            .into_iter()
+            .zip(stamps)
+            .map(|(summary, changed_at)| ChangedRun {
+                summary,
+                changed_at,
+            })
+            .collect())
     }
 
     async fn purge(
@@ -977,5 +1064,72 @@ impl ReadModel for TursoStore {
             Ok(projected)
         })
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rewind_core::{Digest, RunId, RunStatus};
+    use rewind_engine::ports::{ProjectedRun, ReadModel, RunRef, RunSnapshot, TenantId};
+
+    use crate::sql::{self, run_id};
+    use crate::{MasterKey, TursoStore};
+
+    fn projected(n: u128) -> ProjectedRun {
+        ProjectedRun {
+            run: RunRef::new(TenantId::local(), RunId::from_u128(n)),
+            namespace: rewind_engine::ports::NamespaceName::migrated(),
+            script: Digest::of(b"s"),
+            headline: String::new(),
+            toolset: Digest::of(b"t"),
+            labels: BTreeMap::new(),
+            parent: None,
+            workflow: None,
+            started_by: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_changed_run_that_cannot_be_read_is_left_out() {
+        let dir = tempfile::TempDir::new().expect("temporary directory");
+        let store = TursoStore::open(
+            dir.path().join("journal.db"),
+            MasterKey::from_bytes([1; 32]),
+        )
+        .await
+        .expect("open");
+        let snapshot = RunSnapshot {
+            history_len: 0,
+            status: RunStatus::Active,
+            mode: None,
+            waits: Vec::new(),
+            ending: None,
+        };
+        for n in 1..=3 {
+            store
+                .apply(&projected(n), &[], &snapshot)
+                .await
+                .expect("apply");
+        }
+        {
+            let connection = store.connection().await.expect("connection");
+            sql::execute(
+                &connection,
+                "UPDATE run_summaries SET namespace = 'Not a namespace!' WHERE run_id = ?",
+                vec![run_id(RunId::from_u128(2))],
+            )
+            .await
+            .expect("a summary that cannot be read");
+        }
+        let listed: Vec<RunId> = store
+            .changed_runs(&[TenantId::local()], 0, 10)
+            .await
+            .expect("changed_runs")
+            .into_iter()
+            .map(|change| change.summary.run.id)
+            .collect();
+        assert_eq!(listed, [RunId::from_u128(1), RunId::from_u128(3)]);
     }
 }

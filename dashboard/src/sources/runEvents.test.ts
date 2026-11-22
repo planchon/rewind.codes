@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { createWorld } from "../mocks/fixtures";
 import { createHandlers } from "../mocks/handlers";
 import { JournalBuilder } from "../mocks/journal";
+import type { Entry, RunStatus, StreamEvent } from "../model/types";
 import { server } from "../test/server";
 import { Api, ApiError } from "./client";
-import { followRun } from "./events";
-import type { Entry, RunStatus, StreamEvent } from "./types";
+import { followRun } from "./runEvents";
 
 const NOW = Date.parse("2026-11-12T10:00:00Z");
 const api = new Api({ baseUrl: window.location.origin, token: () => "rewind_sk_k" });

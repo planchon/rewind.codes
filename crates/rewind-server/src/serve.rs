@@ -270,6 +270,7 @@ async fn start_wired(
             owner: config.worker_name.clone(),
             ..ProjectorConfig::default()
         },
+        changes_per_pass: config.changes_per_pass,
     };
     let oauth = match (&config.public_url, &sign_in) {
         (Some(public_url), Some(sign_in)) => Some(

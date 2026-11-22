@@ -1,15 +1,13 @@
 // Members: the organization's memberships, each with its grant (role, allowed labels). Whoever
 // holds `members:manage` changes a grant or removes a member, within what they hold themselves.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
-import { MEMBERS, useMembers, useRoles, WHOAMI } from "../../api/organization";
-import type { Member, Role } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { displayName } from "../../model/access";
+import type { Member, Role } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useMembers, useRemoveMember, useRoles, useSetGrant } from "../../state/organization";
 import {
   beyondCaller,
   ConfirmButton,
@@ -38,12 +36,10 @@ function GrantEditor({
   onDone,
 }: {
   member: Member;
-  roles: Role[] | null;
+  roles: readonly Role[] | null;
   onDone: () => void;
 }) {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const givable = roles ? givableRoles(roles, access.permissions) : null;
   const current = member.grant?.role;
   const [role, setRole] = useState(
@@ -52,25 +48,26 @@ function GrantEditor({
       : defaultRole(givable),
   );
   const labels = useLabels(member.grant?.allowedLabels);
-  const save = useMutation({
-    mutationFn: () => api.setGrant(member.user.id, { role, allowedLabels: labels.labels ?? {} }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: MEMBERS });
-      if (member.user.id === access.user?.id)
-        await queryClient.invalidateQueries({ queryKey: WHOAMI });
-      onDone();
-    },
-  });
+  // The member shows the new role at once; a refusal takes it back, and says why here.
+  const save = useSetGrant();
   return (
     <DialogForm
       title={`Role of ${displayName(member.user)}`}
       description="What they may do in the organization, and the labels of the runs they see."
       submit="Save"
-      pending={save.isPending}
+      pending={save.pending}
       disabled={!role || !labels.labels}
       error={save.error}
       onSubmit={() => {
-        if (labels.labels) save.mutate();
+        if (!labels.labels) return;
+        void save.run(
+          {
+            user: member.user.id,
+            grant: { role, allowedLabels: labels.labels },
+            self: member.user.id === access.user?.id,
+          },
+          onDone,
+        );
       }}
     >
       <div className="form-row">
@@ -82,26 +79,21 @@ function GrantEditor({
 }
 
 function Members() {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const members = useMembers();
   const roles = useRoles(access.can("roles:read"));
   const names = useMemberNames();
   // The member in the dialog, kept while it closes.
   const [editing, setEditing] = useState(false);
   const [target, setTarget] = useState<Member | null>(null);
-  const [failed, setFailed] = useState<{ user: string; error: unknown } | null>(null);
   const manage = access.can("members:manage");
-  const remove = useMutation({
-    mutationFn: (user: string) => api.removeMember(user),
-    onMutate: () => setFailed(null),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: MEMBERS }),
-    onError: (error, user) => setFailed({ user, error }),
-  });
+  // The member goes at once; a refusal brings them back, with the reason under their row.
+  const remove = useRemoveMember();
+  const [removing, setRemoving] = useState<string | null>(null);
+  const failed = remove.error && removing ? { user: removing, error: remove.error } : null;
 
   if (members.isPending) return <Loading />;
-  if (members.error) return <ErrorNote error={members.error} />;
+  if (members.isError) return <ErrorNote error={members.error} />;
   const list = [...members.data].sort((a, b) =>
     displayName(a.user).localeCompare(displayName(b.user)),
   );
@@ -202,8 +194,11 @@ function Members() {
                                   ? "You lose access to the organization at once, with your connections' access to it. An invitation brings you back."
                                   : "They lose access to the organization at once, with their connections' access to it. An invitation brings them back."
                               }
-                              pending={remove.isPending}
-                              onConfirm={() => remove.mutate(m.user.id)}
+                              pending={remove.pending}
+                              onConfirm={() => {
+                                setRemoving(m.user.id);
+                                void remove.run(m.user.id);
+                              }}
                             >
                               {you ? "Leave" : "Remove"}
                             </ConfirmButton>

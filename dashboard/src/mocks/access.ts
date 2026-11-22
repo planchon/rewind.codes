@@ -3,6 +3,8 @@
 // rules are the server's (archi/06, "What the caller may do"): no one gives more than they hold,
 // an organization keeps an owner, a role in use stays, a grant limited to labels cannot
 // administer. What a deployment sends by email (codes, invitation links) goes to `log`.
+
+import { ADMIN_PERMISSIONS, PERMISSIONS } from "../model/access";
 import type {
   ApiKey,
   AuthConfig,
@@ -18,8 +20,7 @@ import type {
   PermissionInfo,
   Role,
   User,
-} from "../api/types";
-import { ADMIN_PERMISSIONS, PERMISSIONS } from "../model/access";
+} from "../model/types";
 
 const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;

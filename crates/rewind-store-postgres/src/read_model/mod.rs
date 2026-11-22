@@ -10,19 +10,25 @@
 //! rank (a task) or of the latest time (a quarantine) is kept, whatever their order. A record for
 //! a run projected under another tenant is ignored. Retention removes a run's rows from every
 //! table, its records included.
+//!
+//! Every write that changes a summary stamps its `changed_at` ([`STAMP`]) with the database's
+//! clock, which every process shares, for the change stream ([`ReadModel::changed_runs`]). A
+//! record stamps the summary after its upsert, in a statement of its own: the upsert never waits
+//! for the summary's row while holding a call's, which `apply` takes in the other order.
 
 mod aggregates;
 mod apply;
 mod query;
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use rewind_core::{HistoryEntry, Seq, Shape, Timestamp};
 use rewind_engine::ports::{
-    FailureGroups, FailureWindow, ProjectedRun, QuarantineNote, ReadModel, ReadModelError,
-    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
-    SearchCursor, StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope, ToolStats,
-    ToolStatsFilter,
+    ChangedRun, FailureGroups, FailureWindow, ProjectedRun, QuarantineNote, ReadModel,
+    ReadModelError, RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter,
+    ScriptSummary, SearchCursor, StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope,
+    ToolStats, ToolStatsFilter,
 };
 
 use crate::codec;
@@ -42,6 +48,33 @@ impl From<Failure<ReadModelError>> for ReadModelError {
             Failure::Db(err) => err.into(),
         }
     }
+}
+
+/// Stamps `run_summaries`' row as changed now: the database's clock in milliseconds, at least a
+/// millisecond after the row's previous stamp.
+pub(super) const STAMP: &str = "changed_at = GREATEST(\
+     floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint, run_summaries.changed_at + 1)";
+
+/// Whether a record's upsert may have changed what is kept: it affected a row, or it was
+/// retried, and an attempt that failed may have committed before its connection broke (the
+/// retry then finds the record kept and affects nothing).
+fn changed(rows: u64, tries: &AtomicU32) -> bool {
+    rows > 0 || tries.load(Ordering::Relaxed) > 1
+}
+
+/// Stamps the summary of a run of the tenant, if it is projected.
+async fn stamped(pool: &sqlx::PgPool, run: &RunRef) -> Result<(), ReadModelError> {
+    let statement = format!("UPDATE run_summaries SET {STAMP} WHERE run_id = $1 AND tenant = $2");
+    let attempt = || async {
+        sqlx::query(&statement)
+            .bind(uuid(run.id))
+            .bind(tenant(&run.tenant))
+            .execute(pool)
+            .await
+            .map_err(|err| Failure::<ReadModelError>::Db(err.into()))
+    };
+    retrying(attempt).await?;
+    Ok(())
 }
 
 /// The step of a task's state within an attempt, in SQL: `TaskProgress::rank` is
@@ -185,18 +218,26 @@ impl ReadModel for PostgresStore {
             task_step("EXCLUDED.task_state"),
             task_step("tool_calls.task_state"),
         );
-        let attempt = || async {
-            sqlx::query(&statement)
-                .bind(tenant(&run.tenant))
-                .bind(uuid(run.id))
-                .bind(&seqs)
-                .bind(&attempts)
-                .bind(&states)
-                .execute(&self.pool)
-                .await
-                .map_err(|err| Failure::<ReadModelError>::Db(err.into()))
+        let tries = AtomicU32::new(0);
+        let attempt = || {
+            tries.fetch_add(1, Ordering::Relaxed);
+            async {
+                sqlx::query(&statement)
+                    .bind(tenant(&run.tenant))
+                    .bind(uuid(run.id))
+                    .bind(&seqs)
+                    .bind(&attempts)
+                    .bind(&states)
+                    .execute(&self.pool)
+                    .await
+                    .map(|done| done.rows_affected())
+                    .map_err(|err| Failure::<ReadModelError>::Db(err.into()))
+            }
         };
-        retrying(attempt).await?;
+        let recorded = retrying(attempt).await?;
+        if changed(recorded, &tries) {
+            stamped(&self.pool, run).await?;
+        }
         Ok(())
     }
 
@@ -225,26 +266,48 @@ impl ReadModel for PostgresStore {
         at: Timestamp,
     ) -> Result<(), ReadModelError> {
         // The latest record wins; at the same time, a quarantine wins over a release.
-        sqlx::query(
-            "INSERT INTO run_quarantine (run_id, tenant, recorded_at, kind, reason, since) \
-             SELECT $1, $2, $3, $4, $5, $6 \
-             WHERE NOT EXISTS (SELECT 1 FROM run_summaries WHERE run_id = $1 AND tenant <> $2) \
-             ON CONFLICT (run_id) DO UPDATE SET recorded_at = EXCLUDED.recorded_at, \
-                 kind = EXCLUDED.kind, reason = EXCLUDED.reason, since = EXCLUDED.since \
-                 WHERE EXCLUDED.recorded_at > run_quarantine.recorded_at \
-                     OR (EXCLUDED.recorded_at = run_quarantine.recorded_at \
-                         AND run_quarantine.kind IS NULL AND EXCLUDED.kind IS NOT NULL)",
-        )
-        .bind(uuid(run.id))
-        .bind(tenant(&run.tenant))
-        .bind(ts(at))
-        .bind(quarantine.map(|note| codec::quarantine_kind(note.kind)))
-        .bind(quarantine.map(|note| note.reason.as_str()))
-        .bind(quarantine.map(|note| ts(note.since)))
-        .execute(&self.pool)
-        .await
-        .map_err(Error::from)?;
+        let tries = AtomicU32::new(0);
+        let attempt = || {
+            tries.fetch_add(1, Ordering::Relaxed);
+            async {
+                sqlx::query(
+                    "INSERT INTO run_quarantine (run_id, tenant, recorded_at, kind, reason, \
+                         since) \
+                     SELECT $1, $2, $3, $4, $5, $6 \
+                     WHERE NOT EXISTS \
+                         (SELECT 1 FROM run_summaries WHERE run_id = $1 AND tenant <> $2) \
+                     ON CONFLICT (run_id) DO UPDATE SET recorded_at = EXCLUDED.recorded_at, \
+                         kind = EXCLUDED.kind, reason = EXCLUDED.reason, since = EXCLUDED.since \
+                         WHERE EXCLUDED.recorded_at > run_quarantine.recorded_at \
+                             OR (EXCLUDED.recorded_at = run_quarantine.recorded_at \
+                                 AND run_quarantine.kind IS NULL AND EXCLUDED.kind IS NOT NULL)",
+                )
+                .bind(uuid(run.id))
+                .bind(tenant(&run.tenant))
+                .bind(ts(at))
+                .bind(quarantine.map(|note| codec::quarantine_kind(note.kind)))
+                .bind(quarantine.map(|note| note.reason.as_str()))
+                .bind(quarantine.map(|note| ts(note.since)))
+                .execute(&self.pool)
+                .await
+                .map(|done| done.rows_affected())
+                .map_err(|err| Failure::<ReadModelError>::Db(err.into()))
+            }
+        };
+        let recorded = retrying(attempt).await?;
+        if changed(recorded, &tries) {
+            stamped(&self.pool, run).await?;
+        }
         Ok(())
+    }
+
+    async fn changed_runs(
+        &self,
+        tenants: &[TenantId],
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<ChangedRun>, ReadModelError> {
+        Ok(query::changed_runs(&self.pool, tenants, since, limit).await?)
     }
 
     async fn purge(

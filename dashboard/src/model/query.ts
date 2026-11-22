@@ -2,8 +2,8 @@
 // dashboard handles it: terms and where they are, a facet's value added, excluded or removed,
 // suggestions as the operator types, and the filters of older links turned into a query. The
 // server reads and checks every query (crates/rewind-api/src/query.rs): nothing here refuses one.
-import type { Facets, RunStatus, WaitKind } from "../api/types";
-import { RUN_STATUSES, WAIT_KINDS } from "../api/types";
+import type { Facets, RunStatus, WaitKind } from "./types";
+import { RUN_STATUSES, WAIT_KINDS } from "./types";
 
 export interface FieldSpec {
   name: string;
@@ -262,6 +262,28 @@ export function toggleFacet(text: string, field: string, value: string): string 
 /** A term removed from the query, by its position. */
 export function removeTerm(text: string, term: QueryTerm): string {
   return splice(text, term.start, term.end, "");
+}
+
+/** The terms of a facet (a field, or a label's key written `@agent`) that ask for it. */
+export function askedTerms(text: string, field: string): QueryTerm[] {
+  return splitTerms(text).filter((t) => matches(t, field) && !t.negated);
+}
+
+/**
+ * The query with the terms asking for a field replaced by one (`duration:>1m`), or removed
+ * (`null`): a filter that takes one value at a time.
+ */
+export function withFieldTerm(text: string, field: string, term: string | null): string {
+  let next = text;
+  for (const t of [...askedTerms(text, field)].reverse()) next = removeTerm(next, t);
+  return term ? joinQuery(next, term) : next.trim();
+}
+
+/** How many terms of the query name these facets; `@` stands for every label. */
+export function countTerms(text: string, fields: readonly string[]): number {
+  return splitTerms(text).filter((t) =>
+    fields.some((field) => (field === "@" ? t.kind === "label" : matches(t, field))),
+  ).length;
 }
 
 /** UTF-16 offsets of a span the server gives in characters (Unicode scalar values). */

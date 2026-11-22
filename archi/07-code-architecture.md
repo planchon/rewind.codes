@@ -385,7 +385,12 @@ Contracts, all covered by the conformance suite:
   `observed_shapes(tenant, tools)`. Service state comes from whoever changes it: `record_tasks(run, tasks)` keeps the
   furthest state of each call's task (its attempt, and whether it waits for an approval, is
   parked or deferred), and `attempts(run)` reads the attempts back for `tool_stats`' retries;
-  `record_quarantine(run, quarantine, at)` keeps the latest. `purge(ended_before, tenants)`
+  `record_quarantine(run, quarantine, at)` keeps the latest. Every write to a run's summary
+  stamps it with `changed_at`, the wall clock in milliseconds, at least 1 ms past the run's
+  previous stamp; `changed_runs(tenants, since,
+  limit)` reads the summaries stamped since then, the oldest change first (leaving out, and
+  logging, a summary it cannot read), for the change
+  stream ([08](08-decisions.md#taken-for-the-live-dashboard-november-2026)). `purge(ended_before, tenants)`
   and `delete_run(run)` serve [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
@@ -595,13 +600,14 @@ Conventions:
 | Scripts | `POST /v1/check` | `runs:start` | Type-check only |
 |  | `POST /v1/test` | `runs:start` | Runs tests in mock mode, in virtual time: the given ones, and a workflow's suite ([testing](05-testing-and-observability.md#running-tests)) |
 | Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script, a toolset and the `secrets` it attaches, or a `workflow` (`triage` or `triage@<version>`), which brings its version's |
-|  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start, last activity or next wake |
+|  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start (newest or oldest first), last activity, next wake, duration (longest first) or number of tool calls |
 |  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
 |  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
 |  | `GET /v1/runs/{id}` | `runs:read` | The run's state, with the names of the secrets it attached |
 |  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
 |  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
+| Changes | `GET /v1/changes` | `runs:read` | SSE of the runs that change in the organization, as the caller may see them (an end user's namespace, a grant's labels, the namespace `Rewind-Namespace` names): a `run` event holds the run's summary, the same object as an item of `GET /v1/runs`; `resync` says more changed at once than one pass reads, and the client reads again what it shows. No resume cursor: after a drop, the client reads again what it shows. Closed as a run's event stream is: at a member's access token's expiry (one already expired is refused with 401), once an end user's token or a connection stops authenticating, once the caller's grant no longer gives `runs:read` with the same labels or its key is revoked |
 |  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
 |  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at`, `input` and `secrets` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
@@ -949,7 +955,8 @@ Its build is what `rewind-server` serves:
 | API | `/v1` on the same origin, with the access token or the key as Bearer. The views follow the permissions `whoami` answers: reading needs `runs:read`; Members, Invitations, Roles and API keys (the organization, from the member's menu) are shown to whoever holds their permissions, Namespaces to whoever holds `namespaces:read`, Secrets to whoever holds `secrets:read`, and their writes to whoever holds `secrets:write`; a value is a field that is written and never read back |
 | Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
-| Event stream | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header; resumed with `from` after a drop |
+| Layers | `views/`, `app/` and `components/` render state and call actions; they import only `state/`. `state/` holds the TanStack DB collections (`@tanstack/db`, pinned to an exact version), the hooks that read them and the actions, and decides what to load, when it is stale and what a change touches. `sources/` holds the HTTP client, the change stream and the run event streams: a new way for the server to push changes changes this folder only. Biome's `noRestrictedImports` (`biome.jsonc`) keeps `sources/` and `@tanstack/*` (but `@tanstack/react-virtual`, a component) out of the views. What the caller may do is `state/access.tsx`; browser storage, `model/storage.ts`; views may read the contexts `app/` provides (the server's answer, by the gate) |
+| Event streams | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header. A run's is resumed with `from` after a drop. The change stream (`GET /v1/changes`) is one per tab, reopened after a drop (1 s, doubling up to 30 s) with a read of what is on screen; while it is down, the views read at their former rates |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 
 `dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.

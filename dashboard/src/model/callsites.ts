@@ -5,7 +5,7 @@
 // (`const x = await call()`, one level of destructuring). The run's input is bound to the first
 // parameter of the default export.
 import { parser } from "@lezer/javascript";
-import type { Callsite } from "../api/types";
+import type { Callsite } from "./types";
 
 const typescript = parser.configure({ dialect: "ts" });
 

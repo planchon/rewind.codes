@@ -4,11 +4,10 @@
 // among them), updated and retired, with the reasons (archi/05, "Suites and the gate"). The
 // sidebar lists the workflows, the suite and the version's details; each test has its own page.
 import { useParams, useSearchParams } from "react-router";
-import { useWorkflowVersions } from "../../api/queries";
-import type { Workflow } from "../../api/types";
 import { Loading, ProblemView } from "../../components/bits";
 import { JsonPeek } from "../../components/JsonPeek";
 import { PageHeader } from "../../components/PageHeader";
+import type { Workflow } from "../../model/types";
 import {
   findVersion,
   type SuiteKind,
@@ -17,6 +16,7 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
+import { useWorkflowVersions } from "../../state/workflows";
 import { CrumbLink, Crumbs, Switcher, type SwitchGroup } from "./Crumbs";
 import { SuiteTable } from "./SuiteTable";
 import { TestingSidebar } from "./TestingSidebar";
@@ -157,15 +157,16 @@ function Interface({ version }: { version: Workflow }) {
 }
 
 export function WorkflowView() {
+  const { name = "" } = useParams();
   return (
     <TestingGate>
-      <WorkflowPage />
+      {/* Another workflow is another page: it never shows the one before while it loads. */}
+      <WorkflowPage key={name} name={name} />
     </TestingGate>
   );
 }
 
-function WorkflowPage() {
-  const { name = "" } = useParams();
+function WorkflowPage({ name }: { name: string }) {
   const versions = useWorkflowVersions(name);
   const list = versions.data ?? [];
   const { version, asked } = useVersion(list);

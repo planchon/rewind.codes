@@ -3,8 +3,8 @@
 // tooltip on hover and an accessible name. Colors are the run statuses', always with a legend.
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import type { RunStatus, StatusCounts } from "../api/types";
 import { formatCount } from "../model/format";
+import type { RunStatus, StatusCounts } from "../model/types";
 import { StatusGlyph } from "./Status";
 import { useTooltip } from "./Tooltip";
 

@@ -20,7 +20,7 @@ use crate::access::{
 };
 use crate::admin::ServerInfo;
 use crate::common::Duration;
-use crate::events::{Entry, EventsQuery, StreamEvent};
+use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
 use crate::headers::{IDEMPOTENCY_KEY, IdempotencyKey, NAMESPACE, ORGANIZATION};
 use crate::namespaces::{
     CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
@@ -390,6 +390,38 @@ impl Client {
             }
         });
         Ok(EventStream {
+            inner: Box::pin(events),
+        })
+    }
+
+    /// `GET /v1/changes`: the runs of the organization that change, as the caller may see them,
+    /// until the server ends the stream. Events of a later version are skipped.
+    pub async fn changes(&self) -> Result<ChangeStream, Error> {
+        let request = self
+            .request(Method::GET, routes::CHANGES, &[])?
+            .header(ACCEPT, "text/event-stream");
+        let url = self.base.to_string();
+        let response = self.send(request).await?;
+        let events = SseByteStream::new(response.bytes_stream()).filter_map(move |item| {
+            let url = url.clone();
+            async move {
+                match item {
+                    Ok(sse) => {
+                        let (event, data) = (sse.event?, sse.data.unwrap_or_default());
+                        ChangeEvent::from_sse(&event, &data)
+                            .map_err(|error| {
+                                Error::Decode(format!("invalid event of the stream: {error}"))
+                            })
+                            .transpose()
+                    }
+                    Err(error) => Some(Err(Error::Transport {
+                        url,
+                        message: format!("the change stream broke: {error}"),
+                    })),
+                }
+            }
+        });
+        Ok(ChangeStream {
             inner: Box::pin(events),
         })
     }
@@ -1080,6 +1112,25 @@ impl fmt::Debug for EventStream {
 
 impl Stream for EventStream {
     type Item = Result<StreamEvent, Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+/// The events of `GET /v1/changes`, until the server ends the stream.
+pub struct ChangeStream {
+    inner: Pin<Box<dyn Stream<Item = Result<ChangeEvent, Error>> + Send>>,
+}
+
+impl fmt::Debug for ChangeStream {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ChangeStream")
+    }
+}
+
+impl Stream for ChangeStream {
+    type Item = Result<ChangeEvent, Error>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)

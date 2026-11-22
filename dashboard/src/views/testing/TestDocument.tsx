@@ -7,13 +7,12 @@
 import { Lock } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { Link } from "react-router";
-import { ApiError } from "../../api/client";
-import type { Expectations, Test, TestSignal, TestWorld, Workflow } from "../../api/types";
 import { Digest, ProblemView, RunId, Time } from "../../components/bits";
 import { CodeView } from "../../components/CodeView";
 import { JsonCard, JsonDialog, JsonPeek } from "../../components/JsonPeek";
 import { NamespaceName } from "../../components/NamespaceName";
 import { StatusBadge } from "../../components/Status";
+import type { Expectations, Test, TestSignal, TestWorld, Workflow } from "../../model/types";
 import {
   expectedTimes,
   findVersion,
@@ -24,6 +23,7 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
+import { ApiError } from "../../state/errors";
 
 function Empty({ children }: { children: string }) {
   return <p className="muted">{children}</p>;

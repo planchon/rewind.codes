@@ -1,13 +1,11 @@
 // Settings: the organization's name, and the role a member gets at their first session when no
 // invitation gave one.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
-import { useRoles, WHOAMI } from "../../api/organization";
-import type { OrganizationSettings } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
+import type { OrganizationSettings } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useRoles, useUpdateOrganization } from "../../state/organization";
 import { RoleField } from "./bits";
 import { SectionGate } from "./OrganizationView";
 
@@ -35,28 +33,23 @@ function SettingsForm({
   organization: OrganizationSettings;
   roles: Parameters<typeof RoleField>[0]["roles"];
 }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
   const [name, setName] = useState(organization.name);
   const [defaultRole, setDefaultRole] = useState(organization.defaultRole);
   const [saved, setSaved] = useState(false);
-  const save = useMutation({
-    mutationFn: () =>
-      api.updateOrganization({
-        ...(name.trim() !== organization.name ? { name: name.trim() } : {}),
-        ...(defaultRole !== organization.defaultRole ? { defaultRole } : {}),
-      }),
-    onMutate: () => setSaved(false),
-    onSuccess: async () => {
-      // The name shows in the switcher, the default role here: both come with whoami.
-      await queryClient.invalidateQueries({ queryKey: WHOAMI });
-      setSaved(true);
-    },
-  });
+  // The name shows in the switcher, the default role here: both come with who calls, read again.
+  const save = useUpdateOrganization();
   const changed = name.trim() !== organization.name || defaultRole !== organization.defaultRole;
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (name.trim() && changed) save.mutate();
+    if (!name.trim() || !changed) return;
+    setSaved(false);
+    void save.run(
+      {
+        ...(name.trim() !== organization.name ? { name: name.trim() } : {}),
+        ...(defaultRole !== organization.defaultRole ? { defaultRole } : {}),
+      },
+      () => setSaved(true),
+    );
   };
   return (
     <form className="panel settings-form" aria-label="Settings" onSubmit={submit}>
@@ -75,7 +68,7 @@ function SettingsForm({
             gave one. A member's role can be changed afterwards on the Members page.
           </p>
         </div>
-        {save.error && <ErrorNote error={save.error} />}
+        {save.error ? <ErrorNote error={save.error} /> : null}
         {saved && !changed && (
           <div className="notice" role="status">
             Saved.
@@ -85,9 +78,9 @@ function SettingsForm({
           <button
             type="submit"
             className="btn primary"
-            disabled={!name.trim() || !changed || save.isPending}
+            disabled={!name.trim() || !changed || save.pending}
           >
-            {save.isPending ? "Saving…" : "Save"}
+            {save.pending ? "Saving…" : "Save"}
           </button>
         </div>
       </div>

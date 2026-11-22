@@ -98,7 +98,9 @@ describe("RunView", () => {
     expect(step).toHaveTextContent(/EndedCancelled at /);
     expect(step).not.toHaveTextContent(/failed|threw CancelledError:/);
     // The wait the cancellation rejected is not still waiting.
-    expect(within(notesOf(25)).getByRole("button")).toHaveTextContent('signal "notify"cancelled');
+    await waitFor(() =>
+      expect(within(notesOf(25)).getByRole("button")).toHaveTextContent('signal "notify"cancelled'),
+    );
   });
 
   it("selects the failed call from the banner", async () => {

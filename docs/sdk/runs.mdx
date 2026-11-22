@@ -125,8 +125,10 @@ const stats = await rewind.runs.stats({ q: "@agent:triage" }); // counts by stat
 const failures = await rewind.runs.failures({ q: "@agent:triage" }); // failed runs grouped by fingerprint
 ```
 
-Filters also exist as parameters: `status`, `labels`, `tool`, `script`, `error`, `workflow`, `startedBy`, `parent`,
-`quarantined`. A query that cannot be read is refused with `invalid-query`, and the error says where the term at fault
+`sort` orders them: `started` (the default, the most recently started first), `oldest`, `activity` (the most recent
+activity first), `wakes` (the soonest to wake by itself first), `duration` (the longest first, the runs that have not
+ended last) or `calls` (the most tool calls first). Filters also exist as parameters: `status`, `labels`, `tool`,
+`script`, `error`, `workflow`, `startedBy`, `parent`, `quarantined`. A query that cannot be read is refused with `invalid-query`, and the error says where the term at fault
 is.
 
 ## Cancel a run

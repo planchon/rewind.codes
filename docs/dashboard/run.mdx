@@ -7,6 +7,17 @@ Open a run from anywhere: a row of Observability, a figure of the Overview, Find
 status and id, its sections, and its details: namespace, workflow and version, the run that started it, script, toolset,
 calls, trace id and labels. A run that is still going updates live, step by step.
 
+## Controls
+
+A run that has not ended shows **Controls** in its sidebar, to members whose role holds `runs:control`:
+
+- **Send a signal.** When the run waits for a signal, **Send approval** (the signal's name) opens a form with a JSON
+  editor for its payload; **Send a signal** sends any name, which the run receives when it waits for it. For a run of a
+  [workflow](/concepts/workflows), the form lists the signals the workflow declares, with each payload filled in from
+  its schema. If the server refuses the payload, its reason shows under the editor. A signal is delivered once, even if
+  you send the form again after a network error. The run shows **Signal sent** until it receives it.
+- **Cancel run** asks you to confirm, then shows **Cancelling** until the run ends.
+
 ## Debugger
 
 The debugger is the source of the script, across the page, with what each line caused beside it: tool calls with their

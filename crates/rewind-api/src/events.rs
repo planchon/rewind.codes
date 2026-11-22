@@ -1,5 +1,6 @@
 //! A run's journal over HTTP: one entry in full (`GET /v1/runs/{id}/entries/{idx}`) and the
-//! event stream (`GET /v1/runs/{id}/events`, server-sent events).
+//! event stream (`GET /v1/runs/{id}/events`, server-sent events); and the stream of the runs
+//! that change (`GET /v1/changes`, server-sent events).
 //!
 //! These are projections of committed entries (`archi/05-testing-and-observability.md`). The
 //! stored form of the journal is `rewind-format`'s, exported by `GET /v1/runs/{id}/journal`; the
@@ -13,6 +14,7 @@ use crate::common::{
     AbortReason, Callsite, LogLevel, Payload, RunMode, RunStatus, ScriptError, Timestamp,
     ToolFailure, timestamp,
 };
+use crate::runs::RunSummary;
 
 /// One journal entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
@@ -307,6 +309,47 @@ impl StreamEvent {
     }
 }
 
+// -------------------------------------------------------------------------------------------
+// The change stream
+
+/// One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
+/// whose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the
+/// run's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:
+/// the stream is not resumed, the client reads again what it shows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToSchema)]
+#[serde(untagged)]
+pub enum ChangeEvent {
+    /// `run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it.
+    Run(Box<RunSummary>),
+    /// `resync`: more runs changed at once than the server reads in one pass. Read again what
+    /// is shown.
+    Resync(Resync),
+}
+
+/// The data of a `resync` event: an empty object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+pub struct Resync {}
+
+impl ChangeEvent {
+    /// The SSE `event` field: `run` or `resync`.
+    pub fn sse_event(&self) -> &'static str {
+        match self {
+            ChangeEvent::Run(_) => "run",
+            ChangeEvent::Resync(_) => "resync",
+        }
+    }
+
+    /// An event from its SSE `event` field and its `data`; `None` for an event this version
+    /// does not know, which a client skips.
+    pub fn from_sse(event: &str, data: &str) -> Result<Option<Self>, serde_json::Error> {
+        Ok(match event {
+            "run" => Some(ChangeEvent::Run(Box::new(serde_json::from_str(data)?))),
+            "resync" => Some(ChangeEvent::Resync(Resync {})),
+            _ => None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rewind_core::{Command, HistoryEntry, Seq};
@@ -395,5 +438,41 @@ mod tests {
             assert_eq!(query.follow, Some(follow));
             assert_eq!(query.from, Some(3));
         }
+    }
+
+    #[test]
+    fn a_change_event_is_the_summary_itself_or_an_empty_object() {
+        let summary: RunSummary = serde_json::from_value(json!({
+            "id": "0193a5c4-0000-7000-8000-000000000001",
+            "namespace": "alice",
+            "status": "active",
+            "quarantined": false,
+            "script": "ab",
+            "headline": "// x",
+            "toolset": "cd",
+            "labels": {},
+            "startedAt": "2026-11-09T10:00:00Z",
+            "lastActivityAt": "2026-11-09T10:00:01Z",
+            "toolCalls": 0,
+            "errors": 0,
+            "historyLen": 1
+        }))
+        .unwrap();
+        let run = ChangeEvent::Run(Box::new(summary.clone()));
+        assert_eq!(run.sse_event(), "run");
+        let data = serde_json::to_string(&run).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&data).unwrap(),
+            serde_json::to_value(&summary).unwrap(),
+            "the data is the summary, untagged"
+        );
+        assert_eq!(ChangeEvent::from_sse("run", &data).unwrap(), Some(run));
+
+        let resync = ChangeEvent::Resync(Resync {});
+        assert_eq!(resync.sse_event(), "resync");
+        assert_eq!(serde_json::to_string(&resync).unwrap(), "{}");
+        assert_eq!(ChangeEvent::from_sse("resync", "{}").unwrap(), Some(resync));
+        assert_eq!(ChangeEvent::from_sse("later", "{}").unwrap(), None);
+        assert!(ChangeEvent::from_sse("run", "{}").is_err());
     }
 }

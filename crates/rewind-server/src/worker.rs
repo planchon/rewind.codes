@@ -260,7 +260,13 @@ async fn projector(app: Arc<App>) {
         let mut failed = None;
         for consumer in [FeedConsumer::ReadModel, FeedConsumer::Otel] {
             match app.projector().project_consumer(consumer, app.now()).await {
-                Ok((applied, _)) => projected += applied,
+                Ok((applied, _)) => {
+                    projected += applied;
+                    // The read model changed: the change streams read it now.
+                    if consumer == FeedConsumer::ReadModel && applied > 0 {
+                        app.changes.poke();
+                    }
+                }
                 Err(error) => failed = Some(error),
             }
         }

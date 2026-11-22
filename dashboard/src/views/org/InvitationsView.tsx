@@ -1,15 +1,19 @@
 // Invitations: who was invited, with the grant they get on accepting; whoever holds
 // `members:invite` invites an email with a role and allowed labels, resends and revokes.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Send, UserPlus } from "lucide-react";
 import { useState } from "react";
-import { ORG_INVITATIONS, useOrgInvitations, useRoles } from "../../api/organization";
-import type { Invitation, InvitationState } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import type { Invitation, InvitationState } from "../../model/types";
+import { useAccess } from "../../state/access";
+import {
+  useInvite,
+  useOrgInvitations,
+  useResendInvitation,
+  useRevokeInvitation,
+  useRoles,
+} from "../../state/organization";
 import {
   ConfirmButton,
   defaultRole,
@@ -33,25 +37,17 @@ export function InvitationsView() {
 const ORDER: Record<InvitationState, number> = { pending: 0, expired: 1, accepted: 2, revoked: 3 };
 
 function InviteForm({ onSent }: { onSent: (invitation: Invitation) => void }) {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const roles = useRoles(access.can("roles:read"));
   const givable = roles.data ? givableRoles(roles.data, access.permissions) : null;
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string | null>(null);
   const labels = useLabels();
   const chosen = role ?? defaultRole(givable);
-  const invite = useMutation({
-    mutationFn: () =>
-      api.invite({ email: email.trim(), role: chosen, allowedLabels: labels.labels ?? {} }),
-    onSuccess: async (invitation) => {
-      await queryClient.invalidateQueries({ queryKey: ORG_INVITATIONS });
-      onSent(invitation);
-    },
-  });
+  const invite = useInvite();
   const submit = () => {
-    if (email.trim() && chosen && labels.labels) invite.mutate();
+    if (email.trim() && chosen && labels.labels)
+      void invite.run({ email: email.trim(), role: chosen, allowedLabels: labels.labels }, onSent);
   };
   if (roles.isPending && access.can("roles:read")) return <Loading />;
   return (
@@ -63,7 +59,7 @@ function InviteForm({ onSent }: { onSent: (invitation: Invitation) => void }) {
           <Send size={12} /> Send the invitation
         </>
       }
-      pending={invite.isPending}
+      pending={invite.pending}
       pendingLabel="Sending…"
       disabled={!email.trim() || !chosen || !labels.labels}
       error={invite.error}
@@ -91,34 +87,18 @@ function InviteForm({ onSent }: { onSent: (invitation: Invitation) => void }) {
 }
 
 function Invitations() {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const invitations = useOrgInvitations();
   const names = useMemberNames();
   const canInvite = access.can("members:invite");
   const [inviting, setInviting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const [failed, setFailed] = useState<unknown>(null);
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ORG_INVITATIONS });
-  const resend = useMutation({
-    mutationFn: (id: string) => api.resendInvitation(id),
-    onMutate: () => setFailed(null),
-    onSuccess: (inv) => {
-      setNotice(`The invitation was sent again to ${inv.email}.`);
-      return refresh();
-    },
-    onError: setFailed,
-  });
-  const revoke = useMutation({
-    mutationFn: (id: string) => api.revokeInvitation(id),
-    onMutate: () => setFailed(null),
-    onSuccess: () => {
-      setNotice("The invitation was revoked.");
-      return refresh();
-    },
-    onError: setFailed,
-  });
+  const resend = useResendInvitation();
+  // Shown revoked at once; a refusal takes it back.
+  const revoke = useRevokeInvitation();
+  /** The action last asked for, whose failure shows. */
+  const [last, setLast] = useState<"resend" | "revoke" | null>(null);
+  const failed = last === "resend" ? resend.error : last === "revoke" ? revoke.error : null;
 
   return (
     <section className="org-section" aria-label="Invitations">
@@ -148,7 +128,7 @@ function Invitations() {
       {failed ? <ErrorNote error={failed} /> : null}
       {invitations.isPending ? (
         <Loading />
-      ) : invitations.error ? (
+      ) : invitations.isError ? (
         <ErrorNote error={invitations.error} />
       ) : invitations.data.length === 0 ? (
         <Empty>No invitation sent yet.</Empty>
@@ -213,9 +193,14 @@ function Invitations() {
                             <button
                               type="button"
                               className="btn small"
-                              disabled={resend.isPending}
+                              disabled={resend.pending}
                               aria-label={`Resend the invitation to ${inv.email}`}
-                              onClick={() => resend.mutate(inv.id)}
+                              onClick={() => {
+                                setLast("resend");
+                                void resend.run(inv.id, (sent) =>
+                                  setNotice(`The invitation was sent again to ${sent.email}.`),
+                                );
+                              }}
                             >
                               Resend
                             </button>
@@ -224,8 +209,13 @@ function Invitations() {
                             <ConfirmButton
                               confirm={`Revoke the invitation to ${inv.email}?`}
                               description="The link in the email stops working. Invite them again to send a new one."
-                              pending={revoke.isPending}
-                              onConfirm={() => revoke.mutate(inv.id)}
+                              pending={revoke.pending}
+                              onConfirm={() => {
+                                setLast("revoke");
+                                void revoke.run(inv.id, () =>
+                                  setNotice("The invitation was revoked."),
+                                );
+                              }}
                             >
                               Revoke
                             </ConfirmButton>

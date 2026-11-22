@@ -5,8 +5,6 @@
 import { ChevronFirst, ChevronLast, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { usePayloadValue } from "../../api/queries";
-import type { Entry, Payload } from "../../api/types";
 import { useSettings } from "../../app/settings";
 import { ProblemView } from "../../components/bits";
 import { JsonBox } from "../../components/Payload";
@@ -25,6 +23,8 @@ import {
   stepFromParam,
   stepOf,
 } from "../../model/steps";
+import type { Entry, Payload } from "../../model/types";
+import { usePayloadValue } from "../../state/runs";
 import { ENDED } from "./RunEnd";
 import type { BindingTarget, Target } from "./targets";
 

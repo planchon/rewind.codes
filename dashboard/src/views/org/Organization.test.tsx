@@ -126,7 +126,10 @@ describe("the Organization view", () => {
     const auditor = await screen.findByRole("listitem", { name: "Role auditor" });
     await user.click(within(auditor).getByRole("button", { name: "Delete" }));
     await confirmInDialog(user);
-    const alert = await within(auditor).findByRole("alert");
+    // The role goes at once, and comes back with the server's refusal.
+    const alert = await waitFor(() =>
+      within(screen.getByRole("listitem", { name: "Role auditor" })).getByRole("alert"),
+    );
     expect(alert).toHaveTextContent("auditor is still given");
     expect(alert).toHaveTextContent(/give them another role, then delete it/i);
     expect(alert).toHaveTextContent("409 · role-in-use");

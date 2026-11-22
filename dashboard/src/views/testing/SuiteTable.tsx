@@ -3,11 +3,9 @@
 // why. Each row reads its test's document; a recorded test the caller may not read says so.
 import { Lock } from "lucide-react";
 import { Link } from "react-router";
-import { ApiError } from "../../api/client";
-import { useTest } from "../../api/queries";
-import type { Expectations, Test, Workflow } from "../../api/types";
 import { JsonPeek } from "../../components/JsonPeek";
 import { StatusBadge } from "../../components/Status";
+import type { Expectations, Test, Workflow } from "../../model/types";
 import {
   rulesOf,
   suiteOf,
@@ -16,6 +14,8 @@ import {
   type TestPlace,
   testPath,
 } from "../../model/workflows";
+import { ApiError } from "../../state/errors";
+import { useTest } from "../../state/workflows";
 import { OriginGlyph } from "./TestingSidebar";
 import { KIND_TAG } from "./WorkflowView";
 

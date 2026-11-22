@@ -147,26 +147,36 @@ pub(super) async fn list(
         .map(|last| search::encode_cursor(order, &last.cursor(order)));
     let mut runs = Vec::with_capacity(found.len());
     for found in &found {
-        let mut summary = search::summary(found);
-        if let Some(record) = app.store.get_run(&found.run).await? {
-            summary.status = record.status.into();
-            summary.quarantined = record.quarantine.is_some();
-            summary.history_len = summary.history_len.max(record.history_len);
-            summary.last_activity_at = summary.last_activity_at.max(timestamp(record.updated_at));
-            if let Some(ended_at) = record.ended_at {
-                summary.ended_at = Some(timestamp(ended_at));
-            }
-            if record.status.is_terminal() {
-                summary.waiting_for.clear();
-                summary.wakes_at = None;
-                if summary.error.is_none() {
-                    summary.error = ended_with(&app, &record).await?;
-                }
-            }
-        }
-        runs.push(summary);
+        runs.push(listed(&app, found).await?);
     }
     Ok(Json(RunPage { runs, next_cursor }))
+}
+
+/// A run of the read model as `GET /v1/runs` lists it, and as the change stream sends it: the
+/// run's own record, which the read model follows by a moment, gives its status, quarantine and
+/// times as they are now.
+pub(crate) async fn listed(
+    app: &App,
+    found: &rewind_engine::ports::RunSummary,
+) -> Result<rewind_api::runs::RunSummary, ApiError> {
+    let mut summary = search::summary(found);
+    if let Some(record) = app.store.get_run(&found.run).await? {
+        summary.status = record.status.into();
+        summary.quarantined = record.quarantine.is_some();
+        summary.history_len = summary.history_len.max(record.history_len);
+        summary.last_activity_at = summary.last_activity_at.max(timestamp(record.updated_at));
+        if let Some(ended_at) = record.ended_at {
+            summary.ended_at = Some(timestamp(ended_at));
+        }
+        if record.status.is_terminal() {
+            summary.waiting_for.clear();
+            summary.wakes_at = None;
+            if summary.error.is_none() {
+                summary.error = ended_with(app, &record).await?;
+            }
+        }
+    }
+    Ok(summary)
 }
 
 /// `GET /v1/runs/stats`.

@@ -1,8 +1,14 @@
 // What the caller may do, from `GET /v1/whoami`: the views follow it. The server enforces every
 // rule; the dashboard only hides what would be refused.
 import { createContext, useContext } from "react";
-import type { Identity, Organization, OrganizationSettings, Permission, User } from "../api/types";
 import { effectivePermissions, limitedToLabels } from "../model/access";
+import type {
+  Identity,
+  Organization,
+  OrganizationSettings,
+  Permission,
+  User,
+} from "../model/types";
 
 export interface Section {
   path: string;

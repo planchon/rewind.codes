@@ -1,15 +1,13 @@
 // API keys: the tenant's keys with their grant, who created them and when; whoever holds
 // `api_keys:write` creates one (its secret is shown once) and revokes them.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, KeyRound, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { API_KEYS, useApiKeys, useRoles } from "../../api/organization";
-import type { ApiKey } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
+import type { ApiKey } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useApiKeys, useCreateApiKey, useRevokeApiKey, useRoles } from "../../state/organization";
 import {
   ConfirmButton,
   defaultRole,
@@ -79,9 +77,7 @@ function Secret({ apiKey, onDone }: { apiKey: ApiKey; onDone: () => void }) {
 }
 
 function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const roles = useRoles(access.can("roles:read"));
   const givable = roles.data ? givableRoles(roles.data, access.permissions) : null;
   const [name, setName] = useState("");
@@ -89,21 +85,18 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
   const [tenant, setTenant] = useState("");
   const labels = useLabels();
   const chosen = role ?? defaultRole(givable);
-  const create = useMutation({
-    mutationFn: () =>
-      api.createApiKey({
+  const create = useCreateApiKey();
+  const submit = () => {
+    if (!name.trim() || !chosen || !labels.labels) return;
+    void create.run(
+      {
         name: name.trim(),
         role: chosen,
-        allowedLabels: labels.labels ?? {},
+        allowedLabels: labels.labels,
         ...(access.operator && tenant.trim() ? { tenant: tenant.trim() } : {}),
-      }),
-    onSuccess: async (key) => {
-      await queryClient.invalidateQueries({ queryKey: API_KEYS });
-      onCreated(key);
-    },
-  });
-  const submit = () => {
-    if (name.trim() && chosen && labels.labels) create.mutate();
+      },
+      onCreated,
+    );
   };
   if (roles.isPending && access.can("roles:read")) return <Loading />;
   return (
@@ -111,7 +104,7 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
       title="New API key"
       description="For a harness, its SDK worker, the CLI or a dashboard. Its secret is shown once."
       submit="Create the key"
-      pending={create.isPending}
+      pending={create.pending}
       pendingLabel="Creating…"
       disabled={!name.trim() || !chosen || !labels.labels}
       error={create.error}
@@ -154,21 +147,16 @@ function CreateKey({ onCreated }: { onCreated: (key: ApiKey) => void }) {
 }
 
 function ApiKeys() {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const keys = useApiKeys();
   const names = useMemberNames();
   const write = access.can("api_keys:write");
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<ApiKey | null>(null);
-  const [failed, setFailed] = useState<{ id: string; error: unknown } | null>(null);
-  const revoke = useMutation({
-    mutationFn: (id: string) => api.revokeApiKey(id),
-    onMutate: () => setFailed(null),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: API_KEYS }),
-    onError: (error, id) => setFailed({ id, error }),
-  });
+  // Shown revoked at once; a refusal takes it back, with the reason in its row.
+  const revoke = useRevokeApiKey();
+  const [revoking, setRevoking] = useState<string | null>(null);
+  const failed = revoke.error && revoking ? { id: revoking, error: revoke.error } : null;
 
   return (
     <section className="org-section" aria-label="API keys">
@@ -194,7 +182,7 @@ function ApiKeys() {
       </FormDialog>
       {keys.isPending ? (
         <Loading />
-      ) : keys.error ? (
+      ) : keys.isError ? (
         <ErrorNote error={keys.error} />
       ) : keys.data.length === 0 ? (
         <Empty>No key yet.</Empty>
@@ -249,8 +237,11 @@ function ApiKeys() {
                         <ConfirmButton
                           confirm={`Revoke ${k.name}?`}
                           description="Every client sending this key is refused from its next request. A revoked key cannot be restored: create another."
-                          pending={revoke.isPending}
-                          onConfirm={() => revoke.mutate(k.id)}
+                          pending={revoke.pending}
+                          onConfirm={() => {
+                            setRevoking(k.id);
+                            void revoke.run(k.id);
+                          }}
                         >
                           Revoke
                         </ConfirmButton>

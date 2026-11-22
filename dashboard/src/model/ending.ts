@@ -3,9 +3,10 @@
 // is `cancel_requested` rejecting every pending await (archi/03-execution.md, "Cancellation").
 // What changes is how it is told: a cancellation is not a failure, and says why it happened (its
 // deadline, a request, the script itself) and what the run was waiting for then.
-import type { CancelReason, RunStatus } from "../api/types";
+
 import { formatDuration, shortRunId } from "./format";
 import type { Activity, RunModel } from "./run";
+import type { CancelReason, RunStatus } from "./types";
 import { endedRunOf } from "./workflows";
 
 export type EndKind = "completed" | "failed" | "cancelled" | "aborted";

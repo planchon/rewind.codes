@@ -268,8 +268,9 @@ pub(crate) struct RunsArgs {
     /// "and".
     #[arg(value_name = "QUERY")]
     pub(crate) query: Option<String>,
-    /// The order: the most recently started first (the default), the most recent activity
-    /// first, or the soonest to wake by itself first.
+    /// The order: the most recently started first (the default), the first started first, the
+    /// most recent activity first, the soonest to wake by itself first, the longest first (the
+    /// runs that have not ended last), or the most tool calls first.
     #[arg(long, value_enum)]
     pub(crate) sort: Option<SortArg>,
     #[arg(long, value_enum)]
@@ -303,16 +304,22 @@ pub(crate) struct RunsArgs {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(crate) enum SortArg {
     Started,
+    Oldest,
     Activity,
     Wakes,
+    Duration,
+    Calls,
 }
 
 impl From<SortArg> for rewind_api::runs::RunSort {
     fn from(sort: SortArg) -> Self {
         match sort {
             SortArg::Started => Self::Started,
+            SortArg::Oldest => Self::Oldest,
             SortArg::Activity => Self::Activity,
             SortArg::Wakes => Self::Wakes,
+            SortArg::Duration => Self::Duration,
+            SortArg::Calls => Self::Calls,
         }
     }
 }

@@ -3,8 +3,6 @@
 import { X } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import { useRunEntry } from "../../api/queries";
-import type { Entry, Payload, Run } from "../../api/types";
 import { ProblemView, Time } from "../../components/bits";
 import { JsonBox, PayloadView } from "../../components/Payload";
 import { OutcomeBadge, StatusBadge } from "../../components/Status";
@@ -12,6 +10,7 @@ import { formatDuration, formatOffset } from "../../model/format";
 import { fieldTerm, queryLink } from "../../model/query";
 import type { Activity, RunModel } from "../../model/run";
 import { type Step, stepOf } from "../../model/steps";
+import type { Entry, Payload, Run } from "../../model/types";
 import {
   endedRunOf,
   readRunEnd,
@@ -19,6 +18,7 @@ import {
   startedRunOf,
   workflowCallOf,
 } from "../../model/workflows";
+import { useRunEntry } from "../../state/runs";
 import { activityOutcome, activityTitle, entrySummary } from "./describe";
 
 export type Selection = { kind: "entry"; idx: number } | { kind: "line"; line: number } | null;

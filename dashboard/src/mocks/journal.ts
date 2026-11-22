@@ -8,7 +8,7 @@ import type {
   Payload,
   RunMode,
   ToolFailureKind,
-} from "../api/types";
+} from "../model/types";
 
 /** Above this size the API leaves a payload's value out (`PAYLOAD_VALUE_LIMIT`). */
 export const PAYLOAD_VALUE_LIMIT = 256 * 1024;

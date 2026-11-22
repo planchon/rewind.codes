@@ -21,6 +21,7 @@ use rewind_workos::CookieSeal;
 use tokio::sync::watch;
 
 use crate::auth::Caller;
+use crate::changes::Changes;
 use crate::deliveries::{Background, Deliveries};
 use crate::error::ApiError;
 use crate::oauth::OAuthServer;
@@ -61,6 +62,8 @@ pub(crate) struct Settings {
     /// Where lifecycle webhooks may go.
     pub(crate) webhook_egress: WebhookEgress,
     pub(crate) projector: ProjectorConfig,
+    /// The most runs a pass of the change stream's loop reads (`changes`).
+    pub(crate) changes_per_pass: usize,
 }
 
 impl Settings {
@@ -81,6 +84,8 @@ pub(crate) struct App {
     pub(crate) settings: Settings,
     pub(crate) wake: Wake,
     pub(crate) activity: Activity,
+    /// The change streams' loop (`GET /v1/changes`).
+    pub(crate) changes: Changes,
     /// Set to stop the server.
     pub(crate) stop: watch::Sender<bool>,
     /// The dashboard's sign-in: `None` without WorkOS, and on a worker alone.
@@ -133,6 +138,7 @@ impl App {
             tools,
             exporter,
             deliveries,
+            changes: Changes::new(settings.changes_per_pass),
             settings,
             wake: Wake::new(),
             activity: Activity::new(),
@@ -325,8 +331,11 @@ impl App {
 
     /// Records a task's state in the read model.
     pub(crate) async fn record_progress(&self, run: &RunRef, progress: TaskProgress) {
-        if let Err(error) = self.store.record_tasks(run, &[progress]).await {
-            tracing::warn!(run = %run, seq = progress.seq.0, %error, "the task's state was not recorded");
+        match self.store.record_tasks(run, &[progress]).await {
+            Ok(()) => self.changes.poke(),
+            Err(error) => {
+                tracing::warn!(run = %run, seq = progress.seq.0, %error, "the task's state was not recorded");
+            }
         }
     }
 
@@ -334,8 +343,9 @@ impl App {
     /// the caller does not see the result of: an approval, a rejection, a call that may have
     /// been parked, renewed credentials.
     pub(crate) async fn record_tasks(&self, run: &RunRef) {
-        if let Err(error) = self.projector().record_tasks(run).await {
-            tracing::warn!(run = %run, %error, "the tasks' states were not recorded");
+        match self.projector().record_tasks(run).await {
+            Ok(_) => self.changes.poke(),
+            Err(error) => tracing::warn!(run = %run, %error, "the tasks' states were not recorded"),
         }
     }
 
@@ -381,8 +391,9 @@ impl App {
     /// Records a run's quarantine, as the store holds it now, after a quarantine, a release or
     /// a give-up.
     pub(crate) async fn record_quarantine(&self, run: &RunRef) {
-        if let Err(error) = self.projector().record_quarantine(run, self.now()).await {
-            tracing::warn!(run = %run, %error, "the quarantine was not recorded");
+        match self.projector().record_quarantine(run, self.now()).await {
+            Ok(_) => self.changes.poke(),
+            Err(error) => tracing::warn!(run = %run, %error, "the quarantine was not recorded"),
         }
     }
 }

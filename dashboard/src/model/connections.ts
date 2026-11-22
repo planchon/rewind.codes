@@ -1,14 +1,30 @@
 // Pure code of the Claude pages: what an access gives, the host tools of a toolset, the first
 // message to send Claude, whether a connection arrived while Connect Claude was open, and the
 // choices the consent starts from.
+import { shortDigest } from "./format";
 import type {
   Connection,
   ConnectionAccess,
   ConsentOrganization,
   ConsentRequest,
-} from "../api/connections";
-import type { ToolsetSummary } from "../api/types";
-import { shortDigest } from "./format";
+  ServerInfo,
+  ToolsetSummary,
+} from "./types";
+
+/** The accesses a connection may have in an organization, the least first. */
+export const ACCESSES: readonly ConnectionAccess[] = ["read", "run"];
+
+/** What `GET /v1/server` says of `/mcp`. */
+export interface McpInfo {
+  /** `https://api.rewind.codes/mcp`; `null` when this server does not serve MCP. */
+  mcpUrl: string | null;
+  /** People connect through Rewind's OAuth (it has its public URL and WorkOS). */
+  oauth: boolean;
+}
+
+export function mcpOf(server: ServerInfo): McpInfo {
+  return { mcpUrl: server.mcpUrl ?? null, oauth: server.oauth ?? false };
+}
 
 /** What each access lets the connection do (archi/06, "Connections"). */
 export const ACCESS_INFO: Record<ConnectionAccess, { title: string; gives: string }> = {

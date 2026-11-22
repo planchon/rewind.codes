@@ -1,8 +1,6 @@
 // Pieces the namespace views share: a quota's use against its limit as a meter, an alert as a
 // chip, the form of six limits (in a dialog), and the gate of `namespaces:read`.
 import { type ReactNode, useState } from "react";
-import type { QuotaAlert, Quotas } from "../../api/types";
-import { useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
 import { Meter } from "../../components/Charts";
 import { DialogForm } from "../../components/FormDialog";
@@ -19,6 +17,8 @@ import {
   quotaTexts,
   shareOf,
 } from "../../model/quotas";
+import type { QuotaAlert, Quotas } from "../../model/types";
+import { useAccess } from "../../state/access";
 import { Field } from "../org/bits";
 
 const TONE: Record<Level, "info" | "warning" | "critical" | null> = {

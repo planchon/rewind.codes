@@ -1,18 +1,21 @@
 // Roles: the four built-in ones, which never change, and the organization's own, composed from
 // the catalog of permissions. Writing a role needs every permission it gives; a role still held
 // by a grant cannot be deleted.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
-import { ApiError } from "../../api/client";
-import { ROLES, usePermissionCatalog, useRoles, WHOAMI } from "../../api/organization";
-import type { Permission, PermissionInfo, Role } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { groupPermissions, missingPermissions, roleNameProblem } from "../../model/access";
+import type { Permission, PermissionInfo, Role } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { ApiError } from "../../state/errors";
+import {
+  useDeleteRole,
+  usePermissionCatalog,
+  useRoles,
+  useSaveRole,
+} from "../../state/organization";
 import { ConfirmButton, Described, Field, PermissionList } from "./bits";
 import { SectionGate } from "./OrganizationView";
 
@@ -37,9 +40,7 @@ export function RoleEditor({
   existing: readonly string[];
   onDone: () => void;
 }) {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const [name, setName] = useState(role?.name ?? "");
   const [description, setDescription] = useState(role?.description ?? "");
   const [chosen, setChosen] = useState<ReadonlySet<Permission>>(
@@ -50,20 +51,8 @@ export function RoleEditor({
     ? null
     : (roleNameProblem(name) ??
       (existing.includes(name) ? `The organization already has a role ${name}.` : null));
-  const save = useMutation({
-    mutationFn: () =>
-      api.putRole(role?.name ?? name, {
-        description: description.trim(),
-        // In the catalog's order.
-        permissions: catalog.map((c) => c.permission).filter((p) => chosen.has(p)),
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ROLES });
-      // A change applies at once to whoever holds the role, the caller included.
-      await queryClient.invalidateQueries({ queryKey: WHOAMI });
-      onDone();
-    },
-  });
+  // The role shows as written at once; a refusal takes it back, and says why here.
+  const save = useSaveRole();
   const toggle = (p: Permission) =>
     setChosen((before) => {
       const next = new Set(before);
@@ -73,7 +62,18 @@ export function RoleEditor({
     });
   const submit = () => {
     setTouched(true);
-    if (!nameProblem) save.mutate();
+    if (nameProblem) return;
+    void save.run(
+      {
+        name: role?.name ?? name,
+        body: {
+          description: description.trim(),
+          // In the catalog's order.
+          permissions: catalog.map((c) => c.permission).filter((p) => chosen.has(p)),
+        },
+      },
+      onDone,
+    );
   };
 
   return (
@@ -81,7 +81,7 @@ export function RoleEditor({
       title={role ? `Edit the role ${role.name}` : "New role"}
       meta={`${chosen.size} of ${catalog.length} permissions`}
       submit={role ? "Save the role" : "Create the role"}
-      pending={save.isPending}
+      pending={save.pending}
       disabled={touched && nameProblem !== null}
       error={save.error}
       onSubmit={submit}
@@ -153,9 +153,7 @@ export function RoleEditor({
 }
 
 function Roles() {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const roles = useRoles();
   const write = access.can("roles:write");
   const catalog = usePermissionCatalog(write);
@@ -166,18 +164,16 @@ function Roles() {
     setTarget(role);
     setEditing(true);
   };
-  const [failed, setFailed] = useState<{ role: string; error: unknown } | null>(null);
-  const remove = useMutation({
-    mutationFn: (name: string) => api.deleteRole(name),
-    onMutate: () => setFailed(null),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ROLES }),
-    onError: (error, role) => setFailed({ role, error }),
-  });
+  // Gone at once; a role a grant still holds comes back, with the reason in its row.
+  const remove = useDeleteRole();
+  const [removing, setRemoving] = useState<string | null>(null);
+  const failed = remove.error && removing ? { role: removing, error: remove.error } : null;
 
   if (roles.isPending) return <Loading />;
-  if (roles.error) return <ErrorNote error={roles.error} />;
+  if (roles.isError) return <ErrorNote error={roles.error} />;
   const builtIn = roles.data.filter((r) => r.builtIn);
-  const own = roles.data.filter((r) => !r.builtIn);
+  // By name, as the server lists them: a role just written takes its place at once.
+  const own = roles.data.filter((r) => !r.builtIn).sort((a, b) => a.name.localeCompare(b.name));
 
   const row = (r: Role) => {
     const beyond = missingPermissions(r.permissions, access.permissions);
@@ -210,8 +206,11 @@ function Roles() {
               <ConfirmButton
                 confirm={`Delete the role ${r.name}?`}
                 description="No one can be given this role any more. A role a grant still points to cannot be deleted."
-                pending={remove.isPending}
-                onConfirm={() => remove.mutate(r.name)}
+                pending={remove.pending}
+                onConfirm={() => {
+                  setRemoving(r.name);
+                  void remove.run(r.name);
+                }}
               >
                 Delete
               </ConfirmButton>
@@ -251,7 +250,7 @@ function Roles() {
           </button>
         )}
       </div>
-      {catalog.error && <ErrorNote error={catalog.error} />}
+      {catalog.isError ? <ErrorNote error={catalog.error} /> : null}
       <FormDialog open={editing && catalog.data !== undefined} onOpenChange={setEditing} wide>
         {catalog.data && (
           <RoleEditor

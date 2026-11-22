@@ -10,11 +10,10 @@ import {
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import { Link } from "react-router";
-import { useWorkflows } from "../../api/queries";
-import type { Workflow } from "../../api/types";
 import { PageSidebar } from "../../app/sidebar";
 import { Ago, Digest, LabelList } from "../../components/bits";
 import { formatCount } from "../../model/format";
+import type { Workflow } from "../../model/types";
 import {
   suiteOf,
   suitePlaces,
@@ -23,6 +22,7 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
+import { useWorkflowList } from "../../state/workflows";
 
 /** How a test came into the suite, as a glyph: kept, added, recorded, updated, retired. */
 export function OriginGlyph({ place }: { place: TestPlace }) {
@@ -159,8 +159,7 @@ export function TestingSidebar({
   versions?: readonly Workflow[];
   test?: string | null;
 }) {
-  const workflows = useWorkflows();
-  const list = workflows.data?.pages.flatMap((p) => p.workflows) ?? [];
+  const list = useWorkflowList().rows;
   return (
     <PageSidebar title="Testing" back={null} backLabel="Show the views">
       <section className="pane-section" aria-label="Workflows">

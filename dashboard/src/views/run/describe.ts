@@ -1,9 +1,10 @@
 // One-line descriptions of journal entries and activities, for the journal, the timeline and
 // the notes beside the source.
-import type { Entry } from "../../api/types";
+
 import type { Outcome } from "../../components/Status";
 import { formatBytes, formatDuration, shortRunId } from "../../model/format";
 import type { Activity } from "../../model/run";
+import type { Entry } from "../../model/types";
 import { callName, endedRunOf, readRunEnd, workflowCallOf } from "../../model/workflows";
 
 export function activityTitle(a: Activity): string {

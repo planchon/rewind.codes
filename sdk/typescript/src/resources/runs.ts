@@ -101,8 +101,13 @@ export interface ListRunsParams extends RequestOptions {
    * `query` says where the term at fault is.
    */
   q?: string | undefined;
-  /** `started` (the default), `activity`, or `wakes`: the soonest to wake by itself first. */
-  sort?: "started" | "activity" | "wakes" | undefined;
+  /**
+   * `started` (the default: the most recently started first), `oldest` (the first started
+   * first), `activity` (the most recent activity first), `wakes` (the soonest to wake by itself
+   * first), `duration` (the longest first, the runs that have not ended last), or `calls` (the
+   * most tool calls first).
+   */
+  sort?: "started" | "oldest" | "activity" | "wakes" | "duration" | "calls" | undefined;
   status?: RunStatus | undefined;
   /** Only runs carrying all these labels. */
   labels?: Labels | undefined;

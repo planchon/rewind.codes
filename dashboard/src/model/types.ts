@@ -54,6 +54,8 @@ export type LabelFacet = Schemas["LabelFacet"];
 export type FailureGroup = Schemas["FailureGroup"];
 export type FailureGroupPage = Schemas["FailureGroupPage"];
 export type QuerySpan = Schemas["QuerySpan"];
+export type SignalAccepted = Schemas["SignalAccepted"];
+export type CancelRun = Schemas["CancelRun"];
 export type RunSort = NonNullable<ListRunsQuery["sort"]>;
 
 // Sign-in (`/auth`), the organization and access.
@@ -80,6 +82,29 @@ export type SetGrant = Schemas["SetGrant"];
 export type ApiKey = Schemas["ApiKey"];
 export type CreateApiKey = Schemas["CreateApiKey"];
 export type UpdateOrganization = Schemas["UpdateOrganization"];
+
+// A person's connections (archi/06, "Connections") and the consent of an MCP client.
+/** What a connection may do in an organization: `read`, or `run` (start, signal, cancel too). */
+export type ConnectionAccess = Schemas["Access"];
+/** The person a connection acts for. */
+export type ConnectionPerson = Schemas["ConnectionPerson"];
+/** The MCP client: a metadata document's URL (CIMD), or `rc_…` when it registered itself. */
+export type ConnectionClient = Schemas["ConnectionClient"];
+/** An organization a connection opens, with its access and the labels of its grant there. */
+export type ConnectionOrganization = Schemas["ConnectionOrganization"];
+/** For `/v1/organization/connections`, `organizations` holds this organization only. */
+export type Connection = Schemas["Connection"];
+export type ConnectionList = Schemas["ConnectionList"];
+/** `PATCH /v1/connections/{id}`: the organizations it opens, replaced whole. */
+export type UpdateConnection = Schemas["UpdateConnection"];
+/** An organization of the person, as the consent offers it. */
+export type ConsentOrganization = Schemas["ConsentOrganization"];
+/** `GET /v1/oauth/consent?request=…`: what an authorization request asks. */
+export type ConsentRequest = Schemas["Consent"];
+/** `POST /v1/oauth/consent`. */
+export type ConsentDecision = Schemas["ConsentAnswer"];
+/** Where to send the browser: the client's redirect URI with a code, or with an error. */
+export type ConsentAnswer = Schemas["ConsentRedirect"];
 
 // Namespaces: the end users of the organization, their quotas, use and alerts.
 export type Namespace = Schemas["Namespace"];

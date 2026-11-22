@@ -10,7 +10,8 @@
 //! What comes from the entries is keyed so that applying them twice, or in any order, gives the
 //! same rows: a call's columns are set by the entry that knows them (`schedule_tool_call`, its
 //! completion), the summary keeps the maximum of the times and lengths it has seen, and its
-//! counts are recounted from `tool_calls`.
+//! counts are recounted from `tool_calls`. Every batch stamps the summary as changed
+//! ([`STAMP`]).
 
 use std::collections::BTreeMap;
 
@@ -21,6 +22,7 @@ use rewind_core::{
 use rewind_engine::ports::{ProjectedRun, RunSnapshot};
 use sqlx::{PgConnection, PgPool};
 
+use super::STAMP;
 use super::query::SEARCH_SEPARATOR;
 use crate::Error;
 use crate::codec::{self, decode_labels, encode_labels};
@@ -328,7 +330,7 @@ pub(super) async fn apply_once(
     write_calls(&mut tx, tenant_id, id, &calls).await?;
 
     let ending = snapshot.ending.as_ref();
-    sqlx::query(
+    let statement = format!(
         "UPDATE run_summaries SET tenant = $2, script = $3, toolset = $4, headline = $5, \
              parent = $6, workflow = $7, started_by = $8, labels = $9::jsonb, \
              last_activity_at = GREATEST(last_activity_at, $10), \
@@ -346,34 +348,35 @@ pub(super) async fn apply_once(
              signature = CASE WHEN $16 THEN $22 ELSE signature END, \
              fingerprint = CASE WHEN $16 THEN $23 ELSE fingerprint END, \
              wakes_at = CASE WHEN COALESCE($13, status) = 'active' \
-                 THEN (SELECT min(until) FROM run_waits WHERE run_id = $1) END \
+                 THEN (SELECT min(until) FROM run_waits WHERE run_id = $1) END, {STAMP} \
          WHERE run_id = $1",
-    )
-    .bind(id)
-    .bind(tenant_id)
-    .bind(bytes(run.script))
-    .bind(bytes(run.toolset))
-    .bind(&run.headline)
-    .bind(run.parent.map(uuid))
-    .bind(run.workflow.as_deref())
-    .bind(run.started_by.map(uuid))
-    .bind(encode_labels(&run.labels))
-    .bind(ts(last_activity))
-    .bind(int(history_len))
-    .bind(opt_ts(started_at))
-    .bind(ended.map(|(_, status, _)| status.as_str()))
-    .bind(opt_ts(ended.map(|(.., at)| at)))
-    .bind(!calls.is_empty())
-    .bind(won)
-    .bind(int(snapshot.history_len))
-    .bind(snapshot.mode.map(codec::mode))
-    .bind(ending.map(|ending| ending.error.as_str()))
-    .bind(ending.map(|ending| ending.message.as_str()))
-    .bind(ending.and_then(|ending| ending.line).map(i64::from))
-    .bind(ending.map(|ending| ending.signature.as_str()))
-    .bind(ending.map(|ending| ending.fingerprint.as_str()))
-    .execute(&mut *tx)
-    .await?;
+    );
+    sqlx::query(&statement)
+        .bind(id)
+        .bind(tenant_id)
+        .bind(bytes(run.script))
+        .bind(bytes(run.toolset))
+        .bind(&run.headline)
+        .bind(run.parent.map(uuid))
+        .bind(run.workflow.as_deref())
+        .bind(run.started_by.map(uuid))
+        .bind(encode_labels(&run.labels))
+        .bind(ts(last_activity))
+        .bind(int(history_len))
+        .bind(opt_ts(started_at))
+        .bind(ended.map(|(_, status, _)| status.as_str()))
+        .bind(opt_ts(ended.map(|(.., at)| at)))
+        .bind(!calls.is_empty())
+        .bind(won)
+        .bind(int(snapshot.history_len))
+        .bind(snapshot.mode.map(codec::mode))
+        .bind(ending.map(|ending| ending.error.as_str()))
+        .bind(ending.map(|ending| ending.message.as_str()))
+        .bind(ending.and_then(|ending| ending.line).map(i64::from))
+        .bind(ending.map(|ending| ending.signature.as_str()))
+        .bind(ending.map(|ending| ending.fingerprint.as_str()))
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(())
 }

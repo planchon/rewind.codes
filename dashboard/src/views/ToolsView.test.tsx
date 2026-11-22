@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import type { ToolStats } from "../api/types";
+import type { ToolStats } from "../model/types";
 import { renderApp, search } from "../test/app";
 import { groupTools, logScale, logTicks, namespaceOf } from "./ToolsView";
 

@@ -284,6 +284,11 @@ pub struct ServerArgs {
     #[arg(long, env = "WORKOS_REDIRECT_URI")]
     pub workos_redirect_uri: Option<String>,
 
+    /// The most runs one pass of the change stream's loop reads (`GET /v1/changes`): more
+    /// changed at once sends `resync`. For the tests.
+    #[arg(long, hide = true, default_value_t = crate::changes::PER_PASS)]
+    pub changes_per_pass: usize,
+
     /// The store on the engine's in-memory adapters instead of `--store`: set by
     /// `rewind_server::start_in_memory`, for the server's tests, never from the command line.
     #[arg(skip)]
@@ -454,6 +459,8 @@ pub(crate) struct Config {
     /// The dashboard's sign-in, for the api role: `None` without WorkOS, on a worker alone and
     /// on the embedded server.
     pub(crate) workos: Option<WorkOsConfig>,
+    /// The most runs a pass of the change stream's loop reads.
+    pub(crate) changes_per_pass: usize,
 }
 
 impl Config {
@@ -596,6 +603,7 @@ impl ServerArgs {
                 // The embedded server's socket takes no token: WorkOS's variables, which a
                 // developer's shell may hold for another project, do not apply to it.
                 workos: None,
+                changes_per_pass: self.changes_per_pass.max(1),
             });
         }
 
@@ -701,6 +709,7 @@ impl ServerArgs {
             cache,
             retention,
             workos: workos.filter(|_| api),
+            changes_per_pass: self.changes_per_pass.max(1),
         })
     }
 }

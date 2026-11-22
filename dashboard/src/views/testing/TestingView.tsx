@@ -2,14 +2,14 @@
 // when it was saved (archi/05, "Dashboard"). A workflow opens on its latest version.
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
-import { useWorkflows } from "../../api/queries";
-import type { Workflow } from "../../api/types";
-import { useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../../components/bits";
 import { PageHeader } from "../../components/PageHeader";
 import { formatCount } from "../../model/format";
+import type { Workflow } from "../../model/types";
 import { workflowPath } from "../../model/workflows";
+import { useAccess } from "../../state/access";
+import { useWorkflowList } from "../../state/workflows";
 import { TestingSidebar } from "./TestingSidebar";
 
 /** Testing needs `toolsets:read`: workflows are read with the toolsets. */
@@ -66,8 +66,8 @@ export function TestingView() {
 }
 
 function WorkflowList() {
-  const workflows = useWorkflows();
-  const list = workflows.data?.pages.flatMap((p) => p.workflows) ?? [];
+  const workflows = useWorkflowList();
+  const list = workflows.rows;
   return (
     <div className="page">
       <TestingSidebar />
@@ -76,9 +76,9 @@ function WorkflowList() {
         Each workflow and its suite: the tests every version passed when it was saved, and that the
         next version must pass too.
       </p>
-      {workflows.isPending ? (
+      {workflows.status === "pending" ? (
         <Loading>Loading workflows…</Loading>
-      ) : workflows.isError ? (
+      ) : workflows.status === "error" ? (
         <ProblemView error={workflows.error} title="The workflows could not be read" />
       ) : (
         <div className="table-wrap">
@@ -102,16 +102,16 @@ function WorkflowList() {
           {list.length === 0 && (
             <Empty>No workflow yet: the agent tool save_workflow saves one with its tests.</Empty>
           )}
-          {workflows.hasNextPage && (
+          {workflows.hasMore && (
             <div className="list-foot">
               <span className="num">{formatCount(list.length)} workflows shown</span>
               <button
                 type="button"
                 className="btn small"
-                disabled={workflows.isFetchingNextPage}
-                onClick={() => void workflows.fetchNextPage()}
+                disabled={workflows.loadingMore}
+                onClick={workflows.loadMore}
               >
-                {workflows.isFetchingNextPage ? "Loading…" : "Load more"}
+                {workflows.loadingMore ? "Loading…" : "Load more"}
               </button>
             </div>
           )}

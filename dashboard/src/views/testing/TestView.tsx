@@ -7,11 +7,10 @@
 import { ArrowRight, Braces, ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { useTest, useWorkflowVersions } from "../../api/queries";
-import type { Workflow } from "../../api/types";
 import { Loading, ProblemView } from "../../components/bits";
 import { JsonDialog } from "../../components/JsonPeek";
 import { PageHeader } from "../../components/PageHeader";
+import type { Workflow } from "../../model/types";
 import {
   findVersion,
   suiteOf,
@@ -21,6 +20,7 @@ import {
   workflowPath,
   workflowRef,
 } from "../../model/workflows";
+import { useTest, useWorkflowVersions } from "../../state/workflows";
 import { CrumbLink, Crumbs, Switcher, type SwitchItem } from "./Crumbs";
 import { TestDocument, Unreadable } from "./TestDocument";
 import { OriginGlyph, TestingSidebar } from "./TestingSidebar";
@@ -90,15 +90,17 @@ function Place({
 }
 
 export function TestView() {
+  const { name = "" } = useParams();
   return (
     <TestingGate>
-      <TestPage />
+      {/* Another workflow is another page: it never shows the one before while it loads. */}
+      <TestPage key={name} name={name} />
     </TestingGate>
   );
 }
 
-function TestPage() {
-  const { name = "", digest = "" } = useParams();
+function TestPage({ name }: { name: string }) {
+  const { digest = "" } = useParams();
   const navigate = useNavigate();
   const [json, setJson] = useState(false);
   const versions = useWorkflowVersions(name);

@@ -7,15 +7,9 @@
 // And a workflow's versions, each with its suite (archi/05, "Suites and the gate"): the tests it
 // passed, which it inherited from its parent, added, or updated, and those of the parent it
 // retired, with their reasons.
-import type {
-  ExpectedCall,
-  Payload,
-  RetiredTest,
-  ToolRule,
-  ToolRules,
-  Workflow,
-} from "../api/types";
+
 import type { RunModel, ToolCall } from "./run";
+import type { ExpectedCall, Payload, RetiredTest, ToolRule, ToolRules, Workflow } from "./types";
 
 /** The prefix of the signals that carry the end of a run. */
 export const ENDED_PREFIX = "rewind:ended:";

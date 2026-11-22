@@ -3,6 +3,7 @@
 //! the DTOs are `rewind-api`'s.
 
 mod admin;
+mod changes;
 mod connections;
 mod dashboard;
 mod events;
@@ -69,6 +70,7 @@ pub(crate) fn router(app: Arc<App>, socket: bool, mcp: Option<Router>) -> Router
         .route(routes::RUN_TRACE, get(runs::trace))
         .route(routes::RUN_ENTRY, get(runs::entry))
         .route(routes::RUN_EVENTS, get(events::stream))
+        .route(routes::CHANGES, get(changes::stream))
         .route(routes::RUN_SIGNAL, post(runs::signal))
         .route(routes::RUN_CANCEL, post(runs::cancel))
         .route(routes::RUN_FORK, post(runs::fork))

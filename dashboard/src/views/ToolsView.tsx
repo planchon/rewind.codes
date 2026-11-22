@@ -5,8 +5,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { useToolStats } from "../api/queries";
-import type { ToolStats } from "../api/types";
 import { Empty, Loading, ProblemView, Time } from "../components/bits";
 import { Tile } from "../components/Charts";
 import { PageHeader } from "../components/PageHeader";
@@ -21,6 +19,8 @@ import {
 } from "../model/filters";
 import { formatCount, formatDuration, formatPercent } from "../model/format";
 import { type FieldValues, fieldTerm, queryLink, TEXT_VALUES } from "../model/query";
+import type { ToolStats } from "../model/types";
+import { useToolStats } from "../state/aggregates";
 import { Seg } from "./FilterBits";
 import { useListQuery, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
 

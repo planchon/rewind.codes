@@ -1,12 +1,7 @@
 // Pieces the organization views share: the role picker that offers only what the caller may
 // give, the allowed labels field, inline confirmations, people and principals.
-import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useId, useState } from "react";
-import { MEMBERS } from "../../api/organization";
-import type { ApiKey, Labels, Member, Permission, Role } from "../../api/types";
-import { useAccess } from "../../app/access";
+import { type ReactNode, useEffect, useId, useMemo, useState } from "react";
 import { Avatar } from "../../app/Brand";
-import { useApi } from "../../app/session";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
   canGive,
@@ -17,6 +12,9 @@ import {
   parseLabels,
   splitPrincipal,
 } from "../../model/access";
+import type { ApiKey, Labels, Member, Permission, Role } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useMembers } from "../../state/organization";
 
 /** A labelled field with its hint, or its error, described to assistive technologies. */
 export function Field({
@@ -266,16 +264,11 @@ export function Person({ member, you }: { member: Member; you: boolean }) {
 /** The members, when the caller may list them: to name who invited, granted or created. */
 export function useMemberNames(): Map<string, string> {
   const access = useAccess();
-  const api = useApi();
-  const enabled = access.can("members:read") && access.organization !== null;
-  const members = useQuery({
-    queryKey: MEMBERS,
-    queryFn: ({ signal }) => api.members(signal),
-    enabled,
-  });
-  const names = new Map<string, string>();
-  for (const m of members.data ?? []) names.set(m.user.id, displayName(m.user));
-  return names;
+  const members = useMembers(access.can("members:read") && access.organization !== null);
+  return useMemo(
+    () => new Map((members.data ?? []).map((m) => [m.user.id, displayName(m.user)])),
+    [members.data],
+  );
 }
 
 /** Who a principal's text (`user:<id>`, `key:<id>`) is, as well as it is known. */

@@ -8,7 +8,7 @@ import type {
   RunStatsQuery,
   RunStatus,
   StreamEvent,
-} from "../api/types";
+} from "../model/types";
 import type { Caller } from "./access";
 import { accessHandlers, authenticate, guard, runsWorld } from "./access-handlers";
 import { connectionHandlers } from "./connection-handlers";
@@ -25,6 +25,7 @@ import {
   toolStats,
   visibleEntries,
 } from "./readmodel";
+import { eventStream, runHandlers } from "./run-handlers";
 import { workflowHandlers } from "./workflow-handlers";
 
 export { problem };
@@ -82,11 +83,14 @@ export interface HandlerOptions {
   now?: () => number;
   /** How often a followed stream looks for new entries. */
   pollMs?: number;
+  /** How often the change stream looks for runs that changed. */
+  changesMs?: number;
 }
 
 export function createHandlers(world: World, options: HandlerOptions = {}) {
   const now = options.now ?? (() => Date.now());
   const pollMs = options.pollMs ?? 250;
+  const changesMs = options.changesMs ?? 1_000;
   const noRun = (id: string) => problem(404, "not-found", `No run ${id} for this tenant.`);
   const find = (w: World, id: string) => w.runs.find((r) => r.id === id);
 
@@ -103,6 +107,8 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
 
     ...workflowHandlers(world),
 
+    ...runHandlers(world, now, changesMs),
+
     ...connectionHandlers(world),
 
     http.get("*/v1/server", () =>
@@ -112,7 +118,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
         roles: ["api", "worker"],
         embedded: world.embedded,
         virtualTime: false,
-        // Not in the generated `ServerInfo` yet (`src/api/connections.ts`).
+        // `mcpUrl` and `oauth`, as the world serves MCP.
         ...world.connections.mcp,
       } as never),
     ),
@@ -306,9 +312,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
             clearTimeout(expiry);
           },
         });
-        return new HttpResponse(stream, {
-          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-        });
+        return eventStream(stream);
       }),
     ),
 

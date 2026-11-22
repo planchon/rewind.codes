@@ -3,8 +3,6 @@
 // scripts models write. A group opens its runs; its latest run opens on the step that failed.
 import type { ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
-import { queryFault } from "../../api/client";
-import { useFailures } from "../../api/queries";
 import { useRunLinkState } from "../../app/runLinks";
 import { Ago, Empty, Loading, ProblemView, RunId } from "../../components/bits";
 import { Sparkline } from "../../components/Charts";
@@ -13,6 +11,8 @@ import { isCancellation } from "../../model/ending";
 import { RANGES, type RangeKey } from "../../model/filters";
 import { formatCount, formatDuration, splitLabel } from "../../model/format";
 import { joinQuery, labelTerm, queryLink } from "../../model/query";
+import { useFailures } from "../../state/aggregates";
+import { queryFault } from "../../state/errors";
 import { BUCKETS, WINDOW_WORDS, windowTerm } from "../search";
 
 export function FailureGroups({
@@ -61,7 +61,7 @@ export function FailureGroups({
   } else {
     const page = failures.data;
     body = (
-      <div className="table-wrap">
+      <div className={`table-wrap${failures.stale ? " is-stale" : ""}`}>
         <table className="grid failures-table">
           <thead>
             <tr>

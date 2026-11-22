@@ -3,31 +3,26 @@
 // The person ticks the organizations the client may open, gives each an access within their own
 // role, keeps or unticks the labels of what it starts, and allows or denies; the browser then
 // goes back to the client. A page of its own, outside the dashboard's frame, as a sign-in is.
-import { useMutation, useQuery } from "@tanstack/react-query";
 import { CircleAlert, Laptop, ShieldQuestion } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useSearchParams } from "react-router";
-import { ApiError } from "../../api/client";
-import {
-  ACCESSES,
-  answerConsent,
-  type ConnectionAccess,
-  type ConsentRequest,
-  readConsent,
-} from "../../api/connections";
 import { Brand } from "../../app/Brand";
-import { useApi, useSession } from "../../app/session";
 import { Loading, ProblemView, useNow } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { displayName } from "../../model/access";
 import {
   ACCESS_INFO,
+  ACCESSES,
   type ConsentChoice,
   hostOf,
   initialChoices,
   labelsText,
 } from "../../model/connections";
 import { formatRelative } from "../../model/format";
+import type { ConnectionAccess, ConsentRequest } from "../../model/types";
+import { useAnswerConsent, useConsent } from "../../state/connections";
+import { ApiError } from "../../state/errors";
+import { useSession } from "../../state/session";
 
 export function ConsentView() {
   const [params] = useSearchParams();
@@ -67,14 +62,7 @@ function Expired() {
 }
 
 export function Consent({ request }: { request: string | null }) {
-  const api = useApi();
-  const consent = useQuery({
-    queryKey: ["consent", request],
-    queryFn: ({ signal }) => readConsent(api, request ?? "", signal),
-    enabled: request !== null && request !== "",
-    retry: false,
-    staleTime: Number.POSITIVE_INFINITY,
-  });
+  const consent = useConsent(request);
   if (!request) return <Expired />;
   if (consent.isPending) {
     return (
@@ -83,13 +71,13 @@ export function Consent({ request }: { request: string | null }) {
       </div>
     );
   }
-  if (consent.error) {
+  if (consent.isError) {
     if (isGone(consent.error)) return <Expired />;
     return (
       <Card label="The request could not be read">
         <ProblemView error={consent.error} title="The request could not be read" />
         <div className="gate-actions">
-          <button type="button" className="btn" onClick={() => void consent.refetch()}>
+          <button type="button" className="btn" onClick={() => void consent.refresh()}>
             Try again
           </button>
         </div>
@@ -100,7 +88,6 @@ export function Consent({ request }: { request: string | null }) {
 }
 
 function ConsentForm({ request, consent }: { request: string; consent: ConsentRequest }) {
-  const api = useApi();
   const { phase, assign } = useSession();
   const now = useNow(1_000);
   const skew = phase.kind === "member" ? phase.skewMs : 0;
@@ -108,9 +95,10 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
   const hasLabels = Object.keys(consent.allowedLabels).length > 0;
   const [onlyLabelled, setOnlyLabelled] = useState(true);
   const [leaving, setLeaving] = useState<string | null>(null);
-  const answer = useMutation({
-    mutationFn: (decision: "allow" | "deny") =>
-      answerConsent(api, {
+  const answer = useAnswerConsent();
+  const decide = (decision: "allow" | "deny") =>
+    void answer.run(
+      {
         request,
         decision,
         organizations:
@@ -120,12 +108,12 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
                 .map((o) => ({ id: o.id, access: choices.get(o.id)?.access ?? "read" }))
             : [],
         allowedLabels: decision === "allow" && onlyLabelled ? consent.allowedLabels : {},
-      }),
-    onSuccess: ({ redirectTo }) => {
-      setLeaving(hostOf(redirectTo) ?? consent.redirectHost);
-      assign(redirectTo);
-    },
-  });
+      },
+      ({ redirectTo }) => {
+        setLeaving(hostOf(redirectTo) ?? consent.redirectHost);
+        assign(redirectTo);
+      },
+    );
 
   const expiresAt = Date.parse(consent.expiresAt);
   if (!leaving && expiresAt <= now + skew) return <Expired />;
@@ -138,7 +126,7 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
       return copy;
     });
   const ticked = consent.organizations.filter((o) => choices.get(o.id)?.checked).length;
-  const busy = answer.isPending || leaving !== null;
+  const busy = answer.pending || leaving !== null;
   const client = consent.client;
   const site = hostOf(client.uri ?? null);
   const user = phase.kind === "member" ? phase.state.user : null;
@@ -280,14 +268,14 @@ function ConsentForm({ request, consent }: { request: string; consent: ConsentRe
           <CircleAlert size={12} aria-hidden="true" /> Expires{" "}
           {formatRelative(expiresAt, now + skew)}
         </span>
-        <button type="button" className="btn" disabled={busy} onClick={() => answer.mutate("deny")}>
+        <button type="button" className="btn" disabled={busy} onClick={() => decide("deny")}>
           Deny
         </button>
         <button
           type="button"
           className="btn primary"
           disabled={busy || ticked === 0}
-          onClick={() => answer.mutate("allow")}
+          onClick={() => decide("allow")}
         >
           Allow
         </button>

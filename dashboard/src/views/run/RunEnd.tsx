@@ -2,7 +2,7 @@
 // request, its script) and what the run awaited then; a failure says what threw, where. The
 // error itself follows, its name apart from its message. The time cursor's bar says in which
 // step it ended, with the same mark.
-import type { Run } from "../../api/types";
+
 import { useSettings } from "../../app/settings";
 import { EndGlyph } from "../../components/Status";
 import {
@@ -17,6 +17,7 @@ import {
 } from "../../model/ending";
 import { formatDuration, formatTime } from "../../model/format";
 import type { RunModel } from "../../model/run";
+import type { Run } from "../../model/types";
 
 export interface Ending {
   kind: EndKind;

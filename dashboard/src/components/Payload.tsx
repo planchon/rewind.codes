@@ -4,9 +4,9 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { ChevronDown, ChevronRight, Maximize2, X } from "lucide-react";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
-import { usePayloadValue } from "../api/queries";
-import type { Payload } from "../api/types";
 import { formatBytes, shortDigest } from "../model/format";
+import type { Payload } from "../model/types";
+import { usePayloadValue } from "../state/runs";
 import { CopyButton, ProblemView } from "./bits";
 import { foldable, JsonTree, type Opening, OpeningButtons, useOpening } from "./JsonTree";
 

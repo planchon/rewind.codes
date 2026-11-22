@@ -3,8 +3,8 @@
 // parsed with eventsource-parser. A dropped stream is resumed from the next entry, with the
 // current token: the server closes a stream opened with an access token when the token expires.
 import { createParser } from "eventsource-parser";
+import type { Entry, RunStatus, StreamEvent } from "../model/types";
 import { type Api, ApiError } from "./client";
-import type { Entry, RunStatus, StreamEvent } from "./types";
 
 export type StreamState = "connecting" | "live" | "retrying";
 

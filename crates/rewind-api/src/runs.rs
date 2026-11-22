@@ -311,7 +311,11 @@ pub struct RunFilter {
     /// refused with `invalid-query`, which says where the term at fault is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub q: Option<String>,
-    /// `started` by default.
+    /// `started` (the default): the most recently started first; `oldest`: the first started
+    /// first; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself
+    /// first, the runs that do not wake by themselves last; `duration`: the longest from start to
+    /// end first, the runs that have not ended last; `calls`: the most tool calls first. Ties go
+    /// to the most recently started (`wakes`: the first started).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(inline)]
     pub sort: Option<RunSort>,
@@ -379,19 +383,29 @@ pub enum RunSort {
     /// The most recently started first.
     #[default]
     Started,
+    /// The first started first.
+    Oldest,
     /// The most recent activity first.
     Activity,
     /// The soonest to wake by itself first (a timer, a signal's timeout); the runs that do not
     /// wake by themselves last.
     Wakes,
+    /// The longest first, from start to end; the runs that have not ended last, the most
+    /// recently started first.
+    Duration,
+    /// The most tool calls first.
+    Calls,
 }
 
 impl RunSort {
     pub fn as_str(self) -> &'static str {
         match self {
             RunSort::Started => "started",
+            RunSort::Oldest => "oldest",
             RunSort::Activity => "activity",
             RunSort::Wakes => "wakes",
+            RunSort::Duration => "duration",
+            RunSort::Calls => "calls",
         }
     }
 }

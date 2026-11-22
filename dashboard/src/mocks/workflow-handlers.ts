@@ -3,7 +3,7 @@
 // `GET /v1/tests/{digest}`. They need `toolsets:read`; a grant limited to labels sees the
 // workflows carrying them; a recorded test is read like its run (`runs:read` in its namespace).
 import { HttpResponse, http } from "msw";
-import type { Workflow } from "../api/types";
+import type { Workflow } from "../model/types";
 import { type Caller, grantOf } from "./access";
 import { guard } from "./access-handlers";
 import type { World } from "./fixtures";

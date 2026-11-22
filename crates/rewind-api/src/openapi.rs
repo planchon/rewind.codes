@@ -18,7 +18,7 @@ use utoipa::openapi::{
 use utoipa::{Modify, OpenApi};
 
 use crate::auth::SESSION_COOKIE;
-use crate::events::StreamEvent;
+use crate::events::{ChangeEvent, StreamEvent};
 use crate::namespaces::{QuotaKind, QuotaScope, SignedTokenClaims};
 use crate::oauth::OAuthError;
 use crate::problem::{self, Problem, QuotaReached};
@@ -77,6 +77,7 @@ use crate::webhooks::{
         operations::get_run_trace,
         operations::get_run_entry,
         operations::stream_run_events,
+        operations::stream_changes,
         operations::signal_run,
         operations::cancel_run,
         operations::fork_run,
@@ -166,6 +167,7 @@ use crate::webhooks::{
         QuotaReached,
         QuotaScope,
         StreamEvent,
+        ChangeEvent,
         WebhookEvent,
         WebhookEventType,
         SignedTokenClaims,
@@ -335,8 +337,9 @@ impl Modify for Conventions {
 
 /// The paths whose operations act in a namespace: the header `Rewind-Namespace` names it for
 /// a key or a member, and narrows what they read.
-const NAMESPACED: [&str; 7] = [
+const NAMESPACED: [&str; 8] = [
     "/v1/runs",
+    "/v1/changes",
     "/v1/check",
     "/v1/test",
     "/v1/scripts",
@@ -514,7 +517,7 @@ mod operations {
         Connection, ConnectionList, Consent, ConsentAnswer, ConsentQuery, ConsentRedirect,
         UpdateConnection,
     };
-    use crate::events::{Entry, EventsQuery, StreamEvent};
+    use crate::events::{ChangeEvent, Entry, EventsQuery, StreamEvent};
     use crate::namespaces::{
         CreateToken, CreateTokenKey, NamespaceDefaults, NamespaceDetail, NamespaceList,
         NamespaceListQuery, NamespaceNames, NamespacePatch, NamespaceQuery, PutCeiling,
@@ -881,6 +884,30 @@ mod operations {
         )
     )]
     pub(super) fn stream_run_events() {}
+
+    /// Follow the runs that change (server-sent events)
+    ///
+    /// The runs of the organization that change from now on, as the caller may see them: an
+    /// end user's token its namespace's, a key or a member with `Rewind-Namespace` that
+    /// namespace's, a grant limited to labels the runs carrying them all. A run the caller
+    /// cannot open never shows, not even its id. Each event's `event` field names it and its
+    /// `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as
+    /// an item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);
+    /// `resync`, with `{}`, when more runs changed at once than the server reads in one pass:
+    /// read again what is shown. There is no resume: after a drop, read again what is shown and
+    /// open a new stream. The stream closes at a member's or a connection's access token's
+    /// expiry; once an end user's token or a connection no longer authenticates; once a key is
+    /// revoked, or the grant of a key, a member or a connection is removed, changes its labels or
+    /// no longer gives `runs:read`; and after a `resync` when the server cannot read the changes
+    /// any more.
+    #[utoipa::path(
+        get, path = "/v1/changes", tag = "runs", operation_id = "streamChanges",
+        responses(
+            (status = 200, description = "A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`.", body = ChangeEvent, content_type = "text/event-stream"),
+            (status = 401, description = "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it.", body = Problem, content_type = "application/problem+json"),
+        )
+    )]
+    pub(super) fn stream_changes() {}
 
     /// Send a signal (`signal_run`)
     ///

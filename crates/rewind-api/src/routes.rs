@@ -33,6 +33,8 @@ pub const RUN_JOURNAL: &str = "/v1/runs/{id}/journal";
 pub const RUN_RELEASE: &str = "/v1/runs/{id}/release";
 pub const RUN_GIVE_UP: &str = "/v1/runs/{id}/give-up";
 pub const RUN_CREDENTIALS: &str = "/v1/runs/{id}/credentials";
+/// The runs of the organization that change, as server-sent events (`crate::events::ChangeEvent`).
+pub const CHANGES: &str = "/v1/changes";
 
 pub const TASKS: &str = "/v1/tasks";
 pub const TASK_HEARTBEAT: &str = "/v1/tasks/{token}/heartbeat";
@@ -113,7 +115,7 @@ pub const AUTHORIZATION_SERVER: &str = "/.well-known/oauth-authorization-server"
 pub const MCP: &str = "/mcp";
 
 /// Every operation of the API: its method and its path.
-pub const OPERATIONS: [(&str, &str); 105] = [
+pub const OPERATIONS: [(&str, &str); 106] = [
     ("POST", TOOLSETS),
     ("GET", TOOLSETS),
     ("GET", TOOLSET_DECLARATIONS),
@@ -137,6 +139,7 @@ pub const OPERATIONS: [(&str, &str); 105] = [
     ("GET", RUN_TRACE),
     ("GET", RUN_ENTRY),
     ("GET", RUN_EVENTS),
+    ("GET", CHANGES),
     ("POST", RUN_SIGNAL),
     ("POST", RUN_CANCEL),
     ("POST", RUN_FORK),

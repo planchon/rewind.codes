@@ -7,6 +7,10 @@ import type {
   ApiKey,
   AuthConfig,
   AuthState,
+  Connection,
+  ConsentAnswer,
+  ConsentDecision,
+  ConsentRequest,
   CreateApiKey,
   CreateInvitation,
   Entry,
@@ -45,15 +49,17 @@ import type {
   ScriptPage,
   ServerInfo,
   SetGrant,
+  SignalAccepted,
   Test,
   ToolStatsPage,
   ToolStatsQuery,
   ToolsetSummary,
   Trace,
+  UpdateConnection,
   UpdateOrganization,
   Workflow,
   WorkflowPage,
-} from "./types";
+} from "../model/types";
 
 const PROBLEM_PREFIX = "urn:rewind:problem:";
 
@@ -239,6 +245,36 @@ export class Api {
   async run(id: string, signal?: AbortSignal): Promise<Run> {
     return this.unwrap(
       await this.client.GET("/v1/runs/{id}", { params: { path: { id } }, signal }),
+    );
+  }
+
+  /**
+   * Sends a signal to a run: `payload`, any JSON value, is its body. The same `idempotencyKey`
+   * sent twice to a run delivers one signal.
+   */
+  async signalRun(
+    id: string,
+    name: string,
+    payload: unknown,
+    idempotencyKey: string,
+  ): Promise<SignalAccepted> {
+    return this.unwrap(
+      await this.client.POST("/v1/runs/{id}/signals/{name}", {
+        params: { path: { id, name }, header: { "Idempotency-Key": idempotencyKey } },
+        body: payload,
+        // `null` is a payload too: sent as the JSON `null`, not as no body.
+        bodySerializer: (body: unknown) => JSON.stringify(body === undefined ? null : body),
+      }),
+    );
+  }
+
+  /** Asks for the run's cancellation; the server takes a second request as the first. */
+  async cancelRun(id: string): Promise<Run> {
+    return this.unwrap(
+      await this.client.POST("/v1/runs/{id}/cancel", {
+        params: { path: { id } },
+        body: {},
+      }),
     );
   }
 
@@ -511,6 +547,50 @@ export class Api {
 
   async revokeApiKey(id: string): Promise<void> {
     this.unwrap(await this.client.DELETE("/v1/api-keys/{id}", { params: { path: { id } } }));
+  }
+
+  // A person's connections (archi/06, "Connections"), and the consent of an MCP client.
+
+  /** The caller's own connections, in every organization. */
+  async connections(signal?: AbortSignal): Promise<Connection[]> {
+    return this.unwrap(await this.client.GET("/v1/connections", { signal })).connections;
+  }
+
+  /** Replaces the organizations a connection opens, with their access and labels. */
+  async updateConnection(id: string, body: UpdateConnection): Promise<Connection> {
+    return this.unwrap(
+      await this.client.PATCH("/v1/connections/{id}", { params: { path: { id } }, body }),
+    );
+  }
+
+  async revokeConnection(id: string): Promise<void> {
+    this.unwrap(await this.client.DELETE("/v1/connections/{id}", { params: { path: { id } } }));
+  }
+
+  /** The connections that open the caller's organization. */
+  async organizationConnections(signal?: AbortSignal): Promise<Connection[]> {
+    return this.unwrap(await this.client.GET("/v1/organization/connections", { signal }))
+      .connections;
+  }
+
+  /** Removes the caller's organization from a connection. */
+  async removeOrganizationConnection(id: string): Promise<void> {
+    this.unwrap(
+      await this.client.DELETE("/v1/organization/connections/{id}", {
+        params: { path: { id } },
+      }),
+    );
+  }
+
+  /** What an authorization request of an MCP client asks. */
+  async consent(request: string, signal?: AbortSignal): Promise<ConsentRequest> {
+    return this.unwrap(
+      await this.client.GET("/v1/oauth/consent", { params: { query: { request } }, signal }),
+    );
+  }
+
+  async answerConsent(body: ConsentDecision): Promise<ConsentAnswer> {
+    return this.unwrap(await this.client.POST("/v1/oauth/consent", { body }));
   }
 
   // Namespaces: the end users, their limits, use, alerts and tokens.

@@ -1,11 +1,9 @@
 // Overview, the home page: the runs of a window by outcome over time, the share that completed,
 // durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
-// figure, bar and row opens the runs behind it. Polled every 10 seconds.
+// figure, bar and row opens the runs behind it. Live: its figures change in place within 5 s of a
+// change, and are read every 10 seconds while the change stream is down.
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { queryFault } from "../api/client";
-import { useFailures, useRunStats, useToolStats } from "../api/queries";
-import type { RunStatus } from "../api/types";
 import { useSettings } from "../app/settings";
 import { Empty, Loading, ProblemView } from "../components/bits";
 import { Meter, StackedBars, Tile } from "../components/Charts";
@@ -16,6 +14,9 @@ import { isCancellation } from "../model/ending";
 import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount, formatDuration, formatPercent, formatTime } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
+import type { RunStatus } from "../model/types";
+import { useFailures, useRunStats, useToolStats } from "../state/aggregates";
+import { queryFault } from "../state/errors";
 import { Seg } from "./FilterBits";
 import {
   BUCKETS,
@@ -300,17 +301,12 @@ export function OverviewView() {
       <PageHeader
         title="Overview"
         actions={
-          <>
-            <span className="live-note" title={`${WINDOW_WORDS[win]}, read again every 10 s`}>
-              <span className="live-dot" aria-hidden="true" /> Live
-            </span>
-            <Seg<RangeKey>
-              label="Window"
-              value={win}
-              onChange={setWin}
-              options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
-            />
-          </>
+          <Seg<RangeKey>
+            label="Window"
+            value={win}
+            onChange={setWin}
+            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
+          />
         }
       />
       <QueryBar

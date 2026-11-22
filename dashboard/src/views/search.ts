@@ -2,11 +2,12 @@
 // operator from one view to another, and a link names a search.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
-import { useNamespaceSuggestions, useSettled } from "../api/namespaces";
-import { useAccess } from "../app/access";
+import { useSettled } from "../components/bits";
 import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount } from "../model/format";
 import { type FieldValues, legacyQuery, TEXT_VALUES, withQuery } from "../model/query";
+import { useAccess } from "../state/access";
+import { useNamespaceSuggestions } from "../state/namespaces";
 
 /**
  * The query of the URL (`q`). An older link's filters (`?status=failed&label=…`) are read as the

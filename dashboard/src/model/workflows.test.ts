@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Workflow } from "../api/types";
 import { JournalBuilder, payload } from "../mocks/journal";
 import { buildRunModel } from "./run";
+import type { Workflow } from "./types";
 import {
   callName,
   endedRunOf,

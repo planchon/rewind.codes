@@ -4,8 +4,9 @@
 // limit, the alerts of the month, its tokens in use, its exceptions to the defaults; then its runs
 // of the month and the scripts its runs ran. What the caller's permissions allow, each in a
 // dialog: rename it and change its limits (`namespaces:write`), revoke its tokens
-// (`tokens:write`), erase it (`namespaces:write`, confirmed by typing its id).
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+// (`tokens:write`), erase it (`namespaces:write`, confirmed by typing its id). Each shows on the page
+// at once, and is undone if the server refuses it, its message in the dialog
+// (`state/namespaces.ts`).
 import {
   ChevronLeft,
   ChevronRight,
@@ -16,11 +17,6 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { NAMESPACES, useNamespaceDefaults, useNamespaceDetail } from "../../api/namespaces";
-import { useFailures, useRunStats, useRuns, useScripts } from "../../api/queries";
-import type { NamespaceDetail, Quotas, RevokedTokens, RunStatus } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, CopyButton, Empty, Loading, ProblemView, Time, useNow } from "../../components/bits";
 import { Meter, StackedBars, Tile } from "../../components/Charts";
 import { CpuChart } from "../../components/CpuChart";
@@ -51,8 +47,21 @@ import {
   shiftMonth,
   usedOf,
 } from "../../model/quotas";
+import type { NamespaceDetail, Quotas, RunStatus } from "../../model/types";
+import { useAccess } from "../../state/access";
+import type { Action } from "../../state/actions";
+import { useFailures, useRunStats } from "../../state/aggregates";
+import {
+  useEraseNamespace,
+  useNamespaceDefaults,
+  useNamespaceDetail,
+  useRenameNamespace,
+  useRevokeNamespaceTokens,
+  useSetNamespaceLimits,
+} from "../../state/namespaces";
+import { useScriptList } from "../../state/scripts";
 import { ConfirmButton } from "../org/bits";
-import { RunTable } from "../RunTable";
+import { ScopedRuns } from "../ScopedRuns";
 import { ScriptTable } from "../ScriptsView";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
 
@@ -62,9 +71,11 @@ const DAY_MS = 86_400_000;
 const DISPLAY_NAME_MAX = 128;
 
 export function NamespaceView() {
+  const { name = "" } = useParams();
   return (
     <NamespacesGate>
-      <NamespacePage />
+      {/* Another namespace is another page: it never shows the one before while it loads. */}
+      <NamespacePage key={name} name={name} />
     </NamespacesGate>
   );
 }
@@ -106,16 +117,7 @@ function ExceptionsEditor({
   label: string;
   onDone: () => void;
 }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
-  const name = detail.namespace.name;
-  const save = useMutation({
-    mutationFn: (exceptions: Quotas) => api.putNamespace(name, { exceptions }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
-      onDone();
-    },
-  });
+  const save = useSetNamespaceLimits(detail.namespace.name);
   return (
     <QuotasForm
       label={`Limits of ${label}`}
@@ -133,9 +135,11 @@ function ExceptionsEditor({
           : `default: ${quotaText(defaults ?? {}, key)}`;
       }}
       submit="Save the limits"
-      pending={save.isPending}
+      pending={save.pending}
       error={save.error}
-      onSubmit={(quotas) => save.mutate(quotas)}
+      onSubmit={(quotas) => {
+        void save.run(quotas).then((done) => done && onDone());
+      }}
     />
   );
 }
@@ -150,34 +154,28 @@ function Rename({
   displayName: string | null;
   onDone: () => void;
 }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
   const [typed, setTyped] = useState(displayName ?? "");
+  // The name as it was when the dialog opened: the page shows the new one at once.
+  const [was] = useState(displayName);
   const next = typed.trim();
   const tooLong = [...next].length > DISPLAY_NAME_MAX;
-  const save = useMutation({
-    mutationFn: () => api.patchNamespace(name, { displayName: next === "" ? null : next }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
-      onDone();
-    },
-  });
+  const save = useRenameNamespace(name);
   return (
     <DialogForm
-      title={displayName ? `Rename ${displayName}` : `Name ${name}`}
+      title={was ? `Rename ${was}` : `Name ${name}`}
       description={
         <>
           The name every view shows for this end user. Its id, <span className="mono">{name}</span>,
           stays what its tokens, runs, links and webhooks use. Empty, the views show the id.
         </>
       }
-      submit={next === "" && displayName ? "Remove the name" : "Save the name"}
-      pending={save.isPending}
-      disabled={tooLong || next === (displayName ?? "")}
+      submit={next === "" && was ? "Remove the name" : "Save the name"}
+      pending={save.pending}
+      disabled={tooLong || next === (was ?? "")}
       error={save.error}
       errorTitle="Could not rename it"
       onSubmit={() => {
-        if (!tooLong) save.mutate();
+        if (!tooLong) void save.run(next === "" ? null : next).then((done) => done && onDone());
       }}
     >
       <label className="field col">
@@ -200,18 +198,22 @@ function Rename({
   );
 }
 
-/** Erasing an end user, in a dialog, confirmed by typing its id. */
-function Erase({ name, label, onErased }: { name: string; label: string; onErased: () => void }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
+/**
+ * Erasing an end user, in a dialog, confirmed by typing its id. The page holds the action: it shows
+ * the namespace being erased at once, and the dialog stays until the server's answer.
+ */
+function Erase({
+  name,
+  label,
+  erase,
+  onErased,
+}: {
+  name: string;
+  label: string;
+  erase: Action<void, void>;
+  onErased: () => void;
+}) {
   const [typed, setTyped] = useState("");
-  const erase = useMutation({
-    mutationFn: () => api.deleteNamespace(name),
-    onSuccess: async () => {
-      onErased();
-      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
-    },
-  });
   return (
     <DialogForm
       title={`Erase ${label}`}
@@ -223,14 +225,14 @@ function Erase({ name, label, onErased }: { name: string; label: string; onErase
         </>
       }
       submit={`Erase ${label}`}
-      pending={erase.isPending}
+      pending={erase.pending}
       pendingLabel="Erasing…"
       disabled={typed !== name}
       danger
       error={erase.error}
       errorTitle="Could not erase it"
       onSubmit={() => {
-        if (typed === name) erase.mutate();
+        if (typed === name) void erase.run().then((done) => done && onErased());
       }}
     >
       <label className="field col">
@@ -252,12 +254,16 @@ function Erase({ name, label, onErased }: { name: string; label: string; onErase
 /**
  * How the namespace's runs of the month went: figures, the runs started each day by outcome, what
  * fails most and the tools they call. Every figure, bar and row opens the runs behind it.
+ *
+ * The month going on is open-ended (`started:>=…`): its query does not change as time passes, so
+ * the lists it keys keep their rows instead of loading again each minute.
  */
 function useMonthRuns(name: string, month: string, now: number) {
   const [from, end] = monthBounds(month);
   const until = Math.min(end, now);
   const scope = fieldTerm("namespace", name);
-  const started = `started:${queryTime(from)}..${queryTime(until)}`;
+  const started =
+    end > now ? `started:>=${queryTime(from)}` : `started:${queryTime(from)}..${queryTime(end)}`;
   const range = { since: new Date(from).toISOString(), until: new Date(until).toISOString() };
   const key = `${name}|${month}`;
   const stats = useRunStats(
@@ -459,36 +465,31 @@ function ToolsUsed({ runs, month }: { runs: MonthRuns; month: string }) {
   );
 }
 
-/** Its runs started in the month, the newest first. */
-function MonthRunList({ runs, month }: { runs: MonthRuns; month: string }) {
-  const navigate = useNavigate();
-  const q = joinQuery(runs.scope, runs.started);
-  const list = useRuns(`namespace|${q}`, () => ({ q, limit: 20 }), POLL);
-  const open = (...terms: string[]) =>
-    void navigate(queryLink("/observability", joinQuery(q, ...terms)));
+/**
+ * Its runs started in the month, in Observability's table forced to the namespace and the month:
+ * its headers order and filter them, in the page's URL.
+ */
+function MonthRunList({ runs, month, label }: { runs: MonthRuns; month: string; label: string }) {
   return (
-    <section className="ns-section" aria-label="Its runs">
-      <header className="ns-section-head">
-        <h2>Runs in {monthLabel(month)}</h2>
-        <Link to={queryLink("/observability", q)}>Open in Observability →</Link>
-      </header>
-      <RunTable
-        query={list}
-        onPickLabel={(pair) => {
-          const at = pair.indexOf(":");
-          open(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
-        }}
-        onPickScript={(digest) => open(`script:${digest}`)}
-        empty={`No run started in ${monthLabel(month)}.`}
-      />
-    </section>
+    <ScopedRuns
+      name={`namespace|${runs.scope}|${month}`}
+      label="Its runs"
+      title={`Runs in ${monthLabel(month)}`}
+      scope={joinQuery(runs.scope, runs.started)}
+      locked={[
+        { label: <>Namespace {label}</>, title: `Only the runs of ${label}` },
+        { label: <>Started in {monthLabel(month)}</>, title: "The month the page shows" },
+      ]}
+      refetchMs={POLL}
+      empty={`No run started in ${monthLabel(month)}.`}
+    />
   );
 }
 
 /** The scripts its runs ran, the most recently run first. */
 function ScriptList({ name, scope, count }: { name: string; scope: string; count: number }) {
   const navigate = useNavigate();
-  const scripts = useScripts(`namespace|${name}`, { limit: 10 }, name);
+  const scripts = useScriptList({ query: { limit: 10 }, namespace: name });
   const open = (term: string) => void navigate(queryLink("/scripts", joinQuery(scope, term)));
   return (
     <section className="ns-section" aria-label="Its scripts">
@@ -499,7 +500,7 @@ function ScriptList({ name, scope, count }: { name: string; scope: string; count
         <Link to={queryLink("/scripts", scope)}>Open in Scripts →</Link>
       </header>
       <ScriptTable
-        query={scripts}
+        scripts={scripts}
         scope={scope}
         onPickLabel={(pair) => {
           const at = pair.indexOf(":");
@@ -512,12 +513,9 @@ function ScriptList({ name, scope, count }: { name: string; scope: string; count
   );
 }
 
-function NamespacePage() {
-  const { name = "" } = useParams();
+function NamespacePage({ name }: { name: string }) {
   const [params, setParams] = useSearchParams();
   const access = useAccess();
-  const api = useApi();
-  const queryClient = useQueryClient();
   const now = useNow(60_000);
   const current = monthOf(now);
   const asked = params.get("month");
@@ -529,15 +527,9 @@ function NamespacePage() {
   const [editing, setEditing] = useState(false);
   const [erasing, setErasing] = useState(false);
   const [erased, setErased] = useState(false);
-  const [revoked, setRevoked] = useState<RevokedTokens | null>(null);
-  const revoke = useMutation({
-    mutationFn: () => api.revokeNamespaceTokens(name),
-    onMutate: () => setRevoked(null),
-    onSuccess: async (answer) => {
-      setRevoked(answer);
-      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
-    },
-  });
+  const revoke = useRevokeNamespaceTokens(name);
+  const erase = useEraseNamespace(name);
+  const revoked = revoke.data;
   const toMonth = (next: string) =>
     setParams((p) => {
       const out = new URLSearchParams(p);
@@ -599,8 +591,8 @@ function NamespacePage() {
               <ConfirmButton
                 confirm={`Revoke every token of ${label}?`}
                 description="Its opaque tokens, and the signed tokens issued before now, are refused from their next request. The end user's agents need new tokens."
-                onConfirm={() => revoke.mutate()}
-                pending={revoke.isPending}
+                onConfirm={() => void revoke.run()}
+                pending={revoke.pending}
                 title="Its opaque tokens, and its signed tokens issued before now"
                 icon={<KeyRound size={14} aria-hidden="true" />}
                 small={false}
@@ -651,10 +643,11 @@ function NamespacePage() {
       <FormDialog open={renaming && canWrite} onOpenChange={setRenaming}>
         <Rename name={ns.name} displayName={displayName} onDone={() => setRenaming(false)} />
       </FormDialog>
-      <FormDialog open={erasing && canWrite} onOpenChange={setErasing}>
+      <FormDialog open={erasing && (canWrite || erase.pending)} onOpenChange={setErasing}>
         <Erase
           name={ns.name}
           label={label}
+          erase={erase}
           onErased={() => {
             setErasing(false);
             setErased(true);
@@ -822,7 +815,7 @@ function NamespacePage() {
         </div>
       </div>
 
-      <MonthRunList runs={runs} month={month} />
+      <MonthRunList runs={runs} month={month} label={label} />
       <ScriptList name={ns.name} scope={runs.scope} count={ns.usage.scripts} />
     </div>
   );

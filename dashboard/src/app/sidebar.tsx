@@ -13,7 +13,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { read, write } from "./storage";
+import { read, write } from "../model/storage";
 
 export const SIDEBAR_DEFAULT = 256;
 export const SIDEBAR_MIN = 200;

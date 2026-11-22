@@ -83,7 +83,8 @@ meta       (key PK, value)                                 -- schema version; vi
 
 -- read model, written only by the projector
 run_summaries (run_id PK, namespace, script, toolset, status, labels, started_at, ended_at,
-               last_activity_at, tool_calls, errors, history_len)
+               last_activity_at, tool_calls, errors, history_len,
+               changed_at)                         -- wall clock, ms, rising per run: the change stream
 tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, completed_at, outcome,
                error_kind, args_digest, result_digest)      PK (run_id, seq)
 ```
@@ -440,7 +441,7 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 
 | Permission | Lets the caller | owner | harness | worker | reader |
 | --- | --- | --- | --- | --- | --- |
-| `runs:read` | Read runs, their statistics and failure groups, a run's state, trace, entries, event stream and journal, the scripts, the tool statistics, payloads | yes | yes | | yes |
+| `runs:read` | Read runs, their statistics and failure groups, a run's state, trace, entries, event stream and journal, the change stream, the scripts, the tool statistics, payloads | yes | yes | | yes |
 | `runs:start` | Start and fork runs; `/v1/check`, `/v1/test` | yes | yes | | |
 | `runs:control` | Send signals, cancel | yes | yes | | |
 | `runs:quarantine` | Release a quarantined run or give it up | yes | yes | | |

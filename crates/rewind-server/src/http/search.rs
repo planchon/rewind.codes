@@ -264,20 +264,28 @@ fn wait_kind(waiting: WaitingFor) -> WaitKind {
 pub(crate) fn order(sort: Option<RunSort>) -> RunOrder {
     match sort.unwrap_or_default() {
         RunSort::Started => RunOrder::Started,
+        RunSort::Oldest => RunOrder::Oldest,
         RunSort::Activity => RunOrder::Activity,
         RunSort::Wakes => RunOrder::Wakes,
+        RunSort::Duration => RunOrder::Duration,
+        RunSort::Calls => RunOrder::Calls,
     }
 }
 
-/// A page's cursor as the API writes it: the run id for `started`, else the sort key in
-/// milliseconds (`-` without one), a dot and the run id.
+/// Whether a page's cursor in this order is the run id alone.
+fn by_run_alone(order: RunOrder) -> bool {
+    matches!(order, RunOrder::Started | RunOrder::Oldest)
+}
+
+/// A page's cursor as the API writes it: the run id for `started` and `oldest`, else the sort
+/// key (milliseconds, or a number of calls; `-` without one), a dot and the run id.
 pub(crate) fn encode_cursor(order: RunOrder, cursor: &SearchCursor) -> String {
-    match order {
-        RunOrder::Started => cursor.run.to_string(),
-        RunOrder::Activity | RunOrder::Wakes => match cursor.key {
-            Some(key) => format!("{}.{}", key.as_millis(), cursor.run),
-            None => format!("-.{}", cursor.run),
-        },
+    if by_run_alone(order) {
+        return cursor.run.to_string();
+    }
+    match cursor.key {
+        Some(key) => format!("{key}.{}", cursor.run),
+        None => format!("-.{}", cursor.run),
     }
 }
 
@@ -287,18 +295,15 @@ pub(crate) fn decode_cursor(order: RunOrder, text: &str) -> Result<SearchCursor,
             "cursor {text:?} is not valid for this sort: pass the nextCursor of the previous page, with the same sort"
         ))
     };
-    let (key, run) = match order {
-        RunOrder::Started => (None, text),
-        RunOrder::Activity | RunOrder::Wakes => {
-            let (key, run) = text.split_once('.').ok_or_else(invalid)?;
-            let key = match key {
-                "-" => None,
-                ms => Some(rewind_core::Timestamp::from_millis(
-                    ms.parse().map_err(|_| invalid())?,
-                )),
-            };
-            (key, run)
-        }
+    let (key, run) = if by_run_alone(order) {
+        (None, text)
+    } else {
+        let (key, run) = text.split_once('.').ok_or_else(invalid)?;
+        let key = match key {
+            "-" => None,
+            key => Some(key.parse().map_err(|_| invalid())?),
+        };
+        (key, run)
     };
     Ok(SearchCursor {
         key,
@@ -476,15 +481,13 @@ mod tests {
         let run: RunId = "0193a5c4-7d2e-7c1a-9b1e-3f6a2d9c8e10".parse().unwrap();
         for (order, key) in [
             (RunOrder::Started, None),
-            (
-                RunOrder::Activity,
-                Some(rewind_core::Timestamp::from_millis(42)),
-            ),
+            (RunOrder::Oldest, None),
+            (RunOrder::Activity, Some(42)),
             (RunOrder::Wakes, None),
-            (
-                RunOrder::Wakes,
-                Some(rewind_core::Timestamp::from_millis(7)),
-            ),
+            (RunOrder::Wakes, Some(7)),
+            (RunOrder::Duration, None),
+            (RunOrder::Duration, Some(90_000)),
+            (RunOrder::Calls, Some(0)),
         ] {
             let cursor = SearchCursor { key, run };
             assert_eq!(
@@ -493,6 +496,11 @@ mod tests {
             );
         }
         assert!(decode_cursor(RunOrder::Wakes, &run.to_string()).is_err());
+        assert!(decode_cursor(RunOrder::Calls, &format!("x.{run}")).is_err());
+        assert_eq!(
+            encode_cursor(RunOrder::Oldest, &SearchCursor { key: None, run }),
+            run.to_string()
+        );
     }
 
     #[test]

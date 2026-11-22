@@ -17,8 +17,8 @@ use std::ops::Bound;
 
 use rewind_core::{Callsite, RunId, RunStatus, Seq, Timestamp};
 use rewind_engine::ports::{
-    Ending, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunRef, RunSummary, SearchCursor,
-    Term, TextMatch, Wait,
+    ChangedRun, Ending, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunRef, RunSummary,
+    SearchCursor, TenantId, Term, TextMatch, Wait,
 };
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Postgres, QueryBuilder};
@@ -44,6 +44,12 @@ pub(super) const WAITING_FOR: &str = "CASE WHEN w.kind IN ('call', 'host') \
 /// Joins the call of each wait of `run_waits w`, with its task's state, as `tool_calls c`.
 pub(super) const WAIT_TASKS: &str =
     "LEFT JOIN tool_calls c ON c.run_id = w.run_id AND c.seq = w.seq";
+
+/// How long an ended run of `run_summaries s` took, in milliseconds (`RunSummary::duration`):
+/// null before it has ended or while its start is not projected, 0 for an end recorded before
+/// the start. The index `run_summaries_by_duration` is on this expression.
+pub(super) const DURATION: &str = "CASE WHEN s.ended_at >= s.started_at \
+     THEN s.ended_at - s.started_at WHEN s.ended_at < s.started_at THEN 0 END";
 
 /// Pushes the condition on `run_summaries s` of the runs a query matches.
 pub(super) fn push_matching(sql: &mut Sql<'_>, query: &RunQuery) {
@@ -357,11 +363,14 @@ fn digest_range(prefix: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 // Pages of runs
 
 /// The columns of a summary, read by [`summary_from_row`]: `run_summaries s` with its
-/// quarantine, `run_quarantine q`, joined.
+/// quarantine, `run_quarantine q`, joined; then when it last changed ([`CHANGED_AT`]).
 const SUMMARY_COLUMNS: &str = "s.run_id, s.tenant, s.script, s.toolset, s.headline, s.status, \
      s.mode, s.labels::text, s.parent, s.workflow, s.started_by, s.started_at, s.ended_at, \
      s.last_activity_at, s.tool_calls, s.errors, s.history_len, s.wakes_at, s.error, s.message, \
-     s.line, s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace";
+     s.line, s.signature, s.fingerprint, q.kind, q.reason, q.since, s.namespace, s.changed_at";
+
+/// The column of [`SUMMARY_COLUMNS`] that holds `changed_at`.
+const CHANGED_AT: usize = 27;
 
 fn summary_from_row(row: &PgRow) -> Result<RunSummary, Error> {
     let ending = match row.opt_text(18)? {
@@ -433,13 +442,24 @@ pub(super) async fn search_runs(
         (RunOrder::Started, Some(after)) => {
             sql.push(" AND s.run_id < ").push_bind(uuid(after.run));
         }
-        (RunOrder::Activity, Some(after)) => {
-            // Every run has an activity: a position without one comes after them all.
+        (RunOrder::Oldest, Some(after)) => {
+            sql.push(" AND s.run_id > ").push_bind(uuid(after.run));
+        }
+        // Every run has an activity and a number of calls: a position without one comes after
+        // them all.
+        (RunOrder::Activity | RunOrder::Calls, Some(after)) => {
             let Some(key) = after.key else {
                 return Ok(Vec::new());
             };
-            sql.push(" AND (s.last_activity_at, s.run_id) < (")
-                .push_bind(ts(key))
+            let column = if order == RunOrder::Calls {
+                "s.tool_calls"
+            } else {
+                "s.last_activity_at"
+            };
+            sql.push(" AND (")
+                .push(column)
+                .push(", s.run_id) < (")
+                .push_bind(int(key))
                 .push(", ")
                 .push_bind(uuid(after.run))
                 .push(")");
@@ -447,7 +467,7 @@ pub(super) async fn search_runs(
         (RunOrder::Wakes, Some(after)) => match after.key {
             Some(key) => {
                 sql.push(" AND ((s.wakes_at, s.run_id) > (")
-                    .push_bind(ts(key))
+                    .push_bind(int(key))
                     .push(", ")
                     .push_bind(uuid(after.run))
                     .push(") OR s.wakes_at IS NULL)");
@@ -457,34 +477,111 @@ pub(super) async fn search_runs(
                     .push_bind(uuid(after.run));
             }
         },
+        (RunOrder::Duration, Some(after)) => match after.key {
+            Some(key) => {
+                sql.push(" AND ((")
+                    .push(DURATION)
+                    .push(", s.run_id) < (")
+                    .push_bind(int(key))
+                    .push(", ")
+                    .push_bind(uuid(after.run))
+                    .push(") OR (")
+                    .push(DURATION)
+                    .push(") IS NULL)");
+            }
+            None => {
+                sql.push(" AND (")
+                    .push(DURATION)
+                    .push(") IS NULL AND s.run_id < ")
+                    .push_bind(uuid(after.run));
+            }
+        },
         (_, None) => {}
     }
-    sql.push(match order {
-        RunOrder::Started => " ORDER BY s.run_id DESC",
-        RunOrder::Activity => " ORDER BY s.last_activity_at DESC, s.run_id DESC",
-        RunOrder::Wakes => " ORDER BY s.wakes_at ASC NULLS LAST, s.run_id ASC",
-    });
+    match order {
+        RunOrder::Started => sql.push(" ORDER BY s.run_id DESC"),
+        RunOrder::Oldest => sql.push(" ORDER BY s.run_id ASC"),
+        RunOrder::Activity => sql.push(" ORDER BY s.last_activity_at DESC, s.run_id DESC"),
+        RunOrder::Wakes => sql.push(" ORDER BY s.wakes_at ASC NULLS LAST, s.run_id ASC"),
+        RunOrder::Duration => sql
+            .push(" ORDER BY ")
+            .push(DURATION)
+            .push(" DESC NULLS LAST, s.run_id DESC"),
+        RunOrder::Calls => sql.push(" ORDER BY s.tool_calls DESC, s.run_id DESC"),
+    };
     sql.push(" LIMIT ").push_bind(limit(page));
     let rows = sql.build().persistent(false).fetch_all(pool).await?;
     let mut summaries: Vec<RunSummary> = rows
         .iter()
         .map(summary_from_row)
         .collect::<Result<_, _>>()?;
-    // An active run shows its waits; any other waits for nothing.
+    attach_waits(pool, &mut summaries).await?;
+    Ok(summaries)
+}
+
+/// The summaries of these tenants' runs stamped at or after `since`, the oldest change first,
+/// then by run id; at most `count`, less those that cannot be read (logged).
+pub(super) async fn changed_runs(
+    pool: &PgPool,
+    tenants: &[TenantId],
+    since: u64,
+    count: usize,
+) -> Result<Vec<ChangedRun>, Error> {
+    if tenants.is_empty() || count == 0 {
+        return Ok(Vec::new());
+    }
+    let tenants: Vec<&str> = tenants.iter().map(TenantId::as_str).collect();
+    let rows = sqlx::query(&format!(
+        "SELECT {SUMMARY_COLUMNS} FROM run_summaries s \
+         LEFT JOIN run_quarantine q ON q.run_id = s.run_id AND q.kind IS NOT NULL \
+         WHERE s.tenant = ANY($1) AND s.changed_at >= $2 \
+         ORDER BY s.changed_at, s.run_id LIMIT $3"
+    ))
+    .bind(tenants)
+    .bind(int(since))
+    .bind(limit(count))
+    .fetch_all(pool)
+    .await?;
+    let mut summaries = Vec::with_capacity(rows.len());
+    let mut stamps = Vec::with_capacity(rows.len());
+    for row in &rows {
+        // A row that cannot be read is left out: one bad summary must not hide the others.
+        match summary_from_row(row).and_then(|summary| Ok((summary, row.u64(CHANGED_AT)?))) {
+            Ok((summary, stamp)) => {
+                summaries.push(summary);
+                stamps.push(stamp);
+            }
+            Err(error) => tracing::warn!(%error, "a changed run cannot be read: it is left out"),
+        }
+    }
+    attach_waits(pool, &mut summaries).await?;
+    Ok(summaries
+        .into_iter()
+        .zip(stamps)
+        .map(|(summary, changed_at)| ChangedRun {
+            summary,
+            changed_at,
+        })
+        .collect())
+}
+
+/// Gives the active runs among `summaries` their waits; any other waits for nothing.
+async fn attach_waits(pool: &PgPool, summaries: &mut [RunSummary]) -> Result<(), Error> {
     let active: Vec<Uuid> = summaries
         .iter()
         .filter(|summary| summary.status == RunStatus::Active)
         .map(|summary| uuid(summary.run.id))
         .collect();
-    if !active.is_empty() {
-        let mut waits = waits_of(pool, &active).await?;
-        for summary in &mut summaries {
-            if let Some(waits) = waits.remove(&summary.run.id) {
-                summary.waits = waits;
-            }
+    if active.is_empty() {
+        return Ok(());
+    }
+    let mut waits = waits_of(pool, &active).await?;
+    for summary in summaries {
+        if let Some(waits) = waits.remove(&summary.run.id) {
+            summary.waits = waits;
         }
     }
-    Ok(summaries)
+    Ok(())
 }
 
 /// The waits of these runs, in their snapshot's order, each call's with its task's state.

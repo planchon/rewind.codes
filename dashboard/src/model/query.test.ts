@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Facets } from "../api/types";
 import {
+  askedTerms,
+  countTerms,
   facetState,
   facetValues,
   legacyQuery,
@@ -11,9 +12,12 @@ import {
   toggleFacet,
   typedField,
   utf16Span,
+  withFieldTerm,
   withQuery,
   withTerm,
 } from "./query";
+import { ascending, readSort, withSort } from "./sorts";
+import type { Facets } from "./types";
 
 const FACETS: Facets = {
   statuses: [
@@ -180,5 +184,34 @@ describe("older links", () => {
     expect(withQuery(new URLSearchParams("status=failed&step=3"), "status:failed").toString()).toBe(
       "step=3&q=status%3Afailed",
     );
+  });
+});
+
+describe("a filter that takes one value at a time", () => {
+  it("replaces the terms that ask for its field, and leaves the excluded ones", () => {
+    expect(withFieldTerm("status:failed duration:>1m", "duration", "duration:>1h")).toBe(
+      "status:failed duration:>1h",
+    );
+    expect(withFieldTerm("duration:>1m -duration:>1h", "duration", null)).toBe("-duration:>1h");
+    expect(withFieldTerm("", "calls", "calls:0")).toBe("calls:0");
+    expect(askedTerms("-errors:0 errors:>0", "errors").map((t) => t.raw)).toEqual(["errors:>0"]);
+  });
+
+  it("counts the terms of a column's fields, every label for @", () => {
+    const q = '@agent:triage -status:completed status:failed "rate limit" quarantined:yes';
+    expect(countTerms(q, ["status", "quarantined"])).toBe(3);
+    expect(countTerms(q, ["@"])).toBe(1);
+    expect(countTerms(q, ["duration"])).toBe(0);
+  });
+});
+
+describe("the orders of the runs", () => {
+  it("reads the URL's order, the newest first by default, and leaves the default out", () => {
+    expect(readSort(new URLSearchParams("sort=duration"))).toBe("duration");
+    expect(readSort(new URLSearchParams("sort=fastest"))).toBe("started");
+    expect(withSort(new URLSearchParams("q=a&sort=calls"), "started").toString()).toBe("q=a");
+    expect(withSort(new URLSearchParams("q=a"), "oldest").toString()).toBe("q=a&sort=oldest");
+    expect(ascending("oldest")).toBe(true);
+    expect(ascending("duration")).toBe(false);
   });
 });

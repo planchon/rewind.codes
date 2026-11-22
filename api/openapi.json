@@ -391,6 +391,19 @@
         },
         "type": "object"
       },
+      "ChangeEvent": {
+        "description": "One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event\nwhose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the\nrun's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:\nthe stream is not resumed, the client reads again what it shows.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RunSummary",
+            "description": "`run`: a run changed. Its summary as it is now, as `GET /v1/runs` lists it."
+          },
+          {
+            "$ref": "#/components/schemas/Resync",
+            "description": "`resync`: more runs changed at once than the server reads in one pass. Read again what\nis shown."
+          }
+        ]
+      },
       "CheckRequest": {
         "additionalProperties": false,
         "description": "`POST /v1/check`: type-checks a script against the sandbox lib and a toolset's\ndeclarations, in strict mode, before anything runs.",
@@ -4141,6 +4154,10 @@
             ]
           }
         },
+        "type": "object"
+      },
+      "Resync": {
+        "description": "The data of a `resync` event: an empty object.",
         "type": "object"
       },
       "RetiredTest": {
@@ -9166,6 +9183,98 @@
         ]
       }
     },
+    "/v1/changes": {
+      "get": {
+        "description": "The runs of the organization that change from now on, as the caller may see them: an\nend user's token its namespace's, a key or a member with `Rewind-Namespace` that\nnamespace's, a grant limited to labels the runs carrying them all. A run the caller\ncannot open never shows, not even its id. Each event's `event` field names it and its\n`data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as\nan item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);\n`resync`, with `{}`, when more runs changed at once than the server reads in one pass:\nread again what is shown. There is no resume: after a drop, read again what is shown and\nopen a new stream. The stream closes at a member's or a connection's access token's\nexpiry; once an end user's token or a connection no longer authenticates; once a key is\nrevoked, or the grant of a key, a member or a connection is removed, changes its labels or\nno longer gives `runs:read`; and after a `resync` when the server cannot read the changes\nany more.",
+        "operationId": "streamChanges",
+        "parameters": [
+          {
+            "description": "The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Namespace",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`.",
+            "in": "header",
+            "name": "Rewind-Organization",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeEvent"
+                }
+              }
+            },
+            "description": "A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`."
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The request is malformed (`invalid-request`)."
+          },
+          "401": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it."
+          },
+          "403": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`)."
+          },
+          "500": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "A fault of the platform (`internal`)."
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The server cannot serve the request now (`unavailable`)."
+          }
+        },
+        "summary": "Follow the runs that change (server-sent events)",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/check": {
       "post": {
         "description": "Against the sandbox lib and the toolset's declarations, in strict mode, with the checks\nat start and the checker's own rules. Nothing runs.",
@@ -13232,7 +13341,7 @@
             }
           },
           {
-            "description": "`started` by default.",
+            "description": "`started` (the default): the most recently started first; `oldest`: the first started\nfirst; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself\nfirst, the runs that do not wake by themselves last; `duration`: the longest from start to\nend first, the runs that have not ended last; `calls`: the most tool calls first. Ties go\nto the most recently started (`wakes`: the first started).",
             "in": "query",
             "name": "sort",
             "required": false,
@@ -13240,8 +13349,11 @@
               "description": "The order of `GET /v1/runs`.",
               "enum": [
                 "started",
+                "oldest",
                 "activity",
-                "wakes"
+                "wakes",
+                "duration",
+                "calls"
               ],
               "type": "string"
             }

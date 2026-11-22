@@ -429,6 +429,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Follow the runs that change (server-sent events)
+         * @description The runs of the organization that change from now on, as the caller may see them: an
+         *     end user's token its namespace's, a key or a member with `Rewind-Namespace` that
+         *     namespace's, a grant limited to labels the runs carrying them all. A run the caller
+         *     cannot open never shows, not even its id. Each event's `event` field names it and its
+         *     `data` is a `ChangeEvent`: `run`, with the run's summary as it is now, the same object as
+         *     an item of `GET /v1/runs`, whenever its summary changes (a deleted run is not announced);
+         *     `resync`, with `{}`, when more runs changed at once than the server reads in one pass:
+         *     read again what is shown. There is no resume: after a drop, read again what is shown and
+         *     open a new stream. The stream closes at a member's or a connection's access token's
+         *     expiry; once an end user's token or a connection no longer authenticates; once a key is
+         *     revoked, or the grant of a key, a member or a connection is removed, changes its labels or
+         *     no longer gives `runs:read`; and after a `resync` when the server cannot read the changes
+         *     any more.
+         */
+        get: operations["streamChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/check": {
         parameters: {
             query?: never;
@@ -2201,6 +2233,13 @@ export interface components {
             wait?: components["schemas"]["Duration"] | null;
         };
         /**
+         * @description One event of the change stream (`GET /v1/changes`). On the wire, each is a server-sent event
+         *     whose `event` field is `run` or `resync` and whose `data` is this JSON value: for `run`, the
+         *     run's summary, the very object `GET /v1/runs` lists; for `resync`, `{}`. Events have no `id`:
+         *     the stream is not resumed, the client reads again what it shows.
+         */
+        ChangeEvent: components["schemas"]["RunSummary"] | components["schemas"]["Resync"];
+        /**
          * @description `POST /v1/check`: type-checks a script against the sandbox lib and a toolset's
          *     declarations, in strict mode, before anything runs.
          */
@@ -3683,6 +3722,8 @@ export interface components {
             /** @description Why, written for the model. "rejected by the harness" when absent. */
             message?: string | null;
         };
+        /** @description The data of a `resync` event: an empty object. */
+        Resync: Record<string, unknown>;
         /** @description A test of the parent a version does not keep. */
         RetiredTest: {
             digest: string;
@@ -6151,6 +6192,76 @@ export interface operations {
             };
             /** @description No such key. */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description A fault of the platform (`internal`). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The server cannot serve the request now (`unavailable`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    streamChanges: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
+                "Rewind-Namespace"?: string;
+                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
+                "Rewind-Organization"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A stream of server-sent events `run` and `resync`; each `data` is a `ChangeEvent`. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["ChangeEvent"];
+                };
+            };
+            /** @description The request is malformed (`invalid-request`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description No token, or an unknown, revoked or expired one, an access token already expired included, though the identity provider's leeway would still take it (`unauthorized`): renew it. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9414,8 +9525,14 @@ export interface operations {
                  *     refused with `invalid-query`, which says where the term at fault is.
                  */
                 q?: string;
-                /** @description `started` by default. */
-                sort?: "started" | "activity" | "wakes";
+                /**
+                 * @description `started` (the default): the most recently started first; `oldest`: the first started
+                 *     first; `activity`: the most recent activity first; `wakes`: the soonest to wake by itself
+                 *     first, the runs that do not wake by themselves last; `duration`: the longest from start to
+                 *     end first, the runs that have not ended last; `calls`: the most tool calls first. Ties go
+                 *     to the most recently started (`wakes`: the first started).
+                 */
+                sort?: "started" | "oldest" | "activity" | "wakes" | "duration" | "calls";
                 status?: "pending" | "active" | "completed" | "failed" | "cancelled" | "aborted";
                 /** @description Only runs carrying this label, as `key:value`. Repeat to require several. */
                 label?: string[];

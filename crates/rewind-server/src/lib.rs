@@ -3,7 +3,7 @@
 //! - The HTTP API `/v1` of `rewind-api`, with axum: API keys hashed in the store and members'
 //!   access tokens, grants, roles and label scopes, organizations, members and invitations,
 //!   tenants and their quotas, `Idempotency-Key`, problem+json errors; the event stream
-//!   of a run (server-sent events); host-tool tasks long-polled by the harness's worker; inbound
+//!   of a run and the change stream of the runs (server-sent events, `changes`); host-tool tasks long-polled by the harness's worker; inbound
 //!   webhooks that become signals; outbound lifecycle webhooks signed following Standard
 //!   Webhooks, sent concurrently and bounded per subscription (`deliveries`), never to the
 //!   private network of a deployed server.
@@ -22,6 +22,7 @@
 
 mod app;
 mod auth;
+mod changes;
 mod config;
 mod connections;
 mod deliveries;

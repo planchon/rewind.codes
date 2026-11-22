@@ -1,6 +1,6 @@
 // A refused action, explained where it was tried: what the rule is, then what the server said.
 import { TriangleExclamationPoint } from "lucide-react";
-import { ApiError } from "../api/client";
+import { ApiError } from "../state/errors";
 
 export interface Explanation {
   title: string;

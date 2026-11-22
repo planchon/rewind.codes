@@ -1,10 +1,10 @@
 // The journal itself, the script's logs, and the LLM trace: each a section of the run's page.
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
-import { useRunTrace } from "../../api/queries";
 import { Empty, Loading, ProblemView } from "../../components/bits";
 import { formatCount, formatOffset } from "../../model/format";
 import type { RunModel } from "../../model/run";
+import { useRunTrace } from "../../state/runs";
 import { entryFamily, entryLine, entrySummary } from "./describe";
 
 const ROW = 24;

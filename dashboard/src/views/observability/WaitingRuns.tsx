@@ -1,16 +1,19 @@
 // Observability's waiting runs: every run paused on the outside world, grouped by what it waits
 // for (a signal, an approval, a timer, a tool), with the line it is paused on and when it wakes.
-// The soonest to wake first. A row opens the run at its last step. Polled every 10 seconds.
+// The soonest to wake first. A row opens the run at its last step. Live: read again a second after
+// the last change, every 10 seconds while the change stream is down.
 import { Fragment, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { queryFault } from "../../api/client";
-import { useRuns, useScript } from "../../api/queries";
-import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../api/types";
 import { useRunLinkState } from "../../app/runLinks";
 import { Empty, LabelList, Loading, ProblemView, RunId, useNow } from "../../components/bits";
 import { StatusGlyph } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { joinQuery, labelTerm, withTerm } from "../../model/query";
+import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../model/types";
+import { queryFault } from "../../state/errors";
+import { useRunSearch } from "../../state/runs";
+import { useScript } from "../../state/scripts";
+import { TableToolbar } from "../TableTop";
 
 const POLL = 10_000;
 
@@ -124,15 +127,16 @@ export function WaitingRuns({
   const linkState = useRunLinkState();
   const now = useNow(10_000);
   const tabTerm = tab.kinds.length === 0 ? "waiting:*" : `waiting:${tab.kinds.join(",")}`;
-  const runs = useRuns(
-    `waiting|${tab.tab}|${q}`,
-    () => ({ q: joinQuery(q, tabTerm), sort: "wakes", limit: 100 }),
-    POLL,
-  );
+  const runs = useRunSearch({
+    q: joinQuery(q, tabTerm),
+    sort: "wakes",
+    pageSize: 100,
+    pollMs: POLL,
+  });
   const fault = queryFault(runs.error);
 
   const rows: Row[] = [];
-  for (const run of runs.data?.pages.flatMap((p) => p.runs) ?? []) {
+  for (const run of runs.runs) {
     const waits = (run.waitingFor ?? []).filter(
       (w) => tab.kinds.length === 0 || tab.kinds.includes(w.kind),
     );
@@ -160,9 +164,9 @@ export function WaitingRuns({
     body = (
       <Empty>Fix the query to see the waiting runs: the term at fault is underlined above.</Empty>
     );
-  } else if (runs.isPending) {
+  } else if (runs.status === "pending") {
     body = <Loading>Loading the waiting runs…</Loading>;
-  } else if (runs.isError) {
+  } else if (runs.status === "error") {
     body = <ProblemView error={runs.error} title="The waiting runs could not be read" />;
   } else if (rows.length === 0) {
     body = (
@@ -172,7 +176,7 @@ export function WaitingRuns({
     );
   } else {
     body = (
-      <div className="table-wrap">
+      <div className={`table-wrap${runs.stale ? " is-stale" : ""}`}>
         <table className="grid waiting-table">
           <thead>
             <tr>
@@ -250,15 +254,15 @@ export function WaitingRuns({
             ))}
           </tbody>
         </table>
-        {runs.hasNextPage && (
+        {runs.hasMore && (
           <div className="list-foot">
             <button
               type="button"
               className="btn small"
-              disabled={runs.isFetchingNextPage}
-              onClick={() => void runs.fetchNextPage()}
+              disabled={runs.loadingMore}
+              onClick={runs.loadMore}
             >
-              {runs.isFetchingNextPage ? "Loading…" : "Load more"}
+              {runs.loadingMore ? "Loading…" : "Load more"}
             </button>
           </div>
         )}
@@ -291,7 +295,10 @@ export function WaitingRuns({
           </button>
         ))}
       </div>
-      <div role="tabpanel">{body}</div>
+      <div role="tabpanel" className="run-table">
+        <TableToolbar pending={runs.pending} onShow={runs.showPending} setAtTop={runs.setAtTop} />
+        {body}
+      </div>
     </div>
   );
 }

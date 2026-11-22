@@ -6,7 +6,7 @@
 //! watchers, and the runs' workflow, starter and scope; version 4 the workflow and starter of
 //! the read model's runs; version 5 the namespaces; version 6 the tests and the suites of
 //! workflow versions; version 7 people's connections and the OAuth clients and codes; version 8
-//! the namespaces' display names).
+//! the namespaces' display names; version 9 when each run's summary last changed).
 //!
 //! The tables are those of `archi/06-storage-and-scale.md`, with these differences:
 //!
@@ -45,6 +45,8 @@
 //!   workflow's name, `started_by`), and the kept snapshot's columns: its length
 //!   (`snapshot_len`), mode and ending, the ending's `fingerprint` among them. `wakes_at` is the
 //!   earliest `until` of its waits while the run is active, kept for the `wakes` order;
+//!   `changed_at` when a write last changed the summary, in milliseconds of the system clock,
+//!   for the change stream (0 for the summaries of version 8, which no stream reads again);
 //! - `run_labels` holds one row per label, for equality, prefix and presence;
 //! - `run_waits` holds the kept snapshot's waits by `position`, the snapshot's order, without
 //!   task states;
@@ -61,13 +63,13 @@ use crate::Error;
 use crate::sql::{self, Columns, opt_text, text};
 
 /// The version of the schema this build writes.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 /// The `meta` key of the schema version.
 const VERSION_KEY: &str = "schema_version";
 
 /// Migration `n` brings the schema from version `n` to `n + 1`.
-const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8];
+const MIGRATIONS: [&str; SCHEMA_VERSION as usize] = [V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 const V1: &str = r#"
 CREATE TABLE tenants (
@@ -731,6 +733,14 @@ CREATE INDEX connection_tokens_by_expiry ON connection_tokens (expires_at);
 /// label for the end user. A listing's prefix matches it case aside in the store's code.
 const V8: &str = r#"
 ALTER TABLE namespaces ADD COLUMN display_name TEXT;
+"#;
+
+/// When each run's summary last changed (`archi/08-decisions.md`, "Taken for the live
+/// dashboard"): the change stream reads the summaries stamped since its last pass. The summaries
+/// kept are stamped 0, before any stream.
+const V9: &str = r#"
+ALTER TABLE run_summaries ADD COLUMN changed_at INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX run_summaries_by_change ON run_summaries (tenant, changed_at);
 "#;
 
 /// Brings the database's schema to [`SCHEMA_VERSION`], or refuses a newer one.

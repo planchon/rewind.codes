@@ -7,11 +7,13 @@ use rewind_core::{
     ScriptError, Seq, Shape, Timestamp, ToolFailureKind,
 };
 
+use crate::adapters::SystemClock;
 use crate::ports::{
-    FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency, Predicate,
-    ProjectedRun, QuarantineNote, ReadModel, ReadModelError, RunOrder, RunQuery, RunRef,
-    RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor, StatsWindow,
-    TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter, Wait, WaitKind, WaitingFor,
+    ChangedRun, Clock, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,
+    Latency, Predicate, ProjectedRun, QuarantineNote, ReadModel, ReadModelError, RunOrder,
+    RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor,
+    StatsWindow, TaskProgress, TenantId, TenantScope, ToolStats, ToolStatsFilter, Wait, WaitKind,
+    WaitingFor,
 };
 
 /// Every status, in the order of `RunStatus`: what `run_stats` counts, zeros included.
@@ -28,8 +30,8 @@ const STATUSES: [RunStatus; 6] = [
 const GROUP_LABELS: usize = 5;
 
 /// `ReadModel` in memory: the projected entries of every run, keyed by `(run, index)`, with the
-/// snapshot of the longest history; the task states and quarantine recorded per run. Every query
-/// is computed from them. It passes the conformance suite: it is the reference implementation
+/// snapshot of the longest history; the task states and quarantine recorded per run; when each
+/// run's summary last changed, by the system clock. Every query is computed from them. It passes the conformance suite: it is the reference implementation
 /// of the contract.
 #[derive(Debug, Default)]
 pub struct MemoryReadModel {
@@ -44,6 +46,8 @@ struct State {
     tasks: BTreeMap<RunId, BTreeMap<Seq, TaskProgress>>,
     /// The latest record of each run's quarantine, with its time.
     quarantines: BTreeMap<RunId, (Timestamp, Option<QuarantineNote>)>,
+    /// When each run's summary last changed: milliseconds of the system clock.
+    changed: BTreeMap<RunId, u64>,
 }
 
 #[derive(Debug)]
@@ -249,6 +253,17 @@ impl State {
         self.runs.remove(&run);
         self.tasks.remove(&run);
         self.quarantines.remove(&run);
+        self.changed.remove(&run);
+    }
+
+    /// Stamps the run's summary as changed now, later than its previous stamp.
+    fn stamp(&mut self, run: RunId) {
+        let now = SystemClock.now().as_millis();
+        let stamp = self
+            .changed
+            .get(&run)
+            .map_or(now, |previous| now.max(previous.saturating_add(1)));
+        self.changed.insert(run, stamp);
     }
 }
 
@@ -273,8 +288,7 @@ impl Row {
 
     /// From start to end, once ended.
     fn duration(&self) -> Option<u64> {
-        let (started, ended) = (self.summary.started_at?, self.summary.ended_at?);
-        Some(ended.0.saturating_sub(started.0))
+        self.summary.duration()
     }
 
     /// What free text is searched in.
@@ -364,17 +378,25 @@ impl Row {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Position {
     Started(Reverse<RunId>),
-    Activity(Reverse<Option<Timestamp>>, Reverse<RunId>),
+    Oldest(RunId),
+    Activity(Reverse<Option<u64>>, Reverse<RunId>),
     /// The runs without a wake last, then by run id.
-    Wakes(bool, Option<Timestamp>, RunId),
+    Wakes(bool, Option<u64>, RunId),
+    /// The runs that have not ended last, then newest first.
+    Duration(bool, Reverse<Option<u64>>, Reverse<RunId>),
+    Calls(Reverse<Option<u64>>, Reverse<RunId>),
 }
 
 impl Position {
     fn of(order: RunOrder, cursor: &SearchCursor) -> Self {
+        let (key, run) = (cursor.key, cursor.run);
         match order {
-            RunOrder::Started => Position::Started(Reverse(cursor.run)),
-            RunOrder::Activity => Position::Activity(Reverse(cursor.key), Reverse(cursor.run)),
-            RunOrder::Wakes => Position::Wakes(cursor.key.is_none(), cursor.key, cursor.run),
+            RunOrder::Started => Position::Started(Reverse(run)),
+            RunOrder::Oldest => Position::Oldest(run),
+            RunOrder::Activity => Position::Activity(Reverse(key), Reverse(run)),
+            RunOrder::Wakes => Position::Wakes(key.is_none(), key, run),
+            RunOrder::Duration => Position::Duration(key.is_none(), Reverse(key), Reverse(run)),
+            RunOrder::Calls => Position::Calls(Reverse(key), Reverse(run)),
         }
     }
 }
@@ -589,6 +611,7 @@ impl ReadModel for MemoryReadModel {
         for entry in entries {
             projected.entries.insert(entry.index, entry.clone());
         }
+        state.stamp(run.run.id);
         Ok(())
     }
 
@@ -850,11 +873,22 @@ impl ReadModel for MemoryReadModel {
             return Ok(());
         }
         let recorded = state.tasks.entry(run.id).or_default();
+        let mut changed = false;
         for task in tasks {
-            let kept = recorded.entry(task.seq).or_insert(*task);
-            if task.rank() > kept.rank() {
-                *kept = *task;
+            match recorded.get_mut(&task.seq) {
+                Some(kept) if task.rank() <= kept.rank() => {}
+                Some(kept) => {
+                    *kept = *task;
+                    changed = true;
+                }
+                None => {
+                    recorded.insert(task.seq, *task);
+                    changed = true;
+                }
             }
+        }
+        if changed {
+            state.stamp(run.id);
         }
         Ok(())
     }
@@ -898,8 +932,40 @@ impl ReadModel for MemoryReadModel {
             });
         if newer {
             state.quarantines.insert(run.id, (at, quarantine.cloned()));
+            state.stamp(run.id);
         }
         Ok(())
+    }
+
+    async fn changed_runs(
+        &self,
+        tenants: &[TenantId],
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<ChangedRun>, ReadModelError> {
+        let state = self.lock()?;
+        let mut changed: Vec<(u64, RunId)> = state
+            .runs
+            .values()
+            .filter(|projected| tenants.contains(&projected.run.run.tenant))
+            .filter_map(|projected| {
+                let id = projected.run.run.id;
+                let at = state.changed.get(&id).copied()?;
+                (at >= since).then_some((at, id))
+            })
+            .collect();
+        changed.sort_unstable();
+        changed.truncate(limit);
+        Ok(changed
+            .into_iter()
+            .filter_map(|(changed_at, id)| {
+                let projected = state.runs.get(&id)?;
+                Some(ChangedRun {
+                    summary: state.row(projected).summary,
+                    changed_at,
+                })
+            })
+            .collect())
     }
 
     async fn purge(

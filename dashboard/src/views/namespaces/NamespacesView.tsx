@@ -2,20 +2,11 @@
 // First the organization's ceiling (the operator's) with its totals, then, folding under it, the
 // default limits and the namespaces, sorted by CPU, runs or scripts of the month, so that an end
 // user who abuses the product comes first; the query bar of the runs, which reads the start of a
-// name here, and a filter of those at 80 % or more of a limit. Polled every 30 s.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+// name here, and a filter of those at 80 % or more of a limit. Live: their use moves with their
+// runs (`state/namespaces.ts`).
 import { ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { type ReactNode, useMemo, useState } from "react";
 import { Link } from "react-router";
-import {
-  NAMESPACES,
-  useNamespaceDefaults,
-  useNamespaceList,
-  useQuotaAlerts,
-} from "../../api/namespaces";
-import type { Namespace, NamespaceOrder, QuotaAlert, Quotas } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Empty, Loading, ProblemView } from "../../components/bits";
 import { FormDialog } from "../../components/FormDialog";
 import { NamespaceName } from "../../components/NamespaceName";
@@ -35,8 +26,18 @@ import {
   shortDate,
   usedOf,
 } from "../../model/quotas";
+import type { Namespace, NamespaceOrder, QuotaAlert, Quotas } from "../../model/types";
+import { useAccess } from "../../state/access";
+import {
+  useNamespaceCount,
+  useNamespaceDefaults,
+  useNamespaceList,
+  useQuotaAlerts,
+  useSetNamespaceDefaults,
+} from "../../state/namespaces";
 import { Seg } from "../FilterBits";
 import { useListQuery, useNamespaceNameValues } from "../search";
+import { TableToolbar } from "../TableTop";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm, worstAlert } from "./bits";
 
 const ORDERS: { value: NamespaceOrder; label: string; title: string }[] = [
@@ -104,15 +105,7 @@ function RowNote({ ns, alert }: { ns: Namespace; alert: QuotaAlert | null }) {
 }
 
 function DefaultsEditor({ defaults, onDone }: { defaults: Quotas; onDone: () => void }) {
-  const api = useApi();
-  const queryClient = useQueryClient();
-  const save = useMutation({
-    mutationFn: (quotas: Quotas) => api.putNamespaceDefaults({ defaults: quotas }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: NAMESPACES });
-      onDone();
-    },
-  });
+  const save = useSetNamespaceDefaults();
   return (
     <QuotasForm
       label="Default limits"
@@ -125,9 +118,11 @@ function DefaultsEditor({ defaults, onDone }: { defaults: Quotas; onDone: () => 
       initial={defaults}
       blank={() => "no limit"}
       submit="Save the defaults"
-      pending={save.isPending}
+      pending={save.pending}
       error={save.error}
-      onSubmit={(quotas) => save.mutate(quotas)}
+      onSubmit={(quotas) => {
+        void save.run(quotas).then((done) => done && onDone());
+      }}
     />
   );
 }
@@ -168,16 +163,14 @@ function Namespaces() {
     ...(above ? { above: ABOVE } : {}),
   };
   const list = useNamespaceList(query);
-  // Its total is the count: one namespace is enough to read it.
-  const atRisk = useNamespaceList({ above: ABOVE, limit: 1 });
+  const atRisk = useNamespaceCount({ above: ABOVE });
   const defaults = useNamespaceDefaults();
   const alerts = useQuotaAlerts(null);
 
-  const month = list.data?.pages[0]?.month ?? defaults.data?.month ?? monthOf(Date.now());
-  const rows = list.data?.pages.flatMap((p) => p.namespaces) ?? [];
-  const total = list.data?.pages.at(-1)?.total ?? rows.length;
-  const riskyTotal = atRisk.data?.pages[0]?.total;
-  const riskyCount = riskyTotal === undefined ? null : formatCount(riskyTotal);
+  const month = list.head?.month ?? defaults.data?.month ?? monthOf(Date.now());
+  const rows = list.rows;
+  const total = list.head?.total ?? rows.length;
+  const riskyCount = atRisk.data === undefined ? null : formatCount(atRisk.data);
   const byNamespace = useMemo(() => {
     const map = new Map<string, QuotaAlert[]>();
     for (const a of alerts.data?.alerts ?? []) {
@@ -266,121 +259,126 @@ function Namespaces() {
 
       {fault ? (
         <Empty>Fix the search to see the namespaces: the term at fault is underlined above.</Empty>
-      ) : list.isPending ? (
+      ) : list.status === "pending" ? (
         <Loading>Loading the namespaces…</Loading>
-      ) : list.isError ? (
+      ) : list.status === "error" ? (
         <ProblemView error={list.error} title="The namespaces could not be read" />
       ) : (
-        <div className="table-wrap">
-          <table className="grid namespaces-table">
-            <thead>
-              <tr>
-                <th>Namespace</th>
-                {METERED.map((m) => header(m.key, m.title))}
-              </tr>
-            </thead>
-            <tbody>
-              {defaults.data && (
-                <tr className="row-ceiling">
-                  <th scope="row">
-                    <button
-                      type="button"
-                      className="group-toggle ns-title"
-                      aria-expanded={!folded}
-                      aria-label={`${folded ? "Show" : "Hide"} the namespaces of ${organization}`}
-                      onClick={() => setFolded(!folded)}
-                    >
-                      {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                      {organization}
-                    </button>
-                    <span className="ns-note muted">
-                      operator's ceiling, on the totals
-                      {folded ? ` · ${formatCount(total)} namespace${total === 1 ? "" : "s"}` : ""}
-                    </span>
-                  </th>
-                  {METERED.map((m) => (
-                    <td key={m.key}>
-                      <QuotaMeter
-                        spec={m}
-                        used={usedOf(defaults.data.usage, m.key)}
-                        limit={limitOf(defaults.data.ceiling, m.key)}
-                      />
-                    </td>
-                  ))}
+        <>
+          <TableToolbar pending={list.pending} onShow={list.showPending} setAtTop={list.setAtTop} />
+          <div
+            className={`table-wrap${list.stale ? " is-stale" : ""}`}
+            aria-busy={list.stale || undefined}
+          >
+            <table className="grid namespaces-table">
+              <thead>
+                <tr>
+                  <th>Namespace</th>
+                  {METERED.map((m) => header(m.key, m.title))}
                 </tr>
-              )}
-              {defaults.data && !folded && (
-                <tr className="row-defaults child-row">
-                  <th scope="row">
-                    <span className="ns-title">Defaults</span>
-                    <span className="ns-note muted">{otherLimits(defaults.data.defaults)}</span>
-                  </th>
-                  {METERED.map((m) => {
-                    const limit = limitOf(defaults.data.defaults, m.key);
-                    return (
-                      <td key={m.key} className="num">
-                        {limit === null ? (
-                          <span className="muted">no limit</span>
-                        ) : (
-                          formatQuota(m.key, limit)
-                        )}
+              </thead>
+              <tbody>
+                {defaults.data && (
+                  <tr className="row-ceiling">
+                    <th scope="row">
+                      <button
+                        type="button"
+                        className="group-toggle ns-title"
+                        aria-expanded={!folded}
+                        aria-label={`${folded ? "Show" : "Hide"} the namespaces of ${organization}`}
+                        onClick={() => setFolded(!folded)}
+                      >
+                        {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                        {organization}
+                      </button>
+                      <span className="ns-note muted">
+                        operator's ceiling, on the totals
+                        {folded
+                          ? ` · ${formatCount(total)} namespace${total === 1 ? "" : "s"}`
+                          : ""}
+                      </span>
+                    </th>
+                    {METERED.map((m) => (
+                      <td key={m.key}>
+                        <QuotaMeter
+                          spec={m}
+                          used={usedOf(defaults.data.usage, m.key)}
+                          limit={limitOf(defaults.data.ceiling, m.key)}
+                        />
                       </td>
-                    );
-                  })}
-                </tr>
-              )}
-              {(folded ? [] : rows).map((ns) => (
-                <tr key={ns.name} className={`child-row${ns.deletingSince ? " dimmed" : ""}`}>
-                  <th scope="row">
-                    <Link to={namespacePath(ns.name)} className="ns-title">
-                      <NamespaceName name={ns.name} displayName={ns.displayName ?? null} />
-                    </Link>
-                    <RowNote ns={ns} alert={worstAlert(byNamespace.get(ns.name) ?? [])} />
-                  </th>
-                  {METERED.map((m) => (
-                    <td key={m.key}>
-                      <QuotaMeter
-                        spec={m}
-                        used={usedOf(ns.usage, m.key)}
-                        limit={limitOf(ns.limits, m.key)}
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {rows.length === 0 && (
-            <Empty>
-              {prefix
-                ? `No namespace starts with ${prefix}${above ? " and reached 80% of a limit" : ""}.`
-                : above
-                  ? "No namespace reached 80% of a limit this month."
-                  : "No namespace yet: one is created with the first run or token of an end user."}
-            </Empty>
-          )}
-          {rows.length > 0 && (
-            <div className="list-foot">
-              <span className="num">
-                {list.hasNextPage ? `${formatCount(rows.length)} of ` : ""}
-                {formatCount(total)} namespace{total === 1 ? "" : "s"}
-              </span>
-              {list.hasNextPage && (
-                <button
-                  type="button"
-                  className="btn small"
-                  disabled={list.isFetchingNextPage}
-                  onClick={() => void list.fetchNextPage()}
-                >
-                  {list.isFetchingNextPage ? "Loading…" : "Load more"}
-                </button>
-              )}
-              {list.isFetching && !list.isFetchingNextPage && (
-                <span className="spinner" role="status" aria-label="Refreshing" />
-              )}
-            </div>
-          )}
-        </div>
+                    ))}
+                  </tr>
+                )}
+                {defaults.data && !folded && (
+                  <tr className="row-defaults child-row">
+                    <th scope="row">
+                      <span className="ns-title">Defaults</span>
+                      <span className="ns-note muted">{otherLimits(defaults.data.defaults)}</span>
+                    </th>
+                    {METERED.map((m) => {
+                      const limit = limitOf(defaults.data.defaults, m.key);
+                      return (
+                        <td key={m.key} className="num">
+                          {limit === null ? (
+                            <span className="muted">no limit</span>
+                          ) : (
+                            formatQuota(m.key, limit)
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                )}
+                {(folded ? [] : rows).map((ns) => (
+                  <tr key={ns.name} className={`child-row${ns.deletingSince ? " dimmed" : ""}`}>
+                    <th scope="row">
+                      <Link to={namespacePath(ns.name)} className="ns-title">
+                        <NamespaceName name={ns.name} displayName={ns.displayName ?? null} />
+                      </Link>
+                      <RowNote ns={ns} alert={worstAlert(byNamespace.get(ns.name) ?? [])} />
+                    </th>
+                    {METERED.map((m) => (
+                      <td key={m.key}>
+                        <QuotaMeter
+                          spec={m}
+                          used={usedOf(ns.usage, m.key)}
+                          limit={limitOf(ns.limits, m.key)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rows.length === 0 && (
+              <Empty>
+                {prefix
+                  ? `No namespace starts with ${prefix}${above ? " and reached 80% of a limit" : ""}.`
+                  : above
+                    ? "No namespace reached 80% of a limit this month."
+                    : "No namespace yet: one is created with the first run or token of an end user."}
+              </Empty>
+            )}
+            {rows.length > 0 && (
+              <div className="list-foot">
+                <span className="num">
+                  {rows.length < total ? `${formatCount(rows.length)} of ` : ""}
+                  {formatCount(total)} namespace{total === 1 ? "" : "s"}
+                </span>
+                {list.hasMore && (
+                  <button
+                    type="button"
+                    className="btn small"
+                    disabled={list.loadingMore}
+                    onClick={list.loadMore}
+                  >
+                    {list.loadingMore ? "Loading…" : "Load more"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {(alerts.data?.alerts.length ?? 0) > 0 && (

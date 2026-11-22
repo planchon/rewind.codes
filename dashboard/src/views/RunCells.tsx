@@ -2,8 +2,6 @@
 // labels (those that fit, then "+N"), and how it ended (the error's name over its message).
 import { useState } from "react";
 import { Link } from "react-router";
-import { useRun } from "../api/queries";
-import type { Labels, RunSummary } from "../api/types";
 import { useRunLinkState } from "../app/runLinks";
 import { useSettings } from "../app/settings";
 import { LabelList } from "../components/bits";
@@ -18,6 +16,8 @@ import {
   labelPair,
   shortLabelValue,
 } from "../model/format";
+import type { Labels, RunSummary } from "../model/types";
+import { useRun } from "../state/runs";
 
 /** A run's labels in a cell: those that fit, whole and readable, then "+N" for the rest. */
 export function RunLabels({

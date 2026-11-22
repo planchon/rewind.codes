@@ -70,12 +70,16 @@ pub(super) fn filter(query: &RunQuery) -> Sql {
     sql
 }
 
-/// The `ORDER BY` of an order: `wakes` puts the runs without a wake last.
-pub(super) fn order_by(order: RunOrder) -> &'static str {
+/// The `ORDER BY` of an order: `wakes` puts the runs without a wake last, `duration` those that
+/// have not ended.
+pub(super) fn order_by(order: RunOrder) -> String {
     match order {
-        RunOrder::Started => "s.run_id DESC",
-        RunOrder::Activity => "s.last_activity_at DESC, s.run_id DESC",
-        RunOrder::Wakes => "s.wakes_at IS NULL, s.wakes_at, s.run_id",
+        RunOrder::Started => "s.run_id DESC".to_owned(),
+        RunOrder::Oldest => "s.run_id".to_owned(),
+        RunOrder::Activity => "s.last_activity_at DESC, s.run_id DESC".to_owned(),
+        RunOrder::Wakes => "s.wakes_at IS NULL, s.wakes_at, s.run_id".to_owned(),
+        RunOrder::Duration => format!("({DURATION}) IS NULL, ({DURATION}) DESC, s.run_id DESC"),
+        RunOrder::Calls => "s.tool_calls DESC, s.run_id DESC".to_owned(),
     }
 }
 
@@ -86,27 +90,61 @@ pub(super) fn after(sql: &mut Sql, order: RunOrder, cursor: &SearchCursor) {
         (RunOrder::Started, _) => {
             sql.push(" AND s.run_id < ").bind(id());
         }
-        (RunOrder::Activity, Some(key)) => {
-            sql.push(" AND (s.last_activity_at < ")
-                .bind(ts(key))
-                .push(" OR (s.last_activity_at = ")
-                .bind(ts(key))
+        (RunOrder::Oldest, _) => {
+            sql.push(" AND s.run_id > ").bind(id());
+        }
+        (RunOrder::Activity | RunOrder::Calls, Some(key)) => {
+            let column = if order == RunOrder::Calls {
+                "s.tool_calls"
+            } else {
+                "s.last_activity_at"
+            };
+            sql.push(" AND (")
+                .push(column)
+                .push(" < ")
+                .bind(int(key))
+                .push(" OR (")
+                .push(column)
+                .push(" = ")
+                .bind(int(key))
                 .push(" AND s.run_id < ")
                 .bind(id())
                 .push("))");
         }
-        // Every run has an activity, and a position without one is after all of them.
-        (RunOrder::Activity, None) => {
+        // Every run has an activity and a number of calls, and a position without one is after
+        // all of them.
+        (RunOrder::Activity | RunOrder::Calls, None) => {
             sql.push(" AND 0 = 1");
         }
         (RunOrder::Wakes, Some(key)) => {
             sql.push(" AND (s.wakes_at IS NULL OR s.wakes_at > ")
-                .bind(ts(key))
+                .bind(int(key))
                 .push(" OR (s.wakes_at = ")
-                .bind(ts(key))
+                .bind(int(key))
                 .push(" AND s.run_id > ")
                 .bind(id())
                 .push("))");
+        }
+        (RunOrder::Duration, Some(key)) => {
+            sql.push(" AND ((")
+                .push(DURATION)
+                .push(") IS NULL OR (")
+                .push(DURATION)
+                .push(") < ")
+                .bind(int(key))
+                .push(" OR ((")
+                .push(DURATION)
+                .push(") = ")
+                .bind(int(key))
+                .push(" AND s.run_id < ")
+                .bind(id())
+                .push("))");
+        }
+        (RunOrder::Duration, None) => {
+            sql.push(" AND (")
+                .push(DURATION)
+                .push(") IS NULL AND s.run_id < ")
+                .bind(id());
         }
         (RunOrder::Wakes, None) => {
             sql.push(" AND s.wakes_at IS NULL AND s.run_id > ")

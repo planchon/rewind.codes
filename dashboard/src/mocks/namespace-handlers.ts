@@ -1,14 +1,14 @@
 // The mocked namespaces endpoints of `/v1` (archi/07, "HTTP API /v1"), and the header
 // `Rewind-Namespace`, which narrows a key's or a member's reads to one namespace.
 import { HttpResponse, http } from "msw";
+import { durationMs, isMonth, monthOf, namespaceNameProblem } from "../model/quotas";
 import type {
   NamespaceOrder,
   NamespacePatch,
   PutNamespace,
   PutNamespaceDefaults,
   Quotas,
-} from "../api/types";
-import { durationMs, isMonth, monthOf, namespaceNameProblem } from "../model/quotas";
+} from "../model/types";
 import type { Caller } from "./access";
 import { guard, json } from "./access-handlers";
 import type { World } from "./fixtures";

@@ -2762,26 +2762,30 @@ table.grid tr.row-defaults > * {
   }
 }
 
-.ns-section {
+.ns-section,
+.scoped-runs {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.ns-section-head {
+.ns-section-head,
+.scoped-runs-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
 }
 
-.ns-section-head h2 {
+.ns-section-head h2,
+.scoped-runs-head h2 {
   margin: 0;
   font-size: var(--text-heading);
   font-weight: var(--weight-title);
 }
 
-.ns-section-head a {
+.ns-section-head a,
+.scoped-runs-head a {
   font-size: var(--text-body);
 }
 
@@ -3205,6 +3209,162 @@ table.grid tr.row-defaults > * {
 .runs-table .run-cell {
   min-width: 320px;
   max-width: 420px;
+}
+
+/* The headers of the table of runs, each a menu: the order by its column and its filters
+   (RunColumns.tsx). The arrow says the order, the count the filters. */
+.th-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.th-btn:hover,
+.th-btn:focus-visible,
+.th-btn[data-popup-open] {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.th-btn.sorted,
+.th-btn.filtered {
+  color: var(--ink);
+  font-weight: var(--weight-medium);
+}
+
+.th-arrow {
+  color: var(--ink);
+}
+
+.th-chevron {
+  color: var(--ink-3);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.th-btn:hover .th-chevron,
+.th-btn:focus-visible .th-chevron,
+.th-btn[data-popup-open] .th-chevron {
+  opacity: 1;
+}
+
+.th-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--ink);
+  color: var(--ds-background-100);
+  font-size: var(--text-micro);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.column-menu {
+  width: 280px;
+  max-height: min(480px, var(--available-height, 480px));
+  overflow-y: auto;
+}
+
+.column-menu-section + .column-menu-section {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.column-menu .menu-item[aria-pressed="true"] {
+  font-weight: var(--weight-medium);
+}
+
+.column-menu .menu-item:hover {
+  background: var(--surface-2);
+}
+
+.menu-item-term {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+}
+
+.column-menu-box {
+  margin: 2px 0 4px;
+}
+
+.column-menu-empty {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--ink-3);
+  font-size: var(--text-body);
+}
+
+/* While the runs of a new order or filter load, the previous ones stay, dimmed. */
+.table-wrap.is-stale tbody {
+  opacity: 0.55;
+  transition: opacity 0.15s ease 0.1s;
+}
+
+/* The filters of a table forced to a scope: the scope, locked, then the terms its headers
+   added (ScopedRuns.tsx). */
+.query-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.query-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 4px 0 8px;
+  border-radius: 9999px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  color: var(--ink);
+  font-size: var(--text-small);
+  white-space: nowrap;
+}
+
+.query-chip.locked {
+  padding-right: 8px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.query-chip-remove {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.query-chip-remove:hover {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+.query-chips-clear {
+  font-size: var(--text-small);
 }
 
 .run-cell-id {
@@ -4677,4 +4837,207 @@ table.grid .conn-orgs {
 
 .conn-edit-row .field-hint {
   grid-column: 1 / -1;
+}
+
+/* The live dashboard (archi/05, "Live" and "Nothing moves on its own") */
+
+/* The change stream's state, at a fixed place of the top bar: one size whatever its state. */
+.connection-dot {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--row-height);
+  height: var(--row-height);
+}
+
+.connection-dot-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transition: background-color 0.2s ease;
+}
+
+.connection-dot.state-live .connection-dot-mark {
+  background: var(--good);
+}
+
+.connection-dot.state-connecting .connection-dot-mark,
+.connection-dot.state-reconnecting .connection-dot-mark {
+  background: var(--warning-mark);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .connection-dot.state-reconnecting .connection-dot-mark {
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+}
+
+/* A live table: its toolbar, whose slot for an answer held back ("N new · Show") is always there,
+   stays under the page's header while the table scrolls; the mark under it says whether the
+   table is scrolled to its top. */
+.run-table {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.table-toolbar {
+  position: sticky;
+  top: var(--header-height);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 2px 4px;
+  background: var(--bg);
+}
+
+.table-toolbar-start {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--text-small);
+}
+
+.table-toolbar-slot {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 112px;
+}
+
+.table-top {
+  height: 0;
+}
+
+.pending-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--ink);
+  color: var(--ds-background-100);
+  font-size: var(--text-small);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+}
+
+.pending-btn:hover {
+  background: color-mix(in srgb, var(--ink) 85%, var(--ds-background-100));
+}
+
+/* Cells of one size: the columns of the table of runs have their widths, whatever their rows
+   hold; numbers are tabular; a status takes the width of the longest. */
+.runs-table {
+  table-layout: fixed;
+}
+
+.runs-table .col-run {
+  width: 340px;
+}
+
+.runs-table .col-status {
+  width: 150px;
+}
+
+.runs-table .col-namespace {
+  width: 150px;
+}
+
+.runs-table .col-script {
+  width: 160px;
+}
+
+.runs-table .col-started {
+  width: 110px;
+}
+
+.runs-table .col-duration {
+  width: 100px;
+}
+
+.runs-table .col-calls {
+  width: 130px;
+}
+
+.runs-table .col-wakes {
+  width: 110px;
+}
+
+.runs-table .col-error {
+  width: 280px;
+}
+
+.runs-table td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.runs-table td,
+.runs-table .num {
+  font-variant-numeric: tabular-nums;
+}
+
+.runs-table .status {
+  min-width: 10ch;
+}
+
+/* The run's controls, in its sidebar */
+.run-controls .control-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-btn {
+  justify-content: flex-start;
+  width: 100%;
+}
+
+.btn.danger-ghost {
+  color: var(--critical-ink);
+}
+
+.btn.danger-ghost:hover:not(:disabled) {
+  background: var(--critical-soft);
+}
+
+.control-note {
+  min-height: 18px;
+  margin: 6px 0 0;
+  font-size: var(--text-small);
+}
+
+.json-editor {
+  height: auto;
+  min-height: 140px;
+  padding: 8px 10px;
+  resize: vertical;
+  font-size: var(--text-body);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.signal-schema summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: var(--text-small);
+}
+
+.signal-schema pre {
+  max-height: 200px;
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-small);
 }

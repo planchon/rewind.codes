@@ -1,10 +1,10 @@
 // Small shared pieces: copy buttons, ids and digests, labels, times, problems.
 import { Check, Copy, TriangleExclamationPoint } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { ApiError } from "../api/client";
-import type { Labels } from "../api/types";
 import { useSettings } from "../app/settings";
 import { formatRelative, formatTime, labelPair, shortDigest, shortRunId } from "../model/format";
+import type { Labels } from "../model/types";
+import { ApiError } from "../state/errors";
 
 export function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
@@ -131,6 +131,16 @@ export function LabelList({
 }
 
 /** The current time, updated every `everyMs`, for relative times and countdowns. */
+/** A value once it has stopped changing for `ms`: what is typed, asked for once. */
+export function useSettled<T>(value: T, ms = 150): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
 export function useNow(everyMs = 15_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {

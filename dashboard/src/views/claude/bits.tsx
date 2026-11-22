@@ -2,14 +2,14 @@
 // the organizations a connection opens, and a block of text to copy.
 import { BadgeCheck, Check, CircleHelp, Copy } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
+import { LabelList } from "../../components/bits";
+import { ACCESS_INFO, hostOf } from "../../model/connections";
 import type {
   Connection,
   ConnectionAccess,
   ConnectionClient,
   ConnectionOrganization,
-} from "../../api/connections";
-import { LabelList } from "../../components/bits";
-import { ACCESS_INFO, hostOf } from "../../model/connections";
+} from "../../model/types";
 
 /** A client's name, with its site; one that registered itself is said to be unverified. */
 export function ClientName({ client }: { client: ConnectionClient }) {

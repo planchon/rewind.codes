@@ -3,21 +3,17 @@
 // person chose there, never more than their own role. Whoever holds `members:manage` removes the
 // organization from a connection, in a dialog that asks once more; the person's other
 // organizations stay open to it.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import {
-  CONNECTIONS,
-  type Connection,
-  ORG_CONNECTIONS,
-  removeOrganizationConnection,
-  useOrganizationConnections,
-} from "../../api/connections";
-import { useMembers } from "../../api/organization";
-import { useAccess } from "../../app/access";
-import { useApi } from "../../app/session";
 import { Ago, Empty, LabelList, Loading } from "../../components/bits";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
+import type { Connection } from "../../model/types";
+import { useAccess } from "../../state/access";
+import {
+  useOrganizationConnections,
+  useRemoveOrganizationConnection,
+} from "../../state/connections";
+import { useMembers } from "../../state/organization";
 import { AccessTag, ClientName, connectionName } from "../claude/bits";
 import { Person } from "./bits";
 import { SectionGate } from "./OrganizationView";
@@ -49,20 +45,12 @@ function Who({ connection, you }: { connection: Connection; you: boolean }) {
 }
 
 function OrganizationConnections() {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const connections = useOrganizationConnections();
   const manage = access.can("members:manage");
   const [removing, setRemoving] = useState<Connection | null>(null);
-  const remove = useMutation({
-    mutationFn: (id: string) => removeOrganizationConnection(api, id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ORG_CONNECTIONS });
-      await queryClient.invalidateQueries({ queryKey: CONNECTIONS });
-      setRemoving(null);
-    },
-  });
+  // Gone from the list at once; a refusal brings it back, and the dialog says why.
+  const remove = useRemoveOrganizationConnection();
   const org = access.organization?.name ?? "the organization";
 
   return (
@@ -88,15 +76,15 @@ function OrganizationConnections() {
         }
         confirm="Remove"
         pendingLabel="Removing…"
-        pending={remove.isPending}
+        pending={remove.pending}
         error={remove.error}
         onConfirm={() => {
-          if (removing) remove.mutate(removing.id);
+          if (removing) void remove.run(removing.id, () => setRemoving(null));
         }}
       />
       {connections.isPending ? (
         <Loading />
-      ) : connections.error ? (
+      ) : connections.isError ? (
         <ErrorNote error={connections.error} />
       ) : connections.data.length === 0 ? (
         <Empty>No connection opens {org}.</Empty>

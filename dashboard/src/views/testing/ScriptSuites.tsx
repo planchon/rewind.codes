@@ -2,11 +2,11 @@
 // of each workflow first. A script that no version names has no stored tests: the tests of an
 // ad hoc script are not kept (archi/05, "Suites and the gate").
 import { Link } from "react-router";
-import { useWorkflowsWithScript, useWorkflowVersions } from "../../api/queries";
-import type { Workflow } from "../../api/types";
-import { useAccess } from "../../app/access";
 import { Loading, ProblemView } from "../../components/bits";
+import type { Workflow } from "../../model/types";
 import { workflowPath, workflowRef } from "../../model/workflows";
+import { useAccess } from "../../state/access";
+import { useWorkflowsWithScript, useWorkflowVersions } from "../../state/workflows";
 import { SuiteTable } from "./SuiteTable";
 
 function WorkflowSuite({ newest, older }: { newest: Workflow; older: number }) {

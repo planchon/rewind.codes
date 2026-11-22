@@ -3,16 +3,15 @@
 import { Download, GitFork } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
-import type { JournalState } from "../../api/queries";
-import type { Run, Waiting } from "../../api/types";
-import { useApi } from "../../app/session";
 import { Ago, CopyButton, Digest, LabelList, RunId, useNow } from "../../components/bits";
 import { NamespaceName } from "../../components/NamespaceName";
 import { MockTag, OutcomeBadge, QuarantineTag, StatusBadge } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative, shortRunId } from "../../model/format";
 import { fieldTerm, labelTerm, queryLink } from "../../model/query";
 import type { RunModel } from "../../model/run";
+import type { Run, Waiting } from "../../model/types";
 import { endedRunOf, workflowRef } from "../../model/workflows";
+import { type JournalState, useRunExport } from "../../state/runs";
 import { endingOf, RunEndBanner } from "./RunEnd";
 
 function LiveState({ state }: { state: JournalState }) {
@@ -35,7 +34,7 @@ function LiveState({ state }: { state: JournalState }) {
 }
 
 function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette" }) {
-  const api = useApi();
+  const download = useRunExport();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   return (
@@ -53,7 +52,7 @@ function ExportButton({ runId, as }: { runId: string; as: "journal" | "cassette"
         setBusy(true);
         setFailed(null);
         try {
-          const blob = await api.journal(runId, as);
+          const blob = await download(runId, as);
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;

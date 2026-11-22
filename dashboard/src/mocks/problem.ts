@@ -1,6 +1,6 @@
 // Answers of the mocked API that are not a success: `application/problem+json`.
 import { HttpResponse } from "msw";
-import type { Problem } from "../api/types";
+import type { Problem } from "../model/types";
 
 const TITLES: Record<string, string> = {
   unauthorized: "Unauthorized",

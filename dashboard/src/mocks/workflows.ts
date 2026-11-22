@@ -2,7 +2,7 @@
 // gate"): triage has three versions, whose suites inherit, add, update and retire tests with
 // reasons, the last one adding two tests recorded from its runs; digest has one, with TypeScript
 // mock handlers. One recorded test comes from a namespace the caller cannot read.
-import type { Labels, Test, Workflow } from "../api/types";
+import type { Labels, Test, Workflow } from "../model/types";
 import { fakeDigest } from "./journal";
 
 const HOUR = 3_600_000;

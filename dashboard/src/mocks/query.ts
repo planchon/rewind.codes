@@ -1,10 +1,11 @@
 // The query language, read as the server reads it (crates/rewind-api/src/query.rs), for the mocked
 // API: a query becomes a predicate over the mocked run summaries, or the error the server would
 // answer with `invalid-query`, with the position of the term at fault in characters.
-import type { RunMode, RunStatus, RunSummary, WaitKind } from "../api/types";
-import { RUN_STATUSES, WAIT_KINDS } from "../api/types";
+
 import { FIELDS, operandValues } from "../model/query";
 import { namespaceNameProblem } from "../model/quotas";
+import type { RunMode, RunStatus, RunSummary, WaitKind } from "../model/types";
+import { RUN_STATUSES, WAIT_KINDS } from "../model/types";
 
 /** A run summary with what the read model's other tables know of it. */
 export interface MockRun extends RunSummary {

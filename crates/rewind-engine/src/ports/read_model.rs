@@ -248,13 +248,33 @@ impl RunSummary {
     pub fn cursor(&self, order: RunOrder) -> SearchCursor {
         SearchCursor {
             key: match order {
-                RunOrder::Started => None,
-                RunOrder::Activity => Some(self.last_activity_at),
-                RunOrder::Wakes => self.wakes_at,
+                RunOrder::Started | RunOrder::Oldest => None,
+                RunOrder::Activity => Some(self.last_activity_at.0),
+                RunOrder::Wakes => self.wakes_at.map(|at| at.0),
+                RunOrder::Duration => self.duration(),
+                RunOrder::Calls => Some(self.tool_calls),
             },
             run: self.run.id,
         }
     }
+
+    /// How long the run took, in milliseconds, once it has ended: `None` before (or while its
+    /// start is not projected). An end recorded before the start counts as 0.
+    pub fn duration(&self) -> Option<u64> {
+        let (started, ended) = (self.started_at?, self.ended_at?);
+        Some(ended.0.saturating_sub(started.0))
+    }
+}
+
+/// A run's summary as [`ReadModel::changed_runs`] returns it, with when it last changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChangedRun {
+    pub summary: RunSummary,
+    /// When a write last changed the summary, in milliseconds since the epoch of wall-clock
+    /// time, never virtual time: the store's clock (the database's for a shared store). Each
+    /// write to a run's summary stamps it later than the stamp it had, by a millisecond at
+    /// least, even within one millisecond of the clock.
+    pub changed_at: u64,
 }
 
 /// Which runs `search_runs`, `run_stats` and `failure_groups` consider: the tenant's runs that
@@ -408,18 +428,37 @@ pub enum RunOrder {
     /// Newest run id first (run ids are UUID v7: newest created first).
     #[default]
     Started,
+    /// Oldest run id first.
+    Oldest,
     /// Latest activity first, then newest run id first.
     Activity,
     /// Earliest `wakes_at` first, the runs without one last, then oldest run id first.
     Wakes,
+    /// Longest [`RunSummary::duration`] first, then newest run id first; the runs that have not
+    /// ended last, newest run id first.
+    Duration,
+    /// Most `tool_calls` first, then newest run id first.
+    Calls,
+}
+
+impl RunOrder {
+    pub const ALL: [RunOrder; 6] = [
+        RunOrder::Started,
+        RunOrder::Oldest,
+        RunOrder::Activity,
+        RunOrder::Wakes,
+        RunOrder::Duration,
+        RunOrder::Calls,
+    ];
 }
 
 /// Where a page of `search_runs` starts: after this run, in the page's order. Its `key` is the
-/// run's sort key in that order (`None` for `started`, and for `wakes` when the run has no
-/// `wakes_at`).
+/// run's sort key in that order: `None` for `started` and `oldest`; milliseconds since the epoch
+/// for `activity` and `wakes` (`None` without a `wakes_at`); milliseconds for `duration`
+/// (`None` for a run that has not ended); a count for `calls`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SearchCursor {
-    pub key: Option<Timestamp>,
+    pub key: Option<u64>,
     pub run: RunId,
 }
 
@@ -649,6 +688,11 @@ pub enum ReadModelError {
 ///   or after the run's entries are projected.
 /// - **Retention.** `purge` and `delete_run` remove everything of a run: summary, labels,
 ///   waits, calls, task states, quarantine.
+/// - **Changes.** Every write to a run's summary (`apply`; `record_tasks` and
+///   `record_quarantine` once the run is projected, when they change what is kept) stamps it
+///   with [`ChangedRun::changed_at`], later than its previous stamp; `changed_runs` reads the
+///   summaries stamped since a time (`archi/08-decisions.md`, "Taken for the live dashboard").
+///   A run removed is not listed.
 pub trait ReadModel: Send + Sync {
     /// Projects committed entries of a run, with the snapshot of its history up to the last of
     /// them.
@@ -720,6 +764,17 @@ pub trait ReadModel: Send + Sync {
         quarantine: Option<&QuarantineNote>,
         at: Timestamp,
     ) -> impl Future<Output = Result<(), ReadModelError>> + Send;
+
+    /// The summaries of these tenants' runs stamped at or after `since` (milliseconds since the
+    /// epoch, wall-clock time), the oldest change first, then by run id; at most `limit`. Each
+    /// with its waits, as `search_runs` returns it. A summary the store cannot read is left out
+    /// (and logged), not an error: one bad row must not hide the others.
+    fn changed_runs(
+        &self,
+        tenants: &[TenantId],
+        since: u64,
+        limit: usize,
+    ) -> impl Future<Output = Result<Vec<ChangedRun>, ReadModelError>> + Send;
 
     /// Removes the runs of the tenants in scope that ended before `ended_before`. Returns how
     /// many runs were removed.

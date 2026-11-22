@@ -2,7 +2,7 @@
 import { Lock } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router";
-import { useAccess } from "./access";
+import { useAccess } from "../state/access";
 
 export function NoPermission({
   permission,

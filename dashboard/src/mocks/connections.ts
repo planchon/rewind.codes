@@ -3,14 +3,15 @@
 // organization it opens (`connection:cn_…`, the built-in role `reader` for `read`, `harness` for
 // `run`), kept in the access world's grants as the server keeps them. The mock creates the
 // connection at the consent, as if Claude exchanged its code at once.
+import { ADMIN_PERMISSIONS } from "../model/access";
 import type {
   Connection,
   ConnectionAccess,
   ConnectionClient,
   ConsentOrganization,
-} from "../api/connections";
-import type { Permission, ToolsetSummary } from "../api/types";
-import { ADMIN_PERMISSIONS } from "../model/access";
+  Permission,
+  ToolsetSummary,
+} from "../model/types";
 import {
   type AccessWorld,
   grantsOf,

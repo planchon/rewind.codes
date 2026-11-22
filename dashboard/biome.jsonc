@@ -1,0 +1,59 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": ["**", "!dist", "!node_modules", "!.vercel", "!src/generated", "!**/*.md"]
+  },
+  "formatter": {
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noDescendingSpecificity": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["src/views/**", "src/app/**", "src/components/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/sources", "**/sources/**", "**/api", "**/api/**"],
+                    "message": "Views, app/ and components/ read state through the hooks of state/<domain> and call its actions; only state/ calls the API, through sources/ (archi/07, \"Dashboard\": layers)."
+                  },
+                  {
+                    "group": ["@tanstack/*", "!@tanstack/react-virtual"],
+                    "message": "TanStack Query and TanStack DB are state/'s: read state through the hooks of state/<domain> (archi/07, \"Dashboard\": layers)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  }
+}

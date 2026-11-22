@@ -2,7 +2,7 @@
 // otherwise. Hovering or focusing a display name shows the id it stands for; the id stays what
 // the links, the query (`namespace:`) and the API use.
 import { Tooltip } from "@base-ui/react/tooltip";
-import { useNamespaceNames } from "../api/namespaces";
+import { useNamespaceNames } from "../state/namespaces";
 
 /** The display name of a namespace, `undefined` when it has none (or the caller cannot read it). */
 export function useNamespaceLabel(): (name: string) => string | undefined {

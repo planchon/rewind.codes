@@ -1,10 +1,16 @@
-// The dashboard's session, and the client that sends its credentials.
+// The dashboard's session, and the state of each identity it signs in.
 //
 // A server with WorkOS (`GET /auth/config` answers) signs members in on the dashboard's pages
 // through `/auth`: the session lives in a cookie only `/auth` reads, and the access token sent to
 // `/v1` lives in memory only. It is asked for at load, again a minute before it expires, and once
 // when `/v1` refuses it. A server without WorkOS (404) takes an API key, typed by the operator and
 // kept for the tab (sessionStorage), or on this device when asked (localStorage).
+//
+// Each identity (a key, or a member in an organization) gets a state of its own (`SessionState`):
+// what one of them read is never shown to another. Who calls (`GET /v1/whoami`) is read again
+// when a write may have changed it, and when the server refuses a permission the caller thought
+// it held.
+import { useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
@@ -15,10 +21,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { Api, ApiError, type AuthAnswer } from "../api/client";
-import type { AuthConfig, Authenticated, AuthState } from "../api/types";
-import { keepRoute } from "./pendingRoute";
-import { read, write } from "./storage";
+import { read, write } from "../model/storage";
+import type { AuthConfig, Authenticated, AuthState, Identity, ServerInfo } from "../model/types";
+import { Api, ApiError, type AuthAnswer } from "../sources/client";
+import { type Action, useAction } from "./actions";
+import { type Read, useQueryRead } from "./read";
+import { type Failure, StateProvider, type Store, useStore } from "./store";
 
 const KEY = "rewind.key";
 /** A fresh access token is asked for this long before the current one expires. */
@@ -53,11 +61,10 @@ export type AuthPhase =
     };
 
 export interface Session {
-  api: Api;
   phase: AuthPhase;
   /** The API key, without WorkOS. */
   key: string | null;
-  /** What the query cache belongs to: a key, or a user in an organization. */
+  /** What the state belongs to: a key, or a user in an organization. */
   identity: string;
   /** The token of the invitation link the page was opened with, kept through the sign-in. */
   invitationToken: string | null;
@@ -65,17 +72,11 @@ export interface Session {
   signIn(key: string, remember: boolean): void;
   /** Forgets the key, or signs the member out (`POST /auth/logout`). */
   signOut(): Promise<void>;
-  /** `/v1` refused the credentials, even renewed: back to signing in. */
-  unauthorized(): void;
-  /** Applies the answer of a sign-in step. */
-  advance(answer: AuthAnswer): void;
   /** Switches the session to another organization of the member. */
   switchOrganization(organizationId: string): Promise<void>;
-  /** The email went on the waitlist. */
-  waitlisted(email: string): void;
   /** Back to the first page of the sign-in. */
   backToSignIn(): void;
-  /** Leaves for GitHub, through `/auth/github`, keeping the address to come back to. */
+  /** Leaves for GitHub, through `/auth/github`. */
   signInWithGithub(): void;
   /** Leaves the dashboard for another address (an MCP client's redirect after the consent). */
   assign(url: string): void;
@@ -83,7 +84,18 @@ export interface Session {
   retry(): void;
 }
 
-const SessionContext = createContext<Session | null>(null);
+/** The session as `state/` uses it. */
+interface SessionWorks extends Session {
+  api: Api;
+  /** `/v1` refused the credentials, even renewed: back to signing in. */
+  unauthorized(): void;
+  /** Applies the answer of a sign-in step. */
+  advance(answer: AuthAnswer): void;
+  /** The email went on the waitlist. */
+  waitlisted(email: string): void;
+}
+
+const SessionContext = createContext<SessionWorks | null>(null);
 
 function storedKey(): string | null {
   return read("session", KEY) ?? read("local", KEY);
@@ -382,16 +394,16 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
     [assign],
   );
 
-  const signInWithGithub = useCallback(() => {
-    keepRoute();
-    leave(api.githubUrl(invitationToken));
-  }, [api, leave, invitationToken]);
+  const signInWithGithub = useCallback(
+    () => leave(api.githubUrl(invitationToken)),
+    [api, leave, invitationToken],
+  );
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   keyRef.current = key;
   const identity = identityOf(phase, key);
-  const value = useMemo<Session>(
+  const value = useMemo<SessionWorks>(
     () => ({
       api,
       phase,
@@ -430,18 +442,144 @@ export function SessionProvider({ children, baseUrl, fetch, assign }: SessionPro
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
-export function useSession(): Session {
+function useWorks(): SessionWorks {
   const session = useContext(SessionContext);
   if (!session) throw new Error("useSession is used outside SessionProvider");
   return session;
 }
 
-export function useApi(): Api {
-  return useSession().api;
+export function useSession(): Session {
+  return useWorks();
 }
 
 /** `rewind_sk_…a1b2`: enough to tell keys apart, not enough to use one. */
 export function maskKey(key: string): string {
   const prefix = key.startsWith("rewind_sk_") ? "rewind_sk_" : "";
   return `${prefix}…${key.slice(-4)}`;
+}
+
+// Who calls
+
+const SERVER = ["server"] as const;
+const WHOAMI = ["whoami"] as const;
+
+/** The server's version and roles, and what it says of `/mcp`. */
+export function useServerInfo(): Read<ServerInfo> {
+  const { api } = useStore();
+  return useQueryRead(
+    useQuery({ queryKey: SERVER, queryFn: () => api.server(), staleTime: 60_000 }),
+  );
+}
+
+/** Who calls, with what it may do: read before anything else is shown. */
+export function useWhoami(): Read<Identity> {
+  const { api } = useStore();
+  return useQueryRead(
+    useQuery({
+      queryKey: WHOAMI,
+      queryFn: ({ signal }) => api.whoami(signal),
+      staleTime: 30_000,
+    }),
+  );
+}
+
+/** Reads who calls again, after a write that may change its grant or its organization. */
+export function refreshWhoami(store: Store): Promise<void> {
+  return store.queryClient.invalidateQueries({ queryKey: WHOAMI });
+}
+
+/**
+ * The state of the identity signed in: a new one for each key, or member and organization, so
+ * that nothing one of them read shows to another, not even while the next one's first answers
+ * are on their way (another tenant's runs, scripts or payloads).
+ */
+export function SessionState({ children }: { children: ReactNode }) {
+  const session = useWorks();
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const { api, phase, key, identity } = session;
+  const token =
+    phase.kind === "member" ? phase.state.accessToken : phase.kind === "key" ? key : null;
+  const [onError] = useState(() => (error: unknown, failure: Failure) => {
+    if (!(error instanceof ApiError)) return;
+    const read = failure.key?.[0];
+    if (error.status === 401) {
+      // The key form says itself that the key was refused.
+      if (sessionRef.current.phase.kind === "key" && (read === SERVER[0] || read === WHOAMI[0]))
+        return;
+      // Refused even with a renewed token, or a key revoked while the dashboard is open.
+      sessionRef.current.unauthorized();
+    } else if (error.status === 403 && read !== WHOAMI[0]) {
+      // The caller's grant changed meanwhile: what it may do is read again.
+      void refreshWhoami(failure.store);
+    }
+  });
+  return (
+    <StateProvider key={identity} api={api} token={token} onError={onError}>
+      {children}
+    </StateProvider>
+  );
+}
+
+// The sign-in's steps
+
+/**
+ * Sends a 6-digit code to the email; answers whether it was sent. While sign-ups are closed, an
+ * email without an account gets none: the session goes to the waitlist's step.
+ */
+export function useSendCode(): Action<string, boolean> {
+  const { api, invitationToken, advance } = useWorks();
+  return useAction(async (email: string) => {
+    const answer = await api.sendMagicCode(email, invitationToken);
+    if (answer === null) return true;
+    advance(answer);
+    return false;
+  });
+}
+
+export function useVerifyCode(): Action<{ email: string; code: string }> {
+  const { api, invitationToken, advance } = useWorks();
+  return useAction(async ({ email, code }: { email: string; code: string }) => {
+    advance(await api.verifyMagicCode(email, code, invitationToken));
+  });
+}
+
+export function useVerifyEmail(): Action<string> {
+  const { api, advance } = useWorks();
+  return useAction(async (code: string) => {
+    advance(await api.verifyEmail(code));
+  });
+}
+
+/** Signs in to one of the organizations the member belongs to. */
+export function useChooseOrganization(): Action<string> {
+  const { api, advance } = useWorks();
+  return useAction(async (organizationId: string) => {
+    advance(await api.selectOrganization(organizationId));
+  });
+}
+
+export function useJoinWaitlist(): Action<string> {
+  const { api, waitlisted } = useWorks();
+  return useAction(async (email: string) => {
+    await api.joinWaitlist(email);
+    waitlisted(email);
+  });
+}
+
+export function useSignOut(): Action<void> {
+  const { signOut } = useWorks();
+  return useAction(() => signOut());
+}
+
+/**
+ * Switches the session to another organization of the member. `then` runs right after the
+ * switch, before the views of the new organization replace the ones that asked.
+ */
+export function useSwitchOrganization(then: () => void = () => {}): Action<string> {
+  const { switchOrganization } = useWorks();
+  return useAction(async (organizationId: string) => {
+    await switchOrganization(organizationId);
+    then();
+  });
 }

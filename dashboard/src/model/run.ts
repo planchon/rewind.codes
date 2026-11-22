@@ -11,7 +11,7 @@ import type {
   Payload,
   ScriptError,
   ToolFailure,
-} from "../api/types";
+} from "./types";
 
 interface Point {
   /** The journal entry. */

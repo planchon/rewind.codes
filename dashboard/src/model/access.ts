@@ -1,7 +1,8 @@
 // What the caller may do, as `GET /v1/whoami` tells it, and the rules the organization views
 // follow before the server enforces them (archi/06, "What the caller may do").
-import type { Identity, Labels, Permission, Role, User } from "../api/types";
+
 import { labelPair, splitLabel } from "./format";
+import type { Identity, Labels, Permission, Role, User } from "./types";
 
 /** The catalog, in its order (`GET /v1/permissions` answers the same, with descriptions). */
 export const PERMISSIONS: readonly Permission[] = [

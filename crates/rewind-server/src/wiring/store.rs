@@ -23,10 +23,10 @@ use rewind_core::{
 };
 use rewind_engine::adapters::{MemoryAccess, MemoryJournal, MemoryReadModel, MemorySecrets};
 use rewind_engine::ports::{
-    AccessStore, AcquireRunnable, Activation, ApiKey, ClaimedTask, CompiledScript, CreateRun,
-    Credentials, Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures, FeedConsumer,
-    FeedItem, Grant, GrantClaim, GrantDeletion, GrantWrite, InboxItem, JournalStore, Lease, NewRun,
-    ParkReason, ParkedScope, PayloadRecord, Principal, ProjectedRun, QuarantineKind,
+    AccessStore, AcquireRunnable, Activation, ApiKey, ChangedRun, ClaimedTask, CompiledScript,
+    CreateRun, Credentials, Enqueued, ExpiredRuns, FailureGroups, FailureWindow, Failures,
+    FeedConsumer, FeedItem, Grant, GrantClaim, GrantDeletion, GrantWrite, InboxItem, JournalStore,
+    Lease, NewRun, ParkReason, ParkedScope, PayloadRecord, Principal, ProjectedRun, QuarantineKind,
     QuarantineNote, ReadModel, ReadModelError, Role, RoleDeletion, RunFilter, RunOrder, RunQuery,
     RunRecord, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
     SearchCursor, SecretError, SecretOwner, SecretStore, StatsWindow, StoreError, StoredScript,
@@ -1129,6 +1129,15 @@ impl ReadModel for Store {
         at: Timestamp,
     ) -> Result<(), ReadModelError> {
         read_model!(self, store => store.record_quarantine(run, quarantine, at).await)
+    }
+
+    async fn changed_runs(
+        &self,
+        tenants: &[TenantId],
+        since: u64,
+        limit: usize,
+    ) -> Result<Vec<ChangedRun>, ReadModelError> {
+        read_model!(self, store => store.changed_runs(tenants, since, limit).await)
     }
 
     async fn purge(

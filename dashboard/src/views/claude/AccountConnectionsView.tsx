@@ -2,30 +2,20 @@
 // opens the organizations they ticked, with an access and labels; the person changes them in a
 // dialog (`PATCH /v1/connections/{id}`), without reconnecting the client, or revokes the
 // connection (`DELETE`) in a dialog that asks once more, which the client loses at once.
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plug } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
-import {
-  ACCESSES,
-  CONNECTIONS,
-  type Connection,
-  type ConnectionAccess,
-  ORG_CONNECTIONS,
-  revokeConnection,
-  updateConnection,
-  useConnections,
-} from "../../api/connections";
-import type { Labels } from "../../api/types";
-import { useAccess } from "../../app/access";
-import { useApi, useSession } from "../../app/session";
 import { Ago, Empty, Loading } from "../../components/bits";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ErrorNote } from "../../components/ErrorNote";
 import { DialogForm, FormDialog } from "../../components/FormDialog";
 import { PageHeader } from "../../components/PageHeader";
 import { formatLabels, parseLabels } from "../../model/access";
-import { ACCESS_INFO } from "../../model/connections";
+import { ACCESS_INFO, ACCESSES } from "../../model/connections";
+import type { Connection, ConnectionAccess, Labels } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useConnections, useRevokeConnection, useUpdateConnection } from "../../state/connections";
+import { useSession } from "../../state/session";
 import { ClientName, OrganizationList } from "./bits";
 
 export function AccountConnectionsView() {
@@ -51,20 +41,12 @@ export function AccountConnectionsView() {
 }
 
 function Connections() {
-  const api = useApi();
-  const queryClient = useQueryClient();
   const connections = useConnections();
   const [editing, setEditing] = useState(false);
   const [target, setTarget] = useState<Connection | null>(null);
   const [revoking, setRevoking] = useState<Connection | null>(null);
-  const revoke = useMutation({
-    mutationFn: (id: string) => revokeConnection(api, id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: CONNECTIONS });
-      await queryClient.invalidateQueries({ queryKey: ORG_CONNECTIONS });
-      setRevoking(null);
-    },
-  });
+  // Gone at once; a refusal brings it back, and the dialog says why.
+  const revoke = useRevokeConnection();
 
   return (
     <section className="org-section" aria-label="Connections">
@@ -96,15 +78,15 @@ function Connections() {
         }
         confirm="Revoke"
         pendingLabel="Revoking…"
-        pending={revoke.isPending}
+        pending={revoke.pending}
         error={revoke.error}
         onConfirm={() => {
-          if (revoking) revoke.mutate(revoking.id);
+          if (revoking) void revoke.run(revoking.id, () => setRevoking(null));
         }}
       />
       {connections.isPending ? (
         <Loading />
-      ) : connections.error ? (
+      ) : connections.isError ? (
         <ErrorNote error={connections.error} />
       ) : connections.data.length === 0 ? (
         <Empty>
@@ -209,9 +191,7 @@ function rowsOf(
 }
 
 function EditConnection({ connection, onDone }: { connection: Connection; onDone: () => void }) {
-  const api = useApi();
   const access = useAccess();
-  const queryClient = useQueryClient();
   const [rows, setRows] = useState(() => rowsOf(connection, access.organizations));
   const currentId = access.organization?.id ?? null;
   const givable = (id: string, a: ConnectionAccess): boolean => {
@@ -225,23 +205,25 @@ function EditConnection({ connection, onDone }: { connection: Connection; onDone
   const parsed = rows.map((r) => ({ row: r, labels: parseLabels(r.labels) }));
   const invalid = parsed.some(({ row, labels }) => row.checked && "error" in labels);
   const ticked = rows.filter((r) => r.checked).length;
-  const save = useMutation({
-    mutationFn: () =>
-      updateConnection(api, connection.id, {
-        organizations: parsed
-          .filter(({ row }) => row.checked)
-          .map(({ row, labels }) => ({
-            id: row.id,
-            access: row.access,
-            allowedLabels: "labels" in labels ? (labels.labels as Labels) : {},
-          })),
-      }),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: CONNECTIONS });
-      await queryClient.invalidateQueries({ queryKey: ORG_CONNECTIONS });
-      onDone();
-    },
-  });
+  // The connection shows what it opens at once; a refusal takes it back, and says why here.
+  const save = useUpdateConnection();
+  const send = () =>
+    void save.run(
+      {
+        id: connection.id,
+        body: {
+          organizations: parsed
+            .filter(({ row }) => row.checked)
+            .map(({ row, labels }) => ({
+              id: row.id,
+              access: row.access,
+              allowedLabels: "labels" in labels ? (labels.labels as Labels) : {},
+            })),
+        },
+        names: new Map(rows.map((r) => [r.id, r.name])),
+      },
+      onDone,
+    );
   const set = (id: string, next: Partial<Row>) =>
     setRows((current) => current.map((r) => (r.id === id ? { ...r, ...next } : r)));
 
@@ -256,11 +238,11 @@ function EditConnection({ connection, onDone }: { connection: Connection; onDone
         </>
       }
       submit="Save"
-      pending={save.isPending}
+      pending={save.pending}
       disabled={ticked === 0 || invalid}
       error={save.error}
       onSubmit={() => {
-        if (ticked > 0 && !invalid) save.mutate();
+        if (ticked > 0 && !invalid) send();
       }}
     >
       <fieldset className="conn-edit">

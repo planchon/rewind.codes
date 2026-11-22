@@ -935,6 +935,46 @@ pub(crate) async fn still_valid(app: &App, caller: &Caller) -> bool {
     }
 }
 
+/// Whether the caller that opened a stream may still read what it reads: an end user's token
+/// or a connection that still authenticates ([`still_valid`]); for a key, a member or a
+/// connection, a grant as the store holds it now that still gives `permission`, with the same
+/// labels. A key revoked or deleted, a grant removed, changed to other labels, or whose role no
+/// longer gives the permission: false; a store that cannot be read too. The socket's caller
+/// always may.
+pub(crate) async fn still_holds(app: &App, caller: &Caller, permission: Permission) -> bool {
+    if !still_valid(app, caller).await {
+        return false;
+    }
+    // An end user's token holds what it was minted with: its revocation is its only change.
+    if caller.token.is_some() {
+        return true;
+    }
+    let now = if let Some(connection) = &caller.connection {
+        match Caller::of_connection(&app.store, connection, caller.tenant.clone()).await {
+            Ok(now) => now,
+            Err(_) => return false,
+        }
+    } else {
+        let Some(principal) = &caller.principal else {
+            return true;
+        };
+        if let Principal::Key(hash) = principal {
+            let kept = matches!(
+                app.store.find_key(*hash).await,
+                Ok(Some(key)) if key.revoked_at.is_none() && key.tenant == caller.tenant
+            );
+            if !kept {
+                return false;
+            }
+        }
+        match Caller::of(&app.store, caller.tenant.clone(), principal.clone()).await {
+            Ok(now) => now,
+            Err(_) => return false,
+        }
+    };
+    now.permissions.contains(&permission) && now.labels == caller.labels
+}
+
 #[cfg(test)]
 mod tests {
     use rewind_api::access::BuiltInRole;

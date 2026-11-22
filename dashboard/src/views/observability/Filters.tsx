@@ -3,9 +3,7 @@
 // value asks for it (its term is added to the query), a second excludes it, a third removes it.
 import { Check, Minus } from "lucide-react";
 import { useState } from "react";
-import { useNamespaceSuggestions, useSettled } from "../../api/namespaces";
-import type { Facets, FacetValue } from "../../api/types";
-import { useAccess } from "../../app/access";
+import { useSettled } from "../../components/bits";
 import { useNamespaceLabel } from "../../components/NamespaceName";
 import type { RangeKey } from "../../model/filters";
 import { formatCount, shortDigest } from "../../model/format";
@@ -17,6 +15,9 @@ import {
   removeTerm,
   splitTerms,
 } from "../../model/query";
+import type { Facets, FacetValue } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useNamespaceSuggestions } from "../../state/namespaces";
 import { WINDOW_WORDS, WINDOWS } from "../search";
 
 /** The window a query's `started:>now-…` term names, if it names one of the timeline's. */
@@ -59,7 +60,7 @@ interface Group {
   search?: "namespace";
 }
 
-function Checkbox({ state }: { state: FacetState }) {
+export function Checkbox({ state }: { state: FacetState }) {
   return (
     <span className={`checkbox${state ? ` ${state}` : ""}`} aria-hidden="true">
       {state === "include" && <Check size={12} strokeWidth={3} />}
@@ -69,7 +70,7 @@ function Checkbox({ state }: { state: FacetState }) {
 }
 
 /** The namespaces whose name starts with what is typed, the most active first. */
-function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) {
+export function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) {
   const [typed, setTyped] = useState("");
   const prefix = useSettled(typed.trim() ? typed.trim() : null);
   const found = useNamespaceSuggestions(prefix);
@@ -114,6 +115,64 @@ function NamespaceSearch({ onPick }: { onPick: (name: string) => void }) {
   );
 }
 
+export interface FacetRow {
+  value: string;
+  /** Its runs, `null` for a value the query names that the counts do not list. */
+  runs: number | null;
+  state: FacetState;
+}
+
+/**
+ * The values of a facet with their counts, then those the query names that no counted run has
+ * (an excluded value): they stay, to be removed.
+ */
+export function facetRows(q: string, field: string, values: readonly FacetValue[]): FacetRow[] {
+  const named = facetValues(q, field).filter((n) => !values.some((v) => v.value === n.value));
+  return [
+    ...values.map((v) => ({ value: v.value, runs: v.runs, state: facetState(q, field, v.value) })),
+    ...named.map((n) => ({ value: n.value, runs: null, state: n.state })),
+  ];
+}
+
+/** A facet's values as toggles: a click asks for one, a second excludes it, a third removes it. */
+export function FacetToggles({
+  title,
+  field,
+  rows,
+  onToggle,
+  show,
+  dot = false,
+}: {
+  title: string;
+  field: string;
+  rows: readonly FacetRow[];
+  onToggle: (field: string, value: string) => void;
+  show?: ((value: string) => string) | undefined;
+  dot?: boolean;
+}) {
+  return rows.map((r) => {
+    const shown = show?.(r.value) ?? r.value;
+    return (
+      <button
+        key={r.value}
+        type="button"
+        className={`filter-row${r.state ? ` ${r.state}` : ""}`}
+        aria-pressed={r.state === "include"}
+        aria-label={`${title} ${shown}${r.runs !== null ? `, ${r.runs} runs` : ""}${r.state ? `, ${r.state === "include" ? "asked for" : "excluded"}` : ""}`}
+        title={`${
+          r.state ? STATE_WORD[r.state] : `Only runs with ${shown}; click again to exclude`
+        }${shown !== r.value && field === "namespace" ? ` (namespace ${r.value})` : ""}`}
+        onClick={() => onToggle(field, r.value)}
+      >
+        <Checkbox state={r.state} />
+        {dot && <span className={`dot ${r.value}`} aria-hidden="true" />}
+        <span className="filter-value">{shown}</span>
+        <span className="filter-count">{r.runs === null ? "–" : formatCount(r.runs)}</span>
+      </button>
+    );
+  });
+}
+
 function FilterGroup({
   group,
   q,
@@ -123,18 +182,7 @@ function FilterGroup({
   q: string;
   onToggle: (field: string, value: string) => void;
 }) {
-  // The values the query names stay, even when no run has them any more (an excluded value).
-  const named = facetValues(q, group.field).filter(
-    (n) => !group.values.some((v) => v.value === n.value),
-  );
-  const rows: { value: string; runs: number | null; state: FacetState }[] = [
-    ...group.values.map((v) => ({
-      value: v.value,
-      runs: v.runs,
-      state: facetState(q, group.field, v.value),
-    })),
-    ...named.map((n) => ({ value: n.value, runs: null, state: n.state })),
-  ];
+  const rows = facetRows(q, group.field, group.values);
   if (rows.length === 0 && !group.search) return null;
   const picked = rows.filter((r) => r.state !== null).length;
   return (
@@ -145,27 +193,14 @@ function FilterGroup({
       </summary>
       {/* biome-ignore lint/a11y/useSemanticElements: a list of toggles named by its group */}
       <div className="filter-box" role="group" aria-label={group.title}>
-        {rows.map((r) => {
-          const shown = group.show?.(r.value) ?? r.value;
-          return (
-            <button
-              key={r.value}
-              type="button"
-              className={`filter-row${r.state ? ` ${r.state}` : ""}`}
-              aria-pressed={r.state === "include"}
-              aria-label={`${group.title} ${shown}${r.runs !== null ? `, ${r.runs} runs` : ""}${r.state ? `, ${r.state === "include" ? "asked for" : "excluded"}` : ""}`}
-              title={`${
-                r.state ? STATE_WORD[r.state] : `Only runs with ${shown}; click again to exclude`
-              }${shown !== r.value && group.field === "namespace" ? ` (namespace ${r.value})` : ""}`}
-              onClick={() => onToggle(group.field, r.value)}
-            >
-              <Checkbox state={r.state} />
-              {group.dot && <span className={`dot ${r.value}`} aria-hidden="true" />}
-              <span className="filter-value">{shown}</span>
-              <span className="filter-count">{r.runs === null ? "–" : formatCount(r.runs)}</span>
-            </button>
-          );
-        })}
+        <FacetToggles
+          title={group.title}
+          field={group.field}
+          rows={rows}
+          onToggle={onToggle}
+          show={group.show}
+          dot={group.dot ?? false}
+        />
         {group.search === "namespace" && (
           <NamespaceSearch onPick={(name) => onToggle("namespace", name)} />
         )}

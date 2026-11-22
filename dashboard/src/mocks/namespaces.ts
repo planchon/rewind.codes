@@ -3,6 +3,8 @@
 // started) over this month and the last, the runs active now, their distinct scripts, their
 // tokens, and the alerts recorded when a use crossed 80 % or 100 % of a limit. A few named end
 // users tell a story (bob abuses, chen pays, erin is blocked); a thousand more fill the lists.
+
+import { apiDuration, limitOf, monthOf, shiftMonth } from "../model/quotas";
 import type {
   Namespace,
   NamespaceDefaults,
@@ -11,8 +13,7 @@ import type {
   QuotaKind,
   Quotas,
   QuotaUsage,
-} from "../api/types";
-import { apiDuration, limitOf, monthOf, shiftMonth } from "../model/quotas";
+} from "../model/types";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;

@@ -2,8 +2,9 @@
 // what a namespace used against its limit, the share and its level (orange from 80 %, red at
 // 100 %), durations as the API writes them, the month's cumulative CPU time, and the limits
 // typed in a form. Pure: the server enforces every rule.
-import type { DayUsage, Duration, QuotaKind, Quotas, QuotaUsage } from "../api/types";
+
 import { formatCount, formatDuration } from "./format";
+import type { DayUsage, Duration, QuotaKind, Quotas, QuotaUsage } from "./types";
 
 /** The quotas counted over the month or now, each shown as a meter. */
 export type Metered = "activeRuns" | "runsPerMonth" | "cpuPerMonth" | "scripts";

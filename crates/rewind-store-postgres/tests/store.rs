@@ -100,6 +100,36 @@ async fn the_database_behind_the_store() {
     check!(concurrent_starts_never_take_the_same_last_place);
     check!(projectors_applying_together_keep_the_longest_snapshot);
     check!(percentiles_are_nearest_rank);
+    check!(a_changed_run_that_cannot_be_read_is_left_out);
+}
+
+/// `changed_runs` leaves out a summary it cannot read, and lists the others.
+async fn a_changed_run_that_cannot_be_read_is_left_out(postgres: &Postgres) {
+    let database = postgres.create_database();
+    let store = postgres.connect_with(&database, 2).await;
+    for n in 0..3 {
+        store
+            .apply(
+                &projected_run(n),
+                &[projected_entry(0)],
+                &projected_snapshot(1),
+            )
+            .await
+            .expect("apply");
+    }
+    let bad = projected_run(1).run.id;
+    postgres.psql(
+        &database,
+        &format!("UPDATE run_summaries SET namespace = 'Not a namespace!' WHERE run_id = '{bad}'"),
+    );
+    let listed: Vec<RunId> = store
+        .changed_runs(&[TenantId::local()], 0, 10)
+        .await
+        .expect("changed_runs")
+        .into_iter()
+        .map(|change| change.summary.run.id)
+        .collect();
+    assert_eq!(listed, [projected_run(0).run.id, projected_run(2).run.id]);
 }
 
 async fn a_new_database_gets_the_current_schema(postgres: &Postgres) {

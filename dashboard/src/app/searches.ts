@@ -4,7 +4,7 @@
 // them in its sidebar.
 import { useCallback, useSyncExternalStore } from "react";
 import { queryLink } from "../model/query";
-import { read, write } from "./storage";
+import { read, write } from "../model/storage";
 
 const KEY = "rewind.searches";
 

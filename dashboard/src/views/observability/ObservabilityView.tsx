@@ -13,11 +13,8 @@ import {
   RefreshCw,
   X,
 } from "lucide-react";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router";
-import { queryFault } from "../../api/client";
-import { useRunStats, useRuns } from "../../api/queries";
-import type { RunSort, RunStats, RunStatus } from "../../api/types";
 import { RunsFrom } from "../../app/runLinks";
 import { type SearchView, savedSearchPath, useSavedSearches } from "../../app/searches";
 import { useSettings } from "../../app/settings";
@@ -38,7 +35,11 @@ import {
   toggleFacet,
   withTerm,
 } from "../../model/query";
-import { Seg } from "../FilterBits";
+import { readSort, withSort } from "../../model/sorts";
+import type { Facets, RunStats, RunStatus } from "../../model/types";
+import { useRunStats } from "../../state/aggregates";
+import { queryFault } from "../../state/errors";
+import { useRunSearch } from "../../state/runs";
 import { RunTable } from "../RunTable";
 import { BUCKETS, useRunQueryValues, useSearchQuery, useWindow } from "../search";
 import { FailureGroups } from "./FailureGroups";
@@ -91,17 +92,6 @@ const VIEWS: readonly View[] = [
     icon: <CircleAlert size={14} />,
   },
 ];
-
-const SORTS: { value: RunSort; label: string; title: string }[] = [
-  { value: "started", label: "Started", title: "The most recently started first" },
-  { value: "activity", label: "Activity", title: "The most recent activity first" },
-  { value: "wakes", label: "Wakes", title: "The soonest to wake by itself first" },
-];
-
-function readSort(params: URLSearchParams): RunSort {
-  const sort = params.get("sort");
-  return sort === "activity" || sort === "wakes" ? sort : "started";
-}
 
 /** How many runs each view shows, for the query. */
 function viewCount(view: ViewKey, all: RunStats | undefined, waiting: RunStats | undefined) {
@@ -212,6 +202,7 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
     15_000,
   );
   if (!stats.data) return <div className="histogram placeholder" aria-hidden="true" />;
+  // Its bars change their values in place: the chart is never drawn again from zero.
   const since = stats.data.since ? Date.parse(stats.data.since) : Date.now() - width;
   const buckets = (stats.data.series ?? []).map((b) => {
     const from = Date.parse(b.at);
@@ -246,21 +237,35 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
   );
 }
 
-function RunsList({ q, view, setQ }: { q: string; view: View; setQ: (q: string) => void }) {
-  const [params] = useSearchParams();
+/** The runs of the view, ordered and filtered by the table's headers. */
+function RunsList({
+  q,
+  view,
+  setQ,
+  facets,
+}: {
+  q: string;
+  view: View;
+  setQ: (q: string) => void;
+  facets: Facets | undefined;
+}) {
+  const [params, setParams] = useSearchParams();
   const sort = readSort(params);
   const asked = joinQuery(q, view.term);
-  const runs = useRuns(`${view.key}|${sort}|${q}`, () => ({
-    ...(asked ? { q: asked } : {}),
-    ...(sort !== "started" ? { sort } : {}),
-    limit: 50,
-  }));
+  const runs = useRunSearch({ q: asked, sort, pageSize: 50 });
   const add = (term: string) => setQ(withTerm(q, term));
   if (queryFault(runs.error))
     return <Empty>Fix the query to see its runs: the term at fault is underlined above.</Empty>;
   return (
     <RunTable
-      query={runs}
+      search={runs}
+      controls={{
+        q,
+        onQuery: setQ,
+        sort,
+        onSort: (next) => setParams((current) => withSort(current, next)),
+        facets,
+      }}
       onPickLabel={(pair) => {
         const at = pair.indexOf(":");
         add(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
@@ -284,7 +289,6 @@ export function ObservabilityView() {
   const view = VIEWS.find((v) => v.key === (raw ?? "all"));
   const { q, setQ } = useSearchQuery();
   const lookup = useRunQueryValues();
-  const [params, setParams] = useSearchParams();
   const [win, setWin] = useWindow();
 
   // The counts of the views, and the facets of the one shown.
@@ -299,6 +303,7 @@ export function ObservabilityView() {
     () => ({ q: joinQuery(q, view?.term), top: 10 }),
     15_000,
   );
+  const [refreshing, setRefreshing] = useState(false);
   const counts = useMemo(
     () => ({
       all: viewCount("all", all.data, waiting.data),
@@ -311,7 +316,6 @@ export function ObservabilityView() {
 
   if (!view) return <Navigate to="/observability" replace />;
   const fault = queryFault(shown.error) ?? queryFault(all.error);
-  const sort = readSort(params);
   const timeline = view.key === "failures" ? win : timelineOf(q);
 
   return (
@@ -345,13 +349,15 @@ export function ObservabilityView() {
                 className="btn icon-only"
                 aria-label="Refresh"
                 title="Refresh"
+                disabled={refreshing}
                 onClick={() => {
-                  void all.refetch();
-                  void waiting.refetch();
-                  void shown.refetch();
+                  setRefreshing(true);
+                  void Promise.all([all.refresh(), waiting.refresh(), shown.refresh()]).finally(
+                    () => setRefreshing(false),
+                  );
                 }}
               >
-                <RefreshCw size={14} className={shown.isFetching ? "spin" : undefined} />
+                <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
               </button>
             </>
           }
@@ -365,27 +371,16 @@ export function ObservabilityView() {
             onTyping={lookup.onTyping}
             fault={fault}
             placeholder='@agent:triage status:failed tool:github.* error:timeout "rate limit"'
-          >
-            {(view.key === "all" || view.key === "active") && (
-              <Seg<RunSort>
-                label="Order"
-                value={sort}
-                onChange={(v) =>
-                  setParams((current) => {
-                    const next = new URLSearchParams(current);
-                    if (v === "started") next.delete("sort");
-                    else next.set("sort", v);
-                    return next;
-                  })
-                }
-                options={SORTS}
-              />
-            )}
-          </QueryBar>
+          />
           {(view.key === "all" || view.key === "active") && (
             <>
               {!fault && <RunsHistogram q={q} win={timeline ?? "24h"} />}
-              <RunsList q={q} view={view} setQ={setQ} />
+              <RunsList
+                q={q}
+                view={view}
+                setQ={setQ}
+                facets={fault ? undefined : shown.data?.facets}
+              />
             </>
           )}
           {view.key === "waiting" &&

@@ -1,27 +1,18 @@
-// One script: its source, the suites of the workflow versions it is the script of, and its runs.
-import { Link, useParams, useSearchParams } from "react-router";
-import { useRuns, useScript } from "../api/queries";
-import { RUN_STATUSES, type RunStatus } from "../api/types";
+// One script: its source, the suites of the workflow versions it is the script of, and its runs
+// in Observability's table forced to the script.
+import { Link, useParams } from "react-router";
 import { Digest, Loading, ProblemView } from "../components/bits";
 import { CodeView } from "../components/CodeView";
 import { PageHeader } from "../components/PageHeader";
-import { StatusGlyph } from "../components/Status";
-import { fieldTerm, joinQuery } from "../model/query";
-import { Seg } from "./FilterBits";
-import { RunTable } from "./RunTable";
+import { shortDigest } from "../model/format";
+import { fieldTerm } from "../model/query";
+import { useScript } from "../state/scripts";
+import { ScopedRuns } from "./ScopedRuns";
 import { ScriptSuites } from "./testing/ScriptSuites";
 
 export function ScriptView() {
   const { digest = "" } = useParams();
-  const [params, setParams] = useSearchParams();
-  const status = (RUN_STATUSES as readonly string[]).includes(params.get("status") ?? "")
-    ? (params.get("status") as RunStatus)
-    : null;
   const script = useScript(digest);
-  const runs = useRuns(`script=${digest}&status=${status ?? ""}`, () => ({
-    q: joinQuery(fieldTerm("script", digest), status && `status:${status}`),
-    limit: 50,
-  }));
   const headline = script.data?.source.split("\n").find((l) => l.trim() !== "");
 
   return (
@@ -46,31 +37,16 @@ export function ScriptView() {
         )}
       </section>
       <ScriptSuites digest={digest} />
-      <div className="section-head">
-        <h2>Runs of this script</h2>
-        <Seg<RunStatus | "any">
-          label="Status"
-          value={status ?? "any"}
-          onChange={(v) =>
-            setParams(new URLSearchParams(v === "any" ? {} : { status: v }), { replace: true })
-          }
-          options={[
-            { value: "any", label: "Any status" },
-            ...RUN_STATUSES.map((s) => ({
-              value: s,
-              label: (
-                <>
-                  <span className={`status ${s}`}>
-                    <StatusGlyph status={s} size={12} />
-                  </span>
-                  {s}
-                </>
-              ),
-            })),
-          ]}
-        />
-      </div>
-      <RunTable query={runs} hideScript empty="No run of this script matches." />
+      <ScopedRuns
+        name={`script|${digest}`}
+        label="Runs of this script"
+        title="Runs of this script"
+        scope={fieldTerm("script", digest)}
+        locked={[{ label: <>Script {shortDigest(digest)}</>, title: `Only the runs of ${digest}` }]}
+        limit={50}
+        hideScript
+        empty="No run of this script yet."
+      />
     </div>
   );
 }

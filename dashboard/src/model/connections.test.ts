@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Connection, ConsentRequest } from "../api/connections";
 import {
   arrivedSince,
   firstMessage,
@@ -11,6 +10,7 @@ import {
   snapshotOf,
   toolsetTitle,
 } from "./connections";
+import type { Connection, ConsentRequest } from "./types";
 
 function connection(id: string, createdAt: string, lastUsedAt: string | null): Connection {
   return {

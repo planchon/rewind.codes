@@ -1,7 +1,7 @@
 // The mocked `/auth` and the organization and access endpoints of `/v1`, over the access world.
 import { HttpResponse, http } from "msw";
-import type { Grant, Labels, Permission, PutRole } from "../api/types";
 import { PERMISSIONS, roleNameProblem } from "../model/access";
+import type { Grant, Labels, Permission, PutRole } from "../model/types";
 import {
   acceptInvitation,
   afterVerified,

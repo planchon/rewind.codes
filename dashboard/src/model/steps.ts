@@ -3,9 +3,10 @@
 // tool's result or failure, a timer, a signal, a cancellation) and the entries committed with it,
 // until the script pauses again. What the run knew after a step is the journal up to its last
 // entry, so the state at the cursor is `buildRunModel(entries up to it)`.
-import type { Entry } from "../api/types";
+
 import { CANCELLED_ERROR } from "./ending";
 import type { Activity, RunModel } from "./run";
+import type { Entry } from "./types";
 
 /** The events that wake the script up: each starts a step. */
 export const TRIGGERS: ReadonlySet<Entry["event"]["type"]> = new Set([

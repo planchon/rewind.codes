@@ -9,33 +9,26 @@ import {
   Plug,
   TriangleExclamationPoint,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Link } from "react-router";
-import {
-  CONNECTION_POLL_MS,
-  type Connection,
-  type McpInfo,
-  mcpOf,
-  useConnections,
-  useToolsets,
-} from "../../api/connections";
-import type { ToolsetSummary } from "../../api/types";
-import { useAccess } from "../../app/access";
 import { useServer } from "../../app/Gate";
-import { useSession } from "../../app/session";
 import { Ago, Empty, Loading } from "../../components/bits";
 import { ErrorNote } from "../../components/ErrorNote";
 import { PageHeader } from "../../components/PageHeader";
 import {
-  arrivedSince,
   firstMessage,
   hostTools,
+  type McpInfo,
+  mcpOf,
   namespaceProblem,
-  type Snapshot,
-  snapshotOf,
   toolsetTitle,
 } from "../../model/connections";
 import { shortDigest } from "../../model/format";
+import type { Connection, ToolsetSummary } from "../../model/types";
+import { useAccess } from "../../state/access";
+import { useArrivingConnections } from "../../state/connections";
+import { useSession } from "../../state/session";
+import { useToolsets } from "../../state/toolsets";
 import { Field } from "../org/bits";
 import { ClientName, CopyBlock, OrganizationList, Step, Steps } from "./bits";
 
@@ -58,19 +51,10 @@ export function ConnectView() {
   const member = phase.kind === "member";
   const readsToolsets = access.can("toolsets:read");
   const toolsets = useToolsets(readsToolsets);
-  // Connections are a person's, made through Rewind's OAuth: asked for while the page is open.
+  // Connections are a person's, made through Rewind's OAuth: asked for while the page is open. A
+  // step turns green when one arrives, compared with what they were when the page opened.
   const watching = member && mcp.oauth && mcp.mcpUrl !== null;
-  const connections = useConnections(member, watching ? CONNECTION_POLL_MS : false);
-
-  // What the connections were when the page opened, from an answer asked since (not one cached
-  // by another page): a step turns green when one arrives.
-  const [openedAt] = useState(() => Date.now());
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-  useEffect(() => {
-    if (snapshot === null && connections.data && connections.dataUpdatedAt >= openedAt)
-      setSnapshot(snapshotOf(connections.data));
-  }, [snapshot, connections.data, connections.dataUpdatedAt, openedAt]);
-  const arrived = snapshot && connections.data ? arrivedSince(snapshot, connections.data) : null;
+  const { connections, arrived, ready } = useArrivingConnections(member, watching);
 
   const list = toolsets.data ?? [];
   const organization = access.organization?.name ?? access.identity.tenant ?? "your organization";
@@ -89,7 +73,7 @@ export function ConnectView() {
             <ToolsetStep
               readable={readsToolsets}
               pending={toolsets.isPending}
-              error={toolsets.error}
+              error={toolsets.isError ? toolsets.error : null}
               toolsets={list}
               organization={organization}
             />
@@ -106,8 +90,8 @@ export function ConnectView() {
               member={member}
               arrived={arrived}
               count={connections.data?.length ?? 0}
-              error={connections.error}
-              ready={snapshot !== null}
+              error={connections.isError ? connections.error : null}
+              ready={ready}
             />
           </Step>
           <Step n={5} title="Try it">
@@ -137,7 +121,7 @@ function ToolsetStep({
   readable: boolean;
   pending: boolean;
   error: unknown;
-  toolsets: ToolsetSummary[];
+  toolsets: readonly ToolsetSummary[];
   organization: string;
 }) {
   if (!readable) {
@@ -435,7 +419,13 @@ function CheckStep({
   );
 }
 
-function TryStep({ organization, toolsets }: { organization: string; toolsets: ToolsetSummary[] }) {
+function TryStep({
+  organization,
+  toolsets,
+}: {
+  organization: string;
+  toolsets: readonly ToolsetSummary[];
+}) {
   const [toolset, setToolset] = useState<string | null>(null);
   const [namespace, setNamespace] = useState("demo");
   const chosen = toolset ?? toolsets[0]?.id ?? null;
@@ -527,7 +517,7 @@ function YourConnections({
 }: {
   member: boolean;
   pending: boolean;
-  connections: Connection[];
+  connections: readonly Connection[];
 }) {
   return (
     <section className="panel" aria-labelledby="your-connections">

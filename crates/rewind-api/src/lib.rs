@@ -57,6 +57,6 @@ pub mod toolsets;
 pub mod webhooks;
 pub mod workflows;
 
-pub use client::{Client, EventStream};
+pub use client::{ChangeStream, Client, EventStream};
 pub use error::Error;
 pub use problem::{Problem, ProblemType};

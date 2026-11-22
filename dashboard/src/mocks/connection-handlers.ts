@@ -3,7 +3,7 @@
 // connection is its person's, opens only organizations where the person holds the access given,
 // and an administrator (`members:manage`) removes their organization from it.
 import { HttpResponse, http } from "msw";
-import type { ConnectionAccess, ConsentDecision, UpdateConnection } from "../api/connections";
+import type { ConnectionAccess, ConsentDecision, UpdateConnection } from "../model/types";
 import { type Caller, isMember } from "./access";
 import { authenticate, guard, json } from "./access-handlers";
 import {

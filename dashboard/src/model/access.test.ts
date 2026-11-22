@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Identity, Role } from "../api/types";
 import {
   canGive,
   displayName,
@@ -13,6 +12,7 @@ import {
   roleNameProblem,
   splitPrincipal,
 } from "./access";
+import type { Identity, Role } from "./types";
 
 const reader: Role = {
   name: "reader",

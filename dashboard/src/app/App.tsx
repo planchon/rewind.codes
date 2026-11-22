@@ -1,6 +1,5 @@
-import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Lock } from "lucide-react";
-import { type ReactNode, useRef, useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   createBrowserRouter,
   Navigate,
@@ -10,20 +9,18 @@ import {
   useLocation,
   useRouteError,
 } from "react-router";
-import { ApiError } from "../api/client";
-import { WHOAMI } from "../api/organization";
 import { ProblemView } from "../components/bits";
 import { fieldTerm, joinQuery } from "../model/query";
+import { useAccess } from "../state/access";
+import { SessionProvider, type SessionProviderProps, SessionState } from "../state/session";
 import { OverviewView } from "../views/OverviewView";
 import { ObservabilityView } from "../views/observability/ObservabilityView";
 import { ScriptsView } from "../views/ScriptsView";
 import { ToolsView } from "../views/ToolsView";
-import { useAccess } from "./access";
 import { Gate } from "./Gate";
 import { Layout } from "./Layout";
 import { NoPermission } from "./NoPermission";
 import { adoptHashRoute, restoreRoute } from "./pendingRoute";
-import { SessionProvider, type SessionProviderProps, useSession } from "./session";
 import { SettingsProvider } from "./settings";
 
 function RouteError() {
@@ -102,7 +99,7 @@ function Home() {
 }
 
 /** A run's page, loaded when one is opened: the debugger, its parser and its source view. */
-const runView = async () => ({ Component: (await import("../views/run/RunView")).RunView });
+const runView = async () => ({ Component: (await import("../views/run/RunView")).RunPage });
 
 export const routes: RouteObject[] = [
   {
@@ -237,53 +234,6 @@ export const routes: RouteObject[] = [
   },
 ];
 
-/** A client error will not go away by asking again. */
-function retry(count: number, error: unknown): boolean {
-  if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;
-  return count < 2;
-}
-
-/**
- * A query cache per key, or per member and organization: what one of them read is never shown
- * to another, not even while the new one's first answers are on their way (another tenant's
- * runs, scripts or payloads).
- */
-function Queries({ children }: { children: ReactNode }) {
-  const { identity } = useSession();
-  return <IdentityQueries key={identity}>{children}</IdentityQueries>;
-}
-
-function IdentityQueries({ children }: { children: ReactNode }) {
-  const session = useSession();
-  const sessionRef = useRef(session);
-  sessionRef.current = session;
-  const clientRef = useRef<QueryClient | null>(null);
-  const [client] = useState(() => {
-    const onError = (error: unknown, key: readonly unknown[] | undefined) => {
-      if (!(error instanceof ApiError)) return;
-      const { phase } = sessionRef.current;
-      if (error.status === 401) {
-        // The key form says itself that the key was refused.
-        if (phase.kind === "key" && (key?.[0] === "server" || key?.[0] === WHOAMI[0])) return;
-        // Refused even with a renewed token, or a key revoked while the dashboard is open.
-        sessionRef.current.unauthorized();
-        if (phase.kind === "key")
-          void clientRef.current?.invalidateQueries({ queryKey: ["server"] });
-      } else if (error.status === 403 && key?.[0] !== WHOAMI[0]) {
-        // The caller's grant changed meanwhile: what it may do is read again.
-        void clientRef.current?.invalidateQueries({ queryKey: WHOAMI });
-      }
-    };
-    return new QueryClient({
-      queryCache: new QueryCache({ onError: (error, query) => onError(error, query.queryKey) }),
-      mutationCache: new MutationCache({ onError: (error) => onError(error, undefined) }),
-      defaultOptions: { queries: { retry, refetchOnWindowFocus: false } },
-    });
-  });
-  clientRef.current = client;
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-}
-
 export function Providers({
   children,
   ...session
@@ -291,9 +241,9 @@ export function Providers({
   return (
     <SettingsProvider>
       <SessionProvider {...session}>
-        <Queries>
+        <SessionState>
           <Gate>{children}</Gate>
-        </Queries>
+        </SessionState>
       </SessionProvider>
     </SettingsProvider>
   );

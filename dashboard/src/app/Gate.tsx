@@ -2,7 +2,6 @@
 // in on the sign-in pages, and one without an organization goes through the onboarding. Without
 // WorkOS, the operator types a key; a server that needs none (the embedded one, behind a local
 // proxy) lets the operator in at once.
-import { useQuery } from "@tanstack/react-query";
 import { KeyRound } from "lucide-react";
 import {
   createContext,
@@ -12,15 +11,14 @@ import {
   useMemo,
   useState,
 } from "react";
-import { ApiError } from "../api/client";
-import { useWhoami } from "../api/organization";
-import type { ServerInfo } from "../api/types";
 import { Loading, ProblemView } from "../components/bits";
-import { AccessContext, accessOf } from "./access";
+import type { ServerInfo } from "../model/types";
+import { AccessContext, accessOf } from "../state/access";
+import { ApiError } from "../state/errors";
+import { useServerInfo, useSession, useWhoami } from "../state/session";
 import { Brand } from "./Brand";
 import { Onboarding } from "./Onboarding";
 import { SignIn } from "./SignIn";
-import { useSession } from "./session";
 
 const ServerContext = createContext<ServerInfo | null>(null);
 
@@ -77,28 +75,33 @@ export function Gate({ children }: { children: ReactNode }) {
   }
 }
 
-/** The server's version and who calls, read before anything else is shown. */
+/** A refusal of the key: the key form says so. */
+function refusal(error: unknown): ApiError | null {
+  return error instanceof ApiError && error.status === 401 ? error : null;
+}
+
+/**
+ * The server's version and who calls, read before anything else is shown. Once read, they stay
+ * shown through a read that fails, but a refused key goes back to the key form.
+ */
 function Connected({ children }: { children: ReactNode }) {
-  const { api, phase, key } = useSession();
-  const server = useQuery({
-    queryKey: ["server"],
-    queryFn: () => api.server(),
-    staleTime: 60_000,
-  });
+  const { phase, key } = useSession();
+  const server = useServerInfo();
   const whoami = useWhoami();
   const access = useMemo(() => (whoami.data ? accessOf(whoami.data) : null), [whoami.data]);
 
-  const error = server.error ?? whoami.error;
+  const refused = refusal(server.error) ?? refusal(whoami.error);
+  if (phase.kind === "key" && refused) {
+    return <KeyForm refused={key !== null ? refused.problem.detail : null} />;
+  }
+  const error = server.isError ? server.error : whoami.isError ? whoami.error : null;
   if (error) {
-    if (phase.kind === "key" && error instanceof ApiError && error.status === 401) {
-      return <KeyForm refused={key !== null ? error.problem.detail : null} />;
-    }
     return (
       <Unreachable
         error={error}
         retry={() => {
-          void server.refetch();
-          void whoami.refetch();
+          void server.refresh();
+          void whoami.refresh();
         }}
       />
     );

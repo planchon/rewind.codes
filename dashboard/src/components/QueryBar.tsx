@@ -15,7 +15,6 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Facets } from "../api/types";
 import { formatCount } from "../model/format";
 import {
   type FieldValues,
@@ -29,6 +28,7 @@ import {
   typedField,
   utf16Span,
 } from "../model/query";
+import type { Facets } from "../model/types";
 
 export type { QueryFault };
 

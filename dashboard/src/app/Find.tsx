@@ -5,7 +5,7 @@ import { ArrowRight, Bookmark, CornerDownLeft, Search } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { queryLink } from "../model/query";
-import { useAccess } from "./access";
+import { useAccess } from "../state/access";
 import { savedSearchPath, useSavedSearches } from "./searches";
 
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

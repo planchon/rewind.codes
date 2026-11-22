@@ -15,11 +15,12 @@ import {
 import { type ReactNode, useCallback, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 import { queryLink } from "../model/query";
+import { useAccess } from "../state/access";
+import { type ConnectionState, useConnection } from "../state/connection";
+import { useSession } from "../state/session";
 import { AccountMenu, OrganizationSwitcher, useServerLine } from "./AccountMenus";
-import { useAccess } from "./access";
 import { FindDialog, useFindShortcut } from "./Find";
 import { SidebarFold, SidebarResizer, useFoldShortcut } from "./SidebarResizer";
-import { useSession } from "./session";
 import { SidebarProvider, useSidebar } from "./sidebar";
 
 /**
@@ -137,6 +138,31 @@ function MainNav() {
   );
 }
 
+const CONNECTION_WORDS: Record<ConnectionState, string> = {
+  idle: "Not following the runs: no view of runs is open",
+  connecting: "Connecting to the runs' changes…",
+  live: "Live: the runs' changes show as they happen",
+  reconnecting: "Reconnecting to the runs' changes: the views are read every 10 to 30 s meanwhile",
+};
+
+/**
+ * The change stream's state: a dot at a fixed place of the top bar, of one size whatever its
+ * state, so that a change of state moves nothing.
+ */
+function ConnectionDot() {
+  const state = useConnection();
+  return (
+    <span
+      className={`connection-dot state-${state}`}
+      role="img"
+      aria-label={CONNECTION_WORDS[state]}
+      title={CONNECTION_WORDS[state]}
+    >
+      <span className="connection-dot-mark" aria-hidden="true" />
+    </span>
+  );
+}
+
 function Sidebar({ onFind }: { onFind: () => void }) {
   const { pane, showViews, setShowViews, setSlot, folded } = useSidebar();
   const navigate = useNavigate();
@@ -150,6 +176,7 @@ function Sidebar({ onFind }: { onFind: () => void }) {
       <div className="sidebar-head">
         <div className="sidebar-top">
           <OrganizationSwitcher />
+          <ConnectionDot />
           <SidebarFold />
         </div>
         <button

@@ -20,11 +20,11 @@ use serde_json::json;
 
 use super::{T0, check, tenant};
 use crate::ports::{
-    Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,
-    NamespaceName, Predicate, ProjectedRun, QuarantineKind, QuarantineNote, Range, ReadModel,
-    RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary,
-    SearchCursor, StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope, TextMatch,
-    ToolStats, ToolStatsFilter, Wait, WaitKind, WaitingFor,
+    ChangedRun, Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,
+    Latency, NamespaceName, Predicate, ProjectedRun, QuarantineKind, QuarantineNote, Range,
+    ReadModel, RunOrder, RunQuery, RunRef, RunSnapshot, RunStats, RunSummary, ScriptFilter,
+    ScriptSummary, SearchCursor, StatsWindow, TaskPhase, TaskProgress, TenantId, TenantScope,
+    TextMatch, ToolStats, ToolStatsFilter, Wait, WaitKind, WaitingFor,
 };
 
 /// Runs every check, each on new stores.
@@ -47,6 +47,11 @@ pub async fn run_all<S: ReadModel>(new_store: impl Fn() -> S) {
         "read model",
         new_store(),
         orders_and_cursors_page_through_runs
+    );
+    check!(
+        "read model",
+        new_store(),
+        duration_and_calls_orders_page_through_runs
     );
     check!("read model", new_store(), stats_count_the_runs_of_a_query);
     check!(
@@ -84,6 +89,12 @@ pub async fn run_all<S: ReadModel>(new_store: impl Fn() -> S) {
         "read model",
         new_store(),
         runs_are_found_by_workflow_and_by_the_run_that_started_them
+    );
+    check!("read model", new_store(), writes_stamp_their_run);
+    check!(
+        "read model",
+        new_store(),
+        changes_are_listed_by_tenant_since_a_time
     );
 }
 
@@ -1721,50 +1732,18 @@ fn ordered_runs() -> Vec<Fixture> {
     ]
 }
 
-/// The three orders, their ties, the runs without a wake, and pages through cursors.
+/// Newest first, latest activity, earliest wake: their ties, the runs without a wake, and pages
+/// through cursors.
 pub async fn orders_and_cursors_page_through_runs<S: ReadModel>(store: &S) {
     apply_all(store, &ordered_runs()).await;
     let all = RunQuery::new(acme());
-    let numbers = |summaries: &[RunSummary]| -> Vec<u128> {
-        summaries
-            .iter()
-            .map(|summary| number(summary.run.id))
-            .collect()
-    };
     let orders = [
         (RunOrder::Started, vec![6, 5, 4, 3, 2, 1]),
         (RunOrder::Activity, vec![4, 5, 2, 3, 1, 6]),
         (RunOrder::Wakes, vec![4, 1, 3, 6, 2, 5]),
     ];
     for (order, expected) in &orders {
-        let found = page(store, &all, *order, None, 100).await;
-        assert_eq!(
-            &numbers(&found),
-            expected,
-            "the runs in the order {order:?}"
-        );
-        for limit in [1, 2, 4, 6, 10] {
-            let mut paged = Vec::new();
-            let mut after: Option<SearchCursor> = None;
-            loop {
-                let found = page(store, &all, *order, after.as_ref(), limit).await;
-                assert!(found.len() <= limit, "a page of {limit} at most");
-                let Some(last) = found.last() else {
-                    break;
-                };
-                after = Some(last.cursor(*order));
-                paged.extend(numbers(&found));
-                if found.len() < limit {
-                    break;
-                }
-                assert!(paged.len() <= expected.len(), "pages of {order:?} end");
-            }
-            assert_eq!(
-                &paged, expected,
-                "pages of {limit} in the order {order:?}, each after the last run of the previous"
-            );
-        }
-        assert!(page(store, &all, *order, None, 0).await.is_empty());
+        assert_pages(store, &all, *order, expected).await;
     }
     let four = summary(store, acme(), 4).await;
     assert_eq!(
@@ -1776,7 +1755,7 @@ pub async fn orders_and_cursors_page_through_runs<S: ReadModel>(store: &S) {
     assert_eq!(summary(store, acme(), 2).await.wakes_at, None);
 
     let cursor = |key: Option<u64>, n: u128| SearchCursor {
-        key: key.map(at),
+        key: key.map(|ms| at(ms).0),
         run: id(n),
     };
     let cases = [
@@ -1813,6 +1792,118 @@ pub async fn orders_and_cursors_page_through_runs<S: ReadModel>(store: &S) {
     )
     .await;
     assert_eq!(numbers(&after_three), [6]);
+}
+
+/// The run numbers of summaries, in their order.
+fn numbers(summaries: &[RunSummary]) -> Vec<u128> {
+    summaries
+        .iter()
+        .map(|summary| number(summary.run.id))
+        .collect()
+}
+
+/// The runs of `query` in `order` are `expected`, read at once and in pages of every size, each
+/// after the last run of the previous.
+async fn assert_pages<S: ReadModel>(
+    store: &S,
+    query: &RunQuery,
+    order: RunOrder,
+    expected: &[u128],
+) {
+    let found = page(store, query, order, None, 100).await;
+    assert_eq!(numbers(&found), expected, "the runs in the order {order:?}");
+    for limit in [1, 2, 4, 6, 10] {
+        let mut paged = Vec::new();
+        let mut after: Option<SearchCursor> = None;
+        loop {
+            let found = page(store, query, order, after.as_ref(), limit).await;
+            assert!(found.len() <= limit, "a page of {limit} at most");
+            let Some(last) = found.last() else {
+                break;
+            };
+            after = Some(last.cursor(order));
+            paged.extend(numbers(&found));
+            if found.len() < limit {
+                break;
+            }
+            assert!(paged.len() <= expected.len(), "pages of {order:?} end");
+        }
+        assert_eq!(
+            paged, expected,
+            "pages of {limit} in the order {order:?}, each after the last run of the previous"
+        );
+    }
+    assert!(page(store, query, order, None, 0).await.is_empty());
+}
+
+/// Six runs with ties on duration and on calls, two of them not ended.
+fn measured_runs() -> Vec<Fixture> {
+    let fixture = |n: u128, started: u64, calls: u32, ended: Option<u64>| {
+        let mut history = History::started(started);
+        for seq in 1..=calls {
+            history = history.call(started + u64::from(seq), seq, "github.list_issues");
+        }
+        if let Some(ended) = ended {
+            history = history.complete(ended);
+        }
+        Fixture::new(run(acme(), n, 1, 1, "", &[], None), history, RunMode::Live)
+    };
+    vec![
+        fixture(1, 100, 2, Some(600)),
+        fixture(2, 200, 5, Some(700)),
+        fixture(3, 300, 5, None),
+        fixture(4, 50, 0, Some(2_050)),
+        fixture(5, 400, 1, None),
+        fixture(6, 10, 2, Some(20)),
+    ]
+}
+
+/// The oldest first; the longest first, the runs that have not ended last; the most calls first.
+pub async fn duration_and_calls_orders_page_through_runs<S: ReadModel>(store: &S) {
+    apply_all(store, &measured_runs()).await;
+    let all = RunQuery::new(acme());
+    let orders = [
+        (RunOrder::Oldest, vec![1, 2, 3, 4, 5, 6]),
+        (RunOrder::Duration, vec![4, 2, 1, 6, 5, 3]),
+        (RunOrder::Calls, vec![3, 2, 6, 1, 5, 4]),
+    ];
+    for (order, expected) in &orders {
+        assert_pages(store, &all, *order, expected).await;
+    }
+    assert_eq!(summary(store, acme(), 4).await.duration(), Some(2_000));
+    assert_eq!(summary(store, acme(), 3).await.duration(), None);
+
+    let cursor = |key: Option<u64>, n: u128| SearchCursor { key, run: id(n) };
+    let cases = [
+        (RunOrder::Oldest, cursor(None, 4), vec![5, 6]),
+        (RunOrder::Oldest, cursor(None, 0), vec![1, 2, 3, 4, 5, 6]),
+        (RunOrder::Duration, cursor(Some(500), 2), vec![1, 6, 5, 3]),
+        (
+            RunOrder::Duration,
+            cursor(Some(500), 99),
+            vec![2, 1, 6, 5, 3],
+        ),
+        (RunOrder::Duration, cursor(Some(0), 0), vec![5, 3]),
+        (RunOrder::Duration, cursor(None, 5), vec![3]),
+        (RunOrder::Duration, cursor(None, 100), vec![5, 3]),
+        (RunOrder::Calls, cursor(Some(5), 3), vec![2, 6, 1, 5, 4]),
+        (RunOrder::Calls, cursor(Some(2), 0), vec![5, 4]),
+        (RunOrder::Calls, cursor(None, 1), vec![]),
+    ];
+    for (order, after, expected) in cases {
+        let found = page(store, &all, order, Some(&after), 100).await;
+        assert_eq!(
+            numbers(&found),
+            expected,
+            "the runs after {after:?} in the order {order:?}: a cursor is a position, not a run"
+        );
+    }
+    let ended = RunQuery::new(acme()).with(statuses(&[RunStatus::Completed]));
+    assert_eq!(
+        numbers(&page(store, &ended, RunOrder::Duration, None, 100).await),
+        [4, 2, 1, 6],
+        "the ended runs, longest first"
+    );
 }
 
 // -------------------------------------------------------------------------------------------
@@ -3160,7 +3251,7 @@ pub async fn projections_ignore_order_and_repetition<S: ReadModel>(ordered: &S, 
 
     for tenant in [acme(), other()] {
         let query = RunQuery::new(tenant.clone());
-        for order in [RunOrder::Started, RunOrder::Activity, RunOrder::Wakes] {
+        for order in RunOrder::ALL {
             assert_eq!(
                 page(ordered, &query, order, None, 100).await,
                 page(shuffled, &query, order, None, 100).await,
@@ -3483,5 +3574,250 @@ pub async fn runs_are_found_by_workflow_and_by_the_run_that_started_them<S: Read
         .await,
         Vec::<u128>::new(),
         "another tenant's runs"
+    );
+}
+
+// -------------------------------------------------------------------------------------------
+// Checks: changes
+
+async fn changes<S: ReadModel>(
+    store: &S,
+    tenants: &[TenantId],
+    since: u64,
+    limit: usize,
+) -> Vec<ChangedRun> {
+    store
+        .changed_runs(tenants, since, limit)
+        .await
+        .expect("changed_runs")
+}
+
+/// The runs of changes, by number, in their order.
+fn changed_numbers(changes: &[ChangedRun]) -> Vec<u128> {
+    changes
+        .iter()
+        .map(|change| number(change.summary.run.id))
+        .collect()
+}
+
+/// The stamp of acme's run `n`, and its summary as `changed_runs` lists it.
+async fn stamp<S: ReadModel>(store: &S, n: u128) -> (u64, RunSummary) {
+    let change = changes(store, &[acme()], 0, 1_000)
+        .await
+        .into_iter()
+        .find(|change| change.summary.run.id == id(n))
+        .unwrap_or_else(|| panic!("run #{n} is listed among the changes"));
+    (change.changed_at, change.summary)
+}
+
+/// A record of service state about a run.
+enum Record {
+    Task(TaskProgress),
+    /// A quarantine (`Some`) or a release, at a time.
+    Quarantine(Option<QuarantineNote>, u64),
+}
+
+/// #1 waits for a host call and a signal; #2 has a first half of its history projected.
+fn changing_runs() -> (Fixture, Fixture) {
+    let waiting = Fixture::new(
+        run(acme(), 1, 1, 1, "// waits", &[], None),
+        History::started(0)
+            .call(10, 1, "ask_user")
+            .awaited(20, "go", None),
+        RunMode::Live,
+    )
+    .waits(vec![
+        wait(WaitKind::Host, Some(1), Some("ask_user"), 10),
+        wait(WaitKind::Signal, None, Some("go"), 20),
+    ]);
+    let growing = Fixture::new(
+        run(acme(), 2, 1, 1, "// grows", &[("agent", "triage")], None),
+        History::started(0)
+            .call(10, 1, "github.list_issues")
+            .result(20, 1, json!({ "id": 1 }).into())
+            .complete(30),
+        RunMode::Live,
+    );
+    (waiting, growing)
+}
+
+/// Every write that changes a run's summary stamps it later than its previous stamp: a batch
+/// of entries, a task's state, a quarantine and its release. A record for the run under another
+/// tenant stamps nothing. The summary listed is the one `search_runs` returns.
+pub async fn writes_stamp_their_run<S: ReadModel>(store: &S) {
+    assert!(
+        changes(store, &[acme()], 0, 100).await.is_empty(),
+        "nothing is projected yet"
+    );
+    let (waiting, growing) = changing_runs();
+    waiting.apply(store).await;
+    let batches = growing.batches(2);
+    let (run2, entries, snapshot) = &batches[0];
+    store.apply(run2, entries, snapshot).await.expect("apply");
+
+    let (mut last, listed) = stamp(store, 2).await;
+    assert_eq!(listed, summary(store, acme(), 2).await);
+    assert_eq!(listed.history_len, 2, "the first batch");
+    for (run2, entries, snapshot) in &batches[1..] {
+        store.apply(run2, entries, snapshot).await.expect("apply");
+        let (stamped, listed) = stamp(store, 2).await;
+        assert!(
+            stamped > last,
+            "a batch of entries stamps its run: {stamped} > {last}"
+        );
+        assert_eq!(listed, summary(store, acme(), 2).await);
+        last = stamped;
+    }
+    assert_eq!(
+        stamp(store, 2).await.1.status,
+        RunStatus::Completed,
+        "the last batch"
+    );
+
+    let run1 = waiting.run.run.clone();
+    let (mut last, _) = stamp(store, 1).await;
+    let writes = [
+        (
+            "a task's state",
+            Record::Task(task(1, 0, TaskPhase::Approval)),
+        ),
+        (
+            "a task's later state",
+            Record::Task(task(1, 1, TaskPhase::Deferred)),
+        ),
+        (
+            "a quarantine",
+            Record::Quarantine(Some(quarantine_note()), 500),
+        ),
+        ("a release", Record::Quarantine(None, 600)),
+    ];
+    for (why, record) in writes {
+        match &record {
+            Record::Task(task) => store
+                .record_tasks(&run1, &[*task])
+                .await
+                .expect("record_tasks"),
+            Record::Quarantine(note, when) => store
+                .record_quarantine(&run1, note.as_ref(), at(*when))
+                .await
+                .expect("record_quarantine"),
+        }
+        let (stamped, listed) = stamp(store, 1).await;
+        assert!(stamped > last, "{why} stamps its run: {stamped} > {last}");
+        assert_eq!(listed, summary(store, acme(), 1).await, "{why}");
+        match record {
+            Record::Task(task) => assert_eq!(listed.waits[0].task, Some(task.phase), "{why}"),
+            Record::Quarantine(note, _) => assert_eq!(listed.quarantine, note, "{why}"),
+        }
+        last = stamped;
+    }
+
+    let foreign = RunRef::new(other(), id(1));
+    store
+        .record_tasks(&foreign, &[task(1, 5, TaskPhase::Claimed)])
+        .await
+        .expect("record_tasks of another tenant's run");
+    store
+        .record_quarantine(&foreign, Some(&quarantine_note()), at(9_000))
+        .await
+        .expect("record_quarantine of another tenant's run");
+    assert_eq!(
+        stamp(store, 1).await.0,
+        last,
+        "another tenant's records stamp nothing"
+    );
+}
+
+/// `changed_runs` lists the summaries of the tenants given, stamped at or after `since`, the
+/// oldest change first, at most `limit`; a run removed is not listed.
+pub async fn changes_are_listed_by_tenant_since_a_time<S: ReadModel>(store: &S) {
+    let (waiting, growing) = changing_runs();
+    waiting.apply(store).await;
+    growing.apply(store).await;
+    let elsewhere = Fixture::new(
+        run(other(), 20, 1, 1, "// elsewhere", &[], None),
+        History::started(0).log(10, "x"),
+        RunMode::Live,
+    );
+    elsewhere.apply(store).await;
+    store
+        .record_tasks(&waiting.run.run, &[task(1, 1, TaskPhase::Claimed)])
+        .await
+        .expect("record_tasks");
+
+    let all = changes(store, &[acme()], 0, 100).await;
+    let mut listed = changed_numbers(&all);
+    listed.sort_unstable();
+    assert_eq!(listed, [1, 2], "acme's runs only");
+    for change in &all {
+        let n = number(change.summary.run.id);
+        assert_eq!(change.summary, summary(store, acme(), n).await, "#{n}");
+    }
+    let order: Vec<(u64, RunId)> = all
+        .iter()
+        .map(|change| (change.changed_at, change.summary.run.id))
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(order, sorted, "the oldest change first, then by run id");
+
+    assert_eq!(
+        changed_numbers(&changes(store, &[other()], 0, 100).await),
+        [20]
+    );
+    let mut both = changed_numbers(&changes(store, &[acme(), other()], 0, 100).await);
+    both.sort_unstable();
+    assert_eq!(both, [1, 2, 20]);
+    assert!(changes(store, &[], 0, 100).await.is_empty(), "no tenant");
+    assert!(
+        changes(store, &[tenant("nobody")], 0, 100).await.is_empty(),
+        "a tenant without runs"
+    );
+
+    for change in &all {
+        let since = change.changed_at;
+        let from: Vec<&ChangedRun> = all.iter().filter(|c| c.changed_at >= since).collect();
+        let after: Vec<&ChangedRun> = all.iter().filter(|c| c.changed_at > since).collect();
+        assert_eq!(
+            changes(store, &[acme()], since, 100)
+                .await
+                .iter()
+                .collect::<Vec<_>>(),
+            from,
+            "since {since}, included"
+        );
+        assert_eq!(
+            changes(store, &[acme()], since + 1, 100)
+                .await
+                .iter()
+                .collect::<Vec<_>>(),
+            after,
+            "since {}",
+            since + 1
+        );
+    }
+    let latest = all.iter().map(|c| c.changed_at).max().unwrap_or(0);
+    assert!(
+        changes(store, &[acme()], latest + 1, 100).await.is_empty(),
+        "nothing after the latest change"
+    );
+    for limit in 0..=all.len() {
+        assert_eq!(
+            changes(store, &[acme()], 0, limit).await,
+            all[..limit],
+            "at most {limit}"
+        );
+    }
+
+    assert!(
+        store
+            .delete_run(&growing.run.run)
+            .await
+            .expect("delete_run")
+    );
+    assert_eq!(
+        changed_numbers(&changes(store, &[acme()], 0, 100).await),
+        [1],
+        "a run removed is not listed"
     );
 }

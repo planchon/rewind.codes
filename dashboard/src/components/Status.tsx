@@ -11,8 +11,8 @@ import {
   TriangleExclamationPoint,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { RunStatus } from "../api/types";
 import type { EndKind } from "../model/ending";
+import type { RunStatus } from "../model/types";
 
 /** A run's status: a dot in the status's color, then its word (Geist's status dot). */
 export function StatusGlyph({ status, size = 10 }: { status: RunStatus; size?: number }) {

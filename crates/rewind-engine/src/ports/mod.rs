@@ -86,11 +86,11 @@ pub use namespaces::{
     QuotaExceeded, QuotaKind, QuotaScope, Quotas, Threshold, Usage, UsageDelta, UsageOf, limits,
 };
 pub use read_model::{
-    Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet, Latency,
-    Predicate, ProjectedRun, QuarantineNote, Range, ReadModel, ReadModelError, RunOrder, RunQuery,
-    RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor, StatsWindow,
-    TaskPhase, TaskProgress, Term, TextMatch, ToolStats, ToolStatsFilter, Wait, WaitKind,
-    WaitingFor,
+    ChangedRun, Ending, FacetValue, Facets, FailureGroup, FailureGroups, FailureWindow, LabelFacet,
+    Latency, Predicate, ProjectedRun, QuarantineNote, Range, ReadModel, ReadModelError, RunOrder,
+    RunQuery, RunSnapshot, RunStats, RunSummary, ScriptFilter, ScriptSummary, SearchCursor,
+    StatsWindow, TaskPhase, TaskProgress, Term, TextMatch, ToolStats, ToolStatsFilter, Wait,
+    WaitKind, WaitingFor,
 };
 pub use secrets::{Credentials, Secret, SecretError, SecretOwner, SecretStore, ServerCredentials};
 pub use telemetry::{

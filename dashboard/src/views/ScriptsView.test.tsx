@@ -82,3 +82,29 @@ describe("ScriptsView", () => {
     await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(6));
   });
 });
+
+describe("ScriptView", () => {
+  it("lists the script's runs in the table forced to it; an older status link is a filter", async () => {
+    const user = userEvent.setup();
+    const digest = SCRIPTS.FORECAST.digest;
+    const { router, requested } = renderApp(`/scripts/${digest}?status=completed`);
+    await waitFor(() => expect(search(router).get("q")).toBe("status:completed"));
+    const section = await screen.findByRole("region", { name: "Runs of this script" });
+    await waitFor(() => expect(within(section).getAllByRole("row").length).toBeGreaterThan(1));
+    expect(
+      requested("/v1/runs").some(
+        (u) => u.searchParams.get("q") === `script:${digest} status:completed`,
+      ),
+    ).toBe(true);
+    // No script column: the script is the page's.
+    expect(within(section).queryByRole("columnheader", { name: "Script" })).toBeNull();
+    const chips = within(section).getByRole("group", { name: "Filters" });
+    expect(chips).toHaveTextContent(`Script ${digest.slice(0, 12)}`);
+
+    await user.click(within(chips).getByRole("button", { name: "Clear the filters" }));
+    await waitFor(() => expect(search(router).get("q")).toBeNull());
+    await waitFor(() =>
+      expect(requested("/v1/runs").at(-1)?.searchParams.get("q")).toBe(`script:${digest}`),
+    );
+  });
+});

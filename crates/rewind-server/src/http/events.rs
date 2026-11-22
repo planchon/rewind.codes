@@ -28,7 +28,9 @@ use crate::wake::{Busy, POLL, wait};
 /// closed at the token's expiry: the dashboard resumes it with a new token and `from`. A stream
 /// opened with an end user's token is closed once the token no longer authenticates: revoked,
 /// expired, its key deleted or its namespace erased; one opened by a connection, at its access
-/// token's expiry or once the connection is revoked or no longer opens the organization.
+/// token's expiry or once the connection is revoked or no longer opens the organization. Every
+/// second, the caller's rights are read again as the store holds them ([`auth::still_holds`]): a
+/// key revoked, or a grant that no longer gives `runs:read` with the same labels, closes it.
 pub(super) async fn stream(
     State(app): State<Arc<App>>,
     caller: Caller,
@@ -52,7 +54,8 @@ pub(super) async fn stream(
         tokio::time::Instant::now() + Duration::from_millis(left)
     });
     let tail = Tail {
-        caller: (caller.token.is_some() || caller.connection.is_some()).then_some(caller),
+        caller,
+        checked_at: tokio::time::Instant::now(),
         changes: app.wake.subscribe(),
         busy: query.follow.unwrap_or(false).then(|| app.activity.busy()),
         app,
@@ -69,12 +72,16 @@ pub(super) async fn stream(
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
+/// How often the caller's rights are read again.
+const RECHECK: Duration = Duration::from_secs(1);
+
 /// Where a stream stands.
 struct Tail {
     app: Arc<App>,
-    /// The end user's token or the connection that opened the stream, checked again at each
-    /// read.
-    caller: Option<Caller>,
+    /// Who opened the stream, whose rights are checked again every second.
+    caller: Caller,
+    /// When they were last checked.
+    checked_at: tokio::time::Instant,
     run: RunRef,
     /// The index of the next entry to send.
     next: u64,
@@ -118,11 +125,12 @@ impl Tail {
     /// Reads what was committed since the last read. Returns whether there is something to
     /// send.
     async fn read(&mut self) -> Result<bool, ApiError> {
-        if let Some(caller) = &self.caller
-            && !auth::still_valid(&self.app, caller).await
-        {
-            self.done = true;
-            return Ok(false);
+        if self.checked_at.elapsed() >= RECHECK {
+            self.checked_at = tokio::time::Instant::now();
+            if !auth::still_holds(&self.app, &self.caller, Permission::RunsRead).await {
+                self.done = true;
+                return Ok(false);
+            }
         }
         let Some(record) = self.app.store.get_run(&self.run).await? else {
             self.done = true;

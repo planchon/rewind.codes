@@ -16,9 +16,6 @@ import {
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router";
-import { ApiError } from "../../api/client";
-import { useRun, useRunJournal, useScript } from "../../api/queries";
-import { isEnded } from "../../api/types";
 import { runBackPath } from "../../app/runLinks";
 import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
 import { Empty, Loading, ProblemView, RunId, useNow } from "../../components/bits";
@@ -28,11 +25,16 @@ import { OutcomeGlyph } from "../../components/Status";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
 import { type Activity, buildRunModel, type RunModel } from "../../model/run";
 import { gutterMarks, markMeaning, markSymbol } from "../../model/steps";
+import { isEnded } from "../../model/types";
 import { callName, endedRunOf, readRunEnd, startedRuns } from "../../model/workflows";
+import { ApiError } from "../../state/errors";
+import { useRun, useRunJournal } from "../../state/runs";
+import { useScript } from "../../state/scripts";
 import { CursorBar, StepPanel, useCursorKeys, useTimeCursor, ValuePopover } from "./Cursor";
 import { activityOutcome, activityTitle } from "./describe";
 import { Inspector, type Selection } from "./Inspector";
 import { JournalList, LlmTrace, Logs } from "./JournalPanel";
+import { RunControls } from "./RunControls";
 import { RunActions, RunBanners, RunCard, RunDetails } from "./RunHeader";
 import { StartedRuns } from "./StartedRuns";
 import { Timeline } from "./Timeline";
@@ -262,7 +264,13 @@ type Section = "debugger" | "journal" | "logs" | "trace" | "started";
 
 const SECTIONS: readonly Section[] = ["debugger", "journal", "logs", "trace", "started"];
 
-export function RunView() {
+/** A run's page, mounted again for another run: its details are never the previous run's. */
+export function RunPage() {
+  const { id = "" } = useParams();
+  return <RunView key={id} />;
+}
+
+function RunView() {
   const { id = "", section: rawSection } = useParams();
   const section = (rawSection ?? "debugger") as Section;
   const location = useLocation();
@@ -442,6 +450,7 @@ export function RunView() {
     <div className="page run-page">
       <PageSidebar title="Run" back={back} backLabel="Back to the runs">
         <RunCard run={r} state={journal.state} />
+        <RunControls run={r} />
         <nav className="nav" aria-label="Run">
           {nav.map((n) => (
             <Link

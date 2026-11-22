@@ -6,11 +6,11 @@ import { KeyRound, Mail, Plug, Shield, SlidersHorizontal, Users } from "lucide-r
 import type { ReactNode } from "react";
 import { Navigate, NavLink, Outlet, useLocation } from "react-router";
 import { OrgAvatar } from "../../app/AccountMenus";
-import { SECTIONS, useAccess } from "../../app/access";
 import { NoPermission } from "../../app/NoPermission";
 import { PageSidebar, useSidebarFolded } from "../../app/sidebar";
 import { CopyButton } from "../../components/bits";
 import { PageHeader } from "../../components/PageHeader";
+import { SECTIONS, useAccess } from "../../state/access";
 
 const ICONS: Record<string, ReactNode> = {
   members: <Users size={16} />,

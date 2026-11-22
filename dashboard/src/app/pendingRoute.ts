@@ -4,7 +4,7 @@
 // (`/connect/authorize?request=…`) is the address this is for, but any deep link comes back the
 // same way. Links of earlier versions carried the route in the fragment (`/#/runs/abc`): they are
 // read as the path they meant, before anything else reads the address.
-import { read, write } from "./storage";
+import { read, write } from "../model/storage";
 
 const KEY = "rewind.route";
 /** A route kept longer than this is stale: the sign-in was given up. */

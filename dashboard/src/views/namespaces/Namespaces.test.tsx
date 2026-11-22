@@ -1,8 +1,20 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { HttpResponse, http } from "msw";
 import { describe, expect, it } from "vitest";
-import type { Permission } from "../../api/types";
+import { problem } from "../../mocks/problem";
+import type { Permission } from "../../model/types";
 import { confirmInDialog, renderApp, search, signedIn } from "../../test/app";
+import { server } from "../../test/server";
+
+/** An answer the test gives when it chooses: `release` lets the request go on to the mocked API. */
+function held() {
+  let release: (answer?: Response) => void = () => {};
+  const answer = new Promise<Response | undefined>((resolve) => {
+    release = resolve;
+  });
+  return { answer, release };
+}
 
 /** Gives Grace, in Acme, a role made of these permissions. */
 function graceWith(permissions: Permission[]) {
@@ -170,6 +182,43 @@ describe("the Namespaces view", () => {
     expect(names().slice(2)).toEqual(["dana"]);
   });
 
+  it("loads more as many namespaces as shown and a page more, the rows shown kept", async () => {
+    const user = userEvent.setup();
+    const { requested } = renderApp("/namespaces");
+    await listed();
+    const first = row("bob");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() =>
+      expect(screen.getByText(/^100 of 1,2\d\d namespaces$/)).toBeInTheDocument(),
+    );
+    expect(requested("/v1/namespaces").some((u) => u.searchParams.get("limit") === "100")).toBe(
+      true,
+    );
+    // The same row, not one drawn again.
+    expect(row("bob")).toBe(first);
+  });
+
+  it("keeps the namespaces shown, dimmed, until another order answers", async () => {
+    const user = userEvent.setup();
+    renderApp("/namespaces");
+    await listed();
+    const gate = held();
+    server.use(
+      http.get("*/v1/namespaces", async ({ request }) => {
+        if (new URL(request.url).searchParams.get("order") !== "runs") return undefined;
+        return gate.answer;
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Runs" }));
+    const wrap = screen.getByRole("table").closest(".table-wrap");
+    await waitFor(() => expect(wrap).toHaveClass("is-stale"));
+    expect(names()[2]).toBe("bob");
+    expect(screen.queryByText("Loading the namespaces…")).toBeNull();
+    gate.release();
+    await waitFor(() => expect(names()[2]).toBe("Chen Logistics"));
+    expect(screen.getByRole("table").closest(".table-wrap")).not.toHaveClass("is-stale");
+  });
+
   it("lists the alerts of the month, each sent to the webhooks", async () => {
     renderApp("/namespaces");
     const alerts = await screen.findByRole("region", { name: "Alerts this month" });
@@ -238,9 +287,10 @@ describe("a namespace's page", () => {
     expect(within(alerts).getAllByText(/webhook sent/).length).toBeGreaterThan(0);
     expect(screen.getByTestId("tokens")).toHaveTextContent("3");
     expect(screen.getByText("none: the defaults apply")).toBeInTheDocument();
+    // The month going on has no end: its query does not change as time passes.
     const runs = screen.getByRole("link", { name: "Open in Observability →" });
     expect(new URL(runs.getAttribute("href") ?? "", "http://x").searchParams.get("q")).toMatch(
-      /^namespace:bob started:\S+\.\.\S+$/,
+      /^namespace:bob started:>=\S+$/,
     );
     expect(screen.getByRole("link", { name: "Open in Scripts →" })).toHaveAttribute(
       "href",
@@ -271,6 +321,54 @@ describe("a namespace's page", () => {
     const scripts = screen.getByRole("region", { name: "Its scripts" });
     await waitFor(() => expect(within(scripts).getAllByRole("row").length).toBeGreaterThan(1));
     expect(callsTo("/v1/scripts").at(-1)?.headers.get("Rewind-Namespace")).toBe("bob");
+  });
+
+  it("filters and orders its runs from the table's headers, in the page's URL", async () => {
+    const user = userEvent.setup();
+    const { router, requested } = renderApp("/namespaces/bob");
+    const section = await screen.findByRole("region", { name: "Its runs" });
+    await waitFor(() => expect(within(section).getAllByRole("row").length).toBeGreaterThan(1));
+    // The scope is shown, and cannot be removed.
+    const chips = within(section).getByRole("group", { name: "Filters" });
+    expect(chips).toHaveTextContent("Namespace bob");
+    expect(within(chips).queryByRole("button", { name: /^Remove/ })).toBeNull();
+
+    await user.click(within(section).getByRole("button", { name: "Status" }));
+    const menu = await screen.findByRole("dialog", { name: "Status: order and filters" });
+    await user.click(within(menu).getByRole("button", { name: /^Status failed/ }));
+    await waitFor(() => expect(search(router).get("q")).toBe("status:failed"));
+    await waitFor(() =>
+      expect(
+        requested("/v1/runs").some((u) =>
+          /^namespace:bob started:>=\S+ status:failed$/.test(u.searchParams.get("q") ?? ""),
+        ),
+      ).toBe(true),
+    );
+    await user.keyboard("{Escape}");
+    expect(
+      within(section).getByRole("button", { name: "Remove the filter status:failed" }),
+    ).toBeVisible();
+
+    await user.click(within(section).getByRole("button", { name: "Duration" }));
+    const duration = await screen.findByRole("dialog", { name: "Duration: order and filters" });
+    await user.click(within(duration).getByRole("button", { name: "Longest first" }));
+    await waitFor(() => expect(search(router).get("sort")).toBe("duration"));
+    await waitFor(() =>
+      expect(requested("/v1/runs").some((u) => u.searchParams.get("sort") === "duration")).toBe(
+        true,
+      ),
+    );
+    expect(within(section).getByRole("columnheader", { name: "Duration" })).toHaveAttribute(
+      "aria-sort",
+      "descending",
+    );
+
+    // Removing the filter keeps the order.
+    await user.click(
+      within(section).getByRole("button", { name: "Remove the filter status:failed" }),
+    );
+    await waitFor(() => expect(search(router).get("q")).toBeNull());
+    expect(search(router).get("sort")).toBe("duration");
   });
 
   it("shows its display name, its id on hover, and renames it", async () => {
@@ -421,5 +519,54 @@ describe("a namespace's page", () => {
   it("says when there is no such namespace", async () => {
     renderApp("/namespaces/nobody");
     expect(await screen.findByRole("alert")).toHaveTextContent(/404 · not-found/);
+  });
+
+  it("shows a new name at once, and undoes it with the server's message when refused", async () => {
+    const user = userEvent.setup();
+    renderApp("/namespaces/chen");
+    await screen.findByRole("img", { name: /^Cumulative CPU time of Chen Logistics/ });
+    const gate = held();
+    server.use(http.patch("*/v1/namespaces/:name", () => gate.answer));
+    await user.click(screen.getByRole("button", { name: "Rename" }));
+    const form = screen.getByRole("form", { name: "Rename Chen Logistics" });
+    const field = within(form).getByLabelText("Display name");
+    await user.clear(field);
+    await user.type(field, "Chen & Sons");
+    await user.click(within(form).getByRole("button", { name: "Save the name" }));
+    // The page shows it before the server answers; the dialog waits for the answer.
+    const title = () => screen.getByRole("heading", { level: 1, hidden: true });
+    await waitFor(() => expect(title()).toHaveTextContent("Chen & Sons"));
+    expect(within(form).getByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(screen.getByRole("form", { name: "Rename Chen Logistics" })).toBe(form);
+
+    gate.release(problem(400, "invalid-request", "displayName: refused by the test."));
+    expect(await within(form).findByRole("alert")).toHaveTextContent(
+      /Could not rename it.*refused by the test/,
+    );
+    expect(title()).toHaveTextContent("Chen Logistics");
+  });
+
+  it("shows the erasure at once, and keeps its dialog until the server answers", async () => {
+    const user = userEvent.setup();
+    renderApp("/namespaces/bob");
+    await screen.findByRole("img", { name: /^Cumulative CPU time of bob/ });
+    const gate = held();
+    server.use(http.delete("*/v1/namespaces/:name", () => gate.answer));
+    await user.click(screen.getByRole("button", { name: "Erase…" }));
+    const form = screen.getByRole("form", { name: "Erase bob" });
+    await user.type(within(form).getByLabelText("Type bob to confirm"), "bob");
+    await user.click(within(form).getByRole("button", { name: "Erase bob" }));
+    expect(await screen.findByText(/being erased since/)).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Erasing…" })).toBeDisabled();
+
+    gate.release(
+      HttpResponse.json(
+        { type: "urn:rewind:problem:forbidden", title: "Forbidden", status: 403 },
+        { status: 403, headers: { "Content-Type": "application/problem+json" } },
+      ),
+    );
+    expect(await within(form).findByRole("alert")).toHaveTextContent(/403 · forbidden/);
+    expect(screen.queryByText(/being erased since/)).toBeNull();
+    expect(screen.getByTestId("tokens")).toHaveTextContent("3");
   });
 });

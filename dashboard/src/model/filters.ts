@@ -3,7 +3,7 @@
 // is turned here into the endpoint's parameters. A term the list cannot read is a fault, which
 // the bar underlines, as the server's are. The query (`q`) and the window are kept in the URL, so
 // a filtered view can be shared; the parameters of older links are read as the query they mean.
-import type { ListScriptsQuery, ToolStatsQuery } from "../api/types";
+
 import {
   joinQuery,
   operandValues,
@@ -15,6 +15,7 @@ import {
   termFault,
 } from "./query";
 import { namespaceNameProblem } from "./quotas";
+import type { ListScriptsQuery, ToolStatsQuery } from "./types";
 
 export const RANGES = {
   "1h": 3_600_000,

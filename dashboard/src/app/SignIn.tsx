@@ -1,14 +1,22 @@
 // The sign-in pages, with WorkOS: GitHub, or a 6-digit code sent by email; then whatever step
 // the server answers (an organization to choose, an email to verify, the waitlist). Someone new
 // may also open the waitlist from the first page.
-import { useMutation } from "@tanstack/react-query";
 import { ArrowLeft, Building2, Check, LogOut, Mail } from "lucide-react";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
-import { ApiError, type AuthAnswer } from "../api/client";
-import type { AuthConfig, Organization } from "../api/types";
 import { ErrorNote } from "../components/ErrorNote";
+import type { AuthConfig, Organization } from "../model/types";
+import { ApiError } from "../state/errors";
+import {
+  useChooseOrganization,
+  useJoinWaitlist,
+  useSendCode,
+  useSession,
+  useSignOut,
+  useVerifyCode,
+  useVerifyEmail,
+} from "../state/session";
 import { Brand, GithubMark } from "./Brand";
-import { useSession } from "./session";
+import { keepRoute } from "./pendingRoute";
 
 export function SignIn() {
   const { phase } = useSession();
@@ -98,7 +106,7 @@ function CodeField({
 }
 
 function SignInStart({ config, notice }: { config: AuthConfig; notice: string | null }) {
-  const { api, invitationToken, signInWithGithub, advance } = useSession();
+  const { invitationToken, signInWithGithub } = useSession();
   const [email, setEmail] = useState("");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [resent, setResent] = useState(false);
@@ -106,16 +114,13 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
   const github = config.methods.includes("github");
   const magic = config.methods.includes("magic_auth");
 
-  const send = useMutation({
-    mutationFn: (to: string) => api.sendMagicCode(to, invitationToken),
-    // No code for someone new while sign-ups are closed: the waitlist instead.
-    onSuccess: (answer, to) => (answer ? advance(answer) : setSentTo(to)),
-  });
-  const verify = useMutation({
-    mutationFn: ({ to, code }: { to: string; code: string }) =>
-      api.verifyMagicCode(to, code, invitationToken),
-    onSuccess: (answer: AuthAnswer) => advance(answer),
-  });
+  // No code for someone new while sign-ups are closed: the session goes to the waitlist instead.
+  const send = useSendCode();
+  const sendTo = (to: string) =>
+    void send.run(to, (sent) => {
+      if (sent) setSentTo(to);
+    });
+  const verify = useVerifyCode();
 
   if (sentTo !== null) {
     return (
@@ -125,11 +130,11 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
           A 6-digit code is on its way to <strong>{sentTo}</strong>. It expires after a few minutes.
         </p>
         <CodeField
-          pending={verify.isPending}
-          onComplete={(code) => verify.mutate({ to: sentTo, code })}
+          pending={verify.pending}
+          onComplete={(code) => void verify.run({ email: sentTo, code })}
         />
-        {verify.error && <CodeError error={verify.error} />}
-        {send.error && <ErrorNote error={send.error} />}
+        {verify.error ? <CodeError error={verify.error} /> : null}
+        {send.error ? <ErrorNote error={send.error} /> : null}
         <div className="gate-actions">
           <button
             type="button"
@@ -146,17 +151,17 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
           <button
             type="button"
             className="link-btn"
-            disabled={send.isPending}
+            disabled={send.pending}
             onClick={() => {
               verify.reset();
               setResent(true);
-              send.mutate(sentTo);
+              sendTo(sentTo);
             }}
           >
-            {send.isPending ? "Sending…" : "Send a new code"}
+            {send.pending ? "Sending…" : "Send a new code"}
           </button>
         </div>
-        {resent && send.isSuccess && (
+        {resent && send.data === true && (
           <p className="gate-foot" role="status">
             A new code was sent.
           </p>
@@ -184,7 +189,7 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const to = email.trim();
-    if (to) send.mutate(to);
+    if (to) sendTo(to);
   };
 
   return (
@@ -201,7 +206,15 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
         </div>
       )}
       {github && (
-        <button type="button" className="btn block" onClick={signInWithGithub}>
+        <button
+          type="button"
+          className="btn block"
+          onClick={() => {
+            // Back from GitHub on `/`: the address the sign-in started from comes back.
+            keepRoute();
+            signInWithGithub();
+          }}
+        >
           <GithubMark /> Continue with GitHub
         </button>
       )}
@@ -223,13 +236,13 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
           <button
             type="submit"
             className="btn primary block"
-            disabled={!email.trim() || send.isPending}
+            disabled={!email.trim() || send.pending}
           >
-            <Mail size={13} /> {send.isPending ? "Sending…" : "Send me a code"}
+            <Mail size={13} /> {send.pending ? "Sending…" : "Send me a code"}
           </button>
         </form>
       )}
-      {send.error && <ErrorNote error={send.error} />}
+      {send.error ? <ErrorNote error={send.error} /> : null}
       {config.waitlist && !invitationToken && (
         <p className="gate-foot">
           New to Rewind? Sign-ups go through a waitlist, and approved people get an invitation by
@@ -244,20 +257,15 @@ function SignInStart({ config, notice }: { config: AuthConfig; notice: string | 
 }
 
 function UseAnotherAccount() {
-  const { signOut } = useSession();
-  const [error, setError] = useState<unknown>(null);
+  const out = useSignOut();
   return (
     <>
       <div className="gate-actions">
-        <button
-          type="button"
-          className="link-btn"
-          onClick={() => signOut().catch((e: unknown) => setError(e))}
-        >
+        <button type="button" className="link-btn" onClick={() => void out.run()}>
           <LogOut size={12} /> Use another account
         </button>
       </div>
-      {error ? <ErrorNote error={error} /> : null}
+      {out.error ? <ErrorNote error={out.error} /> : null}
     </>
   );
 }
@@ -269,11 +277,7 @@ function ChooseOrganization({
   email: string;
   organizations: Organization[];
 }) {
-  const { api, advance } = useSession();
-  const choose = useMutation({
-    mutationFn: (id: string) => api.selectOrganization(id),
-    onSuccess: (answer) => advance(answer),
-  });
+  const choose = useChooseOrganization();
   return (
     <Card label="Choose an organization">
       <h1>Choose an organization</h1>
@@ -287,8 +291,8 @@ function ChooseOrganization({
             <button
               type="button"
               className="choice"
-              disabled={choose.isPending}
-              onClick={() => choose.mutate(o.id)}
+              disabled={choose.pending}
+              onClick={() => void choose.run(o.id)}
             >
               <Building2 size={15} aria-hidden="true" />
               <span className="choice-name">{o.name}</span>
@@ -297,18 +301,14 @@ function ChooseOrganization({
           </li>
         ))}
       </ul>
-      {choose.error && <ErrorNote error={choose.error} />}
+      {choose.error ? <ErrorNote error={choose.error} /> : null}
       <UseAnotherAccount />
     </Card>
   );
 }
 
 function VerifyEmail({ email }: { email: string }) {
-  const { api, advance } = useSession();
-  const verify = useMutation({
-    mutationFn: (code: string) => api.verifyEmail(code),
-    onSuccess: (answer) => advance(answer),
-  });
+  const verify = useVerifyEmail();
   return (
     <Card label="Verify your email">
       <h1>Verify your email</h1>
@@ -318,10 +318,10 @@ function VerifyEmail({ email }: { email: string }) {
       </p>
       <CodeField
         label="Verification code"
-        pending={verify.isPending}
-        onComplete={(code) => verify.mutate(code)}
+        pending={verify.pending}
+        onComplete={(code) => void verify.run(code)}
       />
-      {verify.error && <CodeError error={verify.error} />}
+      {verify.error ? <CodeError error={verify.error} /> : null}
       <UseAnotherAccount />
     </Card>
   );
@@ -340,16 +340,12 @@ function Waitlist({
   refused: boolean;
   footer: ReactNode;
 }) {
-  const { api, waitlisted } = useSession();
   const [email, setEmail] = useState(given);
-  const join = useMutation({
-    mutationFn: (to: string) => api.joinWaitlist(to),
-    onSuccess: (_, to) => waitlisted(to),
-  });
+  const join = useJoinWaitlist();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const to = email.trim();
-    if (to) join.mutate(to);
+    if (to) void join.run(to);
   };
   return (
     <Card label="Join the waitlist">
@@ -382,12 +378,12 @@ function Waitlist({
         <button
           type="submit"
           className="btn primary block"
-          disabled={!email.trim() || join.isPending}
+          disabled={!email.trim() || join.pending}
         >
-          {join.isPending ? "Joining…" : "Join the waitlist"}
+          {join.pending ? "Joining…" : "Join the waitlist"}
         </button>
       </form>
-      {join.error && <ErrorNote error={join.error} />}
+      {join.error ? <ErrorNote error={join.error} /> : null}
       {footer}
     </Card>
   );

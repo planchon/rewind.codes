@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import type { TimeZoneMode } from "../model/format";
-import { read, write } from "./storage";
+import { read, write } from "../model/storage";
 
 export type ThemeChoice = "system" | "light" | "dark";
 

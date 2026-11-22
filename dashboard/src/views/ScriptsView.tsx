@@ -2,11 +2,8 @@
 // outcome, the tools it called and the labels it ran with. Searched with the query bar of the
 // runs, which reads labels and one tool here, what `GET /v1/scripts` filters by, and one
 // namespace, sent as `Rewind-Namespace`: the scripts of one end user, counted over their runs.
-import type { InfiniteData, UseInfiniteQueryResult } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
-import { useRunStats, useScripts } from "../api/queries";
-import { RUN_STATUSES, type RunCounts, type ScriptPage, type ScriptSummary } from "../api/types";
 import { Ago, Digest, Empty, LabelList, Loading, ProblemView } from "../components/bits";
 import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
@@ -15,7 +12,11 @@ import { StatusGlyph } from "../components/Status";
 import { legacyScriptsQuery, RANGES, SCRIPTS_LANGUAGE, scriptsSearch } from "../model/filters";
 import { formatCount } from "../model/format";
 import { fieldTerm, joinQuery, labelTerm, queryLink, splitTerms, withTerm } from "../model/query";
+import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../model/types";
+import { useRunStats } from "../state/aggregates";
+import { type ScriptList, useScriptList } from "../state/scripts";
 import { useListQuery, useRunQueryValues } from "./search";
+import { TableToolbar } from "./TableTop";
 
 const LEGACY_NAMES = ["label", "tool"] as const;
 
@@ -158,62 +159,79 @@ function ScriptRow({
  * its tools, its labels, when it last ran. `scope` is the term its links to the runs add.
  */
 export function ScriptTable({
-  query,
+  scripts,
   scope,
   onPickLabel,
   onPickTool,
   empty = "No script matches this search.",
 }: {
-  query: UseInfiniteQueryResult<InfiniteData<ScriptPage>>;
+  scripts: ScriptList;
   scope: string;
   onPickLabel: (pair: string) => void;
   onPickTool: (tool: string) => void;
   empty?: string;
 }) {
-  if (query.isPending) return <Loading>Loading scripts…</Loading>;
-  if (query.isError)
-    return <ProblemView error={query.error} title="The scripts could not be read" />;
-  const list = query.data.pages.flatMap((p) => p.scripts);
+  if (scripts.status === "pending") return <Loading>Loading scripts…</Loading>;
+  if (scripts.status === "error")
+    return <ProblemView error={scripts.error} title="The scripts could not be read" />;
+  const list = scripts.rows;
   return (
-    <div className="table-wrap">
-      <table className="grid">
-        <thead>
-          <tr>
-            <th>Script</th>
-            <th className="right">Runs</th>
-            <th>Outcomes</th>
-            <th>Tools</th>
-            <th>Labels</th>
-            <th>Last run</th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.map((s) => (
-            <ScriptRow
-              key={s.digest}
-              script={s}
-              scope={scope}
-              onPickLabel={onPickLabel}
-              onPickTool={onPickTool}
-            />
-          ))}
-        </tbody>
-      </table>
-      {list.length === 0 && <Empty>{empty}</Empty>}
-      {query.hasNextPage && (
-        <div className="list-foot">
-          <span className="num">{formatCount(list.length)} scripts shown</span>
-          <button
-            type="button"
-            className="btn small"
-            disabled={query.isFetchingNextPage}
-            onClick={() => void query.fetchNextPage()}
-          >
-            {query.isFetchingNextPage ? "Loading…" : "Load more"}
-          </button>
-        </div>
-      )}
-    </div>
+    <>
+      <TableToolbar
+        pending={scripts.pending}
+        onShow={scripts.showPending}
+        setAtTop={scripts.setAtTop}
+      >
+        {list.length > 0 && (
+          <span className="num muted">
+            {formatCount(list.length)} script{list.length === 1 ? "" : "s"}
+            {scripts.hasMore ? " shown" : ""}
+          </span>
+        )}
+      </TableToolbar>
+      <div
+        className={`table-wrap${scripts.stale ? " is-stale" : ""}`}
+        aria-busy={scripts.stale || undefined}
+      >
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Script</th>
+              <th className="right">Runs</th>
+              <th>Outcomes</th>
+              <th>Tools</th>
+              <th>Labels</th>
+              <th>Last run</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((s) => (
+              <ScriptRow
+                key={s.digest}
+                script={s}
+                scope={scope}
+                onPickLabel={onPickLabel}
+                onPickTool={onPickTool}
+              />
+            ))}
+          </tbody>
+        </table>
+        {list.length === 0 && <Empty>{empty}</Empty>}
+        {scripts.hasMore && (
+          <div className="list-foot">
+            <span className="num">{formatCount(list.length)} scripts shown</span>
+            <button
+              type="button"
+              className="btn small"
+              disabled={scripts.loadingMore}
+              onClick={scripts.loadMore}
+            >
+              {scripts.loadingMore ? "Loading…" : "Load more"}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -245,7 +263,11 @@ function useScriptFacets() {
 export function ScriptsView() {
   const { q, setQ } = useListQuery(legacyScriptsQuery, LEGACY_NAMES);
   const search = scriptsSearch(q);
-  const scripts = useScripts(q, search.query, search.namespace, search.fault === null);
+  const scripts = useScriptList({
+    query: search.query,
+    namespace: search.namespace,
+    enabled: search.fault === null,
+  });
   const suggestions = useScriptFacets();
   const addTerm = (term: string) => setQ(withTerm(q, term));
   const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
@@ -277,7 +299,7 @@ export function ScriptsView() {
         <Empty>Fix the query to see the scripts: the term at fault is underlined above.</Empty>
       ) : (
         <ScriptTable
-          query={scripts}
+          scripts={scripts}
           scope={scope}
           onPickLabel={(pair) => {
             const at = pair.indexOf(":");

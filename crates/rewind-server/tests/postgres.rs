@@ -1,7 +1,8 @@
 //! The API end to end on Postgres (Docker): a server with the api role only and two servers with
 //! the worker role only share one database and one blob directory. Runs started through the api
 //! server are activated by the workers; host-tool tasks are long-polled through the api server;
-//! quotas hold across them; members sign in on the api server, which the workers refuse.
+//! quotas hold across them; members sign in on the api server, which the workers refuse; the
+//! api server's change stream follows the runs its workers project.
 //! Skipped, with a message, when Docker is absent, unless
 //! `REWIND_REQUIRE_DOCKER` is set (CI): they fail then.
 
@@ -9,8 +10,10 @@
 
 mod support;
 
+use futures_util::StreamExt;
 use rewind_api::access::BuiltInRole;
 use rewind_api::common::{Labels, RunStatus};
+use rewind_api::events::ChangeEvent;
 use rewind_api::organization::{CreateInvitation, CreateOrganization};
 use rewind_api::runs::{RunFilter, StartRun};
 use rewind_api::tasks::{CompleteTask, TaskQuery};
@@ -257,4 +260,66 @@ async fn lookups_with_a_nul_character_match_nothing_on_postgres() {
     .await;
     support::nul_lookups_match_nothing(&server).await;
     server.stop().await;
+}
+
+/// The change stream of an api server follows the runs that its workers, other processes,
+/// project: the summaries are stamped with the database's clock.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_change_stream_follows_the_runs_workers_project_on_postgres() {
+    let Some(postgres) = Postgres::start() else {
+        return;
+    };
+    let shared = tempfile::tempdir().unwrap();
+    let blobs = shared.path().join("blobs");
+    let worker = TestServer::start_on(
+        tempfile::tempdir().unwrap(),
+        &postgres.url(),
+        &blobs,
+        &["--role", "worker", "--worker-name", "worker-1"],
+    )
+    .await;
+    let api = TestServer::start_on(
+        tempfile::tempdir().unwrap(),
+        &postgres.url(),
+        &blobs,
+        &["--role", "api"],
+    )
+    .await;
+    let harness = api.key(BuiltInRole::Harness, &[]).await;
+    let mut changes = harness.changes().await.unwrap();
+    let mut request = StartRun::new(SLEEP);
+    request.input = json!({ "n": 1 });
+    let run = harness.start_run(&request, None).await.unwrap();
+    let mut statuses = Vec::new();
+    while statuses.last() != Some(&RunStatus::Completed) {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(30), changes.next())
+            .await
+            .expect("an event within 30 s")
+            .unwrap()
+            .unwrap();
+        let ChangeEvent::Run(summary) = event else {
+            continue;
+        };
+        if summary.id != run.id {
+            continue;
+        }
+        if statuses.last() != Some(&summary.status) {
+            statuses.push(summary.status);
+        }
+        if summary.status == RunStatus::Active
+            && summary
+                .waiting_for
+                .iter()
+                .any(|wait| wait.name.as_deref() == Some("go"))
+        {
+            harness
+                .signal_run(&run.id, "go", &json!(2), None)
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(statuses, [RunStatus::Active, RunStatus::Completed]);
+    api.stop().await;
+    worker.stop().await;
+    drop(postgres);
 }

@@ -1,7 +1,7 @@
 // The brand of the gate pages, and the marks of the account menus.
 import { useState } from "react";
-import type { User } from "../api/types";
 import { displayName, initials } from "../model/access";
+import type { User } from "../model/types";
 
 /** Rewind's mark: the rewind glyph, in the text's color (green says "completed" only). */
 export function Mark({ size = 16 }: { size?: number }) {

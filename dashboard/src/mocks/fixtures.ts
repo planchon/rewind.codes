@@ -2,7 +2,7 @@
 // ten-day sleep, retries, a payload above the inline limit and, for `pnpm dev:mock`, a run that
 // goes on live. Times are relative to `now`. Who may read them is the access world's
 // (`access.ts`): the tenant `local` without WorkOS, the organization Acme with it.
-import type { Labels, Quarantine, Run, Waiting } from "../api/types";
+import type { Labels, Quarantine, Run, Waiting } from "../model/types";
 import { type AccessOptions, type AccessWorld, createAccessWorld } from "./access";
 import { type ConnectionWorld, createConnectionWorld } from "./connections";
 import { fakeDigest, JournalBuilder } from "./journal";

@@ -4,7 +4,6 @@
 // the time zone, the server, the sign-out). Menus and dialogs are Base UI's, styled with the tokens.
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   ChevronRight,
@@ -22,44 +21,15 @@ import {
 } from "lucide-react";
 import { type FormEvent, useContext, useState } from "react";
 import { useNavigate } from "react-router";
-import { MY_INVITATIONS, useMyInvitations } from "../api/organization";
-import type { Invitation, Organization, User } from "../api/types";
 import { ErrorNote } from "../components/ErrorNote";
 import { displayName } from "../model/access";
-import { AccessContext, useAccess } from "./access";
+import type { Organization, User } from "../model/types";
+import { AccessContext, useAccess } from "../state/access";
+import { useJoinOrCreate, useMyInvitations } from "../state/organization";
+import { maskKey, useSession, useSignOut, useSwitchOrganization } from "../state/session";
 import { Avatar, Mark } from "./Brand";
 import { useServer } from "./Gate";
-import { maskKey, useSession } from "./session";
 import { type ThemeChoice, useSettings } from "./settings";
-
-/**
- * Joins an invitation's organization, or creates one, then switches the session to it. `then`
- * runs right after the switch, before the views of the new organization replace these ones.
- */
-export function useJoinOrCreate(then: () => void = () => {}) {
-  const { api, switchOrganization } = useSession();
-  const queryClient = useQueryClient();
-  const join = useMutation({
-    mutationFn: async (invitation: Invitation) => {
-      await api.acceptInvitation(invitation.id);
-      const organization = invitation.organization?.id;
-      if (!organization) {
-        await queryClient.invalidateQueries({ queryKey: MY_INVITATIONS });
-        return;
-      }
-      await switchOrganization(organization);
-      then();
-    },
-  });
-  const create = useMutation({
-    mutationFn: async (name: string) => {
-      const organization = await api.createOrganization(name);
-      await switchOrganization(organization.id);
-      then();
-    },
-  });
-  return { join, create };
-}
 
 /** An organization's mark: a gradient drawn from its id, as Vercel's teams have. */
 export function OrgAvatar({
@@ -153,7 +123,7 @@ function CreateOrganization({
 /** The organization picker, at the top of the sidebar; for a key, its tenant. */
 export function OrganizationSwitcher() {
   const access = useAccess();
-  const { phase, switchOrganization } = useSession();
+  const { phase } = useSession();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -164,12 +134,7 @@ export function OrganizationSwitcher() {
     void navigate("/");
   };
   const { join, create } = useJoinOrCreate(done);
-  const toSwitch = useMutation({
-    mutationFn: async (id: string) => {
-      await switchOrganization(id);
-      done();
-    },
-  });
+  const toSwitch = useSwitchOrganization(done);
   const current = access.organization;
 
   if (phase.kind !== "member" || !current) {
@@ -181,7 +146,7 @@ export function OrganizationSwitcher() {
     );
   }
 
-  const pending = toSwitch.isPending || join.isPending || create.isPending;
+  const pending = toSwitch.pending || join.pending || create.pending;
   const error = toSwitch.error ?? join.error ?? create.error;
   const waiting = invitations.data ?? [];
 
@@ -208,7 +173,7 @@ export function OrganizationSwitcher() {
                     disabled={pending}
                     aria-current={o.id === current.id ? "true" : undefined}
                     onClick={() => {
-                      if (o.id !== current.id) toSwitch.mutate(o.id);
+                      if (o.id !== current.id) void toSwitch.run(o.id);
                     }}
                   >
                     <OrgAvatar organization={o} />
@@ -229,7 +194,7 @@ export function OrganizationSwitcher() {
                         key={inv.id}
                         className="menu-item"
                         disabled={pending}
-                        onClick={() => join.mutate(inv)}
+                        onClick={() => void join.run(inv)}
                       >
                         <Plus size={14} aria-hidden="true" />
                         <span className="menu-item-text">
@@ -253,8 +218,8 @@ export function OrganizationSwitcher() {
       <CreateOrganization
         open={creating}
         onOpenChange={setCreating}
-        onCreate={(name) => create.mutate(name)}
-        pending={create.isPending}
+        onCreate={(name) => void create.run(name)}
+        pending={create.pending}
       />
     </>
   );
@@ -333,10 +298,10 @@ export function AccountMenu({
   /** Opens the member's connections (Account › Connections); a key has none. */
   onConnections?: () => void;
 }) {
-  const { phase, key, signOut } = useSession();
+  const { phase, key } = useSession();
   // The onboarding has no access yet: a member without organization.
   const access = useContext(AccessContext);
-  const out = useMutation({ mutationFn: () => signOut() });
+  const out = useSignOut();
   const name = user ? displayName(user) : null;
   const organization = onOrganization && access?.sections.length ? onOrganization : null;
   return (
@@ -417,8 +382,8 @@ export function AccountMenu({
               <Menu.Separator className="menu-separator" />
               <Menu.Item
                 className="menu-item"
-                disabled={out.isPending || phase.kind === "starting"}
-                onClick={() => out.mutate()}
+                disabled={out.pending || phase.kind === "starting"}
+                onClick={() => void out.run()}
               >
                 <LogOut size={14} aria-hidden="true" />
                 <span className="menu-item-text">Sign out</span>

@@ -176,16 +176,86 @@ describe("Observability: every run", () => {
     );
   });
 
-  it("sorts the waiting runs by when they wake", async () => {
+  it("sorts the waiting runs by when they wake, from the Wakes header", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/observability?q=waiting%3A*");
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Wakes" }));
+    const menu = await screen.findByRole("dialog", { name: "Wakes: order and filters" });
+    await user.click(within(menu).getByRole("button", { name: "Soonest to wake first" }));
     await waitFor(() => expect(search(router).get("sort")).toBe("wakes"));
     await waitFor(() =>
       expect(requested("/v1/runs").some((u) => u.searchParams.get("sort") === "wakes")).toBe(true),
     );
-    expect(screen.getByRole("columnheader", { name: "Wakes" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Wakes" })).toHaveAttribute(
+      "aria-sort",
+      "ascending",
+    );
+  });
+
+  it("orders the runs from the headers: oldest, longest, most calls", async () => {
+    const user = userEvent.setup();
+    const { router, requested } = renderApp("/observability");
+    await screen.findByRole("table");
+    const pick = async (header: string, choice: string) => {
+      await user.click(screen.getByRole("button", { name: header }));
+      const menu = await screen.findByRole("dialog", { name: `${header}: order and filters` });
+      await user.click(within(menu).getByRole("button", { name: choice }));
+    };
+    for (const [header, choice, sort] of [
+      ["Started", "Oldest first", "oldest"],
+      ["Duration", "Longest first", "duration"],
+      ["Calls", "Most calls first", "calls"],
+    ] as const) {
+      await pick(header, choice);
+      await waitFor(() => expect(search(router).get("sort")).toBe(sort));
+      await waitFor(() =>
+        expect(requested("/v1/runs").some((u) => u.searchParams.get("sort") === sort)).toBe(true),
+      );
+    }
+    // The most calls first: each row has at most the calls of the one above.
+    await waitFor(() => {
+      const header = screen
+        .getAllByRole("columnheader")
+        .findIndex((h) => h.textContent?.startsWith("Calls"));
+      const calls = rows().map((r) =>
+        Number.parseInt((r as HTMLTableRowElement).cells[header]?.textContent ?? "0", 10),
+      );
+      expect(calls).toEqual([...calls].sort((a, b) => b - a));
+    });
+    // Picked again, an order goes back to the newest first.
+    await pick("Calls", "Most calls first");
+    await waitFor(() => expect(search(router).get("sort")).toBeNull());
+  });
+
+  it("filters from a header's menu, as terms of the query", async () => {
+    const user = userEvent.setup();
+    const { router } = renderApp("/observability");
+    await screen.findByRole("table");
+    await user.click(screen.getByRole("button", { name: "Status" }));
+    const menu = await screen.findByRole("dialog", { name: "Status: order and filters" });
+    // A click asks for a status, a second excludes it.
+    await user.click(within(menu).getByRole("button", { name: /^Status completed/ }));
+    await waitFor(() => expect(search(router).get("q")).toBe("status:completed"));
+    await user.click(within(menu).getByRole("button", { name: /^Status completed/ }));
+    await waitFor(() => expect(search(router).get("q")).toBe("-status:completed"));
+    await user.click(within(menu).getByRole("button", { name: /^Quarantined only/ }));
+    await waitFor(() => expect(search(router).get("q")).toBe("-status:completed quarantined:yes"));
+    expect(queryInput().value).toBe("-status:completed quarantined:yes");
+
+    await user.click(screen.getByRole("button", { name: "Duration" }));
+    const duration = await screen.findByRole("dialog", { name: "Duration: order and filters" });
+    await user.click(within(duration).getByRole("button", { name: /^Over a minute/ }));
+    await waitFor(() =>
+      expect(search(router).get("q")).toBe("-status:completed quarantined:yes duration:>1m"),
+    );
+    // Another threshold replaces it.
+    await user.click(screen.getByRole("button", { name: "Duration" }));
+    const again = await screen.findByRole("dialog", { name: "Duration: order and filters" });
+    await user.click(within(again).getByRole("button", { name: /^Over an hour/ }));
+    await waitFor(() =>
+      expect(search(router).get("q")).toBe("-status:completed quarantined:yes duration:>1h"),
+    );
   });
 
   it("saves a search in the browser and lists it in the sidebar", async () => {
@@ -260,13 +330,14 @@ describe("Observability: every run", () => {
     expect(search(router).get("window")).toBe("7d");
   });
 
-  it("loads the next page with the cursor", async () => {
+  it("loads the next page by reading as many runs as shown, and a page more", async () => {
     const user = userEvent.setup();
     const { requested } = renderApp("/observability");
     await screen.findByRole("table");
     await user.click(screen.getByRole("button", { name: "Load more" }));
     await waitFor(() => expect(rows().length).toBeGreaterThan(50));
-    expect(requested("/v1/runs").some((u) => u.searchParams.get("cursor") === "50")).toBe(true);
+    // Never folded back to the first page: the read asks for every run shown.
+    expect(requested("/v1/runs").some((u) => u.searchParams.get("limit") === "100")).toBe(true);
   });
 });
 

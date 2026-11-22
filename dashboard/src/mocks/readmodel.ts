@@ -1,6 +1,8 @@
 // What the server's read model answers, computed from the mocked world: run states, run
 // summaries, scripts and tool statistics. Entries recorded after the current time are not
 // visible yet, so a run of the world can go on live.
+
+import { buildRunModel, type RunModel } from "../model/run";
 import type {
   Entry,
   FacetValue,
@@ -27,8 +29,7 @@ import type {
   WaitCounts,
   Waiting,
   WaitKind,
-} from "../api/types";
-import { buildRunModel, type RunModel } from "../model/run";
+} from "../model/types";
 import type { RunFixture, World } from "./fixtures";
 import { fakeDigest } from "./journal";
 import { compileQuery, type MockRun, parseDuration } from "./query";
@@ -353,6 +354,15 @@ export function listRuns(world: World, query: ListRunsQuery, now: number): RunPa
   } else if (query.sort === "wakes") {
     const wakes = (r: MockRun) => (r.wakesAt ? Date.parse(r.wakesAt) : Number.POSITIVE_INFINITY);
     matching.sort((a, b) => wakes(a) - wakes(b) || b.startedAt.localeCompare(a.startedAt));
+  } else if (query.sort === "oldest") {
+    matching.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  } else if (query.sort === "duration") {
+    // The longest first; the runs that have not ended last.
+    const duration = (r: MockRun) =>
+      r.endedAt ? Date.parse(r.endedAt) - Date.parse(r.startedAt) : Number.NEGATIVE_INFINITY;
+    matching.sort((a, b) => duration(b) - duration(a) || b.startedAt.localeCompare(a.startedAt));
+  } else if (query.sort === "calls") {
+    matching.sort((a, b) => b.toolCalls - a.toolCalls || b.startedAt.localeCompare(a.startedAt));
   }
   const { slice, next } = page(matching, query.limit, query.cursor);
   const runs: RunSummary[] = slice.map(publicSummary);
