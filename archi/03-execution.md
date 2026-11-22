@@ -21,37 +21,58 @@ column in `script.ts`):
   ([secrets](04-tools.md#secrets)).
 
 A run is started in a namespace, the end user it acts for, and the start must pass that
-namespace's quotas and its tenant's ([quotas](06-storage-and-scale.md#quotas)).
+namespace's quotas and its tenant's, which the tenant's organization actor checks before the
+run is created ([quotas](06-storage-and-scale.md#quotas)).
 
 Starting a run also type-checks the script against the toolset's declarations, as
 `rewind check` does, so that most mistakes are refused before a run exists.
 
 ## Activations
 
-Completions never go straight into the history. They land in a per-run **inbox**. The
-engine, holding the run's lease, moves them into the history one at a time, interleaved
-with the commands they cause. The history therefore has exactly one writer at any time,
-which is what makes its order meaningful.
+Completions never go straight into the history. They land in a per-run **inbox**. A run lives
+in its namespace's partition, and each partition has one **owner**, the only node that writes
+it ([partitions](06-storage-and-scale.md#partitions-owners-and-nodes)). The owner moves the
+triggers into the history one activation at a time, interleaved with the commands they cause.
+The history therefore has exactly one writer at any time, which is what makes its order
+meaningful.
 
 ```
-acquire lease on run R (increments R.fence)
+a durable batch puts a trigger in R's inbox: the owner queues R on its node's ready queue
+an executor takes R; R is busy until its activation is committed
 instance ← cached instance whose history length matches, or new instance + replay(R.history)
-for trigger in take_inbox(R) (arrival order):
+for trigger in R.inbox (arrival order):
   recorded_at ← max(now, last recorded_at)          # monotonic per run
   if R is terminal: drop the completion
   append trigger; deliver it to the instance; run microtasks until idle
   append the commands and annotations emitted
-move payloads above 1 KiB out of the events (payloads table or BlobStore)
+move payloads above 1 KiB out of the events (payload rows, or the BlobStore above 64 KiB)
 derive effects from the new commands: tool tasks, timers, cancelled timers
-commit_activation(lease, { entries, consumed inbox items, effects, status })   # one transaction, fenced
-release lease; the instance stays in the worker's cache (sticky execution)
+the owner commits { entries, consumed inbox items, effects, status } in its next batch
+once that batch is durable: calls are sent, timers set; the instance stays in the cache
+if triggers reached R's inbox meanwhile, R is queued again
 ```
 
-Commands and the effects they create (tool tasks, timers) are committed in the same
-transaction (outbox pattern), so an effect can never be lost or duplicated by a crash
-between the two. A lease holder that lost its lease cannot commit: the fence no longer
-matches. The same transaction writes the feed items that projectors read (telemetry and
-read model, see [05](05-testing-and-observability.md#the-feed-and-the-projector)).
+Commands and the effects they create (tool tasks, timers) are committed in the same batch, so
+an effect can never be lost or duplicated by a crash between the two. Nothing an activation
+causes leaves the owner before its batch is durable: a call is sent, a timer set, a subscriber
+told only after. A node that lost its partition cannot commit: the node that opened it since
+fenced it. The same batch writes the outbox entries that the projections read (telemetry and
+webhooks, see [05](05-testing-and-observability.md#observability)).
+
+While R is busy, the triggers that reach it are committed to its inbox by the owner, in its own
+batches, and wait for the next activation. The owner groups what reaches it into batches: it
+writes, as one batch, everything that arrived while the previous batch was being written, so
+the activations of many runs share one write.
+
+The executors are threads of a node that run V8. The owner runs an activation on its own
+node's executors when its build supports the run's [epoch](#determinism-epoch). Otherwise it
+sends the activation through the node link to a node whose build does: the request carries
+what the executor needs, and the result comes back to the owner, which commits it as always
+([inside a node](07-code-architecture.md#inside-a-node)).
+
+The ready queue is fair across tenants: it takes the tenants with runnable runs in turn, and
+within a tenant the runs with the fewest unfinished activations first, then the run whose
+oldest trigger has waited longest.
 
 Failures of the activation itself:
 
@@ -62,17 +83,20 @@ Failures of the activation itself:
   [quarantined](#non-determinism-and-quarantine).
 - A limit is exceeded → `run_aborted { limit_exceeded }`.
 - Anything else (a missing blob, a store error, a replay interrupted by a limit or an
-  internal error of the executor) → nothing is committed, and the lease is kept until it
-  expires: the run is activated again then, and the other runs are activated meanwhile.
-  After **5 such failures in a row**, the run is [quarantined](#non-determinism-and-quarantine)
-  with the last error: a run that cannot make progress is set aside and reported, not
-  retried forever.
-- The worker dies during the activation (the script crashed the process, the container was
+  internal error of the executor) → nothing of the activation is committed. The owner
+  records the failure in the run's head, with a timer 30 s later, and activates the run again
+  when it fires; the other runs are activated meanwhile. After **5 such failures in a row**,
+  the run is [quarantined](#non-determinism-and-quarantine) with the last error: a run that
+  cannot make progress is set aside and reported, not retried forever.
+- The node dies during the activation (the script crashed the process, the container was
   killed for its memory, a native dependency failed) → nothing is committed and nothing is
-  recorded: the lease expires, and another worker takes the run. This is a failure too. The
-  store counts the activations started since the run's last commit, and when a worker leases a
-  run whose last 5 activations committed nothing, it quarantines the run instead of activating
-  it. A script that kills its workers does not go from worker to worker forever.
+  recorded. This is a failure too, counted when the partition is recovered: the node that
+  takes it over adds one to `attempts`, the activations that never finished, of every run that
+  was runnable, since one of them may have been running. A commit resets the count. An
+  executor that takes a run whose `attempts` is above 5 quarantines the run instead of
+  activating it. A script that kills its nodes does not go from node to node forever, and the
+  runs that were only waiting commit before it runs again, since the ready queue takes the runs
+  with fewer unfinished activations first.
 
 ## Inside the isolate
 
@@ -105,9 +129,9 @@ After `await sleep("10d")`, `Date.now()` is at least start + 10 days, because
 `timer_fired` is recorded after `fire_at`. `performance.now()` is the logical time
 elapsed since the run started.
 
-In virtual time (tests, mock mode), the clock jumps straight to the next timer's
-`fire_at`, or to the next retry of a tool call after its backoff, so a 10-day sleep takes no
-wall-clock time.
+In virtual time (tests, mock mode), the driver jumps the clock straight to the earliest
+timer of the timer wheel: a timer's `fire_at`, a tool call's next attempt after its backoff, a
+deadline. A 10-day sleep takes no wall-clock time.
 
 ## Replay
 
@@ -151,26 +175,26 @@ for the script. Two risks remain:
 Replaying the full history on every activation would be O(history²) over a run's life.
 Mitigations:
 
-- [Sticky execution](#sticky-execution): the worker keeps the instance in memory and gets
-  the run's next activation first. Replay is the fallback, not the hot path.
+- [Sticky execution](#sticky-execution): the executors keep the instance in memory, and the
+  run's next activation runs on them. Replay is the fallback, not the hot path.
 - Histories are capped (default 50k entries). A run that reaches the cap is aborted with
   `limit_exceeded`; `continueAsNew` is out of 0.1.
 
 ## Sticky execution
 
-After a commit, the worker keeps the script instance in a cache, and gets the run's next
-activation first.
+After a commit, the executor leaves the script instance in its node's **instance cache**. Only
+the owner of the run's partition activates the run, so its next activation runs on the same
+node and finds the instance there while it is cached.
 
-- The cache is an LRU, bounded per worker: 500 instances and 4 GiB by default. An instance's
+- The cache is an LRU, bounded per node: 500 instances and 4 GiB by default. An instance's
   memory is its isolate's, as V8's heap statistics give it after each call into the script.
-- The store records the run's sticky worker at commit. When the run becomes runnable again,
-  that worker gets it first. Other workers only take it after 5 s, counted from the oldest
-  trigger waiting. A worker that dies during an activation holds the run until its lease
-  expires, and not longer: by then that trigger has waited more than 5 s.
+- An owner that sends a run's activations to another node, for an epoch its own build does
+  not support, sends them to the same node while that node lives, so the instance stays warm
+  there.
 - **Hit**: the instance is cached, and its history length is the run's. Only the new trigger
   is delivered: no replay.
-- **Miss**: a new instance starts from a V8 startup snapshot and replays the history.
-- An evicted instance releases the worker's priority on its run.
+- **Miss**: a new instance starts from a V8 startup snapshot and replays the history. A run
+  whose partition moved to another node, or whose instance was evicted, misses once.
 
 Each live instance keeps its own thread and isolate. The load tests check that this holds
 within these bounds. An isolate pool per thread is built only if they fail.
@@ -192,7 +216,7 @@ can fix step 7 without redoing the side effects of steps 1 to 6
 | Input | The parent's, unless the request overrides it |
 | TTL | A new one |
 | Toolset | The parent's |
-| Namespace | The parent's: a fork never leaves it |
+| Namespace | The parent's: a fork never leaves it, and so lives in its parent's partition |
 | Attached secrets | The parent's, unless the request gives its own; checked against the caller, since the script is new code ([secrets](04-tools.md#secrets)) |
 
 The engine replays the new script against the parent's history:
@@ -218,7 +242,8 @@ same path. The `at` index forces the fork live from an entry even if the command
 match.
 
 The link to the parent is [run metadata](05-testing-and-observability.md#run-metadata). The
-fork's history is self-contained: it replays without the parent.
+fork's history is self-contained: it replays without the parent. The payloads it references
+that are blobs are copied under the fork's own run ([payloads](06-storage-and-scale.md#payloads)).
 
 ## Determinism epoch
 
@@ -251,10 +276,15 @@ rest, so such a change shows up in CI.
 - **Glue, generators, library and codegen** are JavaScript embedded in the binary. A
   build keeps the versions of every epoch that may still have live runs, and uses the one
   matching the run.
-- **V8 and ICU** cannot coexist in one process. After such an upgrade, a pool of workers
-  on the previous build stays up for the runs of the previous epoch. The
+- **V8 and ICU** cannot coexist in one process. After such an upgrade, a few nodes of the
+  previous build stay up for the runs of the previous epoch, without owning partitions
+  (`--executors-only`): owners send them those runs' activations. The
   [run TTL](#run-ttl) bounds how long: 30 days by default.
-- Workers declare the epochs they support, and are only offered runs of those epochs.
+- Nodes declare the epochs their build supports in the control plane's `nodes` table. An owner
+  runs an activation on its own node when its build supports the run's epoch, and otherwise
+  sends it to a node whose build does ([activations](#activations)).
+- The same mechanism gives a tenant its own sandboxed pool of executors when it needs one
+  (`--pool <name>`): the owners send that tenant's activations to the pool's nodes.
 - A corpus of recorded journals, kept per epoch, is replayed in CI. A change that breaks
   an epoch the build claims to support fails the build.
 
@@ -264,21 +294,21 @@ Scripts cannot be non-deterministic, by construction. A replay mismatch during a
 activation is therefore a fault of the platform (an epoch that was not bumped, a bug in
 the glue), never of the script. Ending the run would make its owner pay for it.
 
-- The activation commits nothing and releases its lease.
-- The store marks the run **quarantined**, with the mismatch message, and stops offering
-  it to workers. Quarantine is service state, like a lease: it is not in the history.
+- The activation commits nothing of its own.
+- The owner marks the run **quarantined** in its head, with the mismatch message, and stops
+  queuing it. Quarantine is service state, kept in the run's head: it is not in the history.
 - A quarantined run is released through the API or the CLI, typically after a fix, and
-  is then activated again. A worker of a new build also retries the quarantined runs of
-  the epochs it supports once: a replay that fails again commits nothing and leaves the run
-  quarantined.
+  is then activated again. A node of a new build that opens a partition also retries, once,
+  each of its quarantined runs of the epochs the build supports: a replay that fails again
+  commits nothing and leaves the run quarantined.
 - If it is still quarantined at its deadline, or if an operator gives up on it, the host
   ends it with `run_aborted { non_determinism }`.
 
 A run whose activations failed 5 times in a row is quarantined the same way, with the last
-error as its reason. An activation whose worker died during it counts as a failed one: the
-reason then says how many never finished. Released, it is activated again; given up on, it
-ends with `run_aborted { internal }`. The failure is logged and reported through
-OpenTelemetry and webhooks.
+error as its reason. An activation whose node died during it counts as a failed one, counted
+when the partition is recovered: the reason then says how many never finished. Released, it is
+activated again; given up on, it ends with `run_aborted { internal }`. The failure is logged
+and reported through OpenTelemetry and webhooks.
 
 `rewind replay <run> --script fixed.ts` still reports a mismatch as its result: there, a
 different script is the point.
@@ -341,6 +371,14 @@ The [run TTL](#run-ttl) bounds it.
   timer is cancelled (`cancel_timer`); if the timer fires first, the waiter resolves to
   `undefined`.
 
+Outside the isolate, a timer is a key of the run's partition, sorted by its due time and
+written in the batch that commits `start_timer`; the batch that commits `cancel_timer` deletes
+it. The owner's **timer wheel** holds the timers due before its **horizon**, an hour ahead,
+and once an hour reads the keys of the next hour: the one scheduling loop of a partition. When
+a timer is due, the owner appends `timer_fired` in its next batch. The run's deadline, a tool
+call's timeout and its next attempt after a backoff are timers of the same kind
+([partitions](06-storage-and-scale.md#partitions-owners-and-nodes)).
+
 ## Workflows across runs
 
 A script starts and signals runs of [workflows](01-product.md#workflows) through two built-ins
@@ -352,9 +390,15 @@ of its own for any of it.
 
 | In the script | In the caller's journal | What the engine does | In the target's journal |
 | --- | --- | --- | --- |
-| `triage.start(input, opts)` | `schedule_tool_call` of `workflows.triage.start` with `{ input, detached?, labels?, ttl? }`, then `tool_call_completed { runId }` | Creates the run of the pinned version: its script, toolset and attached secrets, the caller's labels plus `labels`, the trace context of the call, the caller's scope. Its run key is `rewind:{idempotency key}`, so an attempt after a lost claim finds the same run | `run_started` |
+| `triage.start(input, opts)` | `schedule_tool_call` of `workflows.triage.start` with `{ input, detached?, labels?, ttl? }`, then `tool_call_completed { runId }` | Creates the run of the pinned version: its script, toolset and attached secrets, the caller's labels plus `labels`, the trace context of the call, the caller's scope. Its run key is `rewind:{idempotency key}`, so a start made again after an interruption finds the same run | `run_started` |
 | `run.signal(name, payload)`, `triage.get(id).signal(name, payload)` | `schedule_tool_call` of `workflows.triage.signal` with `{ run, name, payload }`, then `tool_call_completed {}` | Puts the signal in the target's inbox with the key `rewind:{idempotency key}`, so it is delivered once | `signal_received` |
-| `run.result()` | `signal_awaited`, then `signal_received rewind:ended:<run>` | The target's terminal commit puts its end in the inbox of the run that started it, and of every run that watches it, in the same transaction | `complete_run`, `fail_run` or `run_aborted` |
+| `run.result()` | `signal_awaited`, then `signal_received rewind:ended:<run>` | The target's terminal commit puts its end in the inbox of the run that started it, and of every run that watches it, in the same batch | `complete_run`, `fail_run` or `run_aborted` |
+
+A workflow run starts in the namespace of the run that calls it
+([routes](04-tools.md#routes)), and nothing a run does reaches another namespace, so a run and
+every run it starts, signals or watches live in the same partition. Each effect in the table is
+written in the same batch as the fact that caused it, under the keys above, which make a
+second delivery harmless.
 
 Checks:
 
@@ -378,7 +422,7 @@ Ends:
   before the start's result is kept for it.
 - A run started without `detached: true` is **attached**: `complete_run` waits for it
   ([how a script ends](#how-a-script-ends)). A failure or a cancellation does not.
-- When a run ends, the same terminal commit enqueues `cancel_requested` for each of its
+- When a run ends, the same terminal batch enqueues `cancel_requested` for each of its
   attached children still running, with the message `the run <id> that started it ended`. A
   cancellation does not wait for a start in flight: a child created after its caller ended is
   cancelled as soon as it exists.
@@ -427,12 +471,14 @@ starts the run, up to a maximum set by the deployment, and by the `maxTtl` of th
 namespace and of its tenant ([quotas](06-storage-and-scale.md#quotas)); the default is lowered
 to that maximum.
 
-When the deadline passes, the scheduler enqueues `cancel_requested { reason: "ttl" }`.
-The run then follows the cancellation path, grace activation included.
+The deadline is a timer of the run's partition, written in the batch that commits
+`run_started` ([timers](#signals-and-timers-in-the-glue)). When it fires, the owner enqueues
+`cancel_requested { reason: "ttl" }`. The run then follows the cancellation path, grace
+activation included.
 
 The TTL bounds everything that would otherwise wait forever: a `signal()` without a
-timeout, a tool call that never answers, a quarantined run, and the time a worker pool
-of a previous epoch must stay up.
+timeout, a tool call that never answers, a quarantined run, and the time the nodes of a
+previous epoch must stay up.
 
 ## Resource limits
 
@@ -455,8 +501,8 @@ resizable buffer takes its maximum length from the budget when it is created.
 V8 terminates an execution at its next interrupt check, and some built-ins run to their end
 without one: filling or copying an array over a huge length. Such a call that must create more
 elements than the heap holds ends at once, as the heap limit ends it. What V8 still runs to its
-end is bounded by the worker's container
-([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
+end is bounded by the node's container
+([sandboxed workers](06-storage-and-scale.md#sandboxed-nodes)).
 
 The CPU time of each call is also reported to the engine, which counts the calls that execute,
 not those of a replay, toward the namespace's `cpuPerMonth`

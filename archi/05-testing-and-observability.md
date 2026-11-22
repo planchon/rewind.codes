@@ -15,7 +15,11 @@ is virtual (timers fire immediately, and logical time jumps to `fire_at`).
 
 Because the engine is deterministic given its ports, mock mode is not a separate
 system: it is the same engine wired with in-memory adapters and a virtual clock. The
-test harness of the engine itself is built the same way.
+test harness of the engine itself is built the same way. The **driver** runs the engine's actors
+there (the partition owner, the executors, the organization actor) one message at a time on one
+thread. When none of them has anything left to do, it moves the virtual clock to the earliest
+timer of the [timer wheel](06-storage-and-scale.md#partitions-owners-and-nodes). The same inputs
+always give the same steps in the same order.
 
 A test starts at a fixed time with a fixed seed, in virtual time: its result is a function of
 the script, the toolset, the test and the epoch. The same four give the same report, so a test
@@ -104,7 +108,7 @@ A test that runs and does not meet its expectations is **`failed`**.
 ### Running tests
 
 `rewind test`, `POST /v1/test` and the agent tool `test_script` run tests against a script: in
-the CLI process, or on a server with the worker role. Each test runs in its own engine with
+the CLI process, or on a server node. Each test runs in its own engine with
 in-memory adapters; four run at once, and a run of tests takes 5 minutes of wall-clock time at
 most. Mock handlers that cannot load fail their test. A test's report says whether it passed, its problem,
 its failures (one sentence each, written for a model), the run's status, output or error, how
@@ -210,12 +214,14 @@ read the runs of its namespace reads it. The gate runs it whoever saves.
 ### Where tests are stored
 
 A test is a document of the [stored format v1](02-journal.md#stored-format-v1), stored as a blob
-in the `BlobStore` (S3 in production) under the digest of its canonical JSON. A workflow version
-holds digests only. The `tests` table indexes the blobs, with the namespace a recorded test came
-from, and `workflow_tests` the tests each version references
-([tables](06-storage-and-scale.md#tables)). A test lives as long as a version references it; one
-no version references is deleted 24 hours after it was stored. A recorded test is erased with
-its namespace ([retention](06-storage-and-scale.md#retention-and-deletion)).
+in the `BlobStore` (R2 in production) under its tenant and the digest of its canonical JSON
+(`tests/{tenant}/sha256/{digest}`). A workflow version holds digests only. The `tests` table of
+the control plane indexes the blobs, with the namespace a recorded test came from, and
+`workflow_tests` the tests each version references
+([where data lives](06-storage-and-scale.md#where-data-lives)). A test lives as long as a version
+references it; a daily job of the control plane deletes one no version references, 24 hours after
+it was stored. A recorded test is erased with its namespace
+([retention](06-storage-and-scale.md#retention-and-deletion)).
 
 ## Replay, debugging and forks
 
@@ -278,9 +284,9 @@ replay.
 
 | | Service telemetry | Run telemetry |
 | --- | --- | --- |
-| Covers | The platform itself: activations, lease contention, replay duration, commits, store queries, V8 heap, dispatcher attempts and retries | What each script did: tool calls, timers, signal waits, logs, outcome |
+| Covers | The platform itself: activations, replay duration, batches and their latency, partitions owned and taken over, the ready queue, store reads, V8 heap, dispatcher attempts and retries | What each script did: tool calls, timers, signal waits, logs, outcome |
 | Source of truth | The process | The journal |
-| Emitted by | The `tracing` facade in `rewind-engine` and the adapters, live | The projector, from committed entries |
+| Emitted by | The `tracing` facade in `rewind-engine` and the adapters, live | The projector, from durable batches |
 | Exported by | The `tracing` subscriber from `rewind-otel`, installed by `rewind-server` and `rewind-cli` | `rewind-otel`, through the `SpanExporter` port |
 
 Both land in the same OTel trace (see the span model below): the dispatcher's attempt
@@ -288,23 +294,31 @@ spans appear under the tool call span projected from the journal. The engine onl
 records the run's trace id and the parent span id as `tracing` fields; `rewind-otel` turns
 them into OTel context, so the engine never depends on OpenTelemetry.
 
-### The feed and the projector
+### The projector
 
-`commit_activation` also writes, in the same transaction, one **feed item** per
-consumer (`read_model`, `otel`, `webhooks`): `(run_id, fence, from_idx, to_idx)`, the entries
-the activation just committed. The projector claims feed items the way the dispatcher claims
-tool tasks (lease, `SKIP LOCKED`), applies them, and acknowledges them.
+The projector turns durable batches into run telemetry: OTel spans and logs, and the lifecycle
+webhooks. It consumes the partition's
+[outbox](06-storage-and-scale.md#the-outbox). The batch that commits an
+activation also writes one outbox entry per projection (`otel`, `webhooks`), naming the entries
+it committed: `(run, from_idx, to_idx)`. Once the batch is durable, the owner hands those entries
+to the projector in memory. A later batch deletes the outbox entry, once the entries are exported
+or delivered. An owner that recovers the partition feeds the projector again with the entries
+left in the outbox. `quota.alert` takes the same path, from the outbox of the organization
+actor's home partition.
 
-- Delivery is at least once. Every projection is idempotent, keyed by `(run_id, idx)` or
-  by deterministic span ids.
-- One feed item per consumer, so a slow OTel backend never delays the dashboard.
-- A projection can be rebuilt by re-reading histories: backfill, a new projection, a bug
-  fix.
-- Feed items are claimed, not read with a high-water mark: Postgres sequence values are
-  not visible in commit order, so a cursor could skip an activation that committed late.
+- Delivery is at least once. Every projection is idempotent, keyed by deterministic span ids,
+  or by the deterministic id of a webhook event.
+- One outbox entry per projection, so a slow OTel backend never delays the webhooks.
+- A failed webhook delivery is retried with backoff, each retry a timer of the
+  [timer wheel](06-storage-and-scale.md#partitions-owners-and-nodes). Its outbox entry stays until
+  the delivery succeeds or is given up.
+- The run index and the counters are written by the owner in the same batch as the facts they
+  describe ([read model](#read-model)). A list or a count is never behind the journal.
+- A projection can be rebuilt by re-reading histories and sealed journals: backfill, a new
+  projection, a bug fix.
 
-The SSE stream of a single run doesn't need the feed: it tails that run's history by
-index and is woken by commits.
+The event stream of a single run ([below](#llm-trace-and-metrics)) takes another path: the edge
+subscribes to the run at its owner, which pushes the entries of each batch once it is durable.
 
 ### Span model
 
@@ -313,7 +327,7 @@ One OTel trace per run.
 | Span | Span id | Start → end | Exported by |
 | --- | --- | --- | --- |
 | Run | `H(run, "run")` | `run_started` → terminal entry | Projector, when the run ends |
-| Activation | `H(run, fence)` | lease acquired → commit | Engine (service telemetry), at commit |
+| Activation | `H(run, "activation", idx)`, `idx` being the index of the first entry it commits | taken from the ready queue → its batch durable | Engine (service telemetry), once its batch is durable |
 | Tool call | `H(run, seq)` | `schedule_tool_call` → completion | Projector, when the completion is committed |
 | Tool attempt | random | dispatch → response | Dispatcher (service telemetry), child of the tool call span |
 | Timer | `H(run, seq)` | `start_timer` → `timer_fired` or `cancel_timer` | Projector |
@@ -335,7 +349,7 @@ One OTel trace per run.
   run labels. Payloads appear as digest, size and preview, **never as values**: arguments
   are written by a model and may hold sensitive data, and OTel backends have weaker access
   control than the store.
-- **Sampling** is decided per run from the trace id, so every worker and every
+- **Sampling** is decided per run from the trace id, so every node and every
   activation agrees without coordination. The read model is never sampled.
 - **Context propagation**: tool calls forward the W3C trace context (the tool call span as
   parent) to MCP servers in `_meta`, next to the idempotency key, and to host tools
@@ -365,45 +379,47 @@ up in a cassette.
 
 ### Read model
 
-`JournalStore` is shaped by the write path's invariants. Questions across runs go to a
-separate **read model** behind the `ReadModel` port, filled by the projector:
+Questions across runs are answered by each partition, from records its owner writes in the same
+batch as the facts they describe ([where data lives](06-storage-and-scale.md#where-data-lives)).
+There is no separate store to fill: a list or a count is as recent as the partition's last
+durable batch, and no query reads a journal.
 
-- `run_summaries`: namespace, status, script and its first line, toolset, labels, mode, the parent of a
-  fork, the workflow of a run of a workflow (its name: the version is on the run) and the run
-  that started it, start and end, last activity, number of tool calls and errors, history length; for a
-  run that waits, what it waits for and when it wakes; for a run that ended badly, the error's
-  name, message, line and fingerprint; whether it is quarantined.
-- `run_labels`: one row per label of a run, for equality, prefix and presence.
-- `run_waits`: what an active run waits for: a signal (its name, the timeout as wake time), a
-  timer (its due time), a tool call dispatched by Rewind, or a host tool's call; each with
-  the entry that opened it and its callsite.
-- `tool_calls`: run, `seq`, the run's namespace, tool, callsite line, scheduled and completed at, outcome,
-  error kind, payload digests, and the furthest state its task reached: its attempt, and
-  whether it waits for an approval, is parked or deferred.
-
-It answers "which runs called `github.close_issue`", "failures by error kind", "latency
-and error rate per tool", "every script agent X ran this week", "which runs wait for an
-approval". Its projections are tables in Postgres, or in Turso for the embedded server; a
-columnar read model is out of 0.1.
-
-- **Snapshots.** The projector already loads a run's history to project a feed item. It folds
-  it into a snapshot of the run (status, open waits, how it ended) and gives it with the
-  entries; the read model keeps the snapshot with the highest history length, so items
-  applied out of order or twice give the same projection. No query reads a journal.
+- **The run index.** One summary per run, live or ended, kept until the run is erased: namespace,
+  status, script and its first line, toolset, labels, mode, the parent of a fork, the workflow of a
+  run of a workflow (its name: the version is on the run) and the run that started it, start and
+  end, last activity, number of tool calls and errors, history length, the tools it called; for a
+  run that waits, what it waits for: a signal (its name, the timeout as wake time), a timer (its
+  due time), a tool call dispatched by Rewind, a host tool's call, an approval, a parked or a
+  deferred call, each with the entry that opened it and its callsite; for a run that ended badly,
+  the error's name, message, line and fingerprint; whether it is quarantined. Summaries are kept
+  in the order of their start under their namespace, and under each label's value, so a
+  namespace's runs, or those carrying a label, are read in order without reading the others.
+- **Counters.** Per tenant, namespace and hour: the runs started and ended, by status and by
+  workflow, with a sketch of their durations; the failures by fingerprint, with the scripts and
+  lines they came from and their latest runs; per tool, the calls, the errors by kind, a sketch of
+  the latency and the retries; per script, the runs by status and the tools it called. Per tenant
+  and namespace, the active runs that wait now, by what they wait for. Per tenant, namespace and
+  tool, the shape observed of its results, which merges in any order. They are what the
+  [statistics](#statistics) read.
 - **Fingerprints.** A run that failed, was cancelled or was aborted gets a fingerprint: its
   error's name and its message with numbers, UUIDs, long hexadecimal ids, times and
   double-quoted strings replaced by placeholders (for an abort, the abort's kind and message).
   Runs with the same fingerprint are one failure group, across the many scripts models write.
-  The projector computes it, so every adapter stores the same value.
-- **Service state.** Quarantine and the state of a tool task are not in the journal. Whoever
-  changes them records them in the read model, as attempts are recorded: the worker that
-  quarantines a run, the endpoints that release or give it up; whoever claims, defers,
-  approves, parks or resumes a task. A task's records only move forward (its attempt, then
-  its state within the attempt), so they too can arrive in any order.
+  The engine computes it in the batch that ends the run, so every adapter stores the same value.
+- **Service state.** Quarantine and the state of a tool task are not in the journal. They live in
+  the run's head, which the owner writes in its batches, and the summary shows them as they are:
+  the run's quarantine, and for each call its attempt and whether it waits for an approval, is
+  parked or deferred.
+
+It answers "which runs called `github.close_issue`", "every script agent X ran this week",
+"which runs wait for an approval" from the index, and "failures by error kind", "latency and
+error rate per tool" from the counters. An analytics engine over every history, for questions
+nobody planned, is out of 0.1; it would read the sealed journals of the
+[archive](06-storage-and-scale.md#where-data-lives).
 
 ### Query language
 
-The runs of the read model are searched with one query language, the same in the API
+Runs are searched with one query language, the same in the API
 (`q`), the dashboard's query bar, the SDK and `rewind runs`. Terms are separated by spaces
 and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 
@@ -427,10 +443,39 @@ and all must hold; a comma inside a term means "or"; a leading `-` excludes.
 
 Field names are case-sensitive and a term that cannot be read is refused with its position
 (`invalid-query`), so a client can underline it. Logs and payloads are never searched: they may
-hold what a tool returned, which the read model does not index. The server limits every query
+hold what a tool returned, which the index does not hold. The server limits every query
 to the caller's tenant; to a token's namespace, or the namespace of the `Rewind-Namespace`
-header; and for a grant or a token limited to labels, to its labels. Statistics, failure groups,
-scripts and tool statistics are limited the same way.
+header; and for a grant or a token limited to labels, to its labels.
+
+A query runs where its runs are. A query limited to one namespace (by a token, the
+`Rewind-Namespace` header, or a `namespace:` term with one value) goes to that namespace's
+partition; any other goes to every partition, and the edge merges their pages in the query's
+order. A partition reads summaries in the order asked, through the index of the namespace or of a
+label when a term allows it, and evaluates every term on each summary. It reads at most 10,000
+summaries for one page: its **scan budget**. A page cut by the budget comes back with fewer runs
+than asked and a cursor that resumes where it stopped. Only a page without a cursor is the last.
+
+### Statistics
+
+`GET /v1/runs/stats`, `GET /v1/runs/failures`, `GET /v1/scripts` and `GET /v1/tools/stats`
+answer from the [counters](#read-model): they read the partitions that hold their scope, and the
+edge adds the counters up. Their answers keep their shapes. They take a scope and a window:
+
+- **The scope** is the caller's tenant, or one namespace: a token's, the `Rewind-Namespace`
+  header's, or the one a query `q` names with a single `namespace:` term. Any other term of `q`
+  is refused with its position (`invalid-query`).
+- **The window** is made of whole hours, in UTC: its bounds are rounded out to the hour.
+- **Facets** count the runs of the scope and the window by status, by workflow and by namespace.
+  The runs waiting now, by what they wait for, come from the gauge of the active runs.
+- **Failure groups** list the fingerprints of the window with their counts per hour, the scripts
+  and the lines they came from, and their latest runs. A group's labels are those of its latest
+  runs, read from the index.
+- **Tool statistics** are per tool, filtered by the start of a tool's name (`github.`);
+  **scripts** list each script with its runs by status and the tools it called.
+- A grant or a token limited to labels reads none of them (403): counters do not know labels.
+
+The Overview, the Tools and Scripts views and a namespace's page are drawn from them; the runs
+behind each of their marks come from a search.
 
 ### Dashboard
 
@@ -440,12 +485,12 @@ single-page application, served by `rewind-server`.
 | View | Shows |
 | --- | --- |
 | Overview | The home page: runs by outcome over time, success rate, durations, runs waiting now, quarantined runs, what fails most, failing tools; every mark opens the runs behind it in Observability |
-| Observability | The runs, looked at and filtered. Four views: every run (the query bar, with suggestions drawn from the values that exist, the runs over time and the results), the active ones, those waiting on the outside world (grouped by what they wait for: signals, approvals, timers, tools; with the line each is paused on and when it wakes) and the failures (failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run). Its sidebar holds the views and the filters: the values of each field with their counts (facets), which add or remove their term in the query. The table's headers order the runs by their column (newest or oldest first, latest activity, longest, most tool calls, soonest to wake) and filter what each shows, as terms of the query |
-| Run | One run, analysed in depth. At its top, how it ended; a cancellation is told as a cancellation, not a failure: its cause (its deadline, a request, its script) and what the run awaited then ([decisions](08-decisions.md#taken-for-the-dashboards-type-scale-november-2026)). Its header holds its handle ([handles](06-storage-and-scale.md#run-handles)), its mock or quarantine tags and its actions: its forks, beside them a menu of the controls its permissions allow (send a signal, with the signals a workflow declares and their payloads' schemas; cancel; retry a failed run), its journal and its cassette. Its sidebar holds no action: its sections and its details (namespace, workflow and the run that started it, script, toolset, labels, attached secrets). Its sections: the debugger (the source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor), the journal, the logs, and the runs it started ([decisions](08-decisions.md#taken-for-the-dashboards-sidebar-and-run-page-november-2026)) |
-| Scripts | Every distinct script (content-addressed, so deduplicated), by its title ([titles](04-tools.md#script-titles)), with run counts, outcomes and tools used, searched with the runs' query bar (`@key:value`, `tool:`, `namespace:`); a script's page shows the suites of the workflow versions it is the script of |
+| Observability | The runs, looked at and filtered. Four views: every run (the query bar, with suggestions drawn from the facets, the runs over time of the namespace and the window shown, and the results), the active ones, those waiting on the outside world (grouped by what they wait for: signals, approvals, timers, tools; with the line each is paused on and when it wakes) and the failures (failed, cancelled and aborted runs grouped by fingerprint: count over time, scripts, labels, the line most runs failed at, a sample run). Its sidebar holds the views, the saved searches and the filters: the statuses, workflows and namespaces of the window with their counts (facets), which add or remove their term in the query. The table's headers order the runs by their column (newest or oldest first, latest activity, longest, most tool calls, soonest to wake) and filter what each shows, as terms of the query |
+| Run | One run, analysed in depth. At its top, how it ended; a cancellation is told as a cancellation, not a failure: its cause (its deadline, a request, its script) and what the run awaited then ([decisions](08-decisions.md#taken-for-the-dashboards-type-scale-november-2026)). Its sidebar holds its status, its identifiers and details (namespace, workflow and the run that started it, script, toolset, labels, attached secrets) and the controls its permissions allow (send a signal, with the signals a workflow declares and their payloads' schemas; cancel; retry a failed run); and its sections: the debugger (the source, with each tool call, timer and signal next to the line that caused it; the timeline; payloads loaded on demand; live through SSE; a time cursor), the journal, the logs, the LLM trace, and the runs it started |
+| Scripts | Every distinct script (content-addressed, so deduplicated), with its run counts, outcomes and tools used in the window, for the organization or one namespace (`namespace:`); a script's page shows the suites of the workflow versions it is the script of |
 | Testing | Its own sidebar: the workflows, the suite of the version shown (each test a click away, its origin as a glyph) and the version's details. A workflow opens at one version, switched in the breadcrumb (the latest by default): its interface and its [suite](#suites-and-the-gate) as a table, each test with its origin (inherited, added, recorded, updated, retired, with the reasons), its input, what it expects, the calls it checks and its world. Each test has its own page, switched in the breadcrumb or with previous/next: its input and expected output, its world, signals and expectations; every JSON value opens whole, colored, in a dialog, its objects and arrays folding. No test result is shown: every test of a suite passed when its version was saved |
-| Tools | Latency, error rate and retries, per tool and per toolset, searched with the runs' query bar (a tool's name, `tool:`, `toolset:`) |
-| Namespaces | The alerts of the month first, then the tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search by the start of a name or of a display name with the runs' query bar, and a filter of those above 80 %. A namespace's page, over a month: its alerts first, when it has any; how its runs went (started, completed, failed, waiting now, durations, the runs of each day by outcome, what fails most, the tools they call), its cumulative CPU against its quota, its tokens in use, its exceptions, then its runs of the month, in Observability's table forced to the namespace and the month (its headers order and filter them), and the scripts its runs ran; and the actions its permissions allow (rename it, change its limits, revoke its tokens, delete it) |
+| Tools | Latency, error rate and retries per tool, in the window, for the organization or one namespace, filtered by the start of a tool's name |
+| Namespaces | The tenant's ceiling and the default limits, then the namespaces sorted by CPU, runs or scripts of the month, each with its use against its limits (orange from 80 %, red at 100 %); a search by the start of a name or of a display name with the runs' query bar, and a filter of those above 80 %. A namespace's page, over a month: how its runs went (started, completed, failed, waiting now, durations, the runs of each day by outcome, what fails most, the tools they call), its cumulative CPU against its quota, its alerts, its tokens in use, its exceptions, then its runs of the month, in Observability's table forced to the namespace and the month (its headers order and filter them), and the scripts its runs ran; and the actions its permissions allow (rename it, change its limits, revoke its tokens, delete it) |
 | Secrets | The organization's secrets, then a namespace's on its own page: each with its labels, who wrote it and when, its reads per day and its last read, and the runs and workflows that attach it. A value is written, never shown. Deleting one first shows what it would stop: the active runs that attach it, those waiting on a call that reads it, the workflows whose versions attach it ([secrets](04-tools.md#secrets)) |
 | Organization | Opened from the member's menu: the members and their grants, the invitations, the roles and their permissions, the API keys, the signing keys and the address of their public keys, the settings; each part shown to whoever holds its permission |
 
@@ -470,14 +515,18 @@ single-page application, served by `rewind-server`.
   script computes in between is not recorded, and the dashboard does not execute code.
 - **Searches.** The query follows the operator from one view to another in the URL. Saved
   searches are kept in the browser.
-- **Live.** Each tab follows the organization's runs through one change stream
+- **Live.** Each tab follows the organization through one change stream
   ([`GET /v1/changes`](07-code-architecture.md#http-api-v1)): a run's new status, duration or
-  count shows in every row and panel at once, without a request. The searches on screen are
-  read again a second after the last change (at most 5 s after the first of a burst), their
-  counts and charts, the scripts' and a namespace's figures at most every 5 s; the workflows,
-  which runs do not change, on the timer only. While the stream is open, what is on screen is
-  also read again every 60 s; while it is down, the tab reconnects (after 1 s, doubling up to
-  30 s) and reads what is on screen every 10 to 30 s.
+  count shows in every row and panel at once, without a request. A script, a workflow, a secret,
+  a namespace or a connection that changes refreshes the views that show it. The searches on
+  screen are read again a second after the last change of a run (at most 5 s after the first of a
+  burst), and their statistics at most every 10 s. Nothing is read again on a timer. The stream
+  starts where things change: the edge that serves it subscribes to the tenant on every node,
+  whose owners push the runs of each durable batch, and it listens to the changes of the control
+  plane ([inside a node](07-code-architecture.md#inside-a-node)). While the stream is down, the
+  tab reconnects (after 1 s, doubling up to 30 s), and reads again what is on screen once it is
+  back. The connection's state is a dot beside the organization picker,
+  at the head of the sidebar.
 - **Nothing moves on its own.** After a view's first answer, nothing it shows gives way to a
   loading state: a refresh, a reconnection or a resync swaps the data in place, and a search
   the operator changed keeps the previous rows, dimmed, until its answer. Equal data renders
@@ -504,14 +553,15 @@ single-page application, served by `rewind-server`.
   the agent tools and the dashboard see the same thing.
 - Access is scoped by tenant, since it exposes code and payloads, and by the caller's
   permissions.
-- It reads the journal through the read model, not an OTel backend. OTel backends sample,
-  keep data for weeks, truncate attributes and don't store source code; a run paused for
-  a month would fall out of them.
+- It reads runs from the run index and from their journals, live in their partition or sealed
+  in the archive. OTel backends sample, keep data for weeks, truncate attributes and don't
+  store source code; a run paused for a month would fall out of them.
 
 ### LLM trace and metrics
 
 - **Event stream**: `GET /v1/runs/{id}/events?follow=1` (SSE), for harness UIs and the
-  dashboard.
+  dashboard. The edge subscribes to the run at its owner, which pushes the entries of each
+  durable batch; the events of an ended attempt come from its sealed journal.
 - **LLM trace**: `GET /v1/runs/{id}/trace?format=llm` and `rewind trace <run>`. Payloads are
   truncated, and each entry can be expanded individually (`rewind trace <run> --entry 7`).
 
@@ -525,5 +575,5 @@ script triage.ts · toolset 9f2c4e1a07b3 · started 2026-11-09T10:02:11Z · cpu 
   3  +0.4s   timer #3 started 3d (signal "approval" timeout)               L10
 ```
 
-- **Metrics**: runs by status, activation latency, replay duration, tool latency and
-  error rate, inbox depth.
+- **Metrics**: runs by status, activation latency, replay duration, batch latency and size,
+  ready-queue depth, partitions owned and taken over, tool latency and error rate, inbox depth.

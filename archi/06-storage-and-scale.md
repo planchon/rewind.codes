@@ -2,31 +2,46 @@
 
 ## Backends
 
-Storage sits behind the `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel` and `SecretStore`
-ports of `rewind-engine`.
+Storage sits behind the ports of `rewind-engine` ([07](07-code-architecture.md#ports)), in two
+planes.
 
-| Use | Journal, access, read model, secrets | Large payloads |
-| --- | --- | --- |
-| Production (`rewind-server`) | Postgres (`rewind-store-postgres`) | S3 or any S3-compatible service (`rewind-blob`) |
-| Embedded (`rewind server --embedded`, local dev, tests) | Turso Database (`rewind-store-turso`, the `turso` crate) | Local files (`rewind-blob`) |
-| Engine unit tests, mock mode | In memory | In memory |
+- The **control plane** holds what customers and operators configure, written at the pace of
+  people: tenants, namespaces, keys, tokens, roles, grants, connections, scripts, toolsets,
+  workflows, the index of tests, secrets, subscriptions, and the cluster's nodes and partitions.
+  It sits behind `CatalogStore`, `AccessStore`, `SecretStore` and `Cluster`.
+- The **run plane** holds runs: everything a run records, its index and its counters. It is cut
+  into [partitions](#partitions-owners-and-nodes) behind `PartitionStore`. The journals of ended
+  attempts are sealed into the **archive** behind `RunArchive`. Payload values above 64 KiB and
+  test documents are blobs behind `BlobStore`.
 
-Every adapter of `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel` and `SecretStore` passes that port's
-conformance suite, shipped by `rewind-engine` behind the `conformance` feature.
+| Use | Control plane | Partitions | Archive and blobs |
+| --- | --- | --- | --- |
+| Production (`rewind-server`) | Postgres (`rewind-store-postgres`) | SlateDB on R2 or any S3-compatible service (`rewind-store-slatedb`) | R2 or any S3-compatible service (`rewind-blob`) |
+| Embedded (`rewind server --embedded`, local dev, tests) | Turso Database (`rewind-store-turso`, the `turso` crate) | SlateDB on local files under `.rewind/partitions/` | Local files under `.rewind/` (`rewind-blob`) |
+| Engine unit tests, mock mode | In memory | In memory | In memory |
 
-## Tables
+Postgres never holds a run, live or ended. Every adapter passes its port's conformance suite,
+shipped by `rewind-engine` behind the `conformance` feature.
+
+**A store is written only when a state changes**: a fact a run records, an owner that moves, a
+setting someone changes. Nothing is written while nothing happens: no lease is renewed, no
+heartbeat stored, no queue position kept, no table polled. A tool call costs its run two
+appends: the call, before it is sent, and its outcome, before the script sees it
+([decided](08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)).
+
+## Where data lives
 
 Every key starts with the tenant, and what belongs to an end user names its namespace
 ([tenancy](#tenancy-namespaces-identity-and-access)).
+
+### The control plane
 
 ```
 tenants    (id PK, quotas, namespace_defaults, retention)
 data_keys  (tenant PK, wrapped_key, master_key)      -- wrapped_key: the tenant's data key, encrypted
                                                      -- by the master key whose id is master_key
-namespaces (tenant, name, display_name, quotas, tokens_revoked_before, created_at, last_active_at,
-            deleting_since)                                PK (tenant, name)
-script_titles (tenant, digest, title, description, updated_by, updated_at)
-                                                           PK (tenant, digest)
+namespaces (tenant, name, partition, display_name, quotas, tokens_revoked_before, created_at,
+            last_active_at, deleting_since)                PK (tenant, name)
 api_keys   (hash PK, tenant, name, created_by, created_at, revoked_at)
 tokens     (hash PK, tenant, namespace, permissions, labels, expires_at, created_by, created_at,
             revoked_at)                                    index (tenant, namespace)
@@ -45,7 +60,6 @@ connection_tokens (hash PK, connection_id, kind, expires_at, created_at, used_at
                                                            index (connection_id)
 access_settings (tenant PK, default_role)
 scripts    (tenant, digest, source, transpiled, source_map)   PK (tenant, digest)  -- only scripts that compile
-namespace_scripts (tenant, namespace, digest, runs, first_run_at)   PK (tenant, namespace, digest)
 toolsets   (tenant, digest, spec, declarations)               PK (tenant, digest)
 workflows  (tenant, version, name, document, labels, created_at)   PK (tenant, version)
                                                            index on (tenant, name, created_at)
@@ -53,24 +67,6 @@ tests      (tenant, digest, namespace, size, reserved_at, deletion_started_at)
                                                            PK (tenant, digest), index (tenant, namespace)
                                                            -- the document is a blob
 workflow_tests (tenant, version, digest)                   PK (tenant, version, digest)
-runs       (tenant, id, namespace, script, toolset, status, epoch, history_len, blocked_on,
-            runnable_at, expires_at, quarantine, failures, attempts, lease_owner, lease_until,
-            fence, sticky_worker,
-            parent, workflow, workflow_version, started_by, started_seq, detached, scope,
-            secrets, labels, trace_context, idempotency_key, created_at, updated_at, ended_at,
-            archive)
-            PK (tenant, id), UNIQUE (tenant, namespace, idempotency_key), index (tenant, namespace, status)
-run_watchers (run_id, watcher, seq, attached)               PK (run_id, watcher)
-history    (run_id, idx, recorded_at, event)              PK (run_id, idx)
-inbox      (id, run_id, event, received_at)
-signal_keys (run_id, key)                                  PK (run_id, key)
-timers     (run_id, seq, fire_at)                          index on fire_at
-tool_tasks (run_id, seq, tool, route, args, policy, server_concurrency, state, attempt, token,
-            lease_owner, lease_until, next_attempt_at, parked_reason, created_at)
-webhook_tokens (token PK, run_id, name)
-payloads   (tenant, digest, bytes, preview, value, unreferenced_since, deletion_started_at)
-                                                           PK (tenant, digest)  -- value up to 64 KiB
-payload_refs (tenant, digest, run_id)                      PK (tenant, digest, run_id)
 secrets    (tenant, namespace, name, ciphertext, labels, created_by, created_at, updated_by,
             updated_at, last_read_at, last_read_run, last_read_namespace)
                                                             PK (tenant, namespace, name)
@@ -79,107 +75,145 @@ secret_reads (tenant, namespace, name, day, reads)         PK (tenant, namespace
 signing_keys (tenant, kid, public_key, private_ciphertext, created_at, retired_at)
                                                            PK (tenant, kid)
 subscriptions (tenant, id, url, secret, events)
-usage      (tenant, namespace, day, cpu_ms, runs_started)  PK (tenant, namespace, day)  -- namespace *: the tenant
-quota_alerts (tenant, namespace, quota, period, threshold, used, quota_limit, raised_at,
-              lease_owner, lease_until, sent_at)           PK (tenant, namespace, quota, period, threshold)
-feed       (id, consumer, run_id, fence, from_idx, to_idx, lease_owner, lease_until)
+nodes      (id PK, address, build, epochs, pool, executors_only, joined_at)
+partitions (id PK, pool, node, epoch)                      -- epoch: bumped at each move
 meta       (key PK, value)                                 -- schema version; virtual time (embedded)
-
--- read model, written only by the projector
-run_summaries (run_id PK, namespace, script, toolset, status, labels, started_at, ended_at,
-               last_activity_at, tool_calls, errors, history_len,
-               changed_at)                         -- wall clock, ms, rising per run: the change stream
-tool_calls    (run_id, seq, namespace, tool, callsite_line, scheduled_at, completed_at, outcome,
-               error_kind, args_digest, result_digest)      PK (run_id, seq)
 ```
 
-`event` columns hold the `rewind-format` v1 JSON of the event. `namespace`, `labels`,
-`trace_context`, `idempotency_key`, `parent`, `workflow`, `workflow_version`, `started_by`,
-`started_seq`, `detached`, `scope` and `secrets` are run metadata: stored with the run, never in
-its events ([05](05-testing-and-observability.md#run-metadata)). `secrets` holds the run's
-[attachments](04-tools.md#secrets), a secret's scope and name per server, never a value.
-`secrets`, `secret_reads` and `signing_keys` belong to the `SecretStore`: a value and a private key
-are encrypted with the tenant's data key, the names, labels and dates are not. A `workflows` row holds a
-[workflow version](02-journal.md#stored-format-v1) document. A `tests` row indexes a
-[test](05-testing-and-observability.md#testing-and-mocks) whose document is a blob of the
-`BlobStore`; `namespace` is the one a recorded test came from, none for a test written by hand.
-`workflow_tests` lists the tests of each version's suite, written with the version. `run_watchers` lists the runs that
-receive a run's end ([workflows](03-execution.md#workflows-across-runs)): the run that started
-it (`attached` unless it was started detached), and the forks that copied that start.
-`namespaces`, `namespace_scripts`, `usage` and `quota_alerts` belong to the `JournalStore`, which
-checks quotas when it creates a run; `tokens` and `token_keys` to the `AccessStore`.
-`oauth_clients`, `oauth_codes`, `connections` and `connection_tokens` belong to the
-`AccessStore` too, and to no tenant: a [connection](#connections) is a person's, and only its
-grants, one per organization it opens, are a tenant's.
+A `workflows` row holds a [workflow version](02-journal.md#stored-format-v1) document. A `tests`
+row indexes a [test](05-testing-and-observability.md#testing-and-mocks) whose document is a blob of
+the `BlobStore`; `namespace` is the one a recorded test came from, none for a test written by hand.
+`workflow_tests` lists the tests of each version's suite, written with the version. `secrets`,
+`secret_reads` and `signing_keys` belong to the `SecretStore`: a value and a private key are
+encrypted with the tenant's data key, the names, labels and dates are not. `tokens` and
+`token_keys` belong to the `AccessStore`. `oauth_clients`, `oauth_codes`, `connections` and
+`connection_tokens` belong to the `AccessStore` too, and to no tenant: a
+[connection](#connections) is a person's, and only its grants, one per organization it opens, are a
+tenant's. `nodes` and `partitions` belong to the `Cluster`; `namespaces.partition` is chosen when
+the namespace is created and never changes ([partitions](#partitions-owners-and-nodes)).
 
-`epoch` and `expires_at` are copies of the values in `run_started`, kept for queries:
-workers pick runs by epoch, and the scheduler picks the runs past their deadline.
-`quarantine` holds why a run is
+Every write of a control-plane store sends what it changed in the same transaction: `NOTIFY
+control_plane` on Postgres, a broadcast inside the process on Turso and in memory. Every process
+listens, and drops what it had cached of it.
+
+### A partition
+
+A partition is one SlateDB database, `partitions/{id}/` in the bucket. Its records are written in
+the stored format ([partition records](02-journal.md#stored-format-v1)), under keys that belong to
+`rewind-store-slatedb`; the engine never sees a key.
+
+| Records | One per | Holds |
+| --- | --- | --- |
+| Run head | Run | Status, epoch, the counts of failed and started activations, quarantine, waits, deadline, history length, dates, and the run metadata: namespace, labels, trace context, idempotency key, parent, workflow and version, the run that started it and its `seq`, `detached`, scope, the secrets it attached ([05](05-testing-and-observability.md#run-metadata)) |
+| History | Entry of an attempt | The event, its index, `recorded_at` |
+| Inbox | Completion not yet delivered | The event, when it was received |
+| Signal key | Signal key used | Kept for the life of the run ([idempotency](#idempotency-of-the-api)) |
+| Tool task | Call | Tool, route and policy copied from the pinned toolset, args, state, attempt, the token handed out, `next_attempt_at`, parked reason |
+| Timer | Due time | What fires: a script's timer, a call's timeout, a deferred task's deadline, a retry's backoff, the run's deadline, the end of its retention, a webhook's next try |
+| Payload | Payload of a run above 1 KiB | Digest, size, preview, and the value up to 64 KiB ([payloads](#payloads)) |
+| Watcher | Run that waits for this run's end | The watcher, its `seq`, whether it is attached ([workflows](03-execution.md#workflows-across-runs)) |
+| Webhook token | Token | The hash of the token, the run and the signal name |
+| Run summary and index | Run, live or ended | What lists, searches and the change stream show ([05](05-testing-and-observability.md#read-model)) |
+| Start key | Idempotency key of a start | The run it started, unique per namespace |
+| Counters | Tenant, namespace and period | Exact counts, written in the batch of what they count ([quotas](#quotas)) |
+| Outbox entry | Delivery waiting to leave the partition | A span batch to export, a webhook to deliver, a `quota.alert` ([outbox](#the-outbox)) |
+| Organization state | Tenant homed here | What its organization actor keeps: alerts sent, the admissions it holds |
+
+`epoch` and the deadline in a run head are copies of the values in `run_started`, kept so the owner
+can choose executors and schedule the deadline. Quarantine holds why a run is
 [quarantined](03-execution.md#non-determinism-and-quarantine) (non-determinism or repeated
-failures, the reason, and the last build that retried it), `failures` counts its
-activations that failed in a row, and `attempts` the activations started since its last
-commit: those that neither committed nor failed never finished, because their worker died. A tool task keeps the route and policy of its tool, copied from
-the pinned toolset: the claim enforces the concurrency limits from them. `archive` points to the
-journal document of an archived run, in the `BlobStore`.
+failures, the reason, and the last build that retried it); `failures` counts the run's
+activations that failed in a row, and `attempts` the activations an owner started without seeing
+their end.
 
-## Run handles
+### The archive and the blobs
 
-A run's id is a UUIDv7, and stays its identity everywhere: the journal, the stores and their
-keys, the signals runs send each other (`rewind:ended:<id>`), the trace. People read, copy and
-type its **handle**, `<namespace>/<origin>/<suffix>`
-([decisions](08-decisions.md#taken-for-script-titles-and-run-handles-november-2026)):
+| Object | Key | Written |
+| --- | --- | --- |
+| Sealed attempt | `runs/{tenant}/{run}/{attempt}.json` | When an attempt ends: its [journal document](02-journal.md#stored-format-v1), every payload up to 64 KiB inlined as a value |
+| Payload above 64 KiB | `blobs/{tenant}/{run}/sha256/{digest}` | Before the batch that references it |
+| Test | `tests/{tenant}/sha256/{digest}` | When a test is reserved ([suites](05-testing-and-observability.md#suites-and-the-gate)) |
 
-- **namespace**: the run's namespace, by its id (a display name changes; an id never does).
-- **origin**: what ran, frozen when the run is created: its workflow's name; else its script's
-  title as a slug (lower-case ASCII letters and digits, every other run of characters a `-`, at
-  most 40 characters), the title a person gave the script or else its comment's
-  ([titles](04-tools.md#script-titles)); else `script`. A fork's is its parent's.
-- **suffix**: the start of the id in Crockford's base32 (lower case): the 48 bits of its
-  millisecond and the 12 bits after them, 12 characters. The engine writes in those 12 bits the
-  number of the process that made the id (6 bits, drawn at random when it makes its first) and
-  a counter of its ids within the millisecond (6 bits; a 65th id moves to the next millisecond):
-  one process never repeats a suffix. `/` occurs in no part, so a handle splits without doubt.
+Embedded, the same keys are paths under `.rewind/`. Every object is immutable: it is written once and
+read forever after, so every process caches it without asking again.
 
-A handle never names two runs of a tenant. `create_run`, under the lock that already serializes
-the tenant's runs, looks at the tenant's runs whose ids share their first 64 bits with the new
-one and gives it the shortest suffix, of at least 12 characters, that none of them has; it
-keeps it (`runs.suffix_len`). Ids of different processes rarely share those bits; a run that
-does gets one or more characters more. Runs stored before handles take `script` or their
-workflow as their origin, and 25 characters (the whole id) when they shared their first 64 bits
-with another of their tenant.
+## Partitions, owners and nodes
 
-The runs a suffix names are one range of ids: a handle needs no index of its own. The API takes
-a handle wherever it takes a run (`GET /v1/runs/{handle}`, percent-encoded in a path): it reads
-the tenant's runs in that range, and keeps the one whose suffix has the handle's length, of the
-handle's namespace and origin.
+```
+ edge (every process) ──router──► owner of the partition ──batch──► SlateDB on R2
+                                   │  one writer, fenced by epoch
+                                   ├─ ready queue ──► executors (V8) of its node, or of a node of the run's epoch
+                                   ├─ timer wheel, registry, outbox, sealer
+                                   └─ organization actors homed in the partition
+```
 
-## Leases, fencing, workers
+- **Partitions.** A deployment has a fixed number of partitions: 64 in production, 1 embedded. A
+  namespace's partition is chosen when the namespace is created, from its tenant and name, and
+  kept in its row: every run of a namespace lives in that partition, so its idempotency keys,
+  lists and counters stay in one place. A run id is a UUID v7 whose 16 bits after the variant
+  hold its partition: any process finds a run's partition from its id alone, and so from a task's
+  token or a webhook token, which carry their run's id.
+- **One owner per partition.** The owner is the only writer of its partition. Opening a partition
+  fences the previous writer: SlateDB raises the writer epoch, and a commit of the old one fails.
+  An owner whose commit is refused that way drops the partition at once. Correctness never depends
+  on noticing that a node died; only the time it takes another to take over does.
+- **Batches.** Everything an owner writes goes through its committer, which writes as one batch
+  everything that reached it while the previous batch was being written: atomic, and durable when
+  the commit returns. A batch holds the changes of many runs, and costs one write to R2. The
+  [commit invariant](02-journal.md#the-commit-invariant) holds per batch.
+- **Messages after facts.** Once a batch is durable, its fan-out sends what follows from it: a run
+  made runnable goes to the ready queue, a timer to the wheel, a call to be sent, a change to the
+  edges subscribed to the run, its namespace or its tenant, a delivery to a projection. A
+  message is never the only trace of anything: a node that dies loses its messages, and the next
+  owner rebuilds them from the records.
+- **Recovery.** An owner that opens a partition reads, once: the runnable runs, which it queues
+  with one more started activation each, since an activation may have been running when the
+  previous owner died; the timers due before the horizon; the calls in flight, sent again or
+  failed as their policy says; the outbox; the ended attempts not yet sealed; the counters, which
+  it reports to their organizations. Nothing is read again on a timer.
+- **The timer wheel.** It holds the partition's timers due before the horizon, one hour ahead, and
+  sleeps until the earliest. Once per horizon it reads the next hour's timers from the partition.
+  That read is the only loop of the run plane.
+- **Executors.** A node runs activations on its executor threads, fed by its ready queue: fair
+  across tenants (the tenants with runnable runs take turns), and within a tenant the runs with the
+  fewest started activations first, then the oldest trigger. An owner sends an activation to its own
+  node when the node's build supports the run's [epoch](03-execution.md#determinism-epoch), and
+  otherwise, through the node link, to a node whose build does. A tenant can have its own pool of
+  nodes ([sandboxing](#sandboxed-nodes)); its activations go there.
+- **Nodes.** Every process is both the HTTP edge and a node. Each node holds a Postgres session
+  lock on its own id for as long as it lives, and the nodes form a ring in which each waits on the
+  lock of the next. When a node dies, its session ends and its lock comes free: the node waiting
+  on it moves the dead node's partitions to the others in one transaction (each partition's
+  `epoch` + 1, `NOTIFY partition_map`), and waits on the next node of the ring. A process that dies
+  frees its lock at once; a machine that vanishes, once TCP keepalive gives up, about 10 s. A node
+  that joins takes some partitions from the others, and one that stops hands its partitions over
+  before it exits. Partitions go to nodes by rendezvous hashing, so a change moves only what it
+  must.
+- **The edge.** The router finds the owner of a run from the partition map, cached and dropped on
+  `NOTIFY partition_map`. It reaches an owner in its own process through a channel, and another
+  process through the node link: HTTP/2 on the private network, authenticated by the cluster's
+  secret. An owner that no longer holds the partition answers `NotOwner`, and the router reads the
+  map again.
+- **The organization actor.** Each tenant has one, on the owner of its home partition, chosen from
+  the tenant's id. It orders the tenant's admissions, counts its CPU, holds its MCP and API slots
+  and hands its host tasks to SDK streams ([quotas](#quotas), [04](04-tools.md#tool-task-lifecycle)).
 
-- **Workers** hold nothing a run needs: their instance cache only saves a replay. They pick
-  runnable runs with `FOR UPDATE SKIP LOCKED` (Postgres), among the epochs they support and
-  outside quarantine, with the [fairness](#tenancy-namespaces-identity-and-access) between tenants and
-  the priority of the [sticky worker](03-execution.md#sticky-execution). Acquiring a lease
-  increments `fence`. The lease lasts 30 s, and the worker renews it about every 10 s while
-  it works on the run, during the replay as during the execution: a long replay keeps its
-  lease, and a dead worker frees the run at most 30 s after its last renewal.
-- A commit only succeeds if the fence still matches, and `PK (run_id, idx)` is a second
-  guard. A worker that lost its lease (GC pause, network partition) can never corrupt a
-  history.
-- The **scheduler** polls due timers the same way and pushes `timer_fired` into inboxes.
-  It also polls the runs past their deadline and pushes
-  `cancel_requested { reason: "ttl" }`.
-- The **projector** claims feed items the same way, applies them to the read model and
-  the OTel export, then deletes them.
-- A terminal commit clears the run's pending timers and tool tasks.
+Scaling: more nodes take more partitions, and more executors run more activations. A partition's
+writes are bounded by what one batch per R2 write carries, and its reads are served by SlateDB's
+cache in front of R2. More partitions only serve the namespaces created after them.
 
-Scaling path:
+### The outbox
 
-1. More workers.
-2. Partition `history` and `inbox` by `run_id`; archive the histories of finished runs
-   ([retention](#retention-and-deletion)).
+A run reaches only runs of its own namespace ([namespaces](#namespaces)): the workflow runs it
+starts, the runs it signals, the runs that watch its end, the runs it started attached and
+cancels with it. They all live in its partition, so each of these effects is written in the same
+batch as the fact that caused it, and needs no message between nodes.
 
-Sharding over several Postgres clusters and a columnar read model are out of 0.1
-([plan](09-roadmap.md#out-of-01)).
+What leaves the partition goes through its **outbox**: the spans exported to OpenTelemetry, the
+lifecycle webhooks, and `quota.alert`. An outbox entry is written in the batch of the fact that
+causes it. Once the batch is durable, the projection consumes it, and the entry is deleted, in a
+later batch, once exported or delivered. Recovery hands the projections what is left. A failed
+delivery's next try is a timer.
 
 ## Idempotency of the API
 
@@ -195,8 +229,11 @@ retries without knowing.
 | A script signals a run | `rewind:{run_id}/{seq}`, the call's key | Is acknowledged and ignored | |
 | A run ends | `rewind:ended:{run id}`, for each run that watches it | Is ignored | |
 
-- A signal's key is kept in `signal_keys` for the life of the run, not in the inbox. It
-  must outlive the delivery of the signal, or a late retry would pass.
+- A start's key is kept in its namespace's partition, as long as the run is kept. A signal's key
+  is kept with the run, for the life of the run, apart from the inbox. It must outlive the
+  delivery of the signal, or a late retry would pass.
+- The effects of one run on another (a start, a signal, an end) carry these keys, so an effect
+  applied twice, by a recovery for instance, changes nothing the second time.
 - Keys are run metadata. They never appear in events, so they are neither replayed nor
   exported in cassettes.
 - Defaults in the SDK: the agent tools derive `run_script`'s key from the model's tool call
@@ -210,21 +247,26 @@ of three tiers, by size:
 | Size | Where the value lives |
 | --- | --- |
 | Up to 1 KiB | In the event itself |
-| Up to 64 KiB | In the `payloads` table (Postgres, Turso) |
-| Above | In S3, or in files for the embedded server; its size and preview are in `payloads` |
+| Up to 64 KiB | In the run's payload records, in its partition; inlined in its sealed journal |
+| Above | In a blob under the run, `blobs/{tenant}/{run}/sha256/{digest}`; its size and preview are in the run's payload records |
 
-The thresholds are configurable, and load tests confirm the defaults. Medium payloads stay
-in the database so that a miss of the [instance cache](03-execution.md#sticky-execution) does
-not cost an S3 round trip.
+The thresholds are configurable, and load tests confirm the defaults. Medium payloads stay in the
+partition so that a miss of the [instance cache](03-execution.md#sticky-execution) reads them with
+the run's history, without a round trip per value.
+
+A payload belongs to its run. The same value carried by two runs is stored twice; within a run it
+is stored once. A fork copies the blobs it references from its parent under its own run. Erasing a
+run deletes its payloads with it, so no cleanup job looks for unreferenced payloads
+([decided](08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)).
 
 The responsibilities are split by layer:
 
 | Layer | Knows |
 | --- | --- |
 | `rewind-core` | A payload's **identity**: the SHA-256 of its canonical JSON, as defined by RFC 8785 (JCS). An event holds either the value (`Payload::Value`) or only the digest (`Payload::Digest`). The determinism check compares digests. |
-| `rewind-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the `payloads` table with the commit, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
+| `rewind-engine` | **When** to move values: at commit, a payload above the inline threshold leaves the event, which keeps only the digest. Its value goes into the run's payload records with the batch, or to the `BlobStore` before it when it is above the second threshold. On delivery to the script, the value is loaded from where it lives. |
 | `rewind-format` | **How** a payload is written in the journal: `{"value": …}` or `{"digest": "9f2c…"}`. A value is written in its canonical form, so its stored bytes are exactly the bytes its digest is computed on, whatever the JSON library's settings. |
-| `rewind-blob` | **Where** large values live: `{tenant}/sha256/{digest}` on S3, `.rewind/blobs/{tenant}/sha256/ab/<digest>` on disk (atomic writes); workers keep a local cache in front of S3. |
+| `rewind-blob` | **Where** large values live: under their run on R2 or S3, `.rewind/blobs/{tenant}/{run}/sha256/ab/<digest>` on disk (atomic writes); every node keeps a local cache in front of R2. |
 
 Consequences:
 
@@ -233,13 +275,13 @@ Consequences:
   whitespace" leaves to the serializer: keys are ordered by UTF-16 code units, numbers
   are IEEE 754 doubles written as ECMAScript writes them, and string escaping is
   minimal. Golden vectors in `rewind-core`'s tests pin it.
-- Payloads are immutable, deduplicated within a tenant, and cacheable forever.
+- Payloads are immutable and cacheable forever.
 - During replay, recorded command args are compared by digest, so they are never
-  downloaded. Only completion results delivered to the script are fetched, and workers
+  downloaded. Only completion results delivered to the script are fetched, and nodes
   keep a local cache.
 - Traces, OTel spans and the dashboard must render without downloading payloads. Size
-  and preview are store metadata kept next to the digest in the `payloads` table, not part
-  of the domain model ([decided](08-decisions.md#taken-after-the-layering-november-2026)).
+  and preview are store metadata kept next to the digest in the run's payload records, not
+  part of the domain model ([decided](08-decisions.md#taken-after-the-layering-november-2026)).
 
 ## Tenancy, namespaces, identity and access
 
@@ -268,18 +310,20 @@ The tenant is part of every storage key:
 
 | Data | Key |
 | --- | --- |
-| Runs and their metadata | `(tenant, id)`, with their namespace |
-| Idempotency keys of runs | `(tenant, namespace, key)` |
-| Namespaces, their usage, alerts and script counts | `(tenant, namespace)` |
+| Runs, their metadata, records and summaries | `(tenant, id)`, in the partition of their namespace |
+| Idempotency keys of runs | `(tenant, namespace, key)`, in the namespace's partition |
+| Namespaces | `(tenant, namespace)`; their counters in their partition |
 | Scripts, toolsets | `(tenant, digest)` |
 | Workflow versions | `(tenant, version)` |
-| Payloads | `(tenant, digest)`; blobs at `{tenant}/sha256/…` |
-| Read model, secrets, quotas, keys, tokens, roles, grants | Per tenant |
+| Payloads | Under their run; blobs at `blobs/{tenant}/{run}/sha256/…` |
+| Sealed attempts | `runs/{tenant}/{run}/…` |
+| Secrets, quotas, keys, tokens, roles, grants | Per tenant |
 
 - **Quotas**: per namespace and per tenant ([quotas](#quotas)).
-- **Fairness**: workers draw a tenant at random among those with runnable work, then take
-  that tenant's oldest runnable run. A large tenant cannot starve the others, and an end
-  user's share of its tenant's queue is bounded by its namespace's `activeRuns`.
+- **Fairness**: a node's ready queue takes turns among the tenants with runnable runs, then
+  takes the chosen tenant's run with the fewest started activations, the oldest trigger first. A
+  large tenant cannot starve the others, and an end user's share of its tenant's queue is bounded
+  by its namespace's `activeRuns`.
 
 ### Namespaces
 
@@ -302,21 +346,21 @@ Bob's, whatever script its model writes.
   used, or when a run is created in it, with the tenant's default limits. `PUT
   /v1/namespaces/{name}` creates it ahead, or sets its exceptions.
 - **What belongs to a namespace**: its runs, with their journals, signals, idempotency keys,
-  tool tasks, webhook tokens, read model rows and payload references; the end user's
+  tool tasks, webhook tokens, payloads, summaries and counters; the end user's
   [secrets](04-tools.md#secrets); its usage and alerts; its tokens. A fork stays in its parent's namespace, and
   nothing a run does reaches another namespace.
 - **What stays the tenant's**: toolsets; the organization's secrets; its signing key;
   subscriptions, since lifecycle webhooks go to the
   customer, each event naming its namespace; members, roles, keys and token keys; the storage of
-  scripts and payloads, deduplicated per tenant, which a token reads only through its namespace
-  (the scripts its runs ran, the payloads its runs hold).
+  scripts, deduplicated per tenant, which a token reads only through its namespace (the scripts its
+  runs ran).
 - **The customer names the namespace** with the header `Rewind-Namespace`. Creating in a
   namespace requires it: starting a run, `/v1/check` and `/v1/test`, which apply the namespace's
   limits (400 without it). There is no default namespace. A fork takes its parent's namespace.
   Reading without the header covers every namespace of the tenant; with it, that namespace
   only: a run of another namespace is 404, for a fork, a signal or a cancellation too.
 - **An end user's token fixes the namespace.** A header naming another is 403; anything of
-  another namespace is 404; lists hold its namespace only; `tasks:work` claims only the tasks of
+  another namespace is 404; lists hold its namespace only; `tasks:work` receives only the tasks of
   its namespace's runs.
 - **Deleting a namespace** erases an end user ([retention](#retention-and-deletion)).
 
@@ -345,27 +389,32 @@ Three levels:
   `cpuPerMonth`, `activeRuns`, `runsPerMonth` and `scripts` it bounds the tenant's totals, the sum
   over its namespaces; `maxTtl` and `maxScriptLines` bound every namespace.
 
-A start passes its namespace's limit and the tenant's ceiling. `create_run` checks both under a
-lock of the namespace and of the tenant, so two concurrent starts cannot take the same last
-place. A refusal (`quota-exceeded`) says which quota, at which scope (`namespace` or
+A start passes its namespace's limit and the tenant's ceiling. The tenant's organization actor
+admits starts one at a time from its queue, so two concurrent starts cannot take the same last
+place; no lock is taken. A refusal (`quota-exceeded`) says which quota, at which scope (`namespace` or
 `organization`), the limit, the use and when it frees (`resetsAt`, with `Retry-After` for a
 monthly quota), in words written for a model that never name another namespace. A retried
 request with its idempotency key still returns its run.
 
-- **Counting.** `runsPerMonth` is counted in `usage`, under the lock `create_run` takes.
-  `scripts` is counted in `namespace_scripts`: a run adds one to its script's row, erasing a run
-  removes one, and a row at zero is removed.
+- **Counting.** Each partition counts, per tenant and namespace, its active runs, the runs
+  created in the month, the runs it keeps per script (`scripts`: a run adds one to its script's
+  count, erasing it removes one) and the CPU time per UTC day, in the batch of what it counts: the
+  counts commit with their facts, and cannot drift from them. After a batch that moved them, the
+  owner sends the counts to the tenant's organization actor, as absolute values: a message lost
+  is corrected by the next, and a new organization actor asks every owner once.
+- **Admission.** The organization actor answers each start (`AdmitStart`) from the sum of the
+  counts the owners reported, plus the starts it admitted that no report includes yet. It knows
+  the namespaces' limits and the tenant's ceiling from the control plane, cached and dropped on
+  change. A start above a limit is refused at once (429); it is never held in a queue.
 - **CPU time.** The runtime reports the CPU time of each call into the script, which its
   watchdog measures anyway. The engine counts the calls that execute and leaves out those of a
-  replay, which are the cost of the instance cache, not the end user's. A worker adds them up per
-  tenant, namespace and UTC day and writes them to `usage` about every 10 s, with its lease
-  renewals, along with the tenant's own row (namespace `*`). A worker that dies loses at most
-  10 s of counting.
+  replay, which are the cost of the instance cache, not the end user's. The owner adds them to the
+  namespace's day in the batch of the activation, so a node that dies loses none of them.
 - **CPU time is not in the journal.** It measures what the service spent, and differs from one
   replay to the next: it is metering, like service telemetry, and never changes what a run does.
 - **Alerts.** A threshold crossed is recorded once per tenant, namespace (or `*`), quota, month
-  and threshold, in `quota_alerts`, by the write that crosses it. The worker role sends it to the
-  tenant's subscriptions as the event `quota.alert` (`namespace`, `quota`, `threshold`, `used`,
+  and threshold, by the organization actor, in its home partition, with an outbox entry that sends
+  it to the tenant's subscriptions as the event `quota.alert` (`namespace`, `quota`, `threshold`, `used`,
   `limit`, `period`; `namespace` is null for the tenant's ceiling), and the dashboard lists it.
   The customer decides what follows: telling the end user, raising their limits, or blocking
   them.
@@ -406,7 +455,7 @@ Every request to `/v1` carries a Bearer token, and nothing else authenticates it
   tokens issued before that moment (`tokens_revoked_before`); `DELETE /v1/tokens/{id}` revokes
   one; deleting a token key invalidates every token it signed. Every request reads the token's
   state again: a revocation applies from the next request, and closes an event stream opened
-  with the token. The workers delete an opaque token a day after it expired or was revoked.
+  with the token. A daily job deletes an opaque token a day after it expired or was revoked.
 
 The dashboard gets its access token from `/auth`, the only routes that read a cookie
 ([07](07-code-architecture.md#sign-in-auth)). People sign in with GitHub or with a 6-digit code
@@ -449,7 +498,7 @@ organization, opening the organizations they tick.
   `members:manage` in an organization removes it from a connection
   (`/v1/organization/connections`); removing a member removes their connections' grants there.
   At each refresh, the server checks the person's memberships in WorkOS and removes the
-  organizations they left. The workers delete a connection 30 days after its last refresh token
+  organizations they left. A daily job deletes a connection 30 days after its last refresh token
   lapsed. Every request reads the connection, its grants and the person's again.
 - **The organization of a request.** A connection's request names its tenant with the header
   `Rewind-Organization` (400 without it on the tenant's data; 403 for an organization the
@@ -487,7 +536,7 @@ endpoint: require(permission), then the grant's labels on what it touches ◄─
 | `secrets:read` | List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids | yes | yes | | yes |
 | `secrets:write` | Put and delete secrets | yes | yes | | |
 | `secrets:use` | Attach an organization's secret to a run or a workflow ([attaching](04-tools.md#secrets)) | yes | yes | | |
-| `tasks:work` | Claim host-tool tasks, heartbeat, defer, complete, fail | yes | yes | yes | |
+| `tasks:work` | Receive host-tool tasks on a task stream, defer, complete, fail | yes | yes | yes | |
 | `tasks:approve` | Approve or reject a parked task | yes | yes | | |
 | `subscriptions:read` | List the lifecycle webhooks | yes | yes | | yes |
 | `subscriptions:write` | Create and delete them | yes | yes | | |
@@ -510,15 +559,15 @@ holds all rights on its namespaces, and there is no grant per namespace.
 Rules, enforced by the server:
 
 - **Labels.** A grant limited to labels sees only the runs carrying all of them: other runs are
-  missing (404), the read model's lists filter them, and what the principal creates (runs,
-  subscriptions) gets them; a contradicting label is refused (403). With `tasks:work`, it claims
+  missing (404), lists filter them, and what the principal creates (runs,
+  subscriptions) gets them; a contradicting label is refused (403). With `tasks:work`, it receives
   only the host-tool tasks of the runs carrying them, and the token of another run's task is
   answered as a task that no longer exists (410): one tenant's environments (`env=dev`,
   `env=prod`) each run their own worker, though they register the same content-addressed
   toolset. It sees, writes and attaches only the organization's secrets carrying all its labels,
   and the secrets it writes get them. It reads and attaches a namespace's secrets as any grant
   does, and never writes one (403): a namespace's secret serves the end user's runs whatever
-  their labels. The same holds for a token limited to labels. Such a grant cannot read tool statistics, nor use the permissions
+  their labels. The same holds for a token limited to labels. Such a grant cannot read statistics ([05](05-testing-and-observability.md#statistics)), nor use the permissions
   `members:invite`, `members:manage`, `roles:write`, `api_keys:*` and `organization:write` (403).
 - **Workflows.** A workflow saved under a grant limited to labels carries those labels, as part
   of the version: the same workflow saved under other labels, or tenant-wide, is another version,
@@ -564,34 +613,36 @@ Active runs are never touched. Defaults, configurable per tenant:
 
 | Data | Kept |
 | --- | --- |
-| A finished run's journal | 30 days in Postgres (or Turso). Then archived to S3 as a [journal document](02-journal.md#stored-format-v1) for 1 year, and loaded on demand |
-| The read model | 90 days |
-| Payloads | As long as a run's journal, live or archived, references them; deleted 24 h after the last reference is gone |
+| An ended run: its summary, its sealed journals and its payloads | 1 year after it ended. The summary stays in its partition's index; each attempt's [journal document](02-journal.md#stored-format-v1) is in the archive, loaded on demand |
 | An end user's opaque token | Until 24 h after it expired or was revoked; a namespace's erasure revokes its tokens |
 | A test | As long as a workflow version references it; one no version references is deleted 24 h after it was stored. A recorded test outlives its run, and is erased with its namespace |
 
-- `DELETE /v1/runs/{id}` erases a run at any time: its journal, its archive, its read model
-  rows, its payload references and its count in `namespace_scripts`. Tool
-  arguments can hold personal data.
+- **Sealing.** When an attempt ends, the sealer writes its journal to the archive, every payload
+  up to 64 KiB inlined, then deletes the attempt's history, inbox, tasks, payload records and
+  signal keys from the partition, in a later batch. The run's head and summary stay in the index.
+  Until the seal is durable, the run is read from its partition; after it, from the archive. A
+  sealed journal never changes, and every process caches it.
+- **Retention is a timer.** The batch that seals a run writes the timer of its retention's end.
+  When it fires, the owner erases the run.
+- `DELETE /v1/runs/{id}` erases a run at any time: its sealed journals and its blobs (the run's
+  prefix in the archive), then its records, summary and counts in its partition, in one batch.
+  Tool arguments can hold personal data.
 - `DELETE /v1/namespaces/{name}` erases an end user and answers 202. The namespace stops taking
-  runs and tokens (409 `namespace-deleting`); its tokens are revoked and its active runs
-  cancelled through the normal path; then, in the background, its runs are erased as `DELETE
-  /v1/runs/{id}` erases one, then the tests recorded from them, then its secrets and their
-  reads, its usage and alerts, and the namespace. A version keeps the digest of an erased test in its document;
-  the next version's gate leaves the test out
-  ([suites](05-testing-and-observability.md#suites-and-the-gate)). The
-  tenant's own usage row keeps what the namespace consumed: deleting an end user gives nothing
-  back to the tenant's ceiling.
-- A `payload_refs` table, filled at commit, records which runs reference a payload. Cleanup
-  deletes the payloads that no run has referenced for 24 h, per tenant.
-- Tests and payloads share the `BlobStore`'s keys, by digest: the cleanup of payloads keeps a
-  blob that a `tests` row holds, and the cleanup of tests one that a `payloads` row holds.
-- A blob delete cannot be undone or fenced, so no commit may count on a blob being deleted. A
-  large payload's row is reserved before its blob is written, which restarts its grace; cleanup
-  marks a row, deletes its blob, then the row. A payload whose deletion has started is
-  committed with its value in its row instead ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
-- A finished run is archived only once the projector has applied all its feed items: the read
-  model, the traces and the webhooks read its history until then.
+  runs and tokens (409 `namespace-deleting`), and its tokens are revoked. The change reaches the
+  owner of its partition, which cancels its active runs through the normal path and erases its
+  ended runs as `DELETE /v1/runs/{id}` erases one; once the partition holds nothing of the
+  namespace, the control plane erases the tests recorded from it, its secrets and their reads, and
+  the namespace. A version keeps the digest of an erased test in its document; the next version's
+  gate leaves the test out ([suites](05-testing-and-observability.md#suites-and-the-gate)). The
+  tenant's own counts keep what the namespace consumed: deleting an end user gives nothing back to
+  the tenant's ceiling.
+- Payloads go with their run, so nothing looks for payloads no run references.
+- Tests are blobs of the `BlobStore` under the tenant. A test's row is reserved before its blob
+  is written; the daily cleanup marks the rows no version references, deletes their blobs, then
+  removes the rows still marked
+  ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
+- Daily jobs of the control plane, scheduled once a day: the tokens and connections to delete, the
+  tests no version references.
 
 ## Security
 
@@ -604,7 +655,7 @@ A run's seed keys its random generators, `crypto` included. It is protected like
 payloads.
 
 A deployed server also sends requests where a tenant says: to its MCP servers and APIs (from the
-API role at registration, from the workers at each call) and to its lifecycle webhooks. None goes
+edge at registration, from the node of the run's partition at each call) and to its lifecycle webhooks. None goes
 to the internal network: all go through the egress checks of the `http` tool, a name resolved
 once, private, loopback, link-local and metadata addresses refused, the connection to the
 checked address ([MCP servers and APIs](04-tools.md#where-mcp-servers-and-apis-may-be)). Only the
@@ -619,29 +670,33 @@ signed with the tenant's Ed25519 key, whose public part anyone reads at
 `{public-url}/organizations/{tenant}/jwks.json`. One tenant's key never signs for another, and a
 JWT names its audience: a server that receives one cannot replay it against another.
 
-### Sandboxed workers
+### Sandboxed nodes
 
-A V8 isolate is not a hard boundary against V8 vulnerabilities. Only workers run code
-written by a model, so only workers are sandboxed.
+A V8 isolate is not a hard boundary against V8 vulnerabilities. Every node may run code written by
+a model, so every node is sandboxed.
 
-The same binary takes a role at start:
+The same binary runs every process. Options at start change what a node takes on:
 
-| Role | Runs | V8 |
+| Start | Runs | V8 |
 | --- | --- | --- |
-| `rewind server --role api` | HTTP API, authentication, SSE | No |
-| `rewind server --role worker` | V8, dispatcher, scheduler, projector | Yes |
+| `rewind server` | The HTTP edge, the owners of its partitions, the organization actors homed there, executors | Yes |
+| `rewind server --executors-only` | Executors only: activations sent by owners, for the epochs of its build | Yes |
+| `rewind server --pool <name>` | A tenant's own pool: the owners send that tenant's activations there | Yes |
 
-- Workers run under gVisor (`runsc`). A sandbox runs its own network stack: it takes over the
+- Nodes run under gVisor (`runsc`). A sandbox runs its own network stack: it takes over the
   network namespace it starts in, and reaches no DNS server on the host's loopback, such as
-  Docker's: a worker's DNS server stands on its network.
-- They run in pools per tenant when needed. Trusted tenants share a pool.
-- They reach the outside only through the egress proxy, and have no route to the cloud
+  Docker's: a node's DNS server stands on its network.
+- A tenant that needs it gets its own pool of executors. Trusted tenants share the default pool.
+- Nodes reach the outside only through the egress proxy, and have no route to the cloud
   metadata endpoint ([egress](04-tools.md#the-http-tool-and-egress)).
 - Their container has a memory limit. The sandbox bounds each instance's heap and array
   buffers, but V8 runs some built-ins to their end once the limit is reached, and aborts the
   process on a few results too large for it
-  ([limits](03-execution.md#resource-limits)): the container bounds what is left.
-- After an upgrade of V8 or ICU, a worker pool of the previous
-  [epoch](03-execution.md#determinism-epoch) stays up until its runs end, at their TTL.
+  ([limits](03-execution.md#resource-limits)): the container bounds what is left. A node that
+  aborts loses nothing: another owner takes its partitions over, and the run whose activation
+  killed it is quarantined once it has done so five times.
+- After an upgrade of V8 or ICU, a few nodes of the previous build stay up with
+  `--executors-only` for the runs of the previous [epoch](03-execution.md#determinism-epoch),
+  until those runs end, at their TTL.
 
 Three walls stand between two tenants: V8, gVisor, and separate pools.

@@ -9,7 +9,7 @@ A toolset has four kinds of tools:
 | MCP tools | The dispatcher of Rewind, an MCP client (`rmcp`, stdio or streamable HTTP) | Every tool of the toolset's MCP servers |
 | API tools | The dispatcher of Rewind, an HTTP client | Every operation of the toolset's APIs, each described by an OpenAPI document ([API tools](#api-tools)) |
 | Built-ins: `http`, `webhook`; `workflows.<name>.start` and `workflows.<name>.signal` for each workflow the toolset pins | The dispatcher of Rewind; the engine itself for `webhook` and the workflows' | `http` is the only way a script reaches the network ([egress](#the-http-tool-and-egress)); `webhook(name)` returns a URL bound to the run and the signal name ([signals](01-product.md#signals)); the workflows' start and signal runs of [workflows](03-execution.md#workflows-across-runs), in the namespace of the run that calls them |
-| Host tools | The harness's SDK worker, which long-polls `GET /v1/tasks`; each task names the namespace of its run, the end user the handler acts for. A worker claims the tasks of the runs its key or token sees: an end user's namespace, a grant's labels ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)) | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent. A customer's backend that pulls its calls instead of receiving them, as an API's are: nothing reaches it from outside, and it needs no signature to check (Dax) |
+| Host tools | The harness's SDK worker, which holds a task stream open (`GET /v1/tasks/stream`) and is handed the tasks as they become ready; each task names the namespace of its run, the end user the handler acts for. A worker is handed only the tasks of the runs its key or token sees: an end user's namespace, a grant's labels ([access](06-storage-and-scale.md#tenancy-namespaces-identity-and-access)) | Functions that live in the harness: ask the end user, call another LLM, start a sub-agent. A customer's backend that pulls its calls instead of receiving them, as an API's are: nothing reaches it from outside, and it needs no signature to check (Dax) |
 
 Rewind calls MCP tools, API tools and built-ins directly. Their results go back to the script,
 never to the agent. The harness is on the path only for its host tools, and they are optional: a
@@ -30,9 +30,10 @@ A host tool can last days. The most complete case, a host tool that outlasts the
 `wait`:
 
 1. The agent starts the run with `POST /v1/runs` and `wait=30s`. The script calls `ask_user`.
-2. The harness's worker long-polls `GET /v1/tasks?tools=ask_user` and gets the task, a token
-   and the idempotency key.
-3. While it works, it sends `POST /v1/tasks/{token}/heartbeat`.
+2. The harness's worker holds `GET /v1/tasks/stream?tools=ask_user` open, and is handed the
+   task on it, with a token and the idempotency key.
+3. While it works, its stream stays open: the open stream is the liveness of every task handed
+   on it.
 4. After 30 s, the agent gets `suspended`, waiting for `ask_user`.
 5. When it has the answer, even days later, the worker sends
    `POST /v1/tasks/{token}/complete`. The completion goes to the run's inbox, the run resumes
@@ -41,17 +42,26 @@ A host tool can last days. The most complete case, a host tool that outlasts the
 ## Tool task lifecycle
 
 Each `schedule_tool_call` creates a **tool task**, executed outside the isolate. Attempts,
-backoff, leases, approvals and tokens live in the tool task, not in the journal. The journal
-only gets the final outcome.
+backoff, approvals and tokens live in the tool task, kept with its run in the run's partition,
+not in the journal. The journal only gets the final outcome.
+
+The task is created in the batch that commits its call, and nothing is sent before that batch
+is durable. Then the run's owner sends it on its way. An MCP or API call waits for a slot: the
+owner checks the per-run limit itself, and asks the tenant's organization actor for a slot of
+the server's or the API's limit, which is the organization's ([policies](#policies)); with the
+slot, the owner's node sends the call. A host tool's task goes to the organization actor,
+which hands it to an SDK worker's open stream with a free slot, each hand-out with a token of
+its own ([inside a node](07-code-architecture.md#inside-a-node)). The token names the run, so
+an answer reaches the run's owner from whichever process receives it.
 
 One state machine covers every route:
 
 | State | The task | Leaves it |
 | --- | --- | --- |
 | `approval` | Waits for the harness. Only with the `approval` policy | approve → `ready`; reject → `done`, the call fails with a `ToolError` |
-| `ready` | Can be claimed once `next_attempt_at ≤ now` and a concurrency slot is free | claim → `claimed` |
-| `claimed` | Attempt n, under a lease kept alive by heartbeats | See the next table |
-| `deferred` | Holds a token until the handler answers | `/complete` or `/fail` → `done`; a timeout, bounded by the run's TTL → `done` |
+| `ready` | Waits for its next attempt (`next_attempt_at`, a timer after a backoff) and a concurrency slot | sent or handed out → `claimed` |
+| `claimed` | Attempt n, in flight: sent by the owner's node, or handed to an SDK worker's stream | See the next table |
+| `deferred` | Holds a token until the handler answers | `/complete` or `/fail` → `done`; a timeout, bounded by the run's TTL and kept as a timer of the run's partition → `done` |
 | `parked` | Waits for the harness after a schema change, a refused call or a missing secret | continue, or the secret put again → `ready`; cancel → `done` |
 | `done` | Its completion is in the run's inbox: a result, a failure, or `outcomeUnknown` | |
 
@@ -61,7 +71,7 @@ From `claimed`:
 | --- | --- |
 | The tool answered | `done`, with its result or its failure |
 | Transient failure | `ready` with backoff (policy `retry`); `done` with the failure (`at_most_once`) |
-| The claim expired: the dispatcher or the worker died mid-call | `ready` with attempt + 1, up to 5 attempts, then `done` with `outcomeUnknown` (policy `retry`); `done` with `outcomeUnknown` at once (`at_most_once`) |
+| The call was interrupted: the node that sent it died, or the SDK worker's stream closed and did not come back within its grace (`previous_claim_expired` on the next hand-out) | `ready` with attempt + 1, up to 5 attempts, then `done` with `outcomeUnknown` (policy `retry`); `done` with `outcomeUnknown` at once (`at_most_once`) |
 | The handler answers later | `deferred` |
 | The schema changed at dispatch | `parked`, and the harness gets the webhook `tool.schema_changed` ([toolset change](#when-a-toolset-changes-during-a-run)) |
 | The server answered 401 | `parked`, and the harness gets the webhook `credentials.expired` with the reason `refused` ([authenticating calls](#authenticating-calls)) |
@@ -70,8 +80,22 @@ From `claimed`:
 The harness answers a task in `approval`, and a task `parked` by a schema change or a refused
 call, with `POST /v1/tasks/{id}/approve` (→ `ready`) or `POST /v1/tasks/{id}/reject` (→ `done`,
 the call fails with a `ToolError`). Putting a secret again makes `ready` the tasks parked by a
-refusal or a missing secret in the runs that attach it. A run with a task in `approval` or `parked` is suspended, and its
-state says which call waits.
+refusal or a missing secret in the runs that attach it: the write is a change of the control
+plane, which every owner receives and applies to its runs. A run with a task in `approval` or
+`parked` is suspended, and its state says which call waits.
+
+Sending a call or handing out a task writes nothing: the task's records say `ready` while it
+is in flight, and only the owner's memory knows it left. What is written is what happened to
+it: its creation, a backoff, an interruption, its outcome. Nothing is written while a task is in
+flight either: no heartbeat, no renewal.
+
+A call is interrupted when the node that sent it dies. The node that takes the partition over
+cannot know which of the run's `ready` tasks had left, so it treats each as interrupted: under
+`retry` it sends it again with attempt + 1, written in its recovery batch; under
+`at_most_once` it fails it with `outcomeUnknown`. A host task is interrupted when the stream it
+was handed on closes. The organization actor waits for that worker to open a stream again, for
+the policy's grace, and then the owner writes attempt + 1 and the actor hands the task to
+another worker, or the owner fails it under `at_most_once`.
 
 When a run ends, its tasks are deleted: a call still queued is never sent. Results arriving
 for a run that already ended are dropped.
@@ -88,10 +112,10 @@ registers the toolset.
 | After an interruption | `retry` or `at_most_once` | `retry`; for an API operation `POST` or `PATCH`, `at_most_once` unless it declares an `Idempotency-Key` header ([API tools](#api-tools)) |
 | `approval` | The task waits for the harness before it is sent | Off |
 | Execution timeout | A duration | 5 min for MCP and API tools |
-| Heartbeat timeout | A duration | 60 s for host tools |
-| Concurrency | Calls in flight | 16 per run; 8 per MCP server or API on each worker |
+| Grace after a stream closes | A duration: how long a host task handed on a closed stream waits for its worker to come back | 60 s for host tools |
+| Concurrency | Calls in flight | 16 per run; 8 per MCP server or API in the organization |
 
-| Policy | On transient error | Claim expired (outcome unknown) |
+| Policy | On transient error | Interrupted (outcome unknown) |
 | --- | --- | --- |
 | `retry` | Retry with backoff | Retry with the same idempotency key, up to 5 attempts, then fail with `outcomeUnknown: true` |
 | `at_most_once` | Fail | Fail with `outcomeUnknown: true` |
@@ -103,7 +127,10 @@ declared `at_most_once` in the toolset.
 The `approval` policy lets the harness keep its permission gates: a script cannot call such a
 tool without the harness's consent.
 
-Concurrency limits are invisible to the journal: a task waiting for a slot stays `ready`.
+Concurrency limits are invisible to the journal: a task waiting for a slot stays `ready`. The
+limit per run is kept by the run's owner. The limit of a server or an API holds across the
+organization: its slots belong to the tenant's organization actor, which grants them in the
+order they are asked for.
 
 The script sees failures as a thrown `ToolError` and decides what to do.
 
@@ -208,7 +235,7 @@ A toolset names its APIs in `apis`, each with:
 | `baseUrl` | Where the calls go: the document's first `servers[]` unless given. `https`, or `http` on the embedded server |
 | `auth` | How its calls prove who calls ([authenticating calls](#authenticating-calls)); the document's security requirement when left out |
 | `operations` | Optional: the `operationId`s to keep, for an API too large for the prompt |
-| `concurrency` | Its calls in flight on each worker, 8 by default |
+| `concurrency` | Its calls in flight across the organization, 8 by default |
 
 From the document:
 
@@ -354,7 +381,7 @@ of the customer, and the server learns the end user from a signature, not from a
 
 - **The key.** Ed25519, one per tenant, made with the first toolset that needs it; its private
   part is encrypted in the `SecretStore` with the tenant's data key, as its secrets are. No key
-  per namespace: every private key would sit in the same store, read by the same workers, and
+  per namespace: every private key would sit in the same store, read by the same nodes, and
   `sub` comes from the run, never from the script. `POST
   /v1/organization/signing-keys` replaces it: the old key stops signing and stays published for
   24 hours.
@@ -410,13 +437,13 @@ Each request goes through these steps, in order:
 6. The response is bounded to 5 MB and 30 s.
 
 A refused request fails with a `ToolError`. In production, egress also goes through an
-egress proxy ([sandboxed workers](06-storage-and-scale.md#sandboxed-workers)).
+egress proxy ([sandboxed workers](06-storage-and-scale.md#sandboxed-nodes)).
 
 ### Where MCP servers and APIs may be
 
-A tenant names the URLs of its MCP servers and APIs, and Rewind connects to them: the API role at
-registration, to list an MCP server's tools or read an OpenAPI document, and the workers at each
-call. On a deployed server, these connections go through the egress checks of the `http` tool,
+A tenant names the URLs of its MCP servers and APIs, and Rewind connects to them: the edge at
+registration, to list an MCP server's tools or read an OpenAPI document, and the node of the run's
+owner at each call. On a deployed server, these connections go through the egress checks of the `http` tool,
 at registration and at every connection:
 
 1. The name is resolved once.

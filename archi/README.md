@@ -26,8 +26,8 @@ own side channel: traces, metrics about runs, and the dashboard are projections 
 | [03-execution.md](03-execution.md) | Activations, logical time, replay, sticky execution, forks, determinism epoch and quarantine, how a script ends, signals, cancellation, run TTL, limits |
 | [04-tools.md](04-tools.md) | Tool routes, idempotency, the tool task lifecycle, policies, toolsets, code generation, observed result types, API tools from OpenAPI documents, authenticating calls (secrets attached to runs, calls signed with the tenant's key), egress of the `http` tool, MCP servers and APIs, type-checking |
 | [05-testing-and-observability.md](05-testing-and-observability.md) | Mocks, cassettes, scenarios, replay and forks, evals; OpenTelemetry, read model and dashboard as projections of the journal |
-| [06-storage-and-scale.md](06-storage-and-scale.md) | Tables, leases and fencing, idempotency of the API, payload tiers, scaling path, tenancy and authentication, retention, security and sandboxed workers |
-| [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, the HTTP API `/v1`, the embedded server and the CLI |
+| [06-storage-and-scale.md](06-storage-and-scale.md) | The control plane and the run plane, partitions, owners and nodes, idempotency of the API, payload tiers, tenancy and authentication, quotas, retention, security and sandboxed nodes |
+| [07-code-architecture.md](07-code-architecture.md) | Crate layering, ports, boundary representations, dependency rules, the actors inside a node, the HTTP API `/v1`, the embedded server and the CLI |
 | [08-decisions.md](08-decisions.md) | Every decision taken so far, who took it, and why |
 | [09-roadmap.md](09-roadmap.md) | Plan for 0.1: current state of the code, contracts, workstreams, designs settled, what is out of 0.1, acceptance criteria |
 

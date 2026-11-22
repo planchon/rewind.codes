@@ -233,10 +233,11 @@ and the Collector's unfinished last line is left out. The gate's run of November
 | Access and identity: the catalog of permissions and the built-in roles, `AccessStore`, `IdentityProvider`, `/auth` | [06](06-storage-and-scale.md#tenancy-namespaces-identity-and-access), [07](07-code-architecture.md#sign-in-auth) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, the conformance of `AccessStore`) | The stores, `rewind-workos`, `rewind-server`, the dashboard |
 | Namespaces: their quotas, usage and alerts, end users' tokens and token keys, credentials per namespace, `Rewind-Namespace` | [06](06-storage-and-scale.md#namespaces), [07](07-code-architecture.md#ports) | `rewind-api`, `rewind-engine` (ports, in-memory adapters, conformance) | The stores, `rewind-runtime`, `rewind-server`, the CLI, the SDK, the dashboard |
 | Connections and MCP: the connection's tables, grants and tokens, `Rewind-Organization`, `/mcp`, `/oauth`, the tools' definitions | [06](06-storage-and-scale.md#connections), [07](07-code-architecture.md#mcp-and-oauth) | `rewind-api`, `rewind-engine` (`AccessStore`), `rewind-agent-tools` | The stores, `rewind-server`, `rewind-mcp-server`, the CLI, the evals, the dashboard |
+| The run plane: `CatalogStore`, `PartitionStore`, `RunArchive`, `Cluster`, `NodeLink`, the partition records, the actors' messages, the task stream, statistics from counters | [06](06-storage-and-scale.md#partitions-owners-and-nodes), [07](07-code-architecture.md#ports), [07](07-code-architecture.md#inside-a-node), [02](02-journal.md#stored-format-v1) | `rewind-core` (`PartitionId`, run ids), `rewind-engine` (ports, actors, in-memory adapters, conformance), `rewind-format` | `rewind-store-slatedb`, the stores, `rewind-blob`, `rewind-server`, the CLI, the SDK, the dashboard, the e2e corpus |
 
 Each contract is reviewed by the owner, with diagrams, before the code that depends on it.
 The seven were approved in November 2026, access and identity and namespaces on the 14th,
-connections and MCP on the 19th.
+connections and MCP on the 19th, the run plane on the 22nd.
 
 ## Workstreams
 
@@ -258,6 +259,22 @@ connections and MCP on the 19th.
 | Evals | `evals` | Tasks; deterministic fake MCP servers; the loop generate → check → run → fix; reports per model | HTTP API `/v1`, pinned toolset, sandbox lib |
 | Claude as a harness | `rewind-agent-tools`, `rewind-mcp-server`, `rewind-server`, the stores, `rewind-cli`, `dashboard` | Designed and built on 19 November 2026: the connections in `AccessStore` and both stores, their `/v1` endpoints, `Rewind-Organization`, the OAuth authorization server, `rewind-agent-tools`, `rewind-mcp-server`, `/mcp`, `rewind mcp`, the dashboard's pages and the docs. Remains: a connection made from claude.ai and Claude Code against a deployment | Connections and MCP, HTTP API `/v1`, access and identity, namespaces |
 | Operations | `Dockerfile`, `deploy/`, CI, `rewind-load` | Setting WorkOS's variables on Railway's api service, and deploying the dashboard with its `/auth` rewrite | Engine ports, HTTP API `/v1`, access and identity |
+
+### The run plane on object storage (designed 22 November 2026)
+
+The code runs runs on the stores of the previous design (Postgres or Turso, leases, claims, the
+feed, the read model, the worker's loops) until these workstreams land together on `main`. Each
+ends with its suites green.
+
+| Workstream | Crates | What it builds | Depends on |
+| --- | --- | --- | --- |
+| WS0 contracts | `rewind-core`, `rewind-engine` (ports), `rewind-format` | `PartitionId` and run ids; the ports `CatalogStore`, `PartitionStore`, `RunArchive`, `Cluster`, `NodeLink` with their in-memory adapters and conformance suites; the partition records | The run plane contract |
+| WS1 partitions | `rewind-store-slatedb` | `PartitionStore` on SlateDB: the key layout, the conformance suite on memory, files and MinIO; the R2 benchmark from Railway (W4) | WS0 |
+| WS2 actors | `rewind-engine` | The owner, committer, fan-out, timer wheel, registry, outbox, sealer; executors, local and remote; the call executor; the organization actor; the node; the router; the driver; the use cases moved onto them | WS0 |
+| WS3 control plane | `rewind-store-postgres`, `rewind-store-turso`, `rewind-blob` | `CatalogStore` and `Cluster` on both stores, the run tables moved to `legacy`, `NOTIFY` on every write; `RunArchive` and blobs under runs | WS0 |
+| WS4 server | `rewind-server`, `rewind-api` | One process: edge and node; the node link; the task stream; statistics from counters; the change stream from owners and `LISTEN`; `--executors-only`, `--pool`; the embedded node; `migrate-runs`; the worker's loops deleted | WS2, WS3 |
+| WS5 clients | `sdk/typescript`, `dashboard`, `rewind-cli`, `rewind-architecture-tests` | SDK 0.5.0 with the task stream; the dashboard without timers; the CLI's waits and readiness pipe; the guard against timers | WS0, then WS4's routes |
+| WS6 integration | `rewind-e2e`, `rewind-load`, `deploy/` | The corpus, the cluster tests, the release gate, the load test, the migration of staging, the deploy on Railway with R2 | Everything |
 
 ## Designs settled (November 2026)
 
@@ -285,7 +302,7 @@ specified.
   servers and APIs ([04](04-tools.md#where-mcp-servers-and-apis-may-be)).
 - **Retention and deletion** (was question 11)
   ([06](06-storage-and-scale.md#retention-and-deletion)).
-- **Sandboxed workers** ([06](06-storage-and-scale.md#sandboxed-workers)).
+- **Sandboxed workers** ([06](06-storage-and-scale.md#sandboxed-nodes)).
 - **tsgo in `rewind-check`** and the checker's own rules ([04](04-tools.md#type-checking)).
 - **The JSON Schema → TypeScript converter**: ours, in Rust
   ([04](04-tools.md#toolsets-and-code-generation)).
@@ -316,8 +333,9 @@ specified.
 - `rewind replay <run> --inspect`, which attaches the V8 inspector to step through a past run.
 - `continueAsNew`. A run that reaches the history cap (50k entries) is aborted with
   `limit_exceeded`.
-- A columnar read model. The read model lives in Postgres.
-- Sharding over several Postgres clusters.
+- An analytics engine for statistics on any query, reading the archive. Statistics come from the
+  partitions' hourly counters ([05](05-testing-and-observability.md#statistics)).
+- Moving a namespace to another partition, and splitting a partition.
 
 ## 0.1 is done when
 

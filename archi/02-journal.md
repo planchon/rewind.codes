@@ -62,8 +62,9 @@ inside the isolate). It is what links traces to code.
 
 ## The commit invariant
 
-A trigger is committed in the same transaction as every entry the script emitted in
-response to it.
+A trigger is committed in the same batch as every entry the script emitted in response to
+it. A batch is one atomic write of the run's partition, durable once its commit returns
+([partitions](06-storage-and-scale.md#partitions-owners-and-nodes)).
 
 - Starting a run only enqueues `run_started` in the inbox. The first activation commits
   it together with the first commands.
@@ -89,47 +90,51 @@ The run's state is a pure function of its history (`RunState::from_history` in
 - pending tool calls (`seq → tool`), pending timers (`seq → fire_at`), awaited signals.
 - `started_at`, `updated_at`.
 
-A terminal status clears everything pending. The store keeps a copy of the status for
+A terminal status clears everything pending. The run's head keeps a copy of the status for
 queries, but the history is authoritative.
 
 When a run ends by itself (`complete_run` or `fail_run`, without a cancellation), every
 tool call it scheduled has a recorded outcome: the terminal command is only emitted once
 no call is pending ([how a script ends](03-execution.md#how-a-script-ends)).
 
-Quarantine is not a status. Like a lease, it is service state kept by the store, outside
-the history.
+Quarantine is not a status. Like the counts of failed activations, it is service state kept
+in the run's head, outside the history.
 
 ## Stored format v1
 
 What is replayed or exported is written in the stored format, defined by `crates/rewind-format`:
-JSON, versioned `"v": 1`, every value in its canonical form. It covers six documents:
+JSON, versioned `"v": 1`, every value in its canonical form. It covers seven documents:
 
 | Document | Fields | Where it lives |
 | --- | --- | --- |
-| Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A row of `history` or `inbox` |
-| Journal document | `v`, `run` (the run id), `script` (the TypeScript source), `toolset` (the pinned toolset document), `entries[]` | Journal export, the S3 archive of a finished run, the e2e corpus |
+| Event | `type`, then the event's fields (`seq`, `tool`, `args`, `callsite`…); a payload is `{"value": …}` or `{"digest": "9f2c…"}` | A run's history or inbox, in its partition ([where data lives](06-storage-and-scale.md#where-data-lives)) |
+| Journal document | `v`, `run` (the run id), `script` (the TypeScript source), `toolset` (the pinned toolset document), `entries[]` | Journal export; the archive, where an attempt that ended is sealed with every payload up to 64 KiB inlined as a value ([retention](06-storage-and-scale.md#retention-and-deletion)); the e2e corpus |
 | Cassette | `v`, `calls[{tool, args, outcome}]`, `signals[{name, payload, elapsed_ms}]`, `matching`: `sequential` or `by_args` | A file or S3; replayed by `rewind test` ([mocks](05-testing-and-observability.md#testing-and-mocks)) |
-| Pinned toolset | `v`, `servers[{name, transport, concurrency, auth?}]`, `apis[{name, base_url, concurrency, auth?}]` when it has APIs, `tools[{name, route, operation?, description?, schemas, policy}]` (`operation`, for an API tool: `method`, `path`, its `parameters[{name, in}]`, `body` and `idempotency_key`), and `workflows[{name, version, description?, schemas}]` when it pins workflows; `auth` says how calls authenticate ([04](04-tools.md#authenticating-calls)), never with a value | The `toolsets` table; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
-| Workflow version | `v`, `name`, `description?`, `script` and `toolset` (digests), `schemas: { input, output, signals: { <name>: schema } }`; its suite: `parent?` (a version), `tests?[{name, test}]`, `retired?[{name, test, reason}]`, `updated?[{name, from, to, reason}]` (`test`, `from` and `to` are test digests), each left out when empty; `labels: { <key>: value }` when it was saved under a grant limited to labels; and `secrets: { <server>: "org/<name>" \| "ns/<name>" }`, its [attachments](04-tools.md#secrets), when it attaches any | The `workflows` table; its digest is the version ([workflows](01-product.md#workflows), [suites](05-testing-and-observability.md#suites-and-the-gate)). Without a suite, labels or attachments, the document a version had before versions carried them |
+| Pinned toolset | `v`, `servers[{name, transport, concurrency, auth?}]`, `apis[{name, base_url, concurrency, auth?}]` when it has APIs, `tools[{name, route, operation?, description?, schemas, policy}]` (`operation`, for an API tool: `method`, `path`, its `parameters[{name, in}]`, `body` and `idempotency_key`), and `workflows[{name, version, description?, schemas}]` when it pins workflows; `auth` says how calls authenticate ([04](04-tools.md#authenticating-calls)), never with a value | The `toolsets` table of the control plane; its digest is the digest of its canonical JSON ([toolsets](04-tools.md#toolsets-and-code-generation)) |
+| Workflow version | `v`, `name`, `description?`, `script` and `toolset` (digests), `schemas: { input, output, signals: { <name>: schema } }`; its suite: `parent?` (a version), `tests?[{name, test}]`, `retired?[{name, test, reason}]`, `updated?[{name, from, to, reason}]` (`test`, `from` and `to` are test digests), each left out when empty; `labels: { <key>: value }` when it was saved under a grant limited to labels; and `secrets: { <server>: "org/<name>" \| "ns/<name>" }`, its [attachments](04-tools.md#secrets), when it attaches any | The `workflows` table of the control plane; its digest is the version ([workflows](01-product.md#workflows), [suites](05-testing-and-observability.md#suites-and-the-gate)). Without a suite, labels or attachments, the document a version had before versions carried them |
 | Test | `v`, `name`, `input?`, `start?` (milliseconds), `seed?`, `world?: { tools?: { <tool>: rule \| [rule] }, mocks?, cassette? }` (a rule: `args?`, `returns` or `error`, `times?`; the cassette as above, without its `v`), `signals?[{name, payload?, when?}]`, `expect?: { status?, output?, error?, calls?[{tool, args?, times?}], order? }`, `origin?: { run, version, namespace }` | A blob in the `BlobStore`, under the digest of its canonical JSON ([tests](05-testing-and-observability.md#testing-and-mocks)) |
+| Partition records | One record per kind of thing a partition holds about its runs: the run head (status, epoch, counts, quarantine, metadata, waits, deadline, dates), an inbox item, a tool task, a timer, a summary in the run index, an outbox entry, the counters | A partition ([where data lives](06-storage-and-scale.md#where-data-lives)); the keys they are stored under belong to `rewind-store-slatedb` |
 
 A reader refuses an unknown version, type or field. Every change of the format comes with
 an explicit migration.
 
-Service state and run metadata stay out of the format. They are table columns: never
-replayed, never exported, never in a cassette.
+Service state and run metadata stay out of the events and the journal document. They live in
+the run's head and the other partition records: never replayed, never exported, never in a
+cassette.
 
 - labels, idempotency keys, the tenant, the trace context;
 - the workflow and version a run belongs to, the run that started it, the runs that watch its
   end, and the label scope it inherited ([workflows](03-execution.md#workflows-across-runs));
 - the secrets a run attached, and every secret's value;
-- quarantine, the counts of failed and started activations; lease, fence and sticky worker;
-- the feed;
+- quarantine, the counts of failed activations and of activations that never finished;
+- the outbox, and the counters;
 - a fork's link to its parent.
 
 ## Where it lives in the code
 
 - The model (`Event`, `Command`, `Completion`, `HistoryEntry`, `RunState`, `ReplayCursor`)
   is in `crates/rewind-core`. It has no serde: the core does not know how events are stored.
-- The stored form is defined by `crates/rewind-format` ([above](#stored-format-v1)).
+- The stored form is defined by `crates/rewind-format` ([above](#stored-format-v1)), the
+  partition records included. The keys they are stored under belong to
+  `crates/rewind-store-slatedb`: the engine never sees a key.
 - See [code architecture](07-code-architecture.md).

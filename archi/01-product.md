@@ -20,9 +20,12 @@ Priorities:
 
 1. **Durable workflows first.** Short "run this and give me the result" scripts are the
    same thing, started with a `wait` timeout.
-2. **Horizontal scale from day one.** Stateless workers, Postgres as the source of truth.
-   Turso, an embedded SQLite-compatible database, only for the embedded engine (CLI, local
-   dev, tests).
+2. **Horizontal scale from day one.** Compute and storage are separate. Runs live in
+   partitions on object storage (R2), each written by one node, and adding nodes adds compute.
+   Postgres holds only the control plane: organizations, keys, toolsets, workflows, secrets.
+   Turso, an embedded SQLite-compatible database, holds it for the embedded engine (CLI, local
+   dev, tests), whose partition lives in local files
+   ([partitions](06-storage-and-scale.md#partitions-owners-and-nodes)).
 3. **The journal is the only source of truth.**
 
 ## Who uses it
@@ -34,15 +37,15 @@ directory (Turso, local files), or of a remote one
 ([embedded server](07-code-architecture.md#embedded-server-and-cli)).
 
 ```
-┌──────────── agent harness ────────────┐       ┌──────────────── Rewind ────────────────┐
-│                                        │       │                                         │
-│  model ── run_script(code) ──► SDK ────┼─HTTP─►│  API server ──► Postgres (journal, …)   │
-│    ▲                            │      │       │                    ▲          S3 (payloads)
-│    └── result | "suspended" ◄───┘      │       │  workers (V8) ─────┤──► MCP servers, APIs│
-│                                        │       │  scheduler (timers)┘                    │
-│  host-tool worker ◄──── long-poll ─────┼───────│  tool dispatcher                        │
-│  (harness functions, LLM calls, …)     │       │                                         │
-└────────────────────────────────────────┘       └─────────────────────────────────────────┘
+┌──────────── agent harness ─────────────┐       ┌────────────────── Rewind ──────────────────┐
+│                                        │       │  Postgres (control plane)                  │
+│  model ── run_script(code) ──► SDK ────┼─HTTP─►│  edge ──► partition owners ──► R2: runs,   │
+│    ▲                            │      │       │             │    timer wheel     archive,  │
+│    └── result | "suspended" ◄───┘      │       │             ▼                    blobs     │
+│                                        │       │  executors (V8) ──► MCP servers, APIs      │
+│  host-tool worker ◄──── task stream ───┼───────│  organization actors (host tasks)          │
+│  (harness functions, LLM calls, …)     │       │                                            │
+└────────────────────────────────────────┘       └────────────────────────────────────────────┘
 ```
 
 1. The harness **registers a toolset**: MCP servers, APIs described by their OpenAPI documents
@@ -65,8 +68,9 @@ directory (Turso, local files), or of a remote one
    of starting a second one, and may set a `ttl` (30 days by default, see
    [execution](03-execution.md#run-ttl)). The run reads only the secrets the request attaches,
    by name, for the servers that need one ([secrets](04-tools.md#secrets)).
-4. Host tools are executed by the harness through an SDK worker (long-poll), like
-   Temporal activity workers. This is how a script calls harness functions, another
+4. Host tools are executed by the harness through an SDK worker, like Temporal activity
+   workers. The worker holds one open task stream, and Rewind pushes each task to it as soon as
+   it is ready. This is how a script calls harness functions, another
    LLM, a sub-agent, or a human. Each task says the namespace of its run, and the handler
    acts for that end user.
 5. The harness receives lifecycle webhooks (`run.completed`, `run.failed`,

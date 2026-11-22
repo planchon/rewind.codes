@@ -6,15 +6,17 @@ ports, adapters that implement them, and composition roots that wire everything.
 ## Layers
 
 ```
- entry points   rewind-cli (API client, local commands)      rewind-server (HTTP API, workers, embedded mode)
+ entry points   rewind-cli (API client, local commands)      rewind-server (edge, node, embedded mode)
                     │  composition roots: the only crates that know every adapter
                     └───────────── rewind-api (DTOs, OpenAPI, HTTP client) ─────────────┘
- ───────────────────┼─────────────────────────────────────────────────────────────────────
- adapters       rewind-runtime   rewind-store-turso   rewind-store-postgres   rewind-blob   rewind-mcp   rewind-openapi   rewind-check   rewind-otel
-                (V8)             └──────── rewind-format (stored format, v1) ────────┘       └ rewind-outbound ┘
+ ───────────────────┼─────────────────────────────────────────────────────────────────────────────
+ adapters       rewind-runtime  rewind-store-slatedb  rewind-store-turso  rewind-store-postgres  rewind-blob
+                (V8)            └──────────── rewind-format (stored format, v1) ────────────┘
+                rewind-mcp  rewind-openapi  rewind-check  rewind-otel  rewind-workos
+                └ rewind-outbound ┘
                     │  implement the ports
- ───────────────────┼─────────────────────────────────────────────────────────────────────
- application    rewind-engine     use cases + ports (traits) + in-memory adapters
+ ───────────────────┼─────────────────────────────────────────────────────────────────────────────
+ application    rewind-engine     use cases, actors, ports (traits), in-memory adapters
                     │  uses the model
  domain         rewind-core       pure model + pure logic
 ```
@@ -25,36 +27,39 @@ Dependencies only point down. Adapters never depend on each other.
 
 1. **`rewind-core` holds the domain and nothing else.** Types and pure functions: events,
    journal, determinism check (`ReplayCursor`), run state, payload identity, durations,
-   script and toolset model. No I/O, no async, no V8, **no serde**. It knows nothing about
-   storage, transport, or where time and ids come from.
+   script and toolset model, run and partition ids. No I/O, no async, no V8, **no serde**. It
+   knows nothing about storage, transport, or where time and ids come from.
 
 2. **Ports live in `rewind-engine`, and adapters implement them.** The engine holds the use
-   cases (start, activate, signal, cancel, replay, project, fork) and declares what it needs from
-   the outside world as traits. It never names Postgres, S3, V8, MCP or OpenTelemetry.
+   cases (start, activate, signal, cancel, replay, project, fork, seal, erase) and the actors
+   that run them ([inside a node](#inside-a-node)), and declares what it needs from the outside
+   world as traits. It never names Postgres, SlateDB, R2, V8, MCP or OpenTelemetry.
 
-3. **Ports follow the domain's invariants, not the tables.** "A trigger is committed
-   atomically with everything it caused" is one port method, `commit_activation`; the
-   engine doesn't coordinate four inserts. Leases and fencing are part of the port
-   contract. Every adapter of a port passes the same conformance suite.
+3. **Ports follow the domain's invariants, not the keys.** "A trigger is committed atomically
+   with everything it caused" is one port method, `PartitionLog::commit`, taking what changed;
+   the engine never composes keys. Fencing is part of the port contract. Every adapter of a port
+   passes the same conformance suite.
 
 4. **Each boundary owns its representation.** Domain types are converted at the edge and
    never leak through.
 
    | Boundary | Owner | Why it is separate |
    | --- | --- | --- |
-   | Stored format: events, journal documents, cassettes, pinned toolsets | `rewind-format`, versioned (`"v": 1`, [02](02-journal.md#stored-format-v1)) | Runs stay paused for days across deploys. The stored form must stay stable while domain types change. Migrations are explicit. |
+   | Stored format: events, journal documents, partition records, cassettes, pinned toolsets | `rewind-format`, versioned (`"v": 1`, [02](02-journal.md#stored-format-v1)) | Runs stay paused for days across deploys. The stored form must stay stable while domain types change. Migrations are explicit. |
    | HTTP / SDK | DTOs in `rewind-api` | Public contract with its own versioning (`/v1`). Shared by the server and the CLI. |
+   | Between nodes | the node link's DTOs in `rewind-server` | Internal to a deployment: every node of a deployment runs the same build, apart from the executors kept for a previous epoch, which speak the same link. |
    | JS ↔ Rust | `rewind-runtime` | Internal to the sandbox; shaped for the glue code. |
 
 5. **Core knows a payload's identity, not where it lives.** A payload is a JSON value
    identified by the digest of its canonical form; an event holds the value or only the
-   digest. Inline, in the `payloads` table or in S3, key, size and preview are the
+   digest. In the event, in the run's records or in a blob, key, size and preview are the
    adapters' business.
 
 6. **Non-determinism comes in only through ports.** Real time, ids, seeds, tool results
    and signals all come from ports. Core and runtime are deterministic, and the engine is
-   deterministic given its ports. So the engine with in-memory adapters and a virtual
-   clock is both mock mode and the test harness.
+   deterministic given its ports. Its actors are state machines that the driver steps one
+   message at a time, so the engine with in-memory adapters and a virtual clock is both mock
+   mode and the test harness.
 
 7. **The runtime only executes.** `rewind-runtime` takes a script and a start, receives
    deliveries, and returns the emitted events. It knows nothing about history, replay,
@@ -63,53 +68,76 @@ Dependencies only point down. Adapters never depend on each other.
    `ScriptExecutor` port; the engine never handles a V8 type.
 
 8. **Errors don't cross boundaries raw.** Each crate has its own error type. Adapters
-   convert turso, sqlx, S3 and deno errors into port errors. No `anyhow` in libraries.
+   convert turso, sqlx, SlateDB, object store and deno errors into port errors. No `anyhow` in
+   libraries.
 
 9. **Tooling enforces the boundaries, not discipline.** A test crate reads
    `cargo metadata` and asserts the dependency rules below.
 
 10. **The journal is the record; telemetry and dashboards are projections.** What a
-    script did (OTel spans, the read model behind the dashboard, SSE) is projected from
+    script did (OTel spans, the run index behind the dashboard, SSE) is derived from
     committed entries, never emitted from the isolate, from the runtime, or during
     replay. The platform's own behavior goes through the `tracing` facade in the engine
     and the adapters. OpenTelemetry lives only in `rewind-otel`, installed by the
     composition roots. `rewind-core` has no telemetry. Details in
     [05](05-testing-and-observability.md#observability).
 
+11. **Nothing polls.** A component waits on one channel and wakes when a message arrives. The
+    only timers are the timer wheel, the backoff of a retry after an error, and a few clocks that
+    read no store (the embedded server's idle stop, the metrics export, the dashboard's session
+    refresh, the daily jobs). `rewind-architecture-tests` refuses `tokio::time::interval` and
+    `sleep` anywhere else, and the dashboard's lint refuses `refetchInterval`
+    ([decided](08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)).
+
 ## Ports
 
 All ports are declared in `rewind-engine` (`crates/rewind-engine/src/ports/`), each with an in-memory
 adapter in `rewind-engine` that is the reference implementation of its contract. The ports with
-state, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel` and `SecretStore`, and `SpanExporter` and
-`WebhookSender` have a conformance suite in `rewind-engine` (feature `conformance`, modules
-`conformance::journal`, `::access`, `::blobs`, `::read_model`, `::secrets`, `::spans`, `::webhooks`), and
-every adapter of the port passes it. `SpanExporter` and `WebhookSender` have no read side: their
-suites read the backend through a collector or a receiver the adapter's test provides (the
-receiver of the HTTP sender checks each signature). The contracts of the other ports are not
-observable through the port alone (the egress rules, an identity provider): their adapters test them.
+state, `CatalogStore`, `PartitionStore`, `RunArchive`, `Cluster`, `AccessStore`, `BlobStore` and
+`SecretStore`, and `SpanExporter` and `WebhookSender` have a conformance suite in `rewind-engine`
+(feature `conformance`, modules `conformance::catalog`, `::partition`, `::archive`, `::cluster`,
+`::access`, `::blobs`, `::secrets`, `::spans`, `::webhooks`), and every adapter of the port passes
+it. `SpanExporter` and `WebhookSender` have no read side: their suites read the backend through a
+collector or a receiver the adapter's test provides (the receiver of the HTTP sender checks each
+signature). The contracts of the other ports are not observable through the port alone (the egress
+rules, an identity provider, the node link): their adapters test them.
 
 | Port | Responsibility | Adapters |
 | --- | --- | --- |
-| `JournalStore` | Scripts, toolsets and workflow versions by digest, the index of tests and the suite of each version; runs and who watches their end, history, inbox, timers, tool tasks; leases, heartbeats and fencing; `commit_activation`; failure counts and quarantine; the feed; webhook tokens; tenants, namespaces, their quotas, usage and alerts; sticky affinity; payload metadata and references; retention | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `CatalogStore` | The control plane's catalog: scripts, toolsets and workflow versions by digest, the index of tests and the suite of each version; tenants; namespaces, with their partition, display name, exceptions and erasure; subscriptions | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
+| `PartitionStore` | One partition of the run plane, with one writer: runs and their heads, history per attempt, inbox, signal keys, tool tasks, timers, payloads, watchers, webhook tokens; the run index and summaries; start keys; counters; the outbox; the states of the organizations homed there; fencing | memory (engine), `rewind-store-slatedb` |
+| `RunArchive` | The sealed journal of each ended attempt, and the erasure of a run's objects | memory (engine), `rewind-blob` (files, S3) |
+| `Cluster` | The nodes alive, the partition map and its epochs, a node's liveness, and the changes of the control plane | memory (engine), `rewind-store-turso` (one node), `rewind-store-postgres` |
+| `NodeLink` | Requests, subscriptions and activations sent to another node | in process (engine), HTTP/2 (`rewind-server`) |
 | `AccessStore` | Who may do what: API keys, the tenants' roles, grants, each tenant's default role; end users' tokens and the keys that sign them | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `IdentityProvider` | Who someone is: sign-in, sessions and access tokens, users, organizations, memberships, invitations, the waitlist. Never what they may do | memory (engine), `rewind-workos` (WorkOS) |
-| `BlobStore` | Large payload values by digest, per tenant; deletion for cleanup | memory (engine), `rewind-blob` (files, S3) |
+| `BlobStore` | Payload values above 64 KiB under their run, test documents under their tenant; deletion of a run's blobs | memory (engine), `rewind-blob` (files, S3) |
 | `ScriptExecutor` / `ScriptInstance` | Start a script, deliver completions, report emitted events and the outcome | `rewind-runtime` (V8); a fake in engine tests |
 | `ToolDispatcher` | Execute a tool call with its idempotency key and its authentication: a secret, or the tenant's signing key | static responses and cassettes (engine, mock mode); TypeScript mocks (`rewind-runtime`, in a separate isolate); `rewind-mcp` (MCP servers, built-ins `http` and `webhook`); `rewind-openapi` (APIs) |
 | `TypeChecker` | Type-check a script against the sandbox lib and a toolset's declarations | static (engine), `rewind-check` (tsgo) |
-| `ReadModel` | Projections for questions across runs | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `SpanExporter` | Export spans derived from committed entries | memory (engine), `rewind-otel` (OpenTelemetry) |
 | `SecretStore` | Named secrets of the organization and of each namespace, their metadata and reads, and each tenant's signing keys; values and private keys encrypted at rest | memory (engine), `rewind-store-turso`, `rewind-store-postgres` |
 | `WebhookSender` | Lifecycle events to the harness's subscriptions | memory (engine), HTTP (`rewind-server`) |
 | `Clock` | Current time | system clock, virtual clock |
 | `Entropy` | Run ids and seeds | system (uuid v7 / random), deterministic (tests) |
 
-Host tools have no dispatcher: their tasks stay in the `JournalStore`, and the harness's
-SDK worker claims them through `GET /v1/tasks` ([routes](04-tools.md#routes)).
+Host tools have no dispatcher: the organization actor hands their tasks to the harness's SDK
+worker over its task stream (`GET /v1/tasks/stream`, [routes](04-tools.md#routes)).
 
-### `JournalStore`
+Every store method is scoped by the tenant: a run (`RunRef { tenant, id }`), a script, a toolset, a
+payload or a task of one tenant is never visible to another. Run ids are unique across tenants.
+Stores never read a clock: every method that depends on time takes `now`. Tokens (tool tasks,
+webhooks) are the only values a store draws from a CSPRNG. Text a store keeps never holds a NUL
+character (U+0000), which Postgres refuses: the engine refuses it at its entry points
+(`NulCharacter`), and values are JSON, where it is escaped
+([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
+A key looked up with a NUL character matches nothing, and never reaches a store: a token or an id
+is not found, and a filter is refused with 400
+([decided](08-decisions.md#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)).
 
-Methods (declared in `crates/rewind-engine/src/ports/journal/mod.rs`):
+### `CatalogStore`
+
+Methods (declared in `crates/rewind-engine/src/ports/catalog.rs`):
 
 ```
 put_script(tenant, script, compiled) / get_script(tenant, digest)
@@ -120,201 +148,153 @@ latest_workflows(WorkflowFilter { tenant, labels, after, limit })
 reserve_tests(tenant, [TestRecord { digest, namespace?, size }], now) -> [digest being deleted]
 get_test(tenant, digest) -> TestRecord    namespace_tests(tenant, namespace, limit) -> [digest]
 unreferenced_tests(now, limit) -> [(tenant, digest)]    drop_tests([(tenant, digest)], erased) -> count
-create_run(NewRun { run: (tenant, id), namespace, started, metadata, created_at }, key?)
-    -> Created { run, created } | QuotaExceeded { quota, scope, limit, used, resets_at } | NamespaceDeleting
-watch_run(run, watcher, seq) -> Watched { ended }
-enqueue(run, completion, key?, now) -> Accepted | Duplicate | RunEnded
-get_run(run)                       list_runs(RunFilter { tenant, namespace, status, labels, quarantined, after, limit })
-acquire_runnable(AcquireRunnable { owner, epochs, tenants, now, lease_duration, sticky_grace, draw }) -> Lease { run, fence }
-acquire_run(run, owner, now, lease_duration) -> Lease   # any run that has not ended, quarantined or not
-acquire_quarantined(owner, build, epochs, tenants, now, lease_duration) -> Lease   # each quarantined run once per build
-renew(lease, now, lease_duration)
-load_history(run, from)            take_inbox(lease)
-commit_activation(lease, Activation { entries, consumed, payloads, tool_calls, timers, cancelled_timers, status }, now)
-release(lease)                     forget_sticky(run, owner)
-record_failure(lease, error, now) -> Failures { count, quarantined }
-quarantine(lease, kind, reason, now)   release_quarantine(run)
-fire_due_timers(now, limit)        next_timer()
-expire_due_runs(now, limit) -> ExpiredRuns { cancelled, quarantined }    next_deadline()
-claim_tool_tasks(owner, TaskFilter::{All | Dispatched { tenants } | Host { tenant, namespace?, toolset, tools }}, now, limit)
-    -> [ClaimedTask { task, token, previous_claim_expired }]
-heartbeat_tool_task(token, now)    retry_tool_task(token, next_attempt_at)    next_tool_attempt(after)
-defer_tool_task(token, until)      park_tool_task(token, reason)
-complete_tool_task(token, outcome, now)    expire_deferred_tool_tasks(now, limit)
-approve_tool_task(task, now) / reject_tool_task(task, failure, now)
-resume_parked(Secret { tenant, secret: SecretId { namespace, name } }, now)
-secret_usage(tenant, SecretId, labels, limit) -> { active_runs, active_total, waiting_runs, waiting_total, versions }
-tool_tasks(run)                    tool_task(token)
-create_webhook_token(run, name) -> token    resolve_webhook_token(token) -> { run, name }
 put_subscription(subscription)     subscriptions(tenant)    delete_subscription(tenant, id)
-get_payload(tenant, digest) -> { digest, size, preview, value? }
-reserve_payloads(tenant, [PayloadRecord], now) -> [digest being deleted]
-unreferenced_payloads(now, limit) -> [(tenant, digest)]    forget_payloads([(tenant, digest)], now)
-drop_payloads([(tenant, digest)], started) -> count
-runs_to_archive(now, limit)        archive_run(run, document, now)
-runs_to_delete(now, limit)         delete_run(run, now)
 put_tenant(tenant) / get_tenant(id) / list_tenants()
+ensure_namespace(tenant, name, partitions, now) -> Namespace | Deleting   # created at first use, its partition chosen
 put_namespace(tenant, name, exceptions, now) / get_namespace(tenant, name)
 set_namespace_display_name(tenant, name, display_name?) -> Written(Namespace) | Deleting | none
 namespace_display_names(tenant) -> [(name, display_name)]
-list_namespaces(NamespaceFilter { tenant, name, prefix, above, order, month, after, limit }) -> { [NamespaceUsage], total }
-namespace_usage(tenant, Namespace(name) | Tenant, month) -> Usage { cpu, runs_started, active_runs, scripts, days }
-revoke_namespace_tokens(tenant, name, now)    namespace_has_script(tenant, name, digest)
+list_namespaces(NamespaceFilter { tenant, name, prefix, after, limit }) -> { [Namespace], total }
+revoke_namespace_tokens(tenant, name, now)
 delete_namespace(tenant, name, now) -> Started | NotFound    namespaces_to_erase(limit)
-drop_namespace(tenant, name) -> Dropped | RunsLeft
-record_usage([UsageDelta { tenant, namespace, day, cpu }], now) -> [QuotaAlert]
-quota_alerts(tenant, namespace?, month)
-claim_quota_alerts(owner, now, lease_duration, limit) / ack_quota_alerts(ids, now)
-claim_feed(consumer, owner, now, lease_duration, limit)    ack_feed(ids)
+drop_namespace(tenant, name) -> Dropped
 ```
 
-Stores never read a clock: every method that depends on time takes `now`, and the random draw
-of `acquire_runnable` is passed in too. Tokens (tool tasks, webhooks) are the only values a store
-draws from a CSPRNG. Every method is scoped by the tenant: a run (`RunRef { tenant, id }`), a
-script, a toolset, a payload or a task of one tenant is never visible to another. Run ids are
-unique across tenants. Text a store keeps never holds a NUL character (U+0000), which Postgres
-refuses: the engine refuses it at its entry points (`NulCharacter`), and values are JSON, where
-it is escaped ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
-A key looked up with a NUL character matches nothing, and never reaches a store: a token or an id
-is not found, and a filter is refused with 400
-([decided](08-decisions.md#taken-while-fixing-the-runs-that-kill-their-workers-and-the-lookups-with-a-nul-november-2026)).
-
-`metadata` is the run metadata (labels, trace context, the parent of a fork and its `at`; the
-workflow and version of a run of a workflow, the run and `seq` that started it and whether it is
-detached, its scope), stored with the run and never part of its events. `commit_activation` also writes one feed item per
-consumer (`read_model`, `otel`, `webhooks`) in the same transaction: the store guarantees that
-every committed activation is eventually projected.
-
-Contracts, all covered by the conformance suite:
-
-- `key` is an idempotency key. `create_run` with a key already used in the tenant returns the
-  existing run; `enqueue` with a key already seen for that run does nothing
-  ([storage](06-storage-and-scale.md#idempotency-of-the-api)).
-- `create_run` creates the run's namespace if it does not exist, with the tenant's defaults.
-  Under a lock of the namespace and of the tenant, it refuses the run (`QuotaExceeded`) when the
-  namespace's limit or the tenant's ceiling of `activeRuns`, `runsPerMonth` or `scripts` is
-  reached, a script already counted in the namespace passing `scripts`; it names the quota, the
-  scope, the limit, the use and, for a monthly quota, the start of the next month. A first
-  refusal of `activeRuns` in a month records its alert. A created run counts in the month's
-  `runs_started` of its namespace and of the tenant, and in its script's `namespace_scripts`
-  row; crossing 80 % or 100 % of `runsPerMonth` or `scripts` records the alert. A namespace being
-  deleted refuses every run (`NamespaceDeleting`). A retried request with its key still returns
-  its run, whatever the quotas ([quotas](06-storage-and-scale.md#quotas)). Idempotency keys are
-  unique per namespace.
-- `record_usage` adds CPU time to the namespace's day and to the tenant's (`*`), and records
-  the alerts of `cpuPerMonth` whose 80 % or 100 % the addition crosses, once per tenant,
-  namespace or `*`, month and threshold. `claim_quota_alerts` leases the alerts not yet sent,
-  as `claim_feed` leases feed items; `ack_quota_alerts` marks them sent.
-- `delete_run` removes one from the run's `namespace_scripts` row, and the row at zero.
-  `delete_namespace` marks the namespace; `namespaces_to_erase` lists the marked ones;
-  `drop_namespace` removes a marked namespace with its usage and alerts, but not the tenant's
-  `*` rows, once it has no run left (`RunsLeft` otherwise).
-- `revoke_namespace_tokens` sets the namespace's `tokens_revoked_before`, which refuses the
-  signed tokens issued earlier.
-- `acquire_runnable` only returns runs whose epoch is in `epochs` and whose tenant is in
-  `tenants`, and never a quarantined run. It draws a tenant among those with runnable work
-  (ordered by id, the one at `draw` modulo their number), then takes that tenant's oldest
-  runnable run (the oldest inbox item first).
-- Sticky affinity: `commit_activation` records the committing worker as the run's sticky
-  worker. `acquire_runnable` gives a runnable run to its sticky worker first, and to the other
-  workers only once its oldest inbox item has waited `sticky_grace` (5 s). `forget_sticky` drops
-  the priority when the worker evicts the instance
-  ([sticky execution](03-execution.md#sticky-execution)). Only a commit makes a worker sticky: a
-  worker that dies during an activation holds the run until its lease expires, and its priority
-  adds nothing after that, since the run's oldest inbox item has waited longer than the grace.
-- `renew` extends a lease whose fence still matches. A worker calls it about every 10 s while
-  it holds the run ([leases](06-storage-and-scale.md#leases-fencing-workers)).
-- `record_failure` counts the run's activations that failed in a row and keeps the lease. The
-  fifth quarantines the run with that error as its reason (kind `failures`) and releases the
-  lease. A successful `commit_activation` and `release_quarantine` reset the count
-  ([activations](03-execution.md#activations)).
-- `acquire_runnable` counts the activation it leases the run for, in the run's `attempts`; a
-  successful `commit_activation` and `release_quarantine` reset the count. `acquire_run` and
-  `acquire_quarantined` do not count. An activation that neither committed nor recorded a
-  failure never finished: its worker died.
-- `quarantine` releases the lease without committing anything and records its kind and reason:
-  the mismatch (kind `non_determinism`), or the activations that never finished (kind
-  `failures`); `release_quarantine` makes the run runnable again; `acquire_quarantined`
-  hands each quarantined run of the given epochs and tenants to one worker of a new build, once;
-  a run of a tenant out of scope is left to a worker of its own pool
-  ([execution](03-execution.md#non-determinism-and-quarantine)).
-- `expire_due_runs` enqueues `cancel_requested { reason: "ttl" }`, once, for the runs past
-  their deadline, as `fire_due_timers` does for timers. It enqueues nothing for a quarantined
-  run: it reports it, and the engine gives it up (`run_aborted { non_determinism }`, or
-  `{ internal }` after repeated failures) through `acquire_run` and an ordinary
-  `commit_activation`.
-- A terminal commit clears the run's timers, tool tasks, inbox, webhook tokens and quarantine;
-  nothing is enqueued for a terminal run any more (`Enqueued::RunEnded`).
-- Workflows across runs ([execution](03-execution.md#workflows-across-runs)): `create_run` of a
-  run started by a script records the starter as its first watcher, attached unless the run is
-  detached. A terminal commit carries the run's end (`Activation::end`): in the same
-  transaction, the store enqueues it as the signal `rewind:ended:<run>` for every watcher that
-  has not ended, with that name as idempotency key, and enqueues `cancel_requested` for every
-  run this one watches attached and that has not ended. `watch_run` adds a watcher that is
-  never attached (a fork), and says whether the run has already ended: the engine then enqueues
-  the end itself, under the same key. A workflow version is immutable: a second `put_workflow`
-  of a version changes nothing and returns the first. `workflow_versions` lists a name's
-  versions carrying `labels`, newest first (created last first, then stored last first): the
-  first is the latest; `workflows_with_script` lists the versions of any name whose script is
-  `script`, in the same order; `latest_workflows` gives the latest version of each name, by name.
+- A workflow version is immutable: a second `put_workflow` of a version changes nothing and returns
+  the first. `workflow_versions` lists a name's versions carrying `labels`, newest first (created
+  last first, then stored last first): the first is the latest; `workflows_with_script` lists the
+  versions of any name whose script is `script`, in the same order; `latest_workflows` gives the
+  latest version of each name, by name.
 - Tests ([suites](05-testing-and-observability.md#suites-and-the-gate)): the documents are
   blobs; the store indexes them. `reserve_tests` inserts a test's row, or makes an existing one
   new again, before its blob is written, and returns the digests whose deletion has started.
   `put_workflow` writes the rows of `workflow_tests` from the version's suite, and refuses
   (`Conflict`) a version that references a test without a row, or whose deletion has started.
-  `unreferenced_tests` marks the rows no version references, stored more than 24 hours ago,
-  whose digest is not also a payload's, and returns them; their blobs are deleted, then
-  `drop_tests` removes the rows still marked. With `erased`, it removes the given rows whatever
-  references them: a namespace's erasure takes the tests `namespace_tests` lists. The cleanup of
-  payloads leaves out a digest that has a test row.
-- Tool tasks follow the [lifecycle](04-tools.md#tool-task-lifecycle). A new task starts in
-  `approval` when its policy asks for it, else `ready`. `claim_tool_tasks` only hands out
-  `ready` tasks whose `next_attempt_at` has passed, and `claimed` tasks whose claim expired
-  (attempt + 1, `previous_claim_expired`), within the concurrency limits: the policy's calls of
-  the same tool in flight per run, and the server's calls in flight per worker for an MCP tool;
-  a claimed task not expired and a deferred task are in flight. A claim lasts the policy's
-  heartbeat timeout and has its own token: once the task is claimed again, the old token is
-  refused; `tool_task` finds the task a live token holds. `complete_tool_task` writes the outcome
-  to the run's inbox, and drops the outcome of a task that no longer exists. Approving a task
-  parked by `schema_changed` marks it `schema_change_approved`. `resume_parked` makes ready again
-  the tasks parked by `credentials_refused` or `secret_missing` in the runs that attach a secret
-  put again (for a namespace's secret, the runs of that namespace). `secret_usage` reads, for a
-  secret, the active runs that attach it, those of them with a call to a server it serves that
-  is parked or not yet sent, and the latest version of each workflow that attaches it; a
-  version attaching `ns/<name>` counts for every namespace's secret of that name. Only the runs
-  carrying `labels` count, so a caller limited to labels learns nothing of the others.
-  `expire_deferred_tool_tasks` ends the deferred tasks whose deadline passed, with a `timeout`
-  failure. `next_tool_attempt` returns the earliest `next_attempt_at` later than `after` of the
-  `ready` tasks, across tenants: the next retry after a backoff, which virtual time jumps to.
-- A webhook token is unguessable, the same for a run and a signal name, and maps to one run and
-  one signal name. A token whose run has ended no longer resolves.
-- `commit_activation` writes, in the same transaction, the `payloads` rows of the payloads
-  that left the events (digest, size, preview, and the value up to 64 KiB) and the run's
-  `payload_refs` ([payloads](06-storage-and-scale.md#payloads)). `delete_run` starts the grace
-  of the payloads it leaves unreferenced; `unreferenced_payloads` and `forget_payloads` apply
-  each tenant's grace.
-- No commit references a deleted blob. The engine reserves the rows of large payloads
-  (`reserve_payloads`) before writing their blobs: a reserved row starts its grace again. The
-  cleanup marks the rows it deletes (`forget_payloads`), deletes their blobs, then removes the
-  rows still marked (`drop_payloads`). A commit refuses a payload held by digest whose row is not
-  reserved or is marked (`Conflict`); a payload whose deletion has started is committed with its
-  value in its row, which stops the deletion. A deletion not finished within
-  `PAYLOAD_DELETION_TIMEOUT` (1 h) is started again ([decided](08-decisions.md#taken-while-fixing-the-review-of-the-engine-and-the-stores-november-2026)).
-- `runs_to_archive` lists the finished runs past their tenant's journal retention whose feed
-  items are all applied; `archive_run` removes their history once their journal document is in
-  the `BlobStore` (never while feed items are left), and keeps the record and the payload
-  references; `runs_to_delete` lists the archives past their retention; `delete_run` erases a
-  run, its feed items and its payload references
-  ([retention](06-storage-and-scale.md#retention-and-deletion)).
+  `unreferenced_tests` marks the rows no version references, stored more than 24 hours ago, and
+  returns them; their blobs are deleted, then `drop_tests` removes the rows still marked. With
+  `erased`, it removes the given rows whatever references them: a namespace's erasure takes the
+  tests `namespace_tests` lists.
+- `ensure_namespace` creates a namespace at its first use with the tenant's defaults and its
+  partition, `hash(tenant, name) mod partitions`, and returns it; a namespace being deleted is
+  `Deleting`. The partition of a namespace never changes.
+- `revoke_namespace_tokens` sets the namespace's `tokens_revoked_before`, which refuses the
+  signed tokens issued earlier. `delete_namespace` marks the namespace; `namespaces_to_erase`
+  lists the marked ones; `drop_namespace` removes a marked namespace, once its partition holds
+  nothing of it.
 - Only scripts that compile are stored: `start_run` refuses the others before creating a run
   ([execution](03-execution.md#starting-a-run)). `ScriptExecutor::compile` takes the toolset,
   to check what the script imports from `rewind:tools`.
-- `next_timer` and `next_deadline` let the driver jump in virtual time.
+- Every write sends its `ControlPlaneChange` in the same transaction (`Cluster` below).
+
+### `PartitionStore`
+
+Methods (declared in `crates/rewind-engine/src/ports/partition/`):
+
+```
+open(partition, node) -> PartitionLog            # the only writer from now on: fences the previous one
+recover(horizon) -> Recovery { runnable, quarantined, timers, tasks, unsealed, outbox, counters, organizations }
+run(run) -> RunHead?                  summary(run) -> RunSummary?
+history(run, attempt, from) -> [HistoryEntry]    inbox(run) -> [InboxItem]
+tasks(run) -> [ToolTask]              payload(run, digest) -> PayloadRow?
+watchers(run) -> [Watcher]            timers(from, to) -> [DueTimer]
+started(tenant, namespace, key) -> RunId?        signal_key(run, key) -> bool
+webhook(token_hash) -> (RunId, name)?
+search(Scope, RunQuery, RunOrder, Page { cursor, limit, budget }) -> Found { summaries, cursor }
+counters(Scope, Window) -> Counters   gauges(Scope) -> Gauges     shapes(tenant, namespace?, tools)
+organization(tenant) -> OrganizationState?
+commit(Batch) -> ()                   # atomic and durable; Fenced once another node opened the partition
+```
+
+A `Batch` is a list of changes, of one or many runs, applied together:
+
+```
+CreateRun { run, head, start_key?, entries?, payloads }      # entries: a fork's copied history
+Enqueue { run, item, signal_key? }
+Activation { run, attempt, entries, consumed, payloads, tasks, timers, head, summary, counters, outbox }
+Task { run, seq, change }             Timer(Set | Cancel)
+Failure { run, error }                Quarantine { run, kind, reason } | Release { run }
+Seal { run, attempt }                 Erase { run }
+Outbox(Add | Remove)                  Counters([CounterDelta])
+WebhookToken { run, name, hash }      Organization { tenant, state }
+```
+
+Contracts, all covered by the conformance suite:
+
+- `open` fences: once another `open` of the same partition succeeded, every `commit` of the earlier
+  log fails with `Fenced`, and none of its changes is visible. A commit that returned is durable: a
+  later `open`, on any node, reads it.
+- A batch is atomic: after a crash, either all its changes are read or none.
+- The owner is the only writer, so the store checks what a single writer may get wrong and refuses
+  it (`Conflict`): entries appended anywhere but at the attempt's history length, a start key
+  already used in the namespace, a consumed inbox item that does not exist, a change to a run that
+  does not exist or has been erased.
+- `Enqueue` with a signal key already seen for that run changes nothing. A terminal `Activation`
+  clears the run's timers, tool tasks and inbox, and its webhook tokens stop resolving; nothing is
+  enqueued for an ended attempt.
+- `Activation` writes, with the entries, the payload records of the payloads that left the events
+  (digest, size, preview, the value up to 64 KiB), the run's summary and its index entries, and the
+  counters it moves.
+- `recover(horizon)` returns the runs that are runnable (a non-empty inbox, not quarantined, not
+  ended), the quarantined runs, the timers due before `horizon`, the tool tasks that are `ready`,
+  `deferred` or waiting for approval, the attempts that ended and are not sealed, the outbox, the
+  counters of every tenant, and the organization states homed here.
+- `Seal` deletes the attempt's history, inbox, tool tasks, payload records and signal keys, and keeps
+  the run's head, summary and index entries. `Erase` deletes everything of the run, and the counts it
+  held. Neither is refused for a run already sealed or erased.
+- `search` evaluates every term of the query on the summaries of the scope, in the order asked,
+  reads at most `budget` summaries, and returns a cursor when it stopped before the end. Summaries
+  are kept for ended runs until their erasure.
+- `counters` sums the hourly counters of the scope over the window, rounded out to whole hours;
+  `gauges` reads the exact gauges (active runs, waiting runs by kind).
+- Timers are ordered by due time, then by run and kind; `timers(from, to)` includes `from` and
+  excludes `to`.
+
+### `RunArchive`
+
+```
+put(SealedAttempt { run, attempt, script, toolset, entries }) -> ()   # idempotent
+get(run, attempt) -> SealedAttempt?
+erase(run) -> ()                                               # every attempt and every blob of the run
+```
+
+The archive writes the [journal document](02-journal.md#stored-format-v1) of the attempt, every
+payload up to 64 KiB inlined. A second `put` of the same attempt changes nothing. `get` of an
+erased run finds nothing.
+
+### `Cluster` and `NodeLink`
+
+```
+Cluster::join(NodeInfo { id, address, build, epochs, pool, executors_only }) -> Membership
+Membership::watch() -> Departed { node }      # the lock this node waits on came free
+Membership::assign(Moves) -> PartitionMap     # one transaction: owners and epochs + 1, then the change sent
+Membership::partition_map() -> PartitionMap   Membership::nodes() -> [NodeInfo]
+Membership::changes() -> stream of ControlPlaneChange
+Membership::leave()                           # after the node handed its partitions over
+
+NodeLink::call(node, NodeRequest) -> NodeReply
+NodeLink::subscribe(node, SubscriptionKey, from) -> stream of Changed
+NodeLink::activate(node, ActivationRequest) -> ActivationResult      # a remote executor
+```
+
+- A node's liveness is its membership: on Postgres, a session advisory lock on the node's id held
+  on a connection of its own, released when the process or its connection dies. `watch` blocks on
+  the next node's lock and returns once it is granted.
+- `assign` moves partitions in one transaction, raising each moved partition's epoch, and sends
+  `PartitionMap` as it commits.
+- `changes` yields every `ControlPlaneChange` committed by any process after the call: the partition
+  map, a namespace, a tenant, a key, a token or token key, a grant or role, a connection, a secret, a
+  workflow, a subscription. On Turso and in memory, the cluster has one member and the changes are
+  a broadcast inside the process.
+- `NodeLink` carries the requests an edge sends an owner (start, signal, cancel, fork, release, give
+  up, erase, a task's answer, reads), those an owner sends an organization actor and back
+  (admission, counts, slots, host tasks), the hand-out of a host task to the edge that holds the SDK
+  stream, subscriptions, and activations for remote executors. An owner that no longer holds a
+  partition answers `NotOwner`.
 
 ### The other ports
 
 - **`AccessStore`** (`crates/rewind-engine/src/ports/access.rs`): the server's authorization
-  data, apart from the journal, which the engine never reads.
+  data, apart from the run plane, which the engine never reads for it.
   `put_key(key) / find_key(hash) / list_keys(tenant) / revoke_key(hash, now)`: keys are kept by
   the SHA-256 of their secret, with their tenant, name, creator and dates.
   `put_role(role) / get_role(tenant, name) / list_roles(tenant) / delete_role(tenant, name) ->
@@ -334,7 +314,8 @@ Contracts, all covered by the conformance suite:
   must not leave without a holder in the tenant, else it returns `LastHolder` and changes
   nothing. `claim_grant(tenant, invitation, user)` moves an invitation's grant to the user who
   accepted it, unless the user already has one. `set_default_role(tenant, role) /
-  default_role(tenant)`. Built-in roles are not stored: the server knows them.
+  default_role(tenant)`. Built-in roles are not stored: the server knows them. Every write sends
+  its `ControlPlaneChange`.
 - **`IdentityProvider`** (`crates/rewind-engine/src/ports/identity.rs`): `authorization_url`
   (GitHub), `authenticate_code`, `send_magic_code` (`Sent`, or `SignUpClosed` without a code),
   `authenticate_magic_code`, `verify_email`,
@@ -346,11 +327,13 @@ Contracts, all covered by the conformance suite:
   `user`, memberships (`of_user`, `of_organization`, `add`, `remove`), invitations (`invite`,
   `of_organization`, `for_email`, `get`, `accept`, `resend`, `revoke`). Memberships and
   invitations carry no role. Tokens are opaque to Rewind but for the access token's claims.
-- **`BlobStore`**: `put(tenant, digest, bytes)`, `get(tenant, digest)`, `delete(tenant,
-  digest)`. Immutable bytes keyed by their SHA-256: payload values above the table tier (their
-  canonical JSON, so the key is the payload's digest) and the journal documents of archived
-  runs. `put` refuses bytes that do not hash to the digest; a second `put` changes nothing.
-  `get` checks the digest of what it reads. `delete` serves cleanup.
+- **`BlobStore`**: `put(owner, digest, bytes)`, `get(owner, digest)`, `copy(from, to, digest)`,
+  `delete_run(run)`, `delete(owner, digest)`. The owner is a run (`BlobOwner::Run`), for its payload
+  values above 64 KiB, or a tenant's tests (`BlobOwner::Tests`). Immutable bytes keyed by their
+  SHA-256: a payload's canonical JSON, so the key is the payload's digest, or a test's document.
+  `put` refuses bytes that do not hash to the digest; a second `put` changes nothing. `get` checks
+  the digest of what it reads. `copy` serves a fork, `delete_run` the erasure of a run, `delete` the
+  cleanup of tests.
 - **`ScriptExecutor` / `ScriptInstance`**: `compile`, `start`, `deliver`, `memory_usage`
   (the memory an instance holds, which bounds the instance cache), and `cpu_time` (the CPU time
   of the instance's last call into the script, failed or not: loading the script and
@@ -360,7 +343,7 @@ Contracts, all covered by the conformance suite:
 - **`ToolDispatcher`**: `dispatch(call, auth) -> Dispatched`. The call carries the run, its
   namespace and labels, the `seq`, the pinned tool and its server or API, the args, the
   idempotency key, the attempt, whether the harness approved a schema change (then the call is
-  sent without checking the schema again), the claim's token and the trace context. `auth`
+  sent without checking the schema again), the task's token and the trace context. `auth`
   (`CallAuth`) is what the server's `auth` asks ([authenticating
   calls](04-tools.md#authenticating-calls)): nothing, the attached secret's value with where it
   goes, or the tenant's signing key with the claims the engine knows (`iss`, `sub`, `labels`,
@@ -368,9 +351,9 @@ Contracts, all covered by the conformance suite:
   builds, adding `aud`, `htm`, `htu`, `body`, `iat`, `exp` and `jti`, since the JWT covers the
   method, the URL and the body. Mock mode passes nothing. `Dispatched` is one of: `Result` and `Failed` (the
   outcome); `Transient`, after which the engine puts the task back to `ready` with backoff, or
-  fails it under `at_most_once`; `Deferred`, the handler answering later through the claim's
+  fails it under `at_most_once`; `Deferred`, the handler answering later through the task's
   token; `Park` with a reason (schema changed at dispatch, credentials refused). The dispatcher
-  never writes to the journal. The engine parks a call itself (`secret_missing`) when the secret
+  never writes to a store. The engine parks a call itself (`secret_missing`) when the secret
   the run attached no longer exists, before anything is sent.
 - **`TypeChecker`**: `check(script, declarations) -> diagnostics`, and
   `check_workflow(script, declarations, workflow)` for a workflow's script, `workflow` being its
@@ -378,24 +361,6 @@ Contracts, all covered by the conformance suite:
   Diagnostics are written for a model, with a location in `script.ts`, a severity, their source
   (a TypeScript code or one of the checker's own rules), a hint and a code frame
   ([type-checking](04-tools.md#type-checking)).
-- **`ReadModel`**: `apply(run, entries, snapshot)`, idempotent and order-independent, keyed by
-  `(run, index)`; of the snapshots of a run, the one with the highest history length wins
-  ([read model](05-testing-and-observability.md#read-model)). `search_runs(query, order,
-  page)` takes the typed terms of the [query language](05-testing-and-observability.md#query-language)
-  (each negatable, all joined by "and"; `namespace` among them), and a scope: the tenant, a
-  namespace, labels. `run_stats(query, window)` the counts, series, durations and facets of the
-  runs a query matches, `failure_groups(query, window)` its runs grouped by fingerprint;
-  `scripts(filter)`, `tool_stats(filter)`, both with an optional namespace,
-  `observed_shapes(tenant, tools)`. Service state comes from whoever changes it: `record_tasks(run, tasks)` keeps the
-  furthest state of each call's task (its attempt, and whether it waits for an approval, is
-  parked or deferred), and `attempts(run)` reads the attempts back for `tool_stats`' retries;
-  `record_quarantine(run, quarantine, at)` keeps the latest. Every write to a run's summary
-  stamps it with `changed_at`, the wall clock in milliseconds, at least 1 ms past the run's
-  previous stamp; `changed_runs(tenants, since,
-  limit)` reads the summaries stamped since then, the oldest change first (leaving out, and
-  logging, a summary it cannot read), for the change
-  stream ([08](08-decisions.md#taken-for-the-live-dashboard-november-2026)). `purge(ended_before, tenants)`
-  and `delete_run(run)` serve [retention](06-storage-and-scale.md#retention-and-deletion).
 - **`SpanExporter`**: `export(spans)`, `export_logs(logs)`. Spans have deterministic ids, so
   exporting one twice gives the same span.
 - **`SecretStore`**: secrets are keyed by tenant, namespace (`*` for the organization's) and
@@ -415,34 +380,36 @@ Contracts, all covered by the conformance suite:
   master key and the previous ones; `master_keys_in_use() -> [id]` answers the ids its data keys
   are held under, and `rewrap_data_keys() -> count` encrypts those held under a previous key with
   the current one ([master key](04-tools.md#secrets)). Values and private keys leave the
-  store only toward the dispatcher ([secrets](04-tools.md#secrets)).
+  store only toward the dispatcher ([secrets](04-tools.md#secrets)). `put` and `delete` send their
+  `ControlPlaneChange`: the owners resume the calls parked for the secret.
 - **`WebhookSender`**: `send(subscription, event)`. Each delivery is signed with HMAC, and
   retried when it fails. Events are `run.completed`, `run.failed`, `run.cancelled`,
   `run.aborted`, `run.suspended`, `run.quarantined`, `tool.schema_changed`,
   `credentials.expired` (with its reason, `refused` or `missing`, and the attached secret's scope
   and name when there is one) and `quota.alert`, with a deterministic id for receivers to deduplicate;
-  every event about a run names its namespace. Subscriptions
-  are kept by the `JournalStore`.
-- **`Clock`** and **`Entropy`**: unchanged.
+  every event about a run names its namespace. Subscriptions are kept by the `CatalogStore`.
+- **`Clock`** and **`Entropy`**: unchanged. `Entropy` draws a run id for a partition: a UUID v7
+  whose 16 bits after the variant hold it.
 
 Port style: traits whose methods return `impl Future<Output = …> + Send`; adapters may
 implement them with `async fn`. The engine is generic over its adapters (static
 dispatch); composition roots pick the concrete types. `ScriptExecutor` has an associated
-`Instance: ScriptInstance` type.
+`Instance: ScriptInstance` type, `PartitionStore` an associated `Log: PartitionLog`.
 
 ## Crates
 
 | Crate | Layer | Contents |
 | --- | --- | --- |
 | `rewind-core` | domain | ids (`RunId`, `Seq`, `Seed` on 256 bits, `Epoch`), `Digest`, `Payload` + canonical JSON (RFC 8785), `Script`, the pinned `Toolset` (servers, tools, routes, schemas, policies), events, `RunState`, `ReplayCursor`, history validation, `Cassette`, observed `Shape`, `Timestamp`, durations |
-| `rewind-engine` | application | ports, use cases, activation, instance cache, replay, fork, driver (`run_until_idle`, real or virtual time), projector and span derivation, in-memory adapters (`MemoryJournal`, `MemoryAccess`, `MemoryIdentity`, `MemoryBlobs`, `MemoryReadModel`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
-| `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
+| `rewind-engine` | application | ports, use cases, the actors of a node (`partition`: the owner, its committer, fan-out, timer wheel, registry, outbox and sealer; `executors`: the ready queue, the instance cache, activation and replay; `org`: the organization actor; `tasks`: calls and their policies; `node`: partitions taken and handed over, recovery; `router`: the edge's way to an owner), fork, workflows across runs, projector and span derivation, the driver (the actors stepped on one thread, real or virtual time), in-memory adapters (`MemoryCatalog`, `MemoryPartitions`, `MemoryArchive`, `MemoryCluster`, `LocalLink`, `MemoryAccess`, `MemoryIdentity`, `MemoryBlobs`, `MemorySecrets`, `MemorySpanExporter`, `MemoryWebhooks`, `StaticDispatcher`, `StaticTypeChecker`, system and virtual clocks, system and seeded entropy), the conformance suites of the ports with state and of `SpanExporter` (feature `conformance`) |
+| `rewind-format` | adapter support | serde DTOs for the stored format v1 (events, journal documents, partition records, cassettes, pinned toolsets; JSON values in their canonical form); golden fixture tests |
 | `rewind-api` | adapter support | the HTTP DTOs (serde, utoipa) of `/v1` and `/auth`, the catalog of permissions and the built-in roles, the OpenAPI document generated from them, and a thin Rust HTTP client; shared by `rewind-server` and `rewind-cli` |
 | `rewind-runtime` | adapter | deno_core isolate on a dedicated thread, started from a V8 startup snapshot, deterministic globals, ops, JS glue (one version per supported epoch), how a script ends, module loader, CPU watchdog (which also reports each call's CPU time), heap limit, the budget of array buffers and the pinned stack limit (`memory`, the only `unsafe` code), `V8Executor`; the TypeScript mock dispatcher |
-| `rewind-store-turso` | adapter | embedded `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` (Turso Database, the `turso` crate) |
-| `rewind-store-postgres` | adapter | production `JournalStore` (`FOR UPDATE SKIP LOCKED`), `AccessStore`, `ReadModel` and `SecretStore` |
+| `rewind-store-slatedb` | adapter | `PartitionStore` on SlateDB over `object_store`: R2 or any S3-compatible service, local files, memory; the key layout of a partition |
+| `rewind-store-turso` | adapter | the embedded control plane: `CatalogStore`, `AccessStore`, `SecretStore`, and a `Cluster` of one node (Turso Database, the `turso` crate) |
+| `rewind-store-postgres` | adapter | the production control plane: `CatalogStore`, `AccessStore`, `SecretStore`, and `Cluster` (session advisory locks, `LISTEN` and `NOTIFY`) |
 | `rewind-workos` | adapter | `IdentityProvider` on WorkOS, through `workos`, its official Rust SDK: AuthKit's authentication, users, organizations, memberships, invitations, the waitlist, access tokens checked against the JWKS |
-| `rewind-blob` | adapter | `BlobStore` on local files and S3 |
+| `rewind-blob` | adapter | `BlobStore` and `RunArchive` on local files and S3 (R2) |
 | `rewind-mcp` | adapter | `ToolDispatcher` outside mock mode: MCP client (discovery, dispatch, the attached secret or the signature in the transport) and the built-ins `http` and `webhook` |
 | `rewind-openapi` | adapter | API tools ([04](04-tools.md#api-tools)): an OpenAPI 3.0 or 3.1 document read into pinned tools at registration, and `ApiDispatcher`, the `ToolDispatcher` of the `api` route: the request built from the args, its authentication, the answer mapped to an outcome |
 | `rewind-outbound` | adapter support | what leaves Rewind for a tenant's servers: the egress checks (a name resolved once, private addresses refused, the connection to the checked address, redirects within the origin) and the HTTP client built on them, the JWT signing of [signed calls](04-tools.md#signed-calls); used by `rewind-mcp`, `rewind-openapi` and the server's webhooks |
@@ -452,7 +419,7 @@ dispatch); composition roots pick the concrete types. `ScriptExecutor` has an as
 | `rewind-check` | adapter | type-checking with tsgo, driven as a CLI and embedded in the `rewind` binary; the checker's own rules on the swc syntax tree |
 | `rewind-otel` | adapter | OpenTelemetry SDK and OTLP export (gRPC, HTTP): `SpanExporter`, and the `tracing` subscriber the composition roots install, which joins service spans to a run's trace through their fields `trace_id`, `span_id`, `parent_span_id` and `traceparent`, and records the measurements of the engine and the adapters as metrics |
 | `rewind-cli` | composition root | the client commands of the `rewind` binary: a client of the API `/v1` (embedded or remote server); local commands `check`, `test`, replay of an exported journal; `rewind mcp` over stdio |
-| `rewind-server` | composition root | `rewind server`: HTTP API (axum), SSE, webhooks, host-tool tasks, workers, scheduler, projector; roles `api` and `worker`; embedded mode; serves the dashboard; `/mcp`, and the OAuth authorization server of its connections |
+| `rewind-server` | composition root | `rewind server`: the edge (HTTP API with axum, SSE, the task stream, `/mcp`, the OAuth authorization server of its connections, the dashboard) and the node (partitions, organization actors, executors, projections, webhooks) in one process; the node link over HTTP/2 and its DTOs; `--executors-only` and `--pool`; embedded mode; `migrate-runs` |
 | `rewind` | entry point | the `rewind` binary: hands `rewind server …` to `rewind-server` and every other command to `rewind-cli`, nothing else |
 | `rewind-architecture-tests` | tooling | dependency rules |
 | `rewind-e2e` | tooling | the epoch corpus: recorded scenarios (blue: must succeed, red: must fail as specified), replayed from their stored journals; `rewind-e2e replay <case>` |
@@ -467,10 +434,12 @@ arguments after its command. The CLI's code never calls the server's: it reaches
 through the API, and starts the embedded server by running `rewind server --embedded` as a
 separate process.
 
-`rewind-server` wires each adapter in its own module of `src/wiring/` (store, blobs, tools,
-checker, telemetry, webhooks, clock, identity), picked by configuration: `--store turso:<path>` or
-`postgres://…`, `--blobs <directory>` or `s3://<bucket>`, `--otlp-endpoint`, WorkOS's
-variables ([sign-in](#sign-in-auth)).
+`rewind-server` wires each adapter in its own module of `src/wiring/` (control plane,
+partitions, archive and blobs, cluster, tools, checker, telemetry, webhooks, clock, identity),
+picked by configuration: `--store turso:<path>` or `postgres://…` for the control plane,
+`--bucket <directory>` or `s3://<bucket>` (with its endpoint, for R2) for the partitions, the
+archive and the blobs, `--partitions` (64 by default, 1 embedded), `--cluster-secret`,
+`--otlp-endpoint`, WorkOS's variables ([sign-in](#sign-in-auth)).
 
 ## Dependency rules
 
@@ -488,8 +457,9 @@ Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sou
 - `rewind-agent-tools` depends only on `rewind-core` and `rewind-api`; `rewind-mcp-server` only
   on those and `rewind-agent-tools`. Only the composition roots and the tooling crates depend on
   them. Neither knows the engine: the agent tools reach Rewind through `/v1`'s operations.
-- Adapters depend on `rewind-core` and `rewind-engine` (stores also on `rewind-format`, the tool
-  dispatchers also on `rewind-outbound`), and never on each other. `rewind-outbound` depends only
+- Adapters depend on `rewind-core` and `rewind-engine` (the stores, `rewind-store-slatedb` and
+  `rewind-blob` also on `rewind-format`, the tool dispatchers also on `rewind-outbound`), and never
+  on each other. `rewind-outbound` depends only
   on `rewind-core`.
 - Only `rewind-cli` and `rewind-server` may depend on adapters, and the tooling crates
   (`rewind-e2e`, `evals`), which wire adapters like a composition root for tests. `rewind-cli` and
@@ -500,6 +470,9 @@ Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sou
 - Telemetry: `rewind-core` has no telemetry dependency (`tracing` included). The `tracing`
   facade is allowed in `rewind-engine` and the adapters. `opentelemetry*` crates are allowed
   only in `rewind-otel`.
+- No polling: `tokio::time::interval`, `tokio::time::sleep` and `sleep_until` appear only in the
+  engine's timer wheel, the backoff helpers and the clocks that read no store
+  ([principles](#principles)); the dashboard's lint refuses `refetchInterval`.
 - No `unsafe` code, with one exception: the `memory` module of `rewind-runtime`, for what V8
   offers only through raw pointers (the allocator of array buffers, a hook on collections, the
   stack limit). The workspace denies `unsafe_code` and every crate takes the workspace's lints;
@@ -508,44 +481,88 @@ Checked by `crates/rewind-architecture-tests`, from `cargo metadata` and the sou
   (`clippy::undocumented_unsafe_blocks` is denied). `rewind-architecture-tests` reads the sources
   and refuses `unsafe`, or a relaxed lint, anywhere else.
 
-## Activation, in the engine
+## Inside a node
+
+Every actor is a state machine: it takes a message, changes its state, and returns effects (a
+batch to commit, messages to send, timers to set). It does no I/O itself. In a process, a task
+drives each actor over its channel; in tests, the driver steps every actor of every node one
+message at a time on one thread, and jumps a virtual clock to the earliest timer of the wheels
+when nothing else is left to do.
+
+| Actor | Module | One per | Waits on | Sends |
+| --- | --- | --- | --- | --- |
+| Owner | `partition` | Partition held | Its mailbox: the edge's requests, executors' results, call results, `TimerDue` | Batches to its committer; after each durable batch: runs to the ready queue, timers to the wheel, calls to the call executor or to the organization actor, `Changed` to subscribed edges, ended attempts to the sealer, deliveries to the projections, counts to the organization actors |
+| Committer | `partition` | Partition held | The batch being filled | One `PartitionLog::commit`, then `Durable` to the owner |
+| Timer wheel | `partition` | Partition held | Its earliest timer, and timers set or cancelled | `TimerDue`; once an hour, a read of the next hour's timers |
+| Sealer | `partition` | Partition held | `Ended`, once durable | `RunArchive::put`, then `Seal` to the owner |
+| Executors | `executors` | Node | The node's ready queue, and activations from other owners | The activation's result to the owner of the run |
+| Call executor | `tasks` | Node | Calls that are durable and hold a slot | `ToolDispatcher::dispatch`, then the outcome to the owner and `SlotFreed` |
+| Organization actor | `org` | Tenant homed in a held partition | Its mailbox | `Admitted` or `Refused`, `SlotGranted`, `TaskHanded`, alerts in its own batches |
+| Node | `node` | Process | `Membership::watch`, `Membership::changes`, a stop signal | `open` and recovery of the partitions it takes, hand-over of those it gives |
+| Router | `router` | Process | The edge's requests | A channel to a local owner, or `NodeLink::call` |
+
+An activation, from the ready queue to its batch:
 
 ```
-lease ← journal.acquire_runnable(owner, clock.now(), lease_duration)
-history ← journal.load_history(run)
-instance ← cache[run] if its history length matches, else executor.start + ReplayCursor over history
-for item in journal.take_inbox(lease):
+run ← ready queue (fair across tenants; fewest started activations, then oldest trigger)
+history ← log.history(run, attempt) unless the instance cache holds the run at its history length
+instance ← cache[run], or executor.start + ReplayCursor over history
+for item in inbox(run):
     recorded_at ← max(clock.now(), last recorded_at)
-    if run is terminal: drop item (completion for an ended run)
+    if the attempt ended: drop the item
     emitted ← instance.deliver(item, recorded_at)     # payloads loaded from where they live
     cpu[(tenant, namespace, day)] += instance.cpu_time()   # calls that execute, never a replay's
     entries += [item] + emitted
-move payloads > 1 KiB out of the entries: to the payloads rows, or to the BlobStore above 64 KiB
-effects ← tool tasks, timers, cancelled timers derived from the new commands
-journal.commit_activation(lease, Activation { entries, consumed, payloads, effects, status })   # + feed items
-cache[run] ← instance                                  # sticky execution
+move payloads > 1 KiB out of the entries: to the run's payload records, or to a blob above 64 KiB, put first
+effects ← tool tasks, timers, cancelled timers, signals and starts of runs of the namespace, from the new commands
+owner ← Activation { entries, consumed, payloads, effects, status, summary, counters }   # committed in the next batch
+cache[run] ← instance
 ```
 
-The lease is renewed about every 10 s while this runs. With the same period, a loop of the worker
-writes the CPU time it counted to the store (`record_usage`, whole milliseconds; the rest stays
-counted), and another sends the quota alerts the store recorded (`claim_quota_alerts`, `quota.alert`
-to the subscriptions that take it, `ack_quota_alerts`). The retention jobs go on erasing the
-namespaces marked for erasure: their active runs get one ordinary cancellation, their ended and
-quarantined runs are erased as `DELETE /v1/runs/{id}` erases them, and a namespace with no run
-left loses its secrets and their reads, then its use, alerts and script counts (`drop_namespace`). The
-activation itself is a `tracing` span
-(service telemetry), with the run's trace id, span id `H(run, fence)` and parent, the run span
-`H(run, "run")`, recorded as fields.
-Nothing about the script is emitted during replay.
+The activation is a `tracing` span (service telemetry), with the run's trace id, its own span id
+`H(run, "activation", index of its first entry)` and parent, the run span `H(run, "run")`,
+recorded as fields. Nothing about the script is emitted during replay.
 
 - Script checks at start fail → `StartError::InvalidScript`, and no run is created. A text to
   store with a NUL character → `StartError::NulCharacter` (a signal's key:
   `EngineError::NulCharacter`), before anything is stored.
 - Executor start errors (top-level exception) → `run_aborted { invalid_script }`.
-- The run's last 5 activations committed nothing (`attempts` above 5) → the script is not run;
-  `journal.quarantine(lease, failures, reason)`, the reason saying how many never finished.
-- Replay mismatch → nothing is committed; `journal.quarantine(lease, non_determinism, mismatch)`.
-- Any other failure → nothing is committed; `journal.record_failure(lease, error, now)`.
+- The run's started activations without an end exceed 5 → the script is not run; the owner
+  quarantines it (kind `failures`), the reason saying how many never finished.
+- Replay mismatch → nothing is committed; the owner quarantines the run (kind `non_determinism`).
+- Any other failure → nothing is committed; the owner writes the failure, which counts it; the fifth
+  in a row quarantines the run, and a timer tries the run again otherwise
+  ([activations](03-execution.md#activations)).
+
+Rules the engine keeps, tested in the driver:
+
+- **Starts.** The edge finds or creates the namespace (`ensure_namespace`), then asks its owner.
+  The owner answers a known start key with its run, asks the organization actor to admit the start
+  (`AdmitStart`), and commits `CreateRun` once admitted. A start refused for a quota names the
+  quota, the scope, the limit, the use and, for a monthly quota, the start of the next month. A
+  retried request with its key returns its run, whatever the quotas
+  ([quotas](06-storage-and-scale.md#quotas)).
+- **Workflows across runs** ([execution](03-execution.md#workflows-across-runs)). A run started by
+  a script records the starter as its first watcher, attached unless the run is detached. The
+  batch of a terminal activation enqueues the run's end as the signal `rewind:ended:<run>` for
+  every watcher that has not ended, with that name as idempotency key, and enqueues
+  `cancel_requested` for every run this one watches attached and that has not ended. A fork's
+  watch is never attached; when the run it watches has already ended, the engine enqueues the end
+  itself, under the same key. All of them live in the run's partition: it is one batch.
+- **Tool tasks** follow the [lifecycle](04-tools.md#tool-task-lifecycle). A task that becomes
+  ready is sent once its batch is durable, within the concurrency limits: the policy's calls of
+  the same tool in flight per run, held by the owner, and the server's or API's calls in flight in
+  the organization, held by the organization actor. A host task goes to the organization actor,
+  which hands it to an SDK stream with a free slot, with a new token. The outcome of a task that no
+  longer exists is dropped. Approving a task parked by `schema_changed` marks it
+  `schema_change_approved`. A secret put again resumes the calls parked by `credentials_refused`
+  or `secret_missing` in the runs that attach it.
+- **Timers.** Script timers, call timeouts, deferred deadlines, retry backoff, run deadlines,
+  retention and webhook retries are timer records; the wheel fires them. A deadline enqueues
+  `cancel_requested { reason: "ttl" }` once; for a quarantined run, the engine gives it up
+  (`run_aborted { non_determinism }`, or `{ internal }` after repeated failures).
+- **Ends.** A terminal activation clears the run's timers, tool tasks, inbox and webhook tokens,
+  and its quarantine. The sealer seals the attempt, and the retention timer erases the run.
 
 ## Tests
 
@@ -553,15 +570,17 @@ Nothing about the script is emitted during replay.
 | --- | --- |
 | `rewind-core` | Unit tests of the pure model: canonical JSON (RFC 8785 golden vectors), digests, matching, `ReplayCursor`, run state, durations |
 | `rewind-format` | Round trips and golden fixtures (a stored v1 document must always decode) |
-| `rewind-engine` | Use cases with in-memory adapters and a fake executor; the conformance suites of `JournalStore` (idempotency keys, epochs, leases and renewal, quarantine, failure counts and attempts, run expiry, the feed, tool task lifecycle and concurrency, sticky affinity, tenants and fairness, payload references, retention), `BlobStore`, `ReadModel`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (applying a feed item twice changes nothing) |
+| `rewind-engine` | Use cases and actors in the driver, with in-memory adapters and a fake executor: idempotency keys, epochs and remote executors, quarantine, failure counts and attempts, run expiry, tool task lifecycle and concurrency, admission and quotas, fairness, workflows across runs, sealing and retention, recovery after a node dies, a partition moved, an owner fenced while cut off; the conformance suites of `CatalogStore`, `PartitionStore`, `RunArchive`, `Cluster`, `AccessStore`, `BlobStore`, `SecretStore` and `SpanExporter`, passed by the in-memory adapters; span derivation; projector idempotence (a delivery applied twice changes nothing) |
 | `rewind-runtime` | Sandbox behavior, driven by the engine with in-memory adapters and virtual time (`Promise.all`, time, randomness, signals, imports, callsites, cancellation, limits, the exact set of globals, RFC 8785 numbers against V8, and how a script ends: forgotten `await`, unhandled rejection, deadlock) |
 | Epoch corpus (`rewind-e2e`) | `corpus/epoch-N/{blue,red}/<case>/`: a script, a `scenario.json` (input, tools, steps, expectations) and its recorded `journal.v1.json`. Each case runs live and must meet its expectations, must record the committed journal byte for byte, and the committed journal must replay with the script on a fresh executor. Blue cases must succeed; red cases must fail exactly as specified (refused start, failed, cancelled or aborted run, diverging replay, tampered journal). `REWIND_E2E_RECORD=1` records the journals again |
-| `rewind-store-turso`, `rewind-store-postgres` | The conformance suites of `JournalStore`, `AccessStore`, `ReadModel` and `SecretStore` |
+| `rewind-store-turso`, `rewind-store-postgres` | The conformance suites of `CatalogStore`, `Cluster`, `AccessStore` and `SecretStore` (Postgres: two processes' locks and notifications) |
+| `rewind-store-slatedb` | The conformance suite of `PartitionStore`, on memory, on local files, and on MinIO in Docker |
 | `rewind-workos` | Against a fake WorkOS over HTTP (wiremock): every call, every error mapped, access tokens signed with a test key; against WorkOS Staging when `WORKOS_API_KEY` and `WORKOS_CLIENT_ID` are set |
-| `rewind-blob` | The conformance suite of `BlobStore` |
+| `rewind-blob` | The conformance suites of `BlobStore` and `RunArchive`, on files and on MinIO |
 | `rewind-otel` | The conformance suite of `SpanExporter`, on the SDK's in-memory exporters and on an OpenTelemetry Collector in Docker over gRPC and HTTP; service spans and logs joined to a run's trace by their fields; service and run metrics, the engine driven under the subscriber |
-| `rewind-cli` | End to end through the embedded server: V8 + engine + Turso + files, across processes (sleep, interrupt, resume) |
-| `rewind-architecture-tests` | Dependency rules, telemetry rules included; `unsafe` code only in `rewind-runtime`'s `memory` module |
+| `rewind-cli` | End to end through the embedded server: V8 + engine + SlateDB on files + Turso, across processes (sleep, interrupt, resume) |
+| `rewind-server` | Several nodes over Postgres and MinIO: a node killed during an activation, a node joining and leaving, the node link, the task stream, the change stream |
+| `rewind-architecture-tests` | Dependency rules, telemetry rules included; no timer outside the wheel, the backoff helpers and the clocks that read no store; `unsafe` code only in `rewind-runtime`'s `memory` module |
 | `evals` | Every task solved by its reference solution, through the agent tools and the scripted model; the fake servers, the agent tools' texts, the metrics; the model clients against local fakes of the Anthropic and OpenAI APIs |
 
 ## HTTP API `/v1`
@@ -614,13 +633,13 @@ Conventions:
 |  | `POST /v1/test` | `runs:start` | Runs tests in mock mode, in virtual time: the given ones, and a workflow's suite ([testing](05-testing-and-observability.md#running-tests)) |
 | Runs | `POST /v1/runs` | `runs:start` | Starts a run: `Idempotency-Key`, `wait`, `labels`, `traceparent`, `ttl`; a script, a toolset and the `secrets` it attaches, or a `workflow` (`triage` or `triage@<version>`), which brings its version's |
 |  | `GET /v1/runs` | `runs:read` | Lists runs: the [query language](05-testing-and-observability.md#query-language) `q`, filters by label, status, tool, error; `sort` by start (newest or oldest first), last activity, next wake, duration (longest first) or number of tool calls |
-|  | `GET /v1/runs/stats` | `runs:read` | The runs a query matches: counts by status, a series over a time window, durations, runs waiting by kind, facets |
-|  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs a query matches, grouped by fingerprint |
+|  | `GET /v1/runs/stats` | `runs:read` | From the hourly counters of a namespace or the tenant ([statistics](05-testing-and-observability.md#statistics)): counts by status, a series over a time window, durations, runs waiting by kind, facets on status, workflow and namespace |
+|  | `GET /v1/runs/failures` | `runs:read` | The failed, cancelled and aborted runs of a namespace or the tenant over a window, grouped by fingerprint ([statistics](05-testing-and-observability.md#statistics)) |
 |  | `GET /v1/runs/{id}` | `runs:read` | The run's state, with the names of the secrets it attached |
 |  | `GET /v1/runs/{id}/trace?format=llm` | `runs:read` | The LLM trace |
 |  | `GET /v1/runs/{id}/entries/{idx}` | `runs:read` | One journal entry in full |
 |  | `GET /v1/runs/{id}/events` | `runs:read` | SSE, `follow=1` |
-| Changes | `GET /v1/changes` | `runs:read` | SSE of the runs that change in the organization, as the caller may see them (an end user's namespace, a grant's labels, the namespace `Rewind-Namespace` names): a `run` event holds the run's summary, the same object as an item of `GET /v1/runs`; `resync` says more changed at once than one pass reads, and the client reads again what it shows. No resume cursor: after a drop, the client reads again what it shows. Closed as a run's event stream is: at a member's access token's expiry (one already expired is refused with 401), once an end user's token or a connection stops authenticating, once the caller's grant no longer gives `runs:read` with the same labels or its key is revoked |
+| Changes | `GET /v1/changes` | `runs:read` | SSE of what changes in the organization, as the caller may see it (an end user's namespace, a grant's labels, the namespace `Rewind-Namespace` names): a `run` event holds the run's summary, the same object as an item of `GET /v1/runs`, pushed by the run's owner once its batch is durable; `script`, `workflow`, `secret`, `namespace` and `connection` events name what changed in the control plane; `resync` says more changed at once than one pass reads, and the client reads again what it shows. No resume cursor: after a drop, the client reads again what it shows. Closed as a run's event stream is: at a member's access token's expiry (one already expired is refused with 401), once an end user's token or a connection stops authenticating, once the caller's grant no longer gives `runs:read` with the same labels or its key is revoked |
 |  | `POST /v1/runs/{id}/signals/{name}` | `runs:control` | `Idempotency-Key`; 409 if the run has ended; 422 for a name starting with `rewind:`, and, for a run of a workflow, a signal it does not declare or a payload that does not match |
 |  | `POST /v1/runs/{id}/cancel` | `runs:control` | Cancels the run |
 |  | `POST /v1/runs/{id}/fork` | `runs:start` | `retry_run`: a corrected script, an optional `at`, `input` and `secrets` ([forks](03-execution.md#forks)); for a run of a workflow, its version's suite runs against the script first (422 `tests-failed`) |
@@ -628,9 +647,8 @@ Conventions:
 |  | `POST /v1/runs/{id}/release` | `runs:quarantine` | Takes the run out of quarantine |
 |  | `POST /v1/runs/{id}/give-up` | `runs:quarantine` | Gives up a quarantined run |
 |  | `DELETE /v1/runs/{id}` | `runs:delete` | Erases the run, payloads included |
-| Host-tool tasks | `GET /v1/tasks` | `tasks:work` | Long-poll, filtered by toolset and tools, and to the runs the caller sees (a token's namespace, a grant's labels) |
-|  | `POST /v1/tasks/{token}/heartbeat` | `tasks:work` | Extends the task's claim |
-|  | `POST /v1/tasks/{token}/defer` | `tasks:work` | The handler answers later: the task is `deferred`, without heartbeats, until `complete` or `fail` |
+| Host-tool tasks | `GET /v1/tasks/stream` | `tasks:work` | SSE: the tasks handed to this worker as they become ready, filtered by toolset and tools, and to the runs the caller sees (a token's namespace, a grant's labels); `slots` bounds the tasks in flight on it. The open stream is the liveness of the tasks handed on it ([lifecycle](04-tools.md#tool-task-lifecycle)) |
+|  | `POST /v1/tasks/{token}/defer` | `tasks:work` | The handler answers later: the task is `deferred` until `complete` or `fail`, whether the stream stays open or not |
 |  | `POST /v1/tasks/{token}/complete` | `tasks:work` | The result; also later, asynchronously |
 |  | `POST /v1/tasks/{token}/fail` | `tasks:work` | The failure |
 |  | `POST /v1/tasks/{id}/approve` | `tasks:approve` | Approval policy, parked tasks: the task goes on |
@@ -640,9 +658,8 @@ Conventions:
 |  | `GET /v1/subscriptions` | `subscriptions:read` | Lists the subscriptions, without their secrets |
 |  | `DELETE /v1/subscriptions/{id}` | `subscriptions:write` | Deletes a subscription |
 | Reading (dashboard) | `GET /v1/scripts` | `runs:read` | Every distinct script, its runs, its tools |
-|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source, its title and description and where they come from (`titleSource`: `person`, `comment`) |
-|  | `PATCH /v1/scripts/{digest}` | `scripts:write` | Gives the script a title (1 to 120 characters) and a description (at most 2,000) for the organization, or removes them (`title: null`); 422 `invalid-title` out of bounds; answers the script ([titles](04-tools.md#script-titles)) |
-|  | `GET /v1/tools/stats` | `runs:read` | Latency, errors, retries |
+|  | `GET /v1/scripts/{digest}` | `runs:read` | One script's source |
+|  | `GET /v1/tools/stats` | `runs:read` | Per tool, from the hourly counters of a namespace or the tenant over a window: calls, latency, errors, retries |
 |  | `GET /v1/payloads/{digest}` | `runs:read` | A payload, on demand, through a run that holds it (`run`, required with a token, a header, or a grant limited to labels) |
 | Organization | `GET /v1/whoami` | any caller | Who calls: the tenant, the principal (a key's id, the user with their email, name and picture, or a token: its kind, `opaque` or `signed`, its id or key and `jti`, its expiry), the grant (role, allowed labels) or the token's namespace and labels, the permissions it holds; for a member, the organization and every organization of the user; for a connection, its id, person and client, and the organizations it opens with their access |
 | | `POST /v1/organizations` | a member, even without organization | Creates an organization: in WorkOS with the caller's membership, then the tenant and the caller's `owner` grant; if the second step fails, the organization is deleted in WorkOS |
@@ -697,12 +714,12 @@ Conventions:
 |  | `POST /v1/organization/signing-keys` | `organization:write` | Replaces the signing key: the old one stops signing and stays published 24 hours |
 |  | `GET /organizations/{tenant}/jwks.json` | none | The public keys, outside `/v1`: the current one and those retired less than 24 hours ago; `Cache-Control: max-age=300` |
 | Operator | `PUT /v1/organizations/{tenant}/quotas` | the operator | Sets a tenant's ceiling |
-| Server | `GET /v1/server` | any caller | The server's version, epochs and roles |
+| Server | `GET /v1/server` | any caller | The server's version and epochs, and how many partitions and nodes the deployment has |
 | | `POST /v1/server/stop` | the operator | Stops the embedded server, when the CLI replaces it with one of its own version |
 
 ### Sign-in (`/auth`)
 
-The dashboard's sign-in, served by the api role when WorkOS is configured. These routes are for a
+The dashboard's sign-in, served by every node's edge when WorkOS is configured. These routes are for a
 browser only: they read and write the cookie `rewind_session`, and `/v1` never reads it. They are
 described in the OpenAPI document like `/v1`.
 
@@ -736,17 +753,17 @@ described in the OpenAPI document like `/v1`.
 | Variable | Value |
 | --- | --- |
 | `WORKOS_CLIENT_ID` | The WorkOS environment's client, `client_…` |
-| `WORKOS_API_KEY` | Its secret key, `sk_…`. On the api role only, never on a worker |
+| `WORKOS_API_KEY` | Its secret key, `sk_…`. Given to every node, never to a node started with `--executors-only` |
 | `WORKOS_COOKIE_PASSWORD` | 32 random bytes in hexadecimal (64 characters). Changing it signs everyone out |
 | `WORKOS_REDIRECT_URI` | `https://app.rewind.codes/auth/callback`: registered in WorkOS, on the dashboard's origin |
 
 The four are given together or not at all (exit code 64 otherwise). Without them the server has
-no `/auth` and accepts only API keys; keys still get their rights from grants and roles. A worker
-accepts only API keys: the dashboard never calls the routes the edge sends to workers.
+no `/auth` and accepts only API keys; keys still get their rights from grants and roles. A node
+started with `--executors-only` serves no HTTP route but the node link.
 
 ## MCP and OAuth
 
-The api role serves Rewind's MCP server, for Claude and any MCP client
+Every node's edge serves Rewind's MCP server, for Claude and any MCP client
 ([01](01-product.md#claude-as-the-harness)), and the OAuth authorization server its people
 connect through ([connections](06-storage-and-scale.md#connections)). OAuth needs the public URL
 (`--public-url`, the issuer and the resource's base) and WorkOS (the consent needs a person
@@ -782,7 +799,7 @@ The flow:
    `WWW-Authenticate: Bearer resource_metadata="{public-url}/.well-known/oauth-protected-resource/mcp"`,
    and `error="invalid_token"` when a token was sent.
 2. **Clients.** A `client_id` that is an `https` URL with a path is a client's metadata document
-   (CIMD): the api role fetches it with the egress rules of MCP servers
+   (CIMD): the edge fetches it with the egress rules of MCP servers
    ([04](04-tools.md#where-mcp-servers-and-apis-may-be)), no redirect, at most 5 KiB within 5 s, and
    keeps it as its HTTP caching says, 24 hours at most. It names itself as `client_id`, lists
    its `redirect_uris`, and authenticates with `none`. Other clients register
@@ -834,8 +851,7 @@ The flow:
 - **How a tool runs.** The tool calls `/v1` on this server over the loopback address, with the
   caller's Bearer, `Rewind-Organization` and `Rewind-Namespace`: one authorization, the code and
   the limits every client goes through. What runs model-written code (`POST /v1/test`,
-  `POST /v1/workflows`, a fork's suite) goes to the workers through `{public-url}` when this
-  server has no worker role, as the edge routes it.
+  `POST /v1/workflows`, a fork's suite) runs on the node that answers, under its sandbox.
 - **No `Host` check.** Every request carries a Bearer and none reads a cookie, so a page that
   rebinds a name to the server gains nothing.
 
@@ -862,19 +878,21 @@ the first run, as on `/v1`.
 
 ## Embedded server and CLI
 
-The CLI never opens `journal.db`. It is a client of the API `/v1`: of a remote server, or of
-the embedded server of a `.rewind/` directory. Only one process opens the database, so Turso
-stays in its stable single-process mode, and the instance cache lives in that server.
+The CLI never opens what `.rewind/` stores. It is a client of the API `/v1`: of a remote server, or
+of the embedded server of a `.rewind/` directory. Only one process opens the directory, so Turso
+stays in its stable single-process mode, SlateDB has one writer, and the instance cache lives in
+that server.
 
-`rewind server --embedded` is the engine host for a `.rewind/` directory. It takes both roles, api
-and worker.
+`rewind server --embedded` is the engine host for a `.rewind/` directory: one node, which owns the
+only partition, with its edge on a unix socket. It runs the same code as a production node, over
+SlateDB on local files and Turso, with a cluster of one member and the node link inside the process.
 
 | When | What happens |
 | --- | --- |
-| A command needs the server | If `.rewind/server.lock` is free, no server runs: the command starts one, detached, with `rewind server --embedded --dir <dir> --idle-timeout 10m`. |
-| The server starts | It takes an exclusive lock on `.rewind/server.lock`, opens `journal.db`, and listens on the unix socket `.rewind/server.sock`. Due timers fire at startup. |
+| A command needs the server | If `.rewind/server.lock` is free, no server runs: the command starts one, detached, with `rewind server --embedded --dir <dir> --idle-timeout 10m`, and waits for it to write `ready` on the pipe it was given. |
+| The server starts | It takes an exclusive lock on `.rewind/server.lock`, opens `control.db` and its partition, recovers it (the timers that came due while it was down fire at once), listens on the unix socket `.rewind/server.sock`, then writes `ready`. |
 | A second server starts | It fails to take the lock and exits with code 75. |
-| The server is killed (`kill -9`) | The lock is released. The next command starts a new server, and expired leases give the runs back. |
+| The server is killed (`kill -9`) | The lock is released. The next command starts a new server, which recovers the partition: the activations that were running run again. |
 | The CLI's version differs from the server's | The CLI asks the server to stop and starts a new one. |
 | 10 minutes pass without requests and without work in progress | The server stops. A sleeping run resumes at the next `rewind` command. |
 
@@ -883,7 +901,10 @@ and worker.
 - The CLI names a namespace with `--namespace` or `REWIND_NAMESPACE`. Against its own embedded
   server it uses `local` when none is given; against a remote server, a command that starts a
   run without one is a usage error (64).
-- `rewind server` run in the foreground never stops on idle: only `--idle-timeout` makes it.
+- `rewind server` run in the foreground never stops on idle: only `--idle-timeout` makes it. The
+  idle stop is one timer, pushed back by each request and each activation.
+- A command that waits for a run (`--wait`) sends one request, answered when the run ends or the
+  wait elapses.
 - Virtual time is an option of the server (`--virtual-time`, `--real-time`), kept in the
   `meta` table.
 - `rewind server` exits with 0 once stopped, 64 for a usage error, 70 when it cannot start, and 75
@@ -902,12 +923,14 @@ project/
   .rewind/                  created when the first server starts; --dir picks another
     server.lock             held by the embedded server
     server.sock             the API /v1, mode 0600
-    journal.db              Turso: every table of the store; meta holds the schema version and virtual time
-    journal.db-wal          Turso's write-ahead log
+    control.db              Turso: the control plane; meta holds the schema version and virtual time
+    control.db-wal          Turso's write-ahead log
     master.key              the master key of the secret store, mode 0600, made at the first start
-    blobs/
-      local/sha256/ab/cdef… payloads above 64 KiB of the tenant local, named by their digest
-      .staging/             where a blob is written and synced before it is renamed
+    partitions/0/           SlateDB: the partition's write-ahead log, tables and manifest
+    runs/local/<run>/1.json the sealed attempts of the tenant local
+    blobs/local/<run>/sha256/ab/cdef…   payloads above 64 KiB, named by their digest
+    tests/local/sha256/ab/cdef…         test documents
+    .staging/               where an object is written and synced before it is renamed
 ```
 
 Commands:
@@ -930,7 +953,8 @@ Commands:
 | `rewind toolsets add\|declarations\|search` | Registers a toolset file; its declarations; searches its tools |
 | `rewind secrets list\|put\|delete\|usage [name] [--namespace <name>]` | The organization's secrets, or a namespace's; `put` reads the value from standard input, never from an argument |
 | `rewind namespaces list\|show\|rename\|quotas\|delete` | The namespaces and their use; one namespace; sets its display name, or removes it; sets its exceptions, or the defaults with `--defaults`; erases one |
-| `rewind server [--embedded] [--role api\|worker] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
+| `rewind server [--embedded] [--executors-only] [--pool name] [--virtual-time] [--idle-timeout 10m]` | Runs the server in the foreground (`rewind server --help` lists its options) |
+| `rewind server migrate-runs` | Once, at the deploy that moves runs to partitions: moves the runs of the old tables into the partitions and the archive ([08](08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)) |
 | `rewind mcp` | Serves the agent tools over MCP on stdin and stdout, against the embedded server: to debug them with an MCP client (the MCP Inspector, Claude Code on this machine). Never a remote server |
 
 Every command takes `--json`. A first Ctrl-C lets the command finish the call in flight; a
@@ -970,7 +994,7 @@ Its build is what `rewind-server` serves:
 | Claude | Connect Claude (`/connect`): the URL, the steps per client, the good practices, the connection seen arriving. The consent (`/connect/authorize`), reached after the sign-in when the person was not signed in. The person's connections (Account › Connections), and the organization's (Organization › Connections, `members:read`) |
 | Namespace | None picked: the dashboard never sends `Rewind-Namespace` and reads every namespace of the organization; a run's namespace is a term of the query (`namespace:`) |
 | Layers | `views/`, `app/` and `components/` render state and call actions; they import only `state/`. `state/` holds the TanStack DB collections (`@tanstack/db`, pinned to an exact version), the hooks that read them and the actions, and decides what to load, when it is stale and what a change touches. `sources/` holds the HTTP client, the change stream and the run event streams: a new way for the server to push changes changes this folder only. Biome's `noRestrictedImports` (`biome.jsonc`) keeps `sources/` and `@tanstack/*` (but `@tanstack/react-virtual`, a component) out of the views. What the caller may do is `state/access.tsx`; browser storage, `model/storage.ts`; views may read the contexts `app/` provides (the server's answer, by the gate) |
-| Event streams | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header. A run's is resumed with `from` after a drop. The change stream (`GET /v1/changes`) is one per tab, reopened after a drop (1 s, doubling up to 30 s) with a read of what is on screen; while it is down, the views read at their former rates |
+| Event streams | Read with `fetch`, not `EventSource`, which cannot send the `Authorization` header. A run's is resumed with `from` after a drop. The change stream (`GET /v1/changes`) is one per tab, reopened after a drop (1 s, doubling up to 30 s) with a read of what is on screen; while it is down, the views keep what they show, and the dot beside the organization picker says it is not live. No view reads on a timer, and the lint refuses `refetchInterval` |
 | Resources | None from another origin: the fonts are in the build. No inline script. The one image from elsewhere is a member's picture, as WorkOS gives it |
 
 `dashboard/README.md` has the development commands; `pnpm dev:mock` runs it against a mocked API.
