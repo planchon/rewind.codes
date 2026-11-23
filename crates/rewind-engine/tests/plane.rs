@@ -1212,3 +1212,155 @@ async fn a_series_and_the_namespaces_use_are_one_request_per_partition() {
         "the next month used nothing yet"
     );
 }
+
+#[tokio::test]
+async fn cpu_over_its_quota_raises_alerts_and_refuses_nothing() {
+    let programs = FakeExecutor::new().with(
+        "busy",
+        |run| {
+            run.spend(Duration::from_millis(3));
+            run.complete(json!("done"));
+        },
+        |_, _| {},
+    );
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let tenant = TenantId::local();
+    world
+        .plane
+        .catalog
+        .put_subscription(&subscription("https://harness.example.com/hooks"))
+        .await
+        .unwrap();
+    let local = NamespaceName::new("local").unwrap();
+    let quotas = Quotas {
+        cpu_per_month: Some(Duration::from_millis(10)),
+        ..Quotas::default()
+    };
+    world
+        .plane
+        .catalog
+        .put_namespace(
+            &tenant,
+            &local,
+            Some(&quotas),
+            world.partitions,
+            world.now(),
+        )
+        .await
+        .unwrap();
+    let cpu_alerts = |world: &World| -> Vec<String> {
+        world
+            .plane
+            .webhooks
+            .deliveries()
+            .into_iter()
+            .filter(|(_, event)| {
+                event.kind.event_type().as_str() == "quota.alert"
+                    && event.id.contains(":cpu_per_month:")
+            })
+            .map(|(_, event)| event.id)
+            .collect()
+    };
+    // 3 ms, 6 ms: below 80 % of 10 ms.
+    for _ in 0..2 {
+        world.run(request("busy", json!({}))).await;
+    }
+    assert!(cpu_alerts(&world).is_empty());
+    // 9 ms: 80 %; 12 ms: 100 %; 15 ms: nothing new.
+    for _ in 0..3 {
+        let run = world.run(request("busy", json!({}))).await;
+        assert_eq!(
+            world.view(&run).await.head.status,
+            RunStatus::Completed,
+            "CPU over its quota refuses no run"
+        );
+    }
+    let alerts = cpu_alerts(&world);
+    assert_eq!(
+        alerts,
+        [
+            "quota.alert:local:cpu_per_month:2026-01:80",
+            "quota.alert:local:cpu_per_month:2026-01:100"
+        ],
+        "80 % and 100 %, once each"
+    );
+    let month = rewind_engine::ports::Month::of(world.now());
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let recorded = world
+        .edge
+        .quota_alerts(&mut gateway, &tenant, Some(&local), month)
+        .await
+        .unwrap();
+    assert_eq!(recorded.len(), 2);
+    assert!(recorded.iter().all(|alert| {
+        alert.key.quota == rewind_engine::ports::QuotaKind::CpuPerMonth && alert.limit == 10
+    }));
+    assert_eq!(
+        recorded[0].used, 12,
+        "the use when the limit was reached, in ms"
+    );
+}
+
+#[tokio::test]
+async fn a_call_parked_by_a_schema_change_is_sent_once_the_harness_approves_it() {
+    let dispatcher = RecordingDispatcher::dispatching(|call, _| {
+        if call.schema_change_approved {
+            Dispatched::Result(json!({ "sent": "against the new schema" }))
+        } else {
+            Dispatched::Park(rewind_engine::ports::ParkReason {
+                kind: rewind_engine::ports::ParkKind::SchemaChanged,
+                message: "the input schema of a changed: x is now a string".into(),
+            })
+        }
+    });
+    let mut world = World::new(one_call(), dispatcher).await;
+    world
+        .plane
+        .catalog
+        .put_subscription(&subscription("https://harness.example.com/hooks"))
+        .await
+        .unwrap();
+    let run = world.run(request("one_call", json!({}))).await;
+    let tasks = world.tasks(&run).await;
+    let TaskState::Parked(reason) = &tasks[0].state else {
+        panic!("{:?}", tasks[0].state)
+    };
+    assert_eq!(reason.kind, rewind_engine::ports::ParkKind::SchemaChanged);
+    assert!(!tasks[0].schema_change_approved);
+    assert_eq!(
+        world.view(&run).await.summary.unwrap().waits[0].task,
+        Some(rewind_engine::ports::TaskPhase::Parked),
+        "the index shows the call parked"
+    );
+    assert!(
+        world
+            .plane
+            .webhooks
+            .deliveries()
+            .iter()
+            .any(|(_, event)| event.kind.event_type().as_str() == "tool.schema_changed"),
+        "the harness is told"
+    );
+
+    world.approve(&tasks[0].task).await.unwrap();
+    world.idle().await;
+    let calls = world.plane.dispatcher.calls();
+    assert_eq!(calls.len(), 2);
+    assert!(!calls[0].schema_change_approved);
+    assert!(
+        calls[1].schema_change_approved,
+        "sent against the tool's current schema"
+    );
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Completed);
+    let history = world.history(&run).await;
+    let Event::Command(rewind_core::Command::CompleteRun { output }) =
+        &history.last().unwrap().event
+    else {
+        panic!("{history:?}")
+    };
+    assert_eq!(
+        output.value(),
+        Some(&json!({ "sent": "against the new schema" }))
+    );
+}

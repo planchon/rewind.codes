@@ -522,3 +522,44 @@ async fn a_stream_that_does_not_come_back_has_its_tasks_handed_again_or_failed()
     let _ = RunRef::new(TenantId::local(), retried.id);
     let _ = PartitionReply::Done(Ok(true));
 }
+
+#[tokio::test]
+async fn a_tenant_s_activations_run_on_its_pool_and_the_others_on_the_shared_one() {
+    let acme = TenantId::new("acme").unwrap();
+    let pools = std::collections::BTreeMap::from([(acme.clone(), "acme".to_owned())]);
+    let mut owner = config("node-a", 1);
+    owner.pools = pools.clone();
+    let mut pool = config("node-b", 1);
+    pool.executors_only = true;
+    pool.pool = Some("acme".into());
+    pool.pools = pools;
+    let mut world = World::with(waiter(), RecordingDispatcher::echo(), 1, &[owner, pool]).await;
+    let (a, b) = (node("node-a"), node("node-b"));
+
+    let mut of_acme = request("waiter", json!({}));
+    of_acme.tenant = acme.clone();
+    let run = world.run(of_acme).await;
+    assert_eq!(world.events(&run).await, ["run_started", "signal_awaited"]);
+    assert_eq!(world.driver.node(&a).unwrap().cached_instances(), 0);
+    assert_eq!(
+        world.driver.node(&b).unwrap().cached_instances(),
+        1,
+        "the tenant's run ran in its pool"
+    );
+
+    // A tenant without a pool of its own runs on the shared pool: the owner's executors.
+    let shared = world.run(request("waiter", json!({}))).await;
+    assert_eq!(
+        world.events(&shared).await,
+        ["run_started", "signal_awaited"]
+    );
+    assert_eq!(world.driver.node(&a).unwrap().cached_instances(), 1);
+    assert_eq!(world.driver.node(&b).unwrap().cached_instances(), 1);
+
+    world
+        .signal(&run, "go", json!({ "ok": true }), None)
+        .await
+        .unwrap();
+    world.settle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+}
