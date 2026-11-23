@@ -205,19 +205,7 @@ pub(super) async fn payload(
     caller.require(Permission::RunsRead)?;
     let parsed = Digest::from_hex(&digest)
         .map_err(|_| ApiError::not_found(format!("no payload {digest} for this tenant")))?;
-    let Some(run) = &query.run else {
-        if caller.scoped() || caller.namespace.is_some() {
-            return Err(ApiError::forbidden(format!(
-                "{} reads the payloads of the runs it sees: name the run (GET \
-                 /v1/payloads/{digest}?run=<id>)",
-                caller.who()
-            )));
-        }
-        return Err(ApiError::invalid(format!(
-            "run is required: a payload belongs to its run, and is read through it (GET \
-             /v1/payloads/{digest}?run=<id>)"
-        )));
-    };
+    let run = &query.run;
     let view = app.run(&caller, run).await?;
     let value = app
         .views()

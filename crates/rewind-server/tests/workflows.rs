@@ -171,7 +171,7 @@ async fn a_script_starts_signals_and_receives_the_end_of_a_workflow_run() {
         (parent.id.as_str(), false)
     );
 
-    // The read model finds the runs a run started, and the runs of a workflow.
+    // A search finds the runs a run started, and the runs of a workflow.
     let children = eventually(|| async {
         let page = harness
             .list_runs(&RunFilter {

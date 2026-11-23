@@ -200,7 +200,7 @@ impl Permission {
             Permission::SecretsWrite => "Put and delete secrets.",
             Permission::SecretsUse => "Attach an organization's secret to a run or a workflow.",
             Permission::TasksWork => {
-                "Claim host-tool tasks, and heartbeat, defer, complete or fail them."
+                "Hold a task stream of host-tool tasks, and defer, complete or fail them."
             }
             Permission::TasksApprove => "Approve or reject a parked task.",
             Permission::SubscriptionsRead => "List the lifecycle webhooks.",

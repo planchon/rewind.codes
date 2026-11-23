@@ -58,7 +58,7 @@
             ]
           },
           "concurrency": {
-            "description": "Its calls in flight on each worker. 8 by default.",
+            "description": "Its calls in flight in the organization. 8 by default.",
             "format": "int32",
             "minimum": 0,
             "type": [
@@ -7354,7 +7354,7 @@
             "oneOf": [
               {
                 "$ref": "#/components/schemas/Duration",
-                "description": "How long a host tool's worker may go without a heartbeat. 60 seconds by default."
+                "description": "The grace after a stream closes: how long a host task handed on a stream that closed\nwaits for its worker to come back before it is handed again, as attempt + 1. 60 seconds\nby default."
               },
               {
                 "type": "null"
@@ -14350,10 +14350,10 @@
             }
           },
           {
-            "description": "A run whose journal holds the payload. Required with a key limited to labels, which\nreads only the payloads of the runs it sees; checked whenever it is given.",
+            "description": "The run whose history holds the payload: a payload belongs to its run, and is read\nthrough it.",
             "in": "query",
             "name": "run",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -14394,7 +14394,7 @@
                 }
               }
             },
-            "description": "The request is malformed (`invalid-request`)."
+            "description": "No `run` (`invalid-request`): a payload is read through its run."
           },
           "401": {
             "content": {
@@ -14414,7 +14414,7 @@
                 }
               }
             },
-            "description": "The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run."
+            "description": "The key's role or allowed labels do not cover the run (`forbidden`)."
           },
           "404": {
             "content": {
@@ -14424,7 +14424,7 @@
                 }
               }
             },
-            "description": "No such payload for this tenant, or not in the journal of the run given."
+            "description": "No such run, or no such payload in its history."
           },
           "500": {
             "content": {

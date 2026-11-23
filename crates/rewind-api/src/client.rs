@@ -606,11 +606,10 @@ impl Client {
         self.json(request).await
     }
 
-    /// `GET /v1/payloads/{digest}`: the value itself, read through `run` when given (a key
-    /// limited to labels must give it).
-    pub async fn get_payload(&self, digest: &str, run: Option<&str>) -> Result<Value, Error> {
+    /// `GET /v1/payloads/{digest}`: the value itself, read through `run`, which holds it.
+    pub async fn get_payload(&self, digest: &str, run: &str) -> Result<Value, Error> {
         let query = PayloadQuery {
-            run: run.map(str::to_owned),
+            run: run.to_owned(),
         };
         let request = self.request_with(Method::GET, routes::PAYLOAD, &[digest], &query)?;
         self.json(request).await

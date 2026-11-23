@@ -1226,8 +1226,9 @@ mod operations {
         params(("digest" = String, Path, description = "SHA-256 of the canonical JSON, lowercase hex."), PayloadQuery),
         responses(
             (status = 200, description = "The JSON value itself, in canonical form.", body = Value),
-            (status = 403, description = "The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run.", body = Problem, content_type = "application/problem+json"),
-            (status = 404, description = "No such payload for this tenant, or not in the journal of the run given.", body = Problem, content_type = "application/problem+json"),
+            (status = 400, description = "No `run` (`invalid-request`): a payload is read through its run.", body = Problem, content_type = "application/problem+json"),
+            (status = 403, description = "The key's role or allowed labels do not cover the run (`forbidden`).", body = Problem, content_type = "application/problem+json"),
+            (status = 404, description = "No such run, or no such payload in its history.", body = Problem, content_type = "application/problem+json"),
         )
     )]
     pub(super) fn get_payload() {}

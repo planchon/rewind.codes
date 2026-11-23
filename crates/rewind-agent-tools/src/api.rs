@@ -133,7 +133,7 @@ pub trait Api: Send + Sync {
     fn get_payload(
         &self,
         digest: &str,
-        run: Option<&str>,
+        run: &str,
     ) -> impl Future<Output = Result<Value, ApiError>> + Send;
 
     /// `GET /v1/tests/{digest}`.
@@ -281,7 +281,7 @@ impl<A: Api> Api for &A {
     fn get_payload(
         &self,
         digest: &str,
-        run: Option<&str>,
+        run: &str,
     ) -> impl Future<Output = Result<Value, ApiError>> + Send {
         (**self).get_payload(digest, run)
     }

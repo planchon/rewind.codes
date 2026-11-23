@@ -279,7 +279,7 @@ impl Api for ServerApi {
         Api::get_script(&self.local, digest).await
     }
 
-    async fn get_payload(&self, digest: &str, run: Option<&str>) -> Result<Value, ToolError> {
+    async fn get_payload(&self, digest: &str, run: &str) -> Result<Value, ToolError> {
         Api::get_payload(&self.local, digest, run).await
     }
 

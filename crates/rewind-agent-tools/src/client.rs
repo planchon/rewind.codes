@@ -90,7 +90,7 @@ impl Api for Client {
         Ok(Client::get_script(self, digest).await?)
     }
 
-    async fn get_payload(&self, digest: &str, run: Option<&str>) -> Result<Value, ApiError> {
+    async fn get_payload(&self, digest: &str, run: &str) -> Result<Value, ApiError> {
         Ok(Client::get_payload(self, digest, run).await?)
     }
 

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use futures_util::StreamExt;
 use rewind_api::Problem;
 use rewind_api::access::Permission;
 use rewind_api::common::{Timestamp, timestamp};
@@ -25,7 +26,9 @@ use rewind_api::runs::{
 };
 use rewind_api::scripts::{RunCounts, ScriptFilter, ScriptPage, ScriptSummary};
 use rewind_core::{Digest, RunStatus};
-use rewind_engine::ports::{Counters, Gauges, RunCounts as Counted, Scope, Window};
+use rewind_engine::ports::{
+    Counters, Gauges, LatestRun, RunCounts as Counted, RunRef, Scope, Window,
+};
 
 use crate::app::App;
 use crate::auth::Caller;
@@ -40,6 +43,10 @@ const MAX_BUCKETS: u64 = 500;
 const HOUR_MS: u64 = 3_600_000;
 const PAGE: u32 = 50;
 const MAX_PAGE: u32 = 500;
+/// The labels a failure group lists.
+const TOP_LABELS: usize = 10;
+/// The latest runs read at once for the labels of a page of failure groups.
+const LABEL_READS: usize = 16;
 
 /// The scope of a statistics request: the caller's tenant, or one namespace.
 pub(crate) fn scope(caller: &Caller, q: Option<&str>) -> Result<Scope, ApiError> {
@@ -279,6 +286,41 @@ pub(super) async fn runs(
     }))
 }
 
+/// The labels of each failure group's latest runs, as `key:value`, most runs first: read from
+/// the runs' owners, as many at once as [`LABEL_READS`]. A run that cannot be read (erased since,
+/// its partition moving) adds none.
+async fn latest_labels<'a>(
+    app: &App,
+    caller: &Caller,
+    groups: impl Iterator<Item = &'a Vec<LatestRun>>,
+) -> Vec<Vec<FacetValue>> {
+    let runs: Vec<(usize, RunRef)> = groups
+        .enumerate()
+        .flat_map(|(group, latest)| {
+            latest
+                .iter()
+                .map(move |run| (group, RunRef::new(caller.tenant.clone(), run.run)))
+        })
+        .collect();
+    let groups = runs.last().map_or(0, |(group, _)| group + 1);
+    let mut counts = vec![BTreeMap::<String, u64>::new(); groups];
+    let mut reads = futures_util::stream::iter(runs)
+        .map(|(group, run)| async move { (group, app.read_run(&run).await) })
+        .buffer_unordered(LABEL_READS);
+    while let Some((group, view)) = reads.next().await {
+        let Ok(Some(view)) = view else {
+            continue;
+        };
+        for (key, value) in &view.head.metadata.labels {
+            *counts[group].entry(format!("{key}:{value}")).or_insert(0) += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|counts| top(counts, TOP_LABELS))
+        .collect()
+}
+
 /// The runs of each error name of the failure groups.
 fn failure_errors(counters: &Counters) -> BTreeMap<String, u64> {
     let mut errors = BTreeMap::new();
@@ -307,10 +349,12 @@ pub(super) async fn failures(
     groups.sort_by(|(a, x), (b, y)| y.runs.cmp(&x.runs).then_with(|| a.cmp(b)));
     let total_groups = groups.len() as u64;
     let runs = groups.iter().map(|(_, group)| group.runs).sum();
-    let groups = groups
+    let page: Vec<_> = groups.into_iter().take(limit).collect();
+    let labels = latest_labels(&app, &caller, page.iter().map(|(_, group)| &group.latest)).await;
+    let groups = page
         .into_iter()
-        .take(limit)
-        .filter_map(|(fingerprint, group)| {
+        .zip(labels)
+        .filter_map(|((fingerprint, group), labels)| {
             let latest = group.latest.first()?;
             let ends = group.latest.iter().map(|run| run.ended_at);
             Some(FailureGroup {
@@ -335,7 +379,7 @@ pub(super) async fn failures(
                     .iter()
                     .max_by(|a, b| a.1.cmp(b.1).then_with(|| b.0.cmp(a.0)))
                     .map(|(line, _)| *line),
-                labels: Vec::new(),
+                labels,
                 latest: FailureSample {
                     id: latest.run.to_string(),
                     status: latest.status.into(),

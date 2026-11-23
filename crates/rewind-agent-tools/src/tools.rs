@@ -694,7 +694,7 @@ impl<A: Api> Session<'_, A> {
         if let Some(value) = &payload.value {
             return Ok(json(value));
         }
-        let value = self.api.get_payload(&payload.digest, Some(&run.id)).await?;
+        let value = self.api.get_payload(&payload.digest, &run.id).await?;
         Ok(json(&value))
     }
 

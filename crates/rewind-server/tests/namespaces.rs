@@ -278,13 +278,11 @@ async fn an_end_user_s_token_reaches_its_namespace_only() {
     );
     alice.get_script(&hers.script).await.unwrap();
     let her_input = hers.input.clone().unwrap().digest;
+    // Read once the run's first activation has committed its input.
+    let input = eventually(|| async { alice.get_payload(&her_input, &hers.id).await.ok() }).await;
+    assert_eq!(input, json!({}));
     assert_eq!(
-        refused(alice.get_payload(&her_input, None).await),
-        (403, Some(ProblemType::Forbidden)),
-        "a token names the run of a payload"
-    );
-    assert_eq!(
-        refused(alice.get_payload(&her_input, Some(&his.id)).await),
+        refused(alice.get_payload(&her_input, &his.id).await),
         (404, Some(ProblemType::NotFound))
     );
 
@@ -553,16 +551,6 @@ async fn the_customer_names_the_namespace_of_its_requests() {
         (all.runs.len() == 4 && hers.runs.len() == 3 && his.runs.len() == 1).then_some(())
     })
     .await;
-    assert_eq!(
-        refused(
-            customer
-                .with_namespace(ns("bob"))
-                .get_payload(&"ab".repeat(32), None)
-                .await
-        ),
-        (403, Some(ProblemType::Forbidden)),
-        "a read bound to a namespace names the run of a payload"
-    );
     server.stop().await;
 }
 

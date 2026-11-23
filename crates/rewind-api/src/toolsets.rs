@@ -122,7 +122,7 @@ pub struct Api {
     /// absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<Vec<String>>,
-    /// Its calls in flight on each worker. 8 by default.
+    /// Its calls in flight in the organization. 8 by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub concurrency: Option<u32>,
     /// Policies of its tools, by operation name. An operation not listed gets the default of
@@ -295,7 +295,9 @@ pub struct ToolPolicy {
     /// How long one attempt may take. 5 minutes by default for MCP tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<Duration>,
-    /// How long a host tool's worker may go without a heartbeat. 60 seconds by default.
+    /// The grace after a stream closes: how long a host task handed on a stream that closed
+    /// waits for its worker to come back before it is handed again, as attempt + 1. 60 seconds
+    /// by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heartbeat_timeout: Option<Duration>,
     /// At most this many calls of the tool in flight per run. The run's own limit (16) still

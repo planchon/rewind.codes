@@ -79,8 +79,7 @@ pub struct Latency {
 #[serde(rename_all = "camelCase")]
 #[into_params(parameter_in = Query)]
 pub struct PayloadQuery {
-    /// A run whose journal holds the payload. Required with a key limited to labels, which
-    /// reads only the payloads of the runs it sees; checked whenever it is given.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run: Option<String>,
+    /// The run whose history holds the payload: a payload belongs to its run, and is read
+    /// through it.
+    pub run: String,
 }

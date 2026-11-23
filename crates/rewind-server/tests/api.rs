@@ -140,7 +140,7 @@ async fn a_run_starts_waits_and_is_read_back() {
         .unwrap();
     assert_eq!(cassette["v"], 1);
 
-    // The read model lists it once the projector has applied its entries.
+    // The run is listed: its summary is in the index of its partition.
     let listed = eventually(|| async {
         let page = harness
             .list_runs(&RunFilter {
@@ -643,7 +643,7 @@ async fn silent_receiver() -> (String, Arc<Mutex<usize>>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
+async fn a_subscriber_that_never_answers_holds_up_no_other_run() {
     // The receivers listen on 127.0.0.1.
     let server = TestServer::start(&["--allow-private-webhooks"]).await;
     let stranger = server.key_of("other", BuiltInRole::Harness, &[]).await;
@@ -662,8 +662,8 @@ async fn a_subscriber_that_never_answers_holds_up_no_other_projection() {
     stranger.start_run(&quick, None).await.unwrap();
     eventually(|| async { (*accepted.lock().unwrap() > 0).then_some(()) }).await;
 
-    // While its lifecycle event waits for the silent receiver, the runs of another tenant are
-    // still projected: listed, and counted in the scripts' statistics.
+    // While its lifecycle event waits for the silent receiver, the runs of another tenant go
+    // on, and are listed.
     let harness = server.key(BuiltInRole::Harness, &[]).await;
     let run = harness.start_run(&quick, None).await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -1142,13 +1142,8 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
 
     // Payloads: through a run the key sees, which references them.
     assert_eq!(
-        scoped.get_payload(&my_input, Some(&mine.id)).await.unwrap(),
+        scoped.get_payload(&my_input, &mine.id).await.unwrap(),
         json!({ "text": "m".repeat(2048) })
-    );
-    assert_eq!(
-        problem(scoped.get_payload(&my_input, None).await.unwrap_err()).kind(),
-        Some(ProblemType::Forbidden),
-        "a key limited to labels names the run"
     );
     for (digest, run) in [
         (&their_input, &theirs.id),
@@ -1156,31 +1151,15 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
         (&my_input, &theirs.id),
     ] {
         assert_eq!(
-            problem(scoped.get_payload(digest, Some(run)).await.unwrap_err()).kind(),
+            problem(scoped.get_payload(digest, run).await.unwrap_err()).kind(),
             Some(ProblemType::NotFound),
             "{digest} through {run}"
         );
     }
-    assert_eq!(
-        problem(reader.get_payload(&their_input, None).await.unwrap_err()).kind(),
-        Some(ProblemType::Forbidden),
-        "a read bound to a namespace names the run"
-    );
     let tenant_reader = server.tenant_key("acme", "reader").await;
     assert_eq!(
-        problem(
-            tenant_reader
-                .get_payload(&their_input, None)
-                .await
-                .unwrap_err()
-        )
-        .kind(),
-        Some(ProblemType::InvalidRequest),
-        "a payload belongs to its run, which every caller names"
-    );
-    assert_eq!(
         tenant_reader
-            .get_payload(&their_input, Some(&theirs.id))
+            .get_payload(&their_input, &theirs.id)
             .await
             .unwrap(),
         json!({ "text": "t".repeat(2048) })
@@ -1188,7 +1167,7 @@ async fn a_key_limited_to_labels_reads_only_what_its_runs_reference() {
     assert_eq!(
         problem(
             reader
-                .get_payload(&their_input, Some(&mine.id))
+                .get_payload(&their_input, &mine.id)
                 .await
                 .unwrap_err()
         )
@@ -1496,7 +1475,7 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
     asking.toolset = Some(toolset.id.clone());
     let asking = harness.start_run(&asking, None).await.unwrap();
 
-    // Once the projector has applied every run.
+    // Once every run is found.
     eventually(|| async {
         let all = found(&harness, "").await;
         let approval = found(&harness, "waiting:approval").await;
@@ -1652,6 +1631,15 @@ async fn runs_are_searched_counted_and_grouped_by_failure() {
     assert_eq!(group.runs, 2);
     assert_eq!(group.line, Some(2));
     assert!(failed.contains(&group.latest.id));
+    assert_eq!(
+        group
+            .labels
+            .iter()
+            .map(|label| (label.value.as_str(), label.runs))
+            .collect::<Vec<_>>(),
+        [("agent:triage", 2), ("env:test", 2)],
+        "the labels of the group's latest runs"
+    );
 
     // A key limited to labels searches within them.
     let support = server

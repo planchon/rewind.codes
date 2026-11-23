@@ -244,7 +244,7 @@ impl Api for Fake {
         Err(ApiError::fault("unused"))
     }
 
-    async fn get_payload(&self, _digest: &str, _run: Option<&str>) -> Result<Value, ApiError> {
+    async fn get_payload(&self, _digest: &str, _run: &str) -> Result<Value, ApiError> {
         Err(ApiError::fault("unused"))
     }
 

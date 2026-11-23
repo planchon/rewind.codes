@@ -294,8 +294,8 @@ async fn past_runs_are_recorded_one_per_path_and_join_a_suite_through_a_save() {
         runs.push(run.id);
     }
 
-    // Approved or not, the runs took one path: the newest is recorded, once the read model
-    // has projected the three of them.
+    // Approved or not, the runs took one path: the newest is recorded, once the three of them
+    // are found.
     let recorded = eventually(|| async {
         let recorded = harness
             .record_tests("triage", &RecordTests::default())

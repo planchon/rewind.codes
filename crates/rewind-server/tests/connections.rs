@@ -1697,8 +1697,7 @@ async fn claude_runs_a_script_over_mcp() {
     assert!(!error, "{text}");
     assert!(text.contains("42"), "{text}");
 
-    // The run is in the namespace named, with the connection's label, once the read model has
-    // it.
+    // The run is in the namespace named, with the connection's label.
     let mut page = Value::Null;
     for _ in 0..50 {
         let (status, answer) = world

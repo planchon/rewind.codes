@@ -2293,7 +2293,7 @@ export interface components {
             baseUrl?: string | null;
             /**
              * Format: int32
-             * @description Its calls in flight on each worker. 8 by default.
+             * @description Its calls in flight in the organization. 8 by default.
              */
             concurrency?: number | null;
             /** @description The namespace of its tools in `rewind:tools`, an identifier as a server's name is. */
@@ -10198,12 +10198,12 @@ export interface operations {
     };
     getPayload: {
         parameters: {
-            query?: {
+            query: {
                 /**
-                 * @description A run whose journal holds the payload. Required with a key limited to labels, which
-                 *     reads only the payloads of the runs it sees; checked whenever it is given.
+                 * @description The run whose history holds the payload: a payload belongs to its run, and is read
+                 *     through it.
                  */
-                run?: string;
+                run: string;
             };
             header?: {
                 /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
@@ -10228,7 +10228,7 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description The request is malformed (`invalid-request`). */
+            /** @description No `run` (`invalid-request`): a payload is read through its run. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -10246,7 +10246,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description The key's role or allowed labels do not cover this request (`forbidden`): a key limited to labels must name a run. */
+            /** @description The key's role or allowed labels do not cover the run (`forbidden`). */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10255,7 +10255,7 @@ export interface operations {
                     "application/problem+json": components["schemas"]["Problem"];
                 };
             };
-            /** @description No such payload for this tenant, or not in the journal of the run given. */
+            /** @description No such run, or no such payload in its history. */
             404: {
                 headers: {
                     [name: string]: unknown;

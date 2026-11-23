@@ -195,7 +195,7 @@ impl Api for FakeApi {
         Err(unused("get_script"))
     }
 
-    async fn get_payload(&self, _digest: &str, _run: Option<&str>) -> Result<Value, ApiError> {
+    async fn get_payload(&self, _digest: &str, _run: &str) -> Result<Value, ApiError> {
         Err(unused("get_payload"))
     }
 
