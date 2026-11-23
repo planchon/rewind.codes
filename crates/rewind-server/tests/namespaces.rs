@@ -1577,13 +1577,20 @@ async fn namespaces_take_a_display_name() {
         (403, Some(ProblemType::Forbidden))
     );
     customer.delete_namespace(&ns("bob")).await.unwrap();
+    // A namespace being erased takes no display name; once erased (an empty one is, in one
+    // batch, possibly before the patch), it is not found.
     for patch in [
         NamespacePatch::display_name(Some("Bob".into())),
         NamespacePatch::default(),
     ] {
-        assert_eq!(
-            refused(customer.patch_namespace(&ns("bob"), &patch).await),
-            (409, Some(ProblemType::NamespaceDeleting))
+        let answer = refused(customer.patch_namespace(&ns("bob"), &patch).await);
+        assert!(
+            [
+                (409, Some(ProblemType::NamespaceDeleting)),
+                (404, Some(ProblemType::NotFound)),
+            ]
+            .contains(&answer),
+            "{answer:?}"
         );
     }
     server.stop().await;

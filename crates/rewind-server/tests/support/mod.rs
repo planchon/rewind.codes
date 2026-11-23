@@ -370,6 +370,20 @@ impl TestServer {
         let admin = Client::remote(&url, Some(ADMIN_KEY))
             .unwrap()
             .with_namespace(test_namespace());
+        // The node takes its partitions once it serves: until then, a request that reaches every
+        // partition (a toolset's creation, a list of runs) is answered 503, to be asked again.
+        let every = Client::remote(&url, Some(ADMIN_KEY)).unwrap();
+        eventually(|| async {
+            match every
+                .list_runs(&rewind_api::runs::RunFilter::default())
+                .await
+            {
+                Ok(_) => Some(()),
+                Err(rewind_api::Error::Problem(problem)) if problem.status == 503 => None,
+                Err(error) => panic!("the server does not list runs: {error}"),
+            }
+        })
+        .await;
         Self {
             running: Some(running),
             url,

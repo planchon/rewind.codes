@@ -114,8 +114,16 @@ async fn ended(client: &Client, run: &str) -> rewind_api::runs::Run {
 async fn check(url: &str, client: &Client, histories: &Histories) {
     assert_eq!(histories.len(), 15, "{histories:?}");
     for (run, (events, handle)) in histories {
-        // The run keeps the handle the tables gave it, and is found by it.
-        let found = client.get_run(handle, None).await.unwrap();
+        // The run keeps the handle the tables gave it, and is found by it. A server that has
+        // just started may not own every partition yet: it answers 503, to be asked again.
+        let found = eventually(|| async {
+            match client.get_run(handle, None).await {
+                Ok(found) => Some(found),
+                Err(rewind_api::Error::Problem(problem)) if problem.status == 503 => None,
+                Err(error) => panic!("{handle}: {error}"),
+            }
+        })
+        .await;
         assert_eq!((&found.id, &found.handle), (run, handle));
         let journal = client
             .export_journal(run, JournalExport::Journal)
