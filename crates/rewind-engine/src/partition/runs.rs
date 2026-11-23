@@ -1389,13 +1389,15 @@ impl<P: Plane> Owner<P> {
     // Sealing, retention and erasure
 
     /// Writes the ended attempt's journal to the archive; its seal follows in a later batch.
+    /// One seal at a time, and none while the run is being erased.
     pub(crate) fn seal(&mut self, run: &RunRef) {
         let Some(slot) = self.slot_mut(run.id) else {
             return;
         };
-        if !slot.head.is_unsealed() {
+        if !slot.head.is_unsealed() || slot.sealing || slot.erasing {
             return;
         }
+        slot.sealing = true;
         let head = slot.head.clone();
         let Some(log) = self.log.clone() else {
             return;
@@ -1417,6 +1419,12 @@ impl<P: Plane> Owner<P> {
     }
 
     fn sealed(&mut self, run: &RunRef, attempt: Attempt, result: Result<Duration, String>) {
+        let Some(slot) = self.slot_mut(run.id) else {
+            return;
+        };
+        slot.sealing = false;
+        // An erasure that waited for the seal goes on.
+        let waiting = std::mem::take(&mut slot.waiting);
         let retention = match result {
             Ok(retention) => retention,
             Err(error) => {
@@ -1430,6 +1438,9 @@ impl<P: Plane> Owner<P> {
                         OwnerMsg::Internal(Internal::Seal(run.clone())),
                     ),
                 });
+                for message in waiting {
+                    self.dispatch(message);
+                }
                 return;
             }
         };
@@ -1458,6 +1469,9 @@ impl<P: Plane> Owner<P> {
             })));
         }
         self.push(unit);
+        for message in waiting {
+            self.dispatch(message);
+        }
     }
 
     /// Erases a run: its objects in the archive and its blobs first, then its records,
@@ -1469,7 +1483,13 @@ impl<P: Plane> Owner<P> {
             }
             return;
         };
-        if slot.busy.is_some() || (slot.ending && !slot.head.is_ended()) {
+        if slot.erasing {
+            if let Some(reply) = reply {
+                slot.give_up.push(reply);
+            }
+            return;
+        }
+        if slot.busy.is_some() || slot.sealing || (slot.ending && !slot.head.is_ended()) {
             slot.waiting.push(match reply {
                 Some(reply) => OwnerMsg::Request(
                     Box::new(PartitionRequest::Erase { run: run.clone() }),
@@ -1480,6 +1500,7 @@ impl<P: Plane> Owner<P> {
             return;
         }
         slot.ending = true;
+        slot.erasing = true;
         if let Some(reply) = reply {
             slot.give_up.push(reply);
         }
@@ -1511,6 +1532,7 @@ impl<P: Plane> Owner<P> {
         let replies = std::mem::take(&mut slot.give_up);
         if let Err(error) = result {
             slot.ending = false;
+            slot.erasing = false;
             tracing::error!(%run, %error, "a run's objects could not be erased");
             for reply in replies {
                 self.reply(
@@ -1518,6 +1540,8 @@ impl<P: Plane> Owner<P> {
                     PartitionReply::Done(Err(Refusal::Unavailable(error.clone()))),
                 );
             }
+            // A seal skipped while the erasure ran.
+            self.seal(run);
             return;
         }
         let namespace = slot.head.namespace.clone();
