@@ -442,7 +442,8 @@ picked by configuration: `--store turso:<path>` or `postgres://…` for the cont
 archive and the blobs, `--partitions` (64 by default, 1 embedded), `--cluster-database` (where the
 nodes take their liveness locks, `postgres` by default), `--cluster-secret`, `--link-listen` and
 `--link-address` (the node link's port and the address the other nodes dial), `--node-id`,
-`--otlp-endpoint`, WorkOS's variables ([sign-in](#sign-in-auth)).
+`--tenant-pool <tenant>=<pool>` (the tenants whose activations run on a pool of their own, given
+to every node), `--otlp-endpoint`, WorkOS's variables ([sign-in](#sign-in-auth)).
 
 ## Dependency rules
 

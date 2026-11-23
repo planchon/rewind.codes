@@ -102,7 +102,7 @@ limit, and let it reach the outside only through an egress proxy. Two options ch
 | --- | --- |
 | `rewind server` | The HTTP edge, the owners of its partitions, and executors |
 | `rewind server --executors-only` | Executors only: the activations other nodes send it, for the determinism epochs of its build. No HTTP route but the node link |
-| `rewind server --pool <name>` | A pool of executors of its own, for an organization that needs one: the owners send that organization's activations there. The other organizations share the default pool |
+| `rewind server --pool <name>` | A pool of executors of its own, for an organization that needs one: the owners send that organization's activations there, as `--tenant-pool <organization>=<name>` given to every node says. The other organizations share the default pool |
 
 After an upgrade that changes the [determinism epoch](/concepts/journal#determinism-epochs), keep a few nodes of the
 previous build up with `--executors-only`: the runs of that epoch are executed there, until they end, at their TTL
@@ -128,6 +128,7 @@ Every option of `rewind server` also reads an environment variable. `rewind serv
 | `--node-id` | `REWIND_NODE_ID` | This node's id, letters, digits, `-`, `_` and `.`: the host name and the process id by default |
 | `--executors-only` | `REWIND_EXECUTORS_ONLY` | Run the activations other nodes send, and own no partition ([sandboxed nodes](#sandboxed-nodes-and-pools)) |
 | `--pool` | `REWIND_POOL` | The pool of executors this node belongs to; the shared pool without it |
+| `--tenant-pool` | `REWIND_TENANT_POOLS` | An organization whose activations run on a pool of its own, `<organization>=<pool>`; repeat it, or separate pairs with commas. Give every node the same list: while the pool has no node, that organization's runs wait |
 | `--executors` | `REWIND_EXECUTORS` | Activations run at once on this node: the machine's cores by default |
 | `--calls` | `REWIND_CALLS` | Tool calls this node sends at once: 256 by default |
 | `--master-key` | `REWIND_MASTER_KEY` | 32 random bytes in base64. Required |
