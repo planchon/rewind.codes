@@ -106,6 +106,8 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
     // The harness's host tools, served by the SDK's worker on the second node's task stream,
     // whichever node owns the run. Each call is logged with its context.
     const calls: { tool: string; runId: string; seq: number; traceparent: string | undefined; key: string }[] = [];
+    /** What the worker reported, for a stop that does not come. */
+    const reported: string[] = [];
     const log = (tool: string, ctx: HostToolContext) =>
       calls.push({ tool, runId: ctx.runId, seq: ctx.seq, traceparent: ctx.traceparent, key: ctx.idempotencyKey });
     const worker = edges[1 % edges.length]!.worker({
@@ -120,7 +122,10 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
           return { id: `re_${ctx.runId.slice(-6)}`, amount };
         },
       },
-      onError: (error, info) => console.error("worker", info.phase, error),
+      onError: (error, info) => {
+        reported.push(`${new Date().toISOString()} ${info.phase} ${info.task?.tool ?? ""}: ${String(error)}`);
+        console.error("worker", info.phase, error);
+      },
     });
 
     try {
@@ -250,17 +255,28 @@ test.describe("criterion 1: SDK, two nodes, one Postgres", () => {
       expect(activatedBy.size).toBeGreaterThan(0);
       for (const node of activatedBy) expect(deployment.nodes).toContain(node);
     } finally {
-      await stopped(worker, 30_000);
+      await stopped(worker, 30_000, reported);
     }
   });
 });
 
 /** Stops the worker; one that has not stopped within `ms` fails the check with what it holds. */
-async function stopped(worker: { stop(): Promise<void>; readonly running: number }, ms: number): Promise<void> {
+async function stopped(
+  worker: { stop(): Promise<void>; readonly running: number },
+  ms: number,
+  reported: string[],
+): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`the worker did not stop within ${ms} ms: ${worker.running} handler(s) still answering`)),
+      () =>
+        reject(
+          new Error(
+            `the worker did not stop within ${ms} ms: ${worker.running} handler(s) still answering; it reported: ${
+              reported.length === 0 ? "nothing" : reported.join("\n")
+            }`,
+          ),
+        ),
       ms,
     );
   });
