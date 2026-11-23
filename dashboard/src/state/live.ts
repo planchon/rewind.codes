@@ -1,31 +1,33 @@
-// What is on screen, and when it is read again (archi/05, "Live"). The tab follows the
-// organization's runs through one change stream: a `run` event updates the run everywhere at once,
-// without a request; the searches on screen are read again a second after the last change, their
-// counts and charts at most every 5 s. While the stream is open, what is on screen is also read
-// again every 60 s; while it is down (or not open yet), each view reads at its former rate (10 to
-// 30 s). A reopened stream, and a `resync`, read again everything on screen.
-import type { RunSummary } from "../model/types";
+// What is on screen, and when it is read again (archi/05, "Live"): from the change stream only,
+// never on a timer. The tab follows the organization through one change stream: a `run` event
+// updates the run everywhere at once, without a request; the searches on screen are read again a
+// second after the last change of a run (at most 5 s after the first of a burst), their counts and
+// charts at most every 10 s, a run's details when that run changes. A script, a workflow, a secret,
+// a namespace or a connection that changes reads again the views that show it. While the stream is
+// down, the views keep what they show and the connection's dot says it is not live; a reopened
+// stream, and a `resync`, read once everything on screen.
+import type { ControlChange, RunSummary } from "../model/types";
 import { type ChangeStream, type ChangeStreamOptions, followChanges } from "../sources/changes";
 import type { Api } from "../sources/client";
 
-/** `idle` until a view that follows the runs is shown: the stream opens then. */
+/** `idle` until a view that follows the organization is shown: the stream opens then. */
 export type ConnectionState = "idle" | "connecting" | "live" | "reconnecting";
 
 /** Something on screen that the server's changes may make stale. */
 export interface Watched {
   /**
-   * A search's runs, a count or a chart, a run's details; `polled`: what no run's change touches
-   * (the workflows), read on the clock only.
+   * `search`: a search's runs, read again after a run's change; `aggregate`: a count or a chart,
+   * at most every 10 s after a run's change; `detail`: a run's details, when that run changes;
+   * `control`: what no run's change touches (the workflows, the organization's lists), read again
+   * only for the control-plane changes it shows.
    */
-  readonly kind: "search" | "aggregate" | "detail" | "polled";
-  /** How often it is read while the stream is down; `null`: only when asked. */
-  readonly pollMs: number | null;
-  /** When it last asked the server, in ms since the epoch. */
-  readonly lastReadAt: number;
+  readonly kind: "search" | "aggregate" | "detail" | "control";
   /** Reads it again; a read already on its way is followed by one more. */
   refresh(): void;
   /** A run's details: whether a change of `runId` makes them stale. */
   touches?(runId: string): boolean;
+  /** Whether it shows what a control-plane change changed. */
+  controls?(change: ControlChange): boolean;
 }
 
 export interface LiveTimings {
@@ -35,18 +37,12 @@ export interface LiveTimings {
   searchMaxWaitMs: number;
   /** Counts and charts are read again at most this often while changes arrive. */
   aggregateEveryMs: number;
-  /** What is on screen is read again this often while the stream is open. */
-  connectedEveryMs: number;
-  /** How often the reads due are looked for. */
-  tickMs: number;
 }
 
 export const LIVE_TIMINGS: LiveTimings = {
   searchDebounceMs: 1_000,
   searchMaxWaitMs: 5_000,
-  aggregateEveryMs: 5_000,
-  connectedEveryMs: 60_000,
-  tickMs: 1_000,
+  aggregateEveryMs: 10_000,
 };
 
 export type FollowChanges = typeof followChanges;
@@ -58,12 +54,23 @@ export interface LiveOptions {
   stream?: ChangeStreamOptions;
 }
 
+/** What the store does with the changes, beside the values it watches. */
+export interface LiveTargets {
+  /** Applies a run's new summary to what the tab holds. */
+  apply(run: RunSummary): void;
+  /** A control-plane change: the reads outside the watched values that show it. */
+  control?(change: ControlChange): void;
+  /** The counts are due: the reads outside the watched values that move with the runs. */
+  aggregates?(): void;
+  /** A reopened stream or a `resync`: the reads outside the watched values, once. */
+  reread?(): void;
+}
+
 export class Live {
   private state: ConnectionState = "idle";
   private readonly listeners = new Set<() => void>();
   private readonly watched = new Set<Watched>();
   private stream: ChangeStream | null = null;
-  private ticker: ReturnType<typeof setInterval> | undefined;
   private searchTimer: ReturnType<typeof setTimeout> | undefined;
   private burstFrom: number | null = null;
   private aggregateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -74,8 +81,7 @@ export class Live {
 
   constructor(
     private readonly api: Api,
-    /** Applies a run's new summary to what the tab holds. */
-    private readonly apply: (run: RunSummary) => void,
+    private readonly targets: LiveTargets,
     private readonly options: LiveOptions = {},
   ) {
     this.timings = { ...LIVE_TIMINGS, ...options.timings };
@@ -91,10 +97,14 @@ export class Live {
     };
   };
 
-  /** Shows `item` on screen until the answer is called; opens the stream if it is not. */
-  watch(item: Watched): () => void {
+  /**
+   * Shows `item` on screen until the answer is called. `open`: it follows the organization, and
+   * opens the stream if it is not; otherwise it is only read again when the stream, opened by
+   * another view, reopens or resyncs.
+   */
+  watch(item: Watched, open = true): () => void {
     this.watched.add(item);
-    this.start();
+    if (open) this.start();
     return () => {
       this.watched.delete(item);
     };
@@ -109,18 +119,18 @@ export class Live {
         onOpen: (reopened) => {
           // The first opening follows the first reads of what is shown; a later one may have
           // missed changes.
-          if (reopened) this.refresh(() => true);
+          if (reopened) this.rereadAll();
         },
         onRun: (run) => {
-          this.apply(run);
+          this.targets.apply(run);
           this.changed(run.id);
         },
-        onResync: () => this.refresh(() => true),
+        onControl: (change) => this.controlChanged(change),
+        onResync: () => this.rereadAll(),
         onState: (state) => this.setState(state),
       },
       this.options.stream,
     );
-    this.ticker = setInterval(() => this.tick(), this.timings.tickMs);
   }
 
   /** Opens the stream again at once: the token it was opened with was replaced. */
@@ -132,7 +142,6 @@ export class Live {
     this.disposed = true;
     this.stream?.close();
     this.stream = null;
-    clearInterval(this.ticker);
     clearTimeout(this.searchTimer);
     clearTimeout(this.aggregateTimer);
     this.watched.clear();
@@ -149,7 +158,13 @@ export class Live {
     for (const item of [...this.watched]) if (which(item)) item.refresh();
   }
 
-  /** A run changed: the searches a second later, the counts within 5 s, its details now. */
+  /** Everything on screen, once. */
+  private rereadAll(): void {
+    this.refresh(() => true);
+    this.targets.reread?.();
+  }
+
+  /** A run changed: the searches a second later, the counts within 10 s, its details now. */
   private changed(runId: string): void {
     const now = Date.now();
     const t = this.timings;
@@ -170,6 +185,7 @@ export class Live {
           this.aggregateTimer = undefined;
           this.lastAggregateAt = Date.now();
           this.refresh((item) => item.kind === "aggregate");
+          this.targets.aggregates?.();
         },
         Math.max(0, this.lastAggregateAt + t.aggregateEveryMs - now),
       );
@@ -177,14 +193,9 @@ export class Live {
     this.refresh((item) => item.kind === "detail" && (item.touches?.(runId) ?? false));
   }
 
-  /** Reads what is due: every 60 s while the stream is open, at each view's rate otherwise. */
-  private tick(): void {
-    if (typeof document !== "undefined" && document.hidden) return;
-    const now = Date.now();
-    const open = this.state === "live";
-    for (const item of [...this.watched]) {
-      const every = open ? this.timings.connectedEveryMs : item.pollMs;
-      if (every !== null && now - item.lastReadAt >= every) item.refresh();
-    }
+  /** A control-plane change: what shows it, now. */
+  private controlChanged(change: ControlChange): void {
+    this.refresh((item) => item.controls?.(change) ?? false);
+    this.targets.control?.(change);
   }
 }

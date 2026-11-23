@@ -1,14 +1,55 @@
-// Follows the organization's runs through `GET /v1/changes` (server-sent events), read with
-// `fetch` since `EventSource` cannot send the Authorization header. A `run` event carries a run's
-// whole summary, as `GET /v1/runs` lists it; `resync` says that too much changed at once.
+// Follows what changes in the organization through `GET /v1/changes` (server-sent events), read
+// with `fetch` since `EventSource` cannot send the Authorization header. A `run` event carries a
+// run's whole summary, as `GET /v1/runs` lists it; `script`, `workflow`, `secret`, `namespace` and
+// `connection` name what changed in the control plane; `resync` says that too much changed at once.
 //
 // There is no resume cursor: after a drop the stream is opened again (after 1 s, doubling up to
 // 30 s) and whoever follows it reads again what it shows. The server closes the stream at the
 // expiry of the access token it was opened with: it is then opened again at once, with the token
 // the session holds then. One stream per tab and organization.
 import { createParser } from "eventsource-parser";
-import type { RunSummary } from "../model/types";
+import type { ControlChange, RunSummary } from "../model/types";
 import type { Api } from "./client";
+
+/** A control-plane change from an event's name and data; `null` for one this tab does not know. */
+export function controlChange(event: string | undefined, data: string): ControlChange | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(data);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const text = (key: string) => (typeof v[key] === "string" ? (v[key] as string) : null);
+  switch (event) {
+    case "script": {
+      const digest = text("digest");
+      return digest === null ? null : { kind: "script", digest };
+    }
+    case "workflow": {
+      const name = text("name");
+      const version = text("version");
+      return name === null || version === null ? null : { kind: "workflow", name, version };
+    }
+    case "secret": {
+      const name = text("name");
+      const namespace = text("namespace");
+      if (name === null) return null;
+      return namespace === null ? { kind: "secret", name } : { kind: "secret", name, namespace };
+    }
+    case "namespace": {
+      const name = text("name");
+      return name === null ? { kind: "namespace" } : { kind: "namespace", name };
+    }
+    case "connection": {
+      const id = text("id");
+      return id === null ? null : { kind: "connection", id };
+    }
+    default:
+      return null;
+  }
+}
 
 /** `connecting` before the first answer, `reconnecting` after a drop until the next one. */
 export type ChangeStreamState = "connecting" | "live" | "reconnecting";
@@ -21,6 +62,8 @@ export interface ChangeHandlers {
   onOpen(reopened: boolean): void;
   /** A run changed: its whole summary. */
   onRun(run: RunSummary): void;
+  /** A script, a workflow, a secret, a namespace or a connection changed. */
+  onControl(change: ControlChange): void;
   /** Too much changed at once: read again what is shown. */
   onResync(): void;
   onState(state: ChangeStreamState, error?: unknown): void;
@@ -89,7 +132,11 @@ export function followChanges(
           handlers.onResync();
           return;
         }
-        if (message.event !== "run") return;
+        if (message.event !== "run") {
+          const change = controlChange(message.event, message.data);
+          if (change) handlers.onControl(change);
+          return;
+        }
         let run: RunSummary;
         try {
           run = JSON.parse(message.data) as RunSummary;

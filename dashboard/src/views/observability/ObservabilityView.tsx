@@ -3,8 +3,17 @@
 // the failures (grouped by fingerprint). Its sidebar holds the views and the filters; the query
 // lives in the URL, and a filter is a term of it.
 import { Menu } from "@base-ui/react/menu";
-import { Activity, ChevronDown, CircleAlert, Hourglass, List, RefreshCw } from "lucide-react";
-import { type ReactNode, useMemo, useState } from "react";
+import {
+  Activity,
+  Bookmark,
+  ChevronDown,
+  CircleAlert,
+  Hourglass,
+  List,
+  RefreshCw,
+  X,
+} from "lucide-react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useParams, useSearchParams } from "react-router";
 import { RunsFrom } from "../../app/runLinks";
 import { useSettings } from "../../app/settings";
@@ -19,11 +28,13 @@ import {
   fieldTerm,
   joinQuery,
   labelTerm,
+  type QueryFault,
   queryLink,
   queryTime,
   toggleFacet,
   withTerm,
 } from "../../model/query";
+import { waitingRuns } from "../../model/scope";
 import { readSort, withSort } from "../../model/sorts";
 import type { Facets, RunStats, RunStatus } from "../../model/types";
 import { useRunStats } from "../../state/aggregates";
@@ -77,14 +88,22 @@ const VIEWS: readonly View[] = [
   },
 ];
 
-/** How many runs each view shows, for the query. */
-function viewCount(view: ViewKey, all: RunStats | undefined, waiting: RunStats | undefined) {
-  if (view === "waiting") return waiting?.runs;
-  if (!all) return undefined;
-  const s = all.statuses;
-  if (view === "all") return all.runs;
+/**
+ * How many runs each view holds, in the query's namespace or the organization: the statistics
+ * count a scope, never the other terms of a query.
+ */
+function viewCount(view: ViewKey, stats: RunStats | undefined) {
+  if (!stats) return undefined;
+  const s = stats.statuses;
+  if (view === "waiting") return waitingRuns(stats.waiting);
+  if (view === "all") return stats.runs;
   if (view === "active") return s.active;
   return s.failed + s.aborted + s.cancelled;
+}
+
+function sameFault(a: QueryFault | null, b: QueryFault | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.message === b.message && a.start === b.start && a.end === b.end;
 }
 
 function ViewSelect({
@@ -140,20 +159,17 @@ function RunsHistogram({ q, win }: { q: string; win: RangeKey }) {
   const width = RANGES[win];
   const { bucket, ms: bucketMs } = BUCKETS[win];
   const base = withTimeline(q, null);
-  const stats = useRunStats(
-    `obs-histogram|${win}|${base}`,
-    () => {
-      const now = Date.now();
-      return {
-        ...(base ? { q: base } : {}),
-        since: new Date(now - width).toISOString(),
-        until: new Date(now).toISOString(),
-        bucket,
-        top: 1,
-      };
-    },
-    15_000,
-  );
+  // The runs over time of the query's namespace, or of the organization.
+  const stats = useRunStats(`obs-histogram|${win}|${base}`, () => {
+    const now = Date.now();
+    return {
+      ...(base ? { q: base } : {}),
+      since: new Date(now - width).toISOString(),
+      until: new Date(now).toISOString(),
+      bucket,
+      top: 1,
+    };
+  });
   if (!stats.data) return <div className="histogram placeholder" aria-hidden="true" />;
   // Its bars change their values in place: the chart is never drawn again from zero.
   const since = stats.data.since ? Date.parse(stats.data.since) : Date.now() - width;
@@ -196,16 +212,20 @@ function RunsList({
   view,
   setQ,
   facets,
+  onFault,
 }: {
   q: string;
   view: View;
   setQ: (q: string) => void;
   facets: Facets | undefined;
+  /** Told of the term at fault of the query, which the search finds. */
+  onFault: (fault: QueryFault | null) => void;
 }) {
   const [params, setParams] = useSearchParams();
   const sort = readSort(params);
   const asked = joinQuery(q, view.term);
   const runs = useRunSearch({ q: asked, sort, pageSize: 50 });
+  useEffect(() => onFault(queryFault(runs.error)), [runs.error, onFault]);
   const add = (term: string) => setQ(withTerm(q, term));
   if (queryFault(runs.error))
     return <Empty>Fix the query to see its runs: the term at fault is underlined above.</Empty>;
@@ -244,31 +264,29 @@ export function ObservabilityView() {
   const lookup = useRunQueryValues();
   const [win, setWin] = useWindow();
 
-  // The counts of the views, and the facets of the one shown.
-  const all = useRunStats(`obs|all|${q}`, () => ({ ...(q ? { q } : {}), top: 10 }), 15_000);
-  const waiting = useRunStats(
-    `obs|waiting|${q}`,
-    () => ({ q: joinQuery(q, "waiting:*"), top: 10 }),
-    10_000,
-  );
-  const shown = useRunStats(
-    `obs|${view?.key ?? "all"}|${q}`,
-    () => ({ q: joinQuery(q, view?.term), top: 10 }),
-    15_000,
-  );
+  // The counts of the views and the facets: the statistics of the query's namespace, or of the
+  // organization.
+  const stats = useRunStats(`obs|${q}`, () => ({ ...(q ? { q } : {}), top: 10 }));
   const [refreshing, setRefreshing] = useState(false);
   const counts = useMemo(
     () => ({
-      all: viewCount("all", all.data, waiting.data),
-      active: viewCount("active", all.data, waiting.data),
-      waiting: viewCount("waiting", all.data, waiting.data),
-      failures: viewCount("failures", all.data, waiting.data),
+      all: viewCount("all", stats.data),
+      active: viewCount("active", stats.data),
+      waiting: viewCount("waiting", stats.data),
+      failures: viewCount("failures", stats.data),
     }),
-    [all.data, waiting.data],
+    [stats.data],
+  );
+  // The term at fault, as the server finds it: in the search of the view shown.
+  const [searchFault, setSearchFault] = useState<QueryFault | null>(null);
+  const onFault = useCallback(
+    (next: QueryFault | null) => setSearchFault((held) => (sameFault(held, next) ? held : next)),
+    [],
   );
 
   if (!view) return <Navigate to="/observability" replace />;
-  const fault = queryFault(shown.error) ?? queryFault(all.error);
+  const searched = view.key !== "failures";
+  const fault = (searched ? searchFault : null) ?? queryFault(stats.error);
   const timeline = view.key === "failures" ? win : timelineOf(q);
 
   return (
@@ -284,7 +302,7 @@ export function ObservabilityView() {
               <TimelineSelect value={timeline} onChange={(w) => setQ(withTimeline(q, w))} />
             )}
             <FilterGroups
-              facets={fault ? undefined : shown.data?.facets}
+              facets={fault ? undefined : stats.data?.facets}
               q={q}
               onToggle={(field, value) => setQ(toggleFacet(q, field, value))}
             />
@@ -294,28 +312,29 @@ export function ObservabilityView() {
           crumbs="Observability"
           title={view.label}
           actions={
-            <button
-              type="button"
-              className="btn icon-only"
-              aria-label="Refresh"
-              title="Refresh"
-              disabled={refreshing}
-              onClick={() => {
-                setRefreshing(true);
-                void Promise.all([all.refresh(), waiting.refresh(), shown.refresh()]).finally(() =>
-                  setRefreshing(false),
-                );
-              }}
-            >
-              <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
-            </button>
+            <>
+              <SaveSearch q={q} view={view.saved} />
+              <button
+                type="button"
+                className="btn icon-only"
+                aria-label="Refresh"
+                title="Refresh"
+                disabled={refreshing}
+                onClick={() => {
+                  setRefreshing(true);
+                  void stats.refresh().finally(() => setRefreshing(false));
+                }}
+              >
+                <RefreshCw size={14} className={refreshing ? "spin" : undefined} />
+              </button>
+            </>
           }
         />
         <div className="page-body">
           <QueryBar
             value={q}
             onSubmit={setQ}
-            facets={shown.data?.facets}
+            facets={stats.data?.facets}
             values={lookup.values}
             onTyping={lookup.onTyping}
             fault={fault}
@@ -328,18 +347,15 @@ export function ObservabilityView() {
                 q={q}
                 view={view}
                 setQ={setQ}
-                facets={fault ? undefined : shown.data?.facets}
+                facets={fault ? undefined : stats.data?.facets}
+                onFault={onFault}
               />
             </>
           )}
-          {view.key === "waiting" &&
-            (fault ? (
-              <Empty>
-                Fix the query to see the waiting runs: the term at fault is underlined above.
-              </Empty>
-            ) : (
-              <WaitingRuns q={q} setQ={setQ} stats={waiting.data} />
-            ))}
+          {/* Mounted whatever the fault: its search says when the query reads again. */}
+          {view.key === "waiting" && (
+            <WaitingRuns q={q} setQ={setQ} stats={stats.data} onFault={onFault} />
+          )}
           {view.key === "failures" && <FailureGroups q={q} setQ={setQ} win={win} />}
         </div>
       </div>

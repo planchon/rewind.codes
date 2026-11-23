@@ -50,6 +50,7 @@ import {
   shiftMonth,
   usedOf,
 } from "../../model/quotas";
+import { waitingRuns } from "../../model/scope";
 import type { NamespaceDetail, Quotas, RunStatus } from "../../model/types";
 import { useAccess } from "../../state/access";
 import type { Action } from "../../state/actions";
@@ -69,7 +70,6 @@ import { ScriptTable } from "../ScriptsView";
 import { SecretList } from "../secrets/SecretList";
 import { AlertChip, NamespacesGate, QuotaMeter, QuotasForm } from "./bits";
 
-const POLL = 30_000;
 const DAY_MS = 86_400_000;
 /** The longest a display name may be, in characters, as the API checks it. */
 const DISPLAY_NAME_MAX = 128;
@@ -270,22 +270,19 @@ function useMonthRuns(name: string, month: string, now: number) {
     end > now ? `started:>=${queryTime(from)}` : `started:${queryTime(from)}..${queryTime(end)}`;
   const range = { since: new Date(from).toISOString(), until: new Date(until).toISOString() };
   const key = `${name}|${month}`;
-  const stats = useRunStats(
-    `namespace|${key}`,
-    () => ({ q: scope, ...range, bucket: "1d", top: 6 }),
-    POLL,
-  );
-  const waiting = useRunStats(
-    `namespace-waiting|${name}`,
-    () => ({ q: joinQuery(scope, "waiting:*"), top: 1 }),
-    POLL,
-  );
-  const failures = useFailures(
-    `namespace-failures|${key}`,
-    () => ({ q: scope, ...range, limit: 5 }),
-    POLL,
-  );
-  return { scope, started, from, until, stats, waiting, failures };
+  // Its runs waiting now are the gauge of its active runs, whatever the window.
+  const stats = useRunStats(`namespace|${key}`, () => ({
+    q: scope,
+    ...range,
+    bucket: "1d",
+    top: 6,
+  }));
+  const failures = useFailures(`namespace-failures|${key}`, () => ({
+    q: scope,
+    ...range,
+    limit: 5,
+  }));
+  return { scope, started, from, until, stats, failures };
 }
 
 type MonthRuns = ReturnType<typeof useMonthRuns>;
@@ -299,7 +296,7 @@ function RunFigures({ runs, month }: { runs: MonthRuns; month: string }) {
   const ended =
     s.statuses.completed + s.statuses.failed + s.statuses.cancelled + s.statuses.aborted;
   const failed = s.statuses.failed + s.statuses.aborted;
-  const waitingNow = runs.waiting.data;
+  const waiting = s.waiting;
   const durations = s.durations;
   const link = (...terms: string[]) => queryLink("/observability", joinQuery(scope, ...terms));
   return (
@@ -327,12 +324,8 @@ function RunFigures({ runs, month }: { runs: MonthRuns; month: string }) {
       <Tile
         to={queryLink("/observability/waiting", scope)}
         label="Waiting now"
-        value={waitingNow ? formatCount(waitingNow.runs) : "–"}
-        context={
-          waitingNow
-            ? `${formatCount(waitingNow.waiting.signal)} on a signal, ${formatCount(waitingNow.waiting.approval)} on an approval`
-            : " "
-        }
+        value={formatCount(waitingRuns(waiting))}
+        context={`${formatCount(waiting.signal)} on a signal, ${formatCount(waiting.approval)} on an approval`}
         tone="info"
       />
       <Tile
@@ -484,7 +477,6 @@ function MonthRunList({ runs, month, label }: { runs: MonthRuns; month: string; 
         { label: <>Namespace {label}</>, title: `Only the runs of ${label}` },
         { label: <>Started in {monthLabel(month)}</>, title: "The month the page shows" },
       ]}
-      refetchMs={POLL}
       empty={`No run started in ${monthLabel(month)}.`}
     />
   );

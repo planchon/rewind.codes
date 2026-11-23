@@ -2,7 +2,8 @@
 // (`resource.ts`) holding every row shown, all read again together, so that a refresh swaps them in
 // place and an equal answer renders nothing. A read after "Load more" asks for as many rows as are
 // shown and a page more, a page at a time past the most one answer holds. A changed key (another
-// filter, another order) keeps the previous rows, marked `stale`, until its first answer.
+// filter, another order) keeps the previous rows, marked `stale`, until its first answer. When it is
+// read again comes from the change stream (`live.ts`), as for any value of the store.
 //
 // What a view shows of the rows follows the operator as a table of runs does (D7): an answer that
 // adds, drops or reorders rows applies at once while the list is scrolled to its top; otherwise
@@ -28,8 +29,8 @@ export interface Page<T, H> {
 
 export interface PagedInit<T, H> {
   kind: ResourceInit<unknown>["kind"];
-  /** How often it is read while the change stream is down. */
-  pollMs: number | null;
+  /** Whether a control-plane change touches the rows: they are then read again at once. */
+  controls?: ResourceInit<unknown>["controls"];
   /** Rows per page: the first read, and each "Load more". */
   pageSize: number;
   /** One page of at most `limit` rows, after the cursor `after`. */
@@ -189,7 +190,7 @@ export function usePaged<T, H>(key: string | null, init: () => PagedInit<T, H>):
     const i = init();
     return {
       kind: i.kind,
-      pollMs: i.pollMs,
+      ...(i.controls ? { controls: i.controls } : {}),
       load: (signal) =>
         readRows(i, (resource && counts.get(resource as Resource<unknown>)) ?? i.pageSize, signal),
     };

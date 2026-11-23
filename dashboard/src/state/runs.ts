@@ -20,8 +20,6 @@ export interface RunSearchOptions {
   sort?: RunSort;
   /** Runs per page; 50 by default. */
   pageSize?: number;
-  /** How often the runs are read while the change stream is down; 15 s by default. */
-  pollMs?: number | null;
 }
 
 export interface RunSearchView {
@@ -49,9 +47,8 @@ export function useRunSearch(options: RunSearchOptions): RunSearchView {
   const store = useStore();
   const sort = options.sort ?? "started";
   const pageSize = options.pageSize ?? 50;
-  const pollMs = options.pollMs === undefined ? 15_000 : options.pollMs;
   const key = JSON.stringify([options.q, sort, pageSize]);
-  const search = store.search(key, { q: options.q, sort, pageSize, pollMs });
+  const search = store.search(key, { q: options.q, sort, pageSize });
   // Whether the table is at its top is the view's: a new search learns it from the view, which
   // hears of it only when the table crosses its top.
   const atTop = useRef(true);
@@ -88,7 +85,7 @@ export function useRunSearch(options: RunSearchOptions): RunSearchView {
 
 /**
  * One run's details; `enabled` false until they are needed (a card that opens). Read again when
- * the run changes, as its journal grows, and every minute.
+ * the run changes on the change stream, and as its journal grows.
  */
 export function useRun(id: string, enabled = true): Read<Run> {
   const store = useStore();
@@ -96,7 +93,6 @@ export function useRun(id: string, enabled = true): Read<Run> {
   return useResource(enabled && id ? `run|${id}` : null, () => ({
     kind: "detail",
     runId: id,
-    pollMs: 30_000,
     load: (signal) => store.api.run(id, signal),
   }));
 }

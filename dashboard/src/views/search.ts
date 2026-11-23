@@ -60,9 +60,12 @@ export function useListQuery(
 
 export const WINDOWS: readonly RangeKey[] = ["1h", "24h", "7d", "30d"];
 
-/** The width of the buckets of each window: from 12 to 30 bars. */
+/**
+ * The width of the buckets of each window: whole hours, since the statistics are kept per hour
+ * (archi/05, "Statistics"); from 24 to 30 bars past the last hour.
+ */
 export const BUCKETS: Record<RangeKey, { bucket: string; ms: number }> = {
-  "1h": { bucket: "5m", ms: 5 * 60_000 },
+  "1h": { bucket: "1h", ms: 3_600_000 },
   "24h": { bucket: "1h", ms: 3_600_000 },
   "7d": { bucket: "6h", ms: 6 * 3_600_000 },
   "30d": { bucket: "1d", ms: 86_400_000 },

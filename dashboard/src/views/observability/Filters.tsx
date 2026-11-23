@@ -266,6 +266,7 @@ export function FilterGroups({
       show: (name: string) => label(name) ?? name,
       ...(access.can("namespaces:read") ? { search: "namespace" as const } : {}),
     },
+    { field: "workflow", title: "Workflow", values: facets?.workflows ?? [], open: true },
     ...(facets?.labels ?? []).slice(0, 6).map((l, i) => ({
       field: `@${l.key}`,
       title: `@${l.key}`,

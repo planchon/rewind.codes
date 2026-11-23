@@ -1,26 +1,26 @@
 // Secrets (archi/04, "Secrets"): the organization's (`namespace` null) and each namespace's, never
-// a value, and the keys Rewind signs calls with. A list is read again every 30 s while shown, for
-// its reads; a write reads again every list and usage of the secrets, a rotation the signing keys.
+// a value, and the keys Rewind signs calls with. The lists and usages on screen are read again when
+// the change stream says a secret of their scope was put or deleted, and within 10 s of a run's
+// change, for their reads and the runs that attach them (`queries.ts`); a write reads again every
+// list and usage of the secrets, a rotation the signing keys.
 import { useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
 import type { PutSecret, Secret, SecretUsage, SigningKey, SigningKeyList } from "../model/types";
 import { type Action, useAction } from "./actions";
+import { SECRETS, SIGNING_KEYS, secretScope } from "./queries";
 import { type Read, useQueryRead } from "./read";
 import { useStore } from "./store";
 
-const SECRETS = ["secrets"] as const;
-const SIGNING_KEYS = ["signing-keys"] as const;
-
-/** The scope of a list in the cache: `*` for the organization's. */
-const scope = (namespace: string | null) => namespace ?? "*";
-
-/** The secrets of the organization, or of a namespace; read again while shown, for their reads. */
+/** The secrets of the organization, or of a namespace; shown, they follow the change stream. */
 export function useSecrets(namespace: string | null, enabled = true): Read<Secret[]> {
   const store = useStore();
+  useEffect(() => {
+    if (enabled) store.live.start();
+  }, [store, enabled]);
   return useQueryRead(
     useQuery({
-      queryKey: [...SECRETS, scope(namespace), "list"],
+      queryKey: [...SECRETS, secretScope(namespace), "list"],
       queryFn: ({ signal }) => store.api.secrets(namespace, signal),
-      refetchInterval: 30_000,
       enabled,
     }),
   );
@@ -35,7 +35,7 @@ export function useSecretUsage(
   const store = useStore();
   return useQueryRead(
     useQuery({
-      queryKey: [...SECRETS, scope(namespace), "usage", name],
+      queryKey: [...SECRETS, secretScope(namespace), "usage", name],
       queryFn: ({ signal }) => store.api.secretUsage(namespace, name, signal),
       staleTime: 15_000,
       enabled,
@@ -70,7 +70,7 @@ export function useDeleteSecret(): Action<SecretRef> {
   return useAction(async ({ namespace, name }: SecretRef) => {
     await store.api.deleteSecret(namespace, name);
     // The deleted secret's usage is not asked again: it has none.
-    const gone = [...SECRETS, scope(namespace), "usage", name];
+    const gone = [...SECRETS, secretScope(namespace), "usage", name];
     void store.queryClient.invalidateQueries({
       queryKey: SECRETS,
       predicate: (query) => !gone.every((part, i) => query.queryKey[i] === part),

@@ -1,6 +1,7 @@
 // The mocked API's live runs: the change stream `GET /v1/changes` (a `run` event with the run's
 // whole summary each time one changes, as `GET /v1/runs` lists it, among the runs the caller
-// reads; `resync` when too many change at once), and what changes them from the outside: a signal
+// reads; `resync` when too many change at once; the control plane's changes the write handlers
+// tell, `changes.ts`), and what changes them from the outside: a signal
 // (`POST /v1/runs/{id}/signals/{name}`) and a cancellation (`POST /v1/runs/{id}/cancel`).
 //
 // A run of the world goes on by itself, its entries recorded ahead of time. A signal or a
@@ -12,6 +13,7 @@ import { buildRunModel } from "../model/run";
 import { isEnded, type RunSummary, type Workflow } from "../model/types";
 import type { Caller } from "./access";
 import { guard, runsWorld } from "./access-handlers";
+import { changeEvent, onChange } from "./changes";
 import type { RunFixture, World } from "./fixtures";
 import { findRun } from "./handles";
 import { problem } from "./problem";
@@ -229,12 +231,22 @@ function changeStream(
   const encoder = new TextEncoder();
   let timer: ReturnType<typeof setInterval> | undefined;
   let expiry: ReturnType<typeof setTimeout> | undefined;
+  let unfollow: (() => void) | undefined;
   const stop = () => {
     clearInterval(timer);
     clearTimeout(expiry);
+    unfollow?.();
   };
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      // What the control plane's writes changed, as they happen.
+      unfollow = onChange(world, (change) => {
+        try {
+          controller.enqueue(encoder.encode(changeEvent(change)));
+        } catch {
+          stop();
+        }
+      });
       const close = () => {
         stop();
         try {

@@ -2,8 +2,9 @@
 // and a run's event stream (`GET /v1/runs/{id}/events`). Installed after `renderApp`, they take
 // precedence over its handlers.
 import { http } from "msw";
+import { changeEvent } from "../mocks/changes";
 import { eventStream } from "../mocks/run-handlers";
-import type { Entry, RunSummary } from "../model/types";
+import type { ControlChange, Entry, RunSummary } from "../model/types";
 import { server } from "./server";
 
 interface Open {
@@ -79,6 +80,10 @@ export function changeStream() {
     },
     resync() {
       w.send("event: resync\ndata: {}\n\n");
+    },
+    /** A change of the control plane: a script, a workflow, a secret, a namespace, a connection. */
+    control(change: ControlChange) {
+      w.send(changeEvent(change));
     },
     /** The server closes every open stream. */
     drop: w.close,

@@ -3,22 +3,24 @@
 // it holds: an equal answer changes nothing, and the value keeps its object.
 import { createCollection } from "@tanstack/db";
 import { queryCollectionOptions } from "@tanstack/query-db-collection";
+import type { ControlChange } from "../model/types";
 import { collectionId, Kept, withRetry } from "./kept";
 import type { Watched } from "./live";
 import type { Store } from "./store";
 
 export interface ResourceInit<T> {
   /**
-   * `aggregate`: read again within 5 s of a change; `detail`: when its run changes; `polled`: on
-   * its own clock only, which no run's change moves (the workflows); `value`: only when its key
-   * changes, or asked.
+   * `aggregate`: read again within 10 s of a run's change; `detail`: when its run changes;
+   * `control`: only for the control-plane changes it shows (`controls`), which no run's change
+   * moves (the workflows); `value`: only when its key changes, or asked. Every kind but `value` is
+   * read once again when the change stream reopens, or resyncs.
    */
-  kind: "aggregate" | "detail" | "polled" | "value";
+  kind: "aggregate" | "detail" | "control" | "value";
   load: (signal: AbortSignal) => Promise<T>;
-  /** How often it is read while the change stream is down; `null`: never by itself. */
-  pollMs: number | null;
   /** For a run's details: the run. */
   runId?: string;
+  /** Whether a control-plane change touches what it shows: it is then read again at once. */
+  controls?: (change: ControlChange) => boolean;
 }
 
 export type ReadStatus = "pending" | "ready" | "error";
@@ -36,9 +38,9 @@ interface Row<T> {
 }
 
 export class Resource<T> extends Kept implements Watched {
-  readonly kind: "search" | "aggregate" | "detail" | "polled";
-  readonly pollMs: number | null;
+  readonly kind: "aggregate" | "detail" | "control";
   readonly runId: string | null;
+  private readonly controlled: ((change: ControlChange) => boolean) | null;
   lastReadAt = 0;
   private load: (signal: AbortSignal) => Promise<T>;
   private inflight = 0;
@@ -59,10 +61,10 @@ export class Resource<T> extends Kept implements Watched {
     gone: () => void,
   ) {
     super(gone);
-    this.kind = init.kind === "value" ? "aggregate" : init.kind;
+    this.kind = init.kind === "value" ? "control" : init.kind;
     this.live = init.kind !== "value";
-    this.pollMs = init.pollMs;
     this.runId = init.runId ?? null;
+    this.controlled = init.controls ?? null;
     this.load = init.load;
     this.collection = createCollection(
       queryCollectionOptions<Row<T>>({
@@ -94,6 +96,10 @@ export class Resource<T> extends Kept implements Watched {
 
   touches(runId: string): boolean {
     return this.runId === runId;
+  }
+
+  controls(change: ControlChange): boolean {
+    return this.controlled?.(change) ?? false;
   }
 
   refresh = (): void => {

@@ -6,6 +6,7 @@ import { HttpResponse, http } from "msw";
 import type { ConnectionAccess, ConsentDecision, UpdateConnection } from "../model/types";
 import { type Caller, isMember } from "./access";
 import { authenticate, guard, json } from "./access-handlers";
+import { emitChange, told } from "./changes";
 import {
   accessesOf,
   connect,
@@ -108,7 +109,11 @@ export function connectionHandlers(world: World) {
         organizations.push({ id: o.id, access: o.access, allowedLabels: labels });
       }
       setOrganizations(access, connection, organizations);
-      return HttpResponse.json(connectionDto(access, connection));
+      return told(
+        world,
+        { kind: "connection", id: connection.id },
+        HttpResponse.json(connectionDto(access, connection)),
+      );
     }),
 
     http.delete("*/v1/connections/:id", ({ request, params }) => {
@@ -119,7 +124,11 @@ export function connectionHandlers(world: World) {
         return problem(404, "not-found", `You have no connection ${String(params.id)}.`);
       connection.revokedAt = Date.now();
       setOrganizations(access, connection, []);
-      return new HttpResponse(null, { status: 204 });
+      return told(
+        world,
+        { kind: "connection", id: connection.id },
+        new HttpResponse(null, { status: 204 }),
+      );
     }),
 
     http.get("*/v1/organization/connections", ({ request }) => {
@@ -147,7 +156,11 @@ export function connectionHandlers(world: World) {
           `No connection ${String(params.id)} opens this organization.`,
         );
       grants.delete(principal);
-      return new HttpResponse(null, { status: 204 });
+      return told(
+        world,
+        { kind: "connection", id: connection.id },
+        new HttpResponse(null, { status: 204 }),
+      );
     }),
 
     http.get("*/v1/oauth/consent", ({ request }) => {
@@ -203,7 +216,7 @@ export function connectionHandlers(world: World) {
       cw.requests.delete(pending.id);
       // The server creates the connection when the client exchanges its code; the mock's client
       // exchanges it at once.
-      connect(access, cw, {
+      const made = connect(access, cw, {
         userId: caller.user.id,
         client: pending.client,
         organizations: organizations.map((o) => ({
@@ -212,6 +225,7 @@ export function connectionHandlers(world: World) {
           allowedLabels: labels,
         })),
       });
+      emitChange(world, { kind: "connection", id: made.id });
       back.searchParams.set("code", `mock_code_${pending.id.slice(0, 8)}`);
       return HttpResponse.json({ redirectTo: back.toString() });
     }),

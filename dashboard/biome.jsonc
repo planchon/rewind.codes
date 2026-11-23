@@ -25,6 +25,12 @@
   },
   "overrides": [
     {
+      // Nothing polls (archi/07, principle 11): `refetchInterval` and `setInterval` are refused in
+      // the dashboard; the mocked server of `src/mocks` is not the dashboard.
+      "includes": ["src/**", "!src/mocks/**"],
+      "plugins": ["./lint/no-polling.grit"]
+    },
+    {
       "includes": ["src/views/**", "src/app/**", "src/components/**"],
       "linter": {
         "rules": {

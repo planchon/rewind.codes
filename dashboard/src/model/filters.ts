@@ -117,18 +117,23 @@ export function legacyScriptsQuery(params: URLSearchParams): string | null {
   ]);
 }
 
-// Tools: `GET /v1/tools/stats?toolset=…`, the tools filtered in the browser
+// Tools: `GET /v1/tools/stats?q=namespace:…&prefix=…`, the tools filtered in the browser
 
 export const TOOLS_LANGUAGE: QueryLanguage = {
   fields: [
     { name: "tool", doc: "these tools: tool:github.close_issue, tool:github.*" },
-    { name: "toolset", doc: "the calls of the runs of one toolset: its digest" },
+    { name: "namespace", doc: "the calls of one end user's runs: namespace:alice" },
   ],
   labels: false,
 };
 
+const TOOLS_TERMS = "Tools are searched by tool (tool:github.*), namespace and name";
+
 export interface ToolsSearch {
-  toolset: string | null;
+  /** The one namespace whose calls are counted; the organization's when `null`. */
+  namespace: string | null;
+  /** The start of the tools' names the server keeps: one `tool:github.*` asked for. */
+  prefix: string | null;
   /** Whether a tool is kept. */
   keeps: (tool: string) => boolean;
   fault: QueryFault | null;
@@ -140,59 +145,73 @@ function toolMatches(value: string, tool: string): boolean {
 }
 
 /**
- * What a query keeps of the tool statistics: `toolset:` asks the server for one toolset's calls;
- * `tool:` (a name or a pattern), free text (in the tool's name) and their negations are applied
- * to the tools the server returns, all of a tenant's.
+ * What a query keeps of the tool statistics, kept per tool by the hourly counters (archi/05,
+ * "Statistics"): `namespace:` asks the server for one end user's calls, and one `tool:` pattern
+ * for the tools whose name starts with it; `tool:` (a name or a pattern), free text (in the tool's
+ * name) and their negations are applied to the tools the server returns.
  */
 export function toolsSearch(q: string): ToolsSearch {
-  let toolset: string | null = null;
+  let namespace: string | null = null;
+  const patterns: string[] = [];
   const tests: ((tool: string) => boolean)[] = [];
-  const done = (fault: QueryFault | null) => ({
-    toolset,
-    keeps: (tool: string) => tests.every((test) => test(tool)),
-    fault,
-  });
+  const done = (fault: QueryFault | null): ToolsSearch => {
+    const only = patterns.length === 1 ? (patterns[0] ?? "") : "";
+    return {
+      namespace,
+      prefix: only.endsWith("*") && only.length > 1 ? only.slice(0, -1) : null,
+      keeps: (tool: string) => tests.every((test) => test(tool)),
+      fault,
+    };
+  };
   for (const term of splitTerms(q)) {
     const values = valuesOf(term);
     const fault = (message: string) => done(termFault(q, term, message));
     let test: (tool: string) => boolean;
-    if (term.kind === "field" && term.field === "toolset") {
-      if (term.negated) return fault("A toolset cannot be excluded: remove the -");
-      if (values.length !== 1 || !/^[0-9a-f]{8,64}$/.test(values[0] ?? ""))
-        return fault("toolset: takes a toolset's digest, 8 hexadecimal digits at least");
-      if (toolset !== null) return fault("One toolset at a time");
-      toolset = values[0] ?? null;
+    if (term.kind === "field" && term.field === "namespace") {
+      const name = values.length === 1 ? (values[0] ?? "") : "";
+      if (term.negated) return fault("A namespace cannot be excluded: remove the -");
+      if (values.length !== 1 || name.includes("*"))
+        return fault("namespace: names one end user: namespace:alice");
+      const problem = namespaceNameProblem(name);
+      if (problem) return fault(problem);
+      if (namespace !== null) return fault("One namespace at a time");
+      namespace = name;
       continue;
     }
+    if (term.kind === "field" && term.field === "toolset")
+      return fault("Tool statistics are kept per tool, not per toolset: search by tool and name");
     if (term.kind === "field" && term.field === "tool") {
       if (values.length === 0) return fault("tool: needs a tool: tool:github.close_issue");
       test = (tool) => values.some((v) => toolMatches(v, tool));
+      if (!term.negated) patterns.push(values.length === 1 ? (values[0] ?? "") : "");
     } else if (term.kind === "text") {
       const text = textOf(term).toLowerCase();
       test = (tool) => tool.toLowerCase().includes(text);
     } else {
-      return fault("Tools are searched by tool (tool:github.*), toolset and name");
+      return fault(TOOLS_TERMS);
     }
     tests.push(term.negated ? (tool) => !test(tool) : test);
   }
   return done(null);
 }
 
-/** `?toolset=…`, as the Tools view's links wrote it. */
+/** `?toolset=…`, as the Tools view's links wrote it: a term the view explains it cannot read. */
 export function legacyToolsQuery(params: URLSearchParams): string | null {
   return legacy(params, (p) => p.getAll("toolset").map((t) => `toolset:${quoteValue(t)}`));
 }
 
+/** The statistics a search of the Tools asks for: a window of whole hours, a scope, a prefix. */
 export function toToolStatsQuery(
   window: RangeKey,
-  toolset: string | null,
+  search: Pick<ToolsSearch, "namespace" | "prefix">,
   now: number,
 ): ToolStatsQuery {
   const query: ToolStatsQuery = {
     since: new Date(now - RANGES[window]).toISOString(),
     until: new Date(now).toISOString(),
   };
-  if (toolset) query.toolset = toolset;
+  if (search.namespace) query.q = `namespace:${quoteValue(search.namespace)}`;
+  if (search.prefix) query.prefix = search.prefix;
   return query;
 }
 

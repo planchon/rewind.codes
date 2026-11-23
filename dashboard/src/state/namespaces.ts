@@ -3,8 +3,10 @@
 // reads (the list, there can be many thousands; one namespace with its use day by day; the
 // defaults with the ceiling; the alerts) and writes. They read every namespace of the
 // organization: the filter of the run views does not narrow them. A namespace's use moves with its
-// runs: they are read again within 5 s of a run's change, every 60 s while the change stream is
-// open, every 30 s while it is down.
+// runs: they are read again within 10 s of a run's change. A namespace that the change stream says
+// changed (created, renamed, other limits or tokens, erased) is read again at once wherever it is
+// shown, with the lists and the names; a change of the default limits reads the defaults, the
+// lists and every namespace's page.
 //
 // A write is shown at once where its answer is known (a name, limits, the defaults, revoked tokens,
 // an erasure starting), then every namespace read on screen is read again; a refusal undoes it.
@@ -12,6 +14,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { QUOTA_FIELDS } from "../model/quotas";
 import type {
+  ControlChange,
   ListNamespacesQuery,
   Namespace,
   NamespaceDefaults,
@@ -25,15 +28,17 @@ import type {
 import { useAccess } from "./access";
 import { type Action, optimistic, useAction } from "./actions";
 import { type Paged, type PagedRead, usePaged } from "./paged";
+import { NAMESPACES } from "./queries";
 import { type Read, useQueryRead, useResource } from "./read";
 import type { Resource } from "./resource";
 import { type Store, useStore } from "./store";
 
-const NAMESPACES = ["namespaces"] as const;
 const NAMES = [...NAMESPACES, "names"] as const;
 /** The keys of the namespaces' resources in the store. */
 const PREFIX = "namespaces|";
-const POLL = 30_000;
+
+/** Any namespace's change, or the defaults'. */
+const anyNamespace = (change: ControlChange) => change.kind === "namespace";
 
 /** The namespaces whose name starts with `prefix`, the most active first: what to suggest. */
 export function useNamespaceSuggestions(prefix: string | null, limit = 8): Read<NamespaceList> {
@@ -61,8 +66,8 @@ export function useNamespaceNames(): ReadonlyMap<string, string> {
     queryKey: NAMES,
     queryFn: ({ signal }) => api.namespaceNames(signal),
     enabled: access.can("namespaces:read"),
-    staleTime: 60_000,
-    refetchInterval: 5 * 60_000,
+    // Read again when a namespace changes on the change stream (`queries.ts`).
+    staleTime: Number.POSITIVE_INFINITY,
   });
   return useMemo(
     () => new Map((names.data?.namespaces ?? []).map((n) => [n.name, n.displayName])),
@@ -88,7 +93,7 @@ export function useNamespaceList(query: Omit<ListNamespacesQuery, "after">): Nam
   const { limit, ...filter } = query;
   return usePaged(`${PREFIX}list|${JSON.stringify([filter, limit])}`, () => ({
     kind: "aggregate",
-    pollMs: POLL,
+    controls: anyNamespace,
     pageSize: limit ?? 50,
     keyOf: (ns: Namespace) => ns.name,
     readPage: async (after, pageLimit, signal) => {
@@ -112,7 +117,7 @@ export function useNamespaceCount(
   const { api } = useStore();
   return useResource(`${PREFIX}count|${JSON.stringify(query)}`, () => ({
     kind: "aggregate",
-    pollMs: POLL,
+    controls: anyNamespace,
     load: async (signal) => (await api.namespaces({ ...query, limit: 1 }, signal)).total,
   }));
 }
@@ -122,7 +127,7 @@ export function useNamespaceDefaults(): Read<NamespaceDefaults> {
   const { api } = useStore();
   return useResource(`${PREFIX}defaults`, () => ({
     kind: "aggregate",
-    pollMs: POLL,
+    controls: (change) => change.kind === "namespace" && change.name == null,
     load: (signal) => api.namespaceDefaults(signal),
   }));
 }
@@ -132,7 +137,9 @@ export function useNamespaceDetail(name: string, month: string | null): Read<Nam
   const { api } = useStore();
   return useResource(`${PREFIX}detail|${name}|${month ?? "now"}`, () => ({
     kind: "aggregate",
-    pollMs: POLL,
+    // Its own change, or the defaults' that its limits follow.
+    controls: (change) =>
+      change.kind === "namespace" && (change.name == null || change.name === name),
     load: (signal) => api.namespaceDetail(name, month, signal),
   }));
 }
@@ -142,7 +149,6 @@ export function useQuotaAlerts(month: string | null): Read<QuotaAlertList> {
   const { api } = useStore();
   return useResource(`${PREFIX}alerts|${month ?? "now"}`, () => ({
     kind: "aggregate",
-    pollMs: POLL,
     load: (signal) => api.quotaAlerts(month ? { month } : {}, signal),
   }));
 }

@@ -2,8 +2,8 @@
 // all, each opening the organizations they ticked; the connections of the organization's members
 // that open it; and the consent of an MCP client (archi/07, "MCP and OAuth"). A connection
 // changed, revoked, or taken out of the organization shows at once, and comes back if the server
-// refuses; both lists are read again after each write. Connect Claude asks every 2 s, while it is
-// open, whether a connection arrived.
+// refuses; both lists are read again after each write, and when the change stream says a
+// connection was made, changed, used or revoked: Connect Claude sees one arrive that way.
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { arrivedSince, type Snapshot, snapshotOf } from "../model/connections";
@@ -12,6 +12,7 @@ import type {
   ConsentAnswer,
   ConsentDecision,
   ConsentRequest,
+  ControlChange,
   UpdateConnection,
 } from "../model/types";
 import { type Action, useAction } from "./actions";
@@ -19,16 +20,18 @@ import { heldList, keyedList, type ListInit, useKeyedList, useList } from "./lis
 import { type Read, useQueryRead } from "./read";
 import { type Store, useStore } from "./store";
 
-/** How often Connect Claude asks whether Claude has connected, while it is open. */
-const WATCH_MS = 2_000;
+/** A connection's change, from the change stream. */
+const anyConnection = (change: ControlChange) => change.kind === "connection";
 
 const CONNECTIONS = (store: Store): ListInit<Connection> => ({
   load: (signal) => store.api.connections(signal),
   key: (c) => c.id,
+  controls: anyConnection,
 });
 const ORG_CONNECTIONS = (store: Store): ListInit<Connection> => ({
   load: (signal) => store.api.organizationConnections(signal),
   key: (c) => c.id,
+  controls: anyConnection,
 });
 
 const connections = (store: Store) => keyedList(store, "connections", CONNECTIONS);
@@ -55,15 +58,12 @@ export interface ArrivingConnections {
 const noSubscribe = () => () => {};
 
 /**
- * The caller's connections, asked for every 2 s while `watching`, and the one that arrived since
- * the view opened: compared with an answer asked after it opened, not one another view read.
+ * The caller's connections, read again as the change stream announces them, and the one that
+ * arrived since the view opened: compared with an answer asked after it opened, not one another
+ * view read.
  */
-export function useArrivingConnections(enabled: boolean, watching: boolean): ArrivingConnections {
-  const { list, read } = useKeyedList(
-    enabled ? "connections" : null,
-    CONNECTIONS,
-    watching ? WATCH_MS : null,
-  );
+export function useArrivingConnections(enabled: boolean): ArrivingConnections {
+  const { list, read } = useKeyedList(enabled ? "connections" : null, CONNECTIONS);
   const [openedAt] = useState(() => Date.now());
   const answeredAt = useSyncExternalStore(
     list?.subscribe ?? noSubscribe,

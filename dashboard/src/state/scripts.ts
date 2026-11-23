@@ -1,6 +1,6 @@
 // Scripts: named by their digest, a script's source never changes. The list of the scripts the runs
-// ran, each with its runs by outcome, is read again within 5 s of a run's change, every 60 s while
-// the change stream is open, and every 30 s while it is down.
+// ran, each with its runs by outcome, is read again within 10 s of a run's change, and at once when
+// the change stream announces a script run for the first time.
 import { useQuery } from "@tanstack/react-query";
 import { useCallback } from "react";
 import type { ListScriptsQuery, Script, ScriptSummary, SetScriptTitle } from "../model/types";
@@ -38,7 +38,7 @@ export function useScriptList({ query, namespace, enabled = true }: ScriptListOp
   const { limit, ...filter } = query;
   return usePaged(enabled ? `scripts|${JSON.stringify([filter, namespace, limit])}` : null, () => ({
     kind: "aggregate",
-    pollMs: 30_000,
+    controls: (change) => change.kind === "script",
     pageSize: limit ?? 50,
     keyOf: (s: ScriptSummary) => s.digest,
     readPage: async (after, pageLimit, signal) => {

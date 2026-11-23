@@ -33,7 +33,7 @@ import type {
 import type { RunFixture, World } from "./fixtures";
 import { handleOf, scriptTitleOf } from "./handles";
 import { fakeDigest } from "./journal";
-import { compileQuery, type MockRun, parseDuration } from "./query";
+import { compileQuery, type MockRun, parseDuration, scopeOf } from "./query";
 
 export function visibleEntries(fixture: RunFixture, now: number): Entry[] {
   const entries = fixture.journal.entries;
@@ -415,6 +415,8 @@ function windowOf(query: { since?: string; until?: string; bucket?: string }, no
 }
 
 export function runStats(world: World, query: RunStatsQuery, now: number): RunStats {
+  // A scope only, as the counters keep them.
+  scopeOf(query.q);
   const all = matchingRuns(world, query.q, now);
   const w = windowOf(query, now);
   const top = Math.min(50, query.top ?? 10);
@@ -456,9 +458,11 @@ export function runStats(world: World, query: RunStatsQuery, now: number): RunSt
   const waits = new Map<string, number>();
   const signals = new Map<string, number>();
   const namespaces = new Map<string, number>();
+  const workflows = new Map<string, number>();
   for (const r of inWindow) {
     tally(byStatus, [r.status]);
     tally(namespaces, [r.namespace]);
+    if (r.workflow) tally(workflows, [r.workflow]);
     for (const [k, v] of Object.entries(r.labels)) {
       let values = keys.get(k);
       if (!values) {
@@ -509,6 +513,7 @@ export function runStats(world: World, query: RunStatsQuery, now: number): RunSt
     quarantined: all.filter((r) => r.quarantined).length,
     facets: {
       statuses: topValues(byStatus, top),
+      workflows: topValues(workflows, top),
       labels,
       tools: topValues(tools, top),
       errors: topValues(errors, top),
@@ -526,6 +531,7 @@ export function runStats(world: World, query: RunStatsQuery, now: number): RunSt
 const FAILED: readonly RunStatus[] = ["failed", "cancelled", "aborted"];
 
 export function failureGroups(world: World, query: FailuresQuery, now: number): FailureGroupPage {
+  scopeOf(query.q);
   const w = windowOf(query, now);
   const runs = matchingRuns(world, query.q, now).filter((r) => {
     if (!FAILED.includes(r.status) || !r.endedAt || !r.fingerprint) return false;
@@ -650,12 +656,15 @@ export function toolStats(world: World, query: ToolStatsQuery, now: number): Too
     string,
     { latencies: number[]; errors: Record<string, number>; retries: number }
   >();
+  const namespace = scopeOf(query.q);
   for (const fixture of world.runs) {
     if (query.toolset && fixture.toolset !== query.toolset) continue;
+    if (namespace !== null && fixture.namespace !== namespace) continue;
     const model = buildRunModel(visibleEntries(fixture, now));
     for (const call of model.calls) {
       if (!call.end || call.end.at < since || call.end.at >= until) continue;
       if (query.tool && call.tool !== query.tool) continue;
+      if (query.prefix && !call.tool.startsWith(query.prefix)) continue;
       let stats = byTool.get(call.tool);
       if (!stats) {
         stats = { latencies: [], errors: {}, retries: 0 };

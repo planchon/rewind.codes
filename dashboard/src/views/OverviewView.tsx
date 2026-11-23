@@ -1,7 +1,8 @@
 // Overview, the home page: the runs of a window by outcome over time, the share that completed,
 // durations, the runs waiting now, quarantined runs, what fails most and the failing tools. Every
-// figure, bar and row opens the runs behind it. Live: its figures change in place within 5 s of a
-// change, and are read every 10 seconds while the change stream is down.
+// figure, bar and row opens the runs behind it. Its figures are the statistics of the query's
+// namespace, or of the organization; the query's other terms narrow the runs its links open. Live:
+// its figures change in place within 10 s of a run's change.
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { useSettings } from "../app/settings";
@@ -13,6 +14,7 @@ import { isCancellation } from "../model/ending";
 import { RANGES, type RangeKey } from "../model/filters";
 import { formatCount, formatDuration, formatPercent, formatTime } from "../model/format";
 import { fieldTerm, joinQuery, queryLink, queryTime } from "../model/query";
+import { statsScope, waitingRuns } from "../model/scope";
 import type { RunStatus } from "../model/types";
 import { useFailures, useRunStats, useToolStats } from "../state/aggregates";
 import { queryFault } from "../state/errors";
@@ -26,8 +28,6 @@ import {
   WINDOWS,
   windowTerm,
 } from "./search";
-
-const POLL = 10_000;
 
 /** The change from the previous window, as people say it. */
 function change(now: number, before: number, win: RangeKey): string {
@@ -58,61 +58,45 @@ export function OverviewView() {
   const key = `${win}|${q}`;
   const withQ = q ? { q } : {};
 
-  const current = useRunStats(
-    `overview|${key}`,
-    () => {
-      const now = Date.now();
-      return {
-        ...withQ,
-        since: new Date(now - width).toISOString(),
-        until: new Date(now).toISOString(),
-        bucket,
-        top: 10,
-      };
-    },
-    POLL,
-  );
-  const previous = useRunStats(
-    `overview-previous|${key}`,
-    () => {
-      const now = Date.now();
-      return {
-        ...withQ,
-        since: new Date(now - 2 * width).toISOString(),
-        until: new Date(now - width).toISOString(),
-        top: 1,
-      };
-    },
-    POLL,
-  );
-  const waiting = useRunStats(
-    `overview-waiting|${q}`,
-    () => ({ q: joinQuery(q, "waiting:*"), top: 1 }),
-    POLL,
-  );
-  const failures = useFailures(
-    `overview-failures|${key}`,
-    () => {
-      const now = Date.now();
-      return {
-        ...withQ,
-        since: new Date(now - width).toISOString(),
-        until: new Date(now).toISOString(),
-        limit: 5,
-      };
-    },
-    POLL,
-  );
-  const tools = useToolStats(
-    `overview-tools|${win}`,
-    () => {
-      const now = Date.now();
-      return { since: new Date(now - width).toISOString(), until: new Date(now).toISOString() };
-    },
-    POLL,
-  );
+  const scope = statsScope(q);
+  const current = useRunStats(`overview|${key}`, () => {
+    const now = Date.now();
+    return {
+      ...withQ,
+      since: new Date(now - width).toISOString(),
+      until: new Date(now).toISOString(),
+      bucket,
+      top: 10,
+    };
+  });
+  const previous = useRunStats(`overview-previous|${key}`, () => {
+    const now = Date.now();
+    return {
+      ...withQ,
+      since: new Date(now - 2 * width).toISOString(),
+      until: new Date(now - width).toISOString(),
+      top: 1,
+    };
+  });
+  const failures = useFailures(`overview-failures|${key}`, () => {
+    const now = Date.now();
+    return {
+      ...withQ,
+      since: new Date(now - width).toISOString(),
+      until: new Date(now).toISOString(),
+      limit: 5,
+    };
+  });
+  const tools = useToolStats(`overview-tools|${win}|${scope.q ?? ""}`, () => {
+    const now = Date.now();
+    return {
+      ...(scope.q ? { q: scope.q } : {}),
+      since: new Date(now - width).toISOString(),
+      until: new Date(now).toISOString(),
+    };
+  });
 
-  const fault = queryFault(current.error) ?? queryFault(waiting.error);
+  const fault = queryFault(current.error);
   const started = windowTerm("started", win);
   const runsLink = (...terms: string[]) =>
     queryLink("/observability", joinQuery(q, started, ...terms));
@@ -129,7 +113,6 @@ export function OverviewView() {
     const ended =
       s.statuses.completed + s.statuses.failed + s.statuses.cancelled + s.statuses.aborted;
     const failed = s.statuses.failed + s.statuses.aborted + s.statuses.cancelled;
-    const waitingNow = waiting.data;
     const durations = s.durations;
     const since = s.since ? Date.parse(s.since) : Date.now() - width;
     const buckets = (s.series ?? []).map((b) => {
@@ -173,8 +156,8 @@ export function OverviewView() {
           <Tile
             to={queryLink("/observability/waiting", q)}
             label="Waiting now"
-            value={waitingNow ? formatCount(waitingNow.runs) : "–"}
-            context={waitingNow ? `${formatCount(waitingNow.waiting.signal)} on a signal` : " "}
+            value={formatCount(waitingRuns(s.waiting))}
+            context={`${formatCount(s.waiting.signal)} on a signal`}
             tone="info"
           />
           <Tile
@@ -315,7 +298,15 @@ export function OverviewView() {
         values={lookup.values}
         onTyping={lookup.onTyping}
         fault={fault}
-      />
+      >
+        <SaveSearch q={q} view="overview" />
+      </QueryBar>
+      {scope.narrowed && !fault && (
+        <p className="muted">
+          The figures count the runs of {scope.q ? <code>{scope.q}</code> : "the organization"}: the
+          other terms of the query narrow the runs each figure opens.
+        </p>
+      )}
       {body}
     </div>
   );

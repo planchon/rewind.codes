@@ -11,6 +11,7 @@ import type {
 } from "../model/types";
 import type { Caller } from "./access";
 import { guard, json } from "./access-handlers";
+import { told } from "./changes";
 import type { World } from "./fixtures";
 import {
   alertsOf,
@@ -199,7 +200,11 @@ export function namespaceHandlers(world: World, now: () => number) {
         found.namespaces.namespaces.set(name, ns);
       }
       ns.exceptions = cleanQuotas(body.exceptions);
-      return HttpResponse.json(detailDto(found.namespaces, ns, monthOf(now())));
+      return told(
+        world,
+        { kind: "namespace", name },
+        HttpResponse.json(detailDto(found.namespaces, ns, monthOf(now()))),
+      );
     }),
 
     http.patch("*/v1/namespaces/:name", async ({ request, params }) => {
@@ -231,7 +236,11 @@ export function namespaceHandlers(world: World, now: () => number) {
           );
         found.ns.displayName = trimmed === "" ? null : trimmed;
       }
-      return HttpResponse.json(detailDto(found.namespaces, found.ns, monthOf(now())));
+      return told(
+        world,
+        { kind: "namespace", name },
+        HttpResponse.json(detailDto(found.namespaces, found.ns, monthOf(now()))),
+      );
     }),
 
     http.get("*/v1/organization/namespace-names", ({ request }) => {
@@ -255,7 +264,7 @@ export function namespaceHandlers(world: World, now: () => number) {
         ns.tokensRevokedBefore = now();
         ns.activeRuns = 0;
       }
-      return new HttpResponse(null, { status: 202 });
+      return told(world, { kind: "namespace", name }, new HttpResponse(null, { status: 202 }));
     }),
 
     http.delete("*/v1/namespaces/:name/tokens", ({ request, params }) => {
@@ -267,10 +276,14 @@ export function namespaceHandlers(world: World, now: () => number) {
       const revoked = ns.tokens;
       ns.tokens = 0;
       ns.tokensRevokedBefore = now();
-      return HttpResponse.json({
-        revoked,
-        revokedBefore: new Date(ns.tokensRevokedBefore).toISOString(),
-      });
+      return told(
+        world,
+        { kind: "namespace", name },
+        HttpResponse.json({
+          revoked,
+          revokedBefore: new Date(ns.tokensRevokedBefore).toISOString(),
+        }),
+      );
     }),
 
     http.get("*/v1/organization/namespace-defaults", ({ request }) => {
@@ -290,7 +303,11 @@ export function namespaceHandlers(world: World, now: () => number) {
       if (refused) return problem(400, "invalid-request", `defaults: ${refused}.`);
       const namespaces = namespacesOf(world, caller);
       namespaces.defaults = cleanQuotas(body.defaults);
-      return HttpResponse.json(defaultsDto(namespaces, monthOf(now())));
+      return told(
+        world,
+        { kind: "namespace" },
+        HttpResponse.json(defaultsDto(namespaces, monthOf(now()))),
+      );
     }),
 
     http.get("*/v1/organization/quota-alerts", ({ request }) => {

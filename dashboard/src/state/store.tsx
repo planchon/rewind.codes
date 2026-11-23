@@ -10,6 +10,7 @@ import { type WritableCollection, writableCollection } from "./collections";
 import { Journal } from "./journal";
 import type { Kept } from "./kept";
 import { Live, type LiveOptions } from "./live";
+import { LIVE_QUERIES, MOVED_BY_RUNS, staleOn } from "./queries";
 import { Resource, type ResourceInit } from "./resource";
 import { RunSearch, type SearchRequest } from "./search";
 
@@ -37,7 +38,22 @@ export class Store {
     private readonly options: StoreOptions = {},
   ) {
     this.runs = writableCollection<RunSummary>("runs", (r) => r.id);
-    this.live = new Live(api, (run) => this.applyRun(run), options.live);
+    this.live = new Live(
+      api,
+      {
+        apply: (run) => this.applyRun(run),
+        control: (change) => this.stale(staleOn(change)),
+        aggregates: () => this.stale(MOVED_BY_RUNS),
+        reread: () => this.stale(LIVE_QUERIES),
+      },
+      options.live,
+    );
+  }
+
+  /** Reads again the reads of TanStack Query on screen whose key starts with one of `keys`. */
+  private stale(keys: readonly (readonly unknown[])[]): void {
+    if (this.disposed) return;
+    for (const queryKey of keys) void this.queryClient.invalidateQueries({ queryKey });
   }
 
   /** A read failed. */

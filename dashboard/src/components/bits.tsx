@@ -178,7 +178,6 @@ export function LabelList({
   );
 }
 
-/** The current time, updated every `everyMs`, for relative times and countdowns. */
 /** A value once it has stopped changing for `ms`: what is typed, asked for once. */
 export function useSettled<T>(value: T, ms = 150): T {
   const [settled, setSettled] = useState(value);
@@ -189,9 +188,14 @@ export function useSettled<T>(value: T, ms = 150): T {
   return settled;
 }
 
+/**
+ * The current time, updated every `everyMs`, for relative times and countdowns: a clock that reads
+ * no store (archi/07, principle 11), drawing again what is already on screen.
+ */
 export function useNow(everyMs = 15_000): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    // biome-ignore lint/plugin/no-polling: a display clock; it reads no store, only `Date.now()`.
     const t = setInterval(() => setNow(Date.now()), everyMs);
     return () => clearInterval(t);
   }, [everyMs]);

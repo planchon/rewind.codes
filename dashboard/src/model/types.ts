@@ -44,6 +44,18 @@ export type Quarantine = Schemas["Quarantine"];
 export type RunWait = Schemas["RunWait"];
 export type WaitKind = Schemas["WaitKind"];
 export type RunStats = Schemas["RunStats"];
+export type ScriptChanged = Schemas["ScriptChanged"];
+export type WorkflowChanged = Schemas["WorkflowChanged"];
+export type SecretChanged = Schemas["SecretChanged"];
+export type NamespaceChanged = Schemas["NamespaceChanged"];
+export type ConnectionChanged = Schemas["ConnectionChanged"];
+/** What changed in the control plane, from an event of `GET /v1/changes` (its `event`, its data). */
+export type ControlChange =
+  | ({ kind: "script" } & ScriptChanged)
+  | ({ kind: "workflow" } & WorkflowChanged)
+  | ({ kind: "secret" } & SecretChanged)
+  | ({ kind: "namespace" } & NamespaceChanged)
+  | ({ kind: "connection" } & ConnectionChanged);
 export type StatusCounts = Schemas["StatusCounts"];
 export type WaitCounts = Schemas["WaitCounts"];
 export type SeriesBucket = Schemas["SeriesBucket"];

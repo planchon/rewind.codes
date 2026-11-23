@@ -2,7 +2,7 @@
 // API: a query becomes a predicate over the mocked run summaries, or the error the server would
 // answer with `invalid-query`, with the position of the term at fault in characters.
 
-import { FIELDS, operandValues } from "../model/query";
+import { FIELDS, operandValues, splitTerms } from "../model/query";
 import { namespaceNameProblem } from "../model/quotas";
 import type { RunMode, RunStatus, RunSummary, WaitKind } from "../model/types";
 import { RUN_STATUSES, WAIT_KINDS } from "../model/types";
@@ -22,6 +22,36 @@ export class QueryError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * The namespace the `q` of a statistics route names, `null` for the tenant (archi/05,
+ * "Statistics"): one `namespace:` term of one value, or nothing; any other term is refused with its
+ * position, as the server refuses it.
+ */
+export function scopeOf(q: string | null | undefined): string | null {
+  const text = q ?? "";
+  const terms = splitTerms(text);
+  const chars = (at: number) => [...text.slice(0, at)].length;
+  for (const term of terms) {
+    const values = operandValues(term.operand);
+    const value = values[0] ?? "";
+    const scope =
+      term.kind === "field" &&
+      term.field === "namespace" &&
+      !term.negated &&
+      values.length === 1 &&
+      value !== "" &&
+      !value.includes("*");
+    if (!scope || terms.length > 1)
+      throw new QueryError(
+        `the statistics are counted per namespace and hour: ${term.raw} cannot narrow them; name one namespace (namespace:alice) or none`,
+        chars(term.start),
+        chars(term.end),
+      );
+    return value;
+  }
+  return null;
 }
 
 export type Predicate = (run: MockRun) => boolean;

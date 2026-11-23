@@ -1,0 +1,24 @@
+// Nothing polls (archi/07, principle 11; archi/08, E6): no view reads on a timer. The views are
+// read again from the change stream (`src/state/live.ts`); a clock that reads no store says why
+// with `// biome-ignore lint/plugin/no-polling: <reason>`.
+language js
+
+or {
+  `$key: $_` where {
+    $key <: or {
+      `refetchInterval`,
+      `"refetchInterval"`,
+      `'refetchInterval'`
+    },
+    register_diagnostic(span=$key, message="No view reads on a timer (archi/07, principle 11): refetchInterval is refused. Read it again from the change stream (src/state/live.ts).")
+  },
+  `$callee($...)` where {
+    $callee <: or {
+      `setInterval`,
+      `window.setInterval`,
+      `globalThis.setInterval`,
+      `self.setInterval`
+    },
+    register_diagnostic(span=$callee, message="Nothing polls (archi/07, principle 11): setInterval is refused. Read again from the change stream (src/state/live.ts); a clock that reads no store says so with biome-ignore lint/plugin/no-polling.")
+  }
+}

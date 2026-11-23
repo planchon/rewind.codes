@@ -1,6 +1,6 @@
 // Connect Claude (archi/01, "Claude as the harness"): a page read top to bottom, from a toolset to
-// a first message, beside the good practices and the person's connections. The fourth step asks
-// every 2 s, while the page is open, whether a connection arrived or was used since it opened.
+// a first message, beside the good practices and the person's connections. The fourth step sees a
+// connection arrive, or one used since the page opened, as the change stream announces it.
 import {
   ArrowUpRight,
   ChevronRight,
@@ -51,10 +51,10 @@ export function ConnectView() {
   const member = phase.kind === "member";
   const readsToolsets = access.can("toolsets:read");
   const toolsets = useToolsets(readsToolsets);
-  // Connections are a person's, made through Rewind's OAuth: asked for while the page is open. A
-  // step turns green when one arrives, compared with what they were when the page opened.
-  const watching = member && mcp.oauth && mcp.mcpUrl !== null;
-  const { connections, arrived, ready } = useArrivingConnections(member, watching);
+  // Connections are a person's, made through Rewind's OAuth: read again as the change stream
+  // announces them. A step turns green when one arrives, compared with what they were when the
+  // page opened.
+  const { connections, arrived, ready } = useArrivingConnections(member);
 
   const list = toolsets.data ?? [];
   const organization = access.organization?.name ?? access.identity.tenant ?? "your organization";

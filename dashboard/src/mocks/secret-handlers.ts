@@ -6,6 +6,7 @@ import { HttpResponse, http } from "msw";
 import type { Labels, PutSecret, Secret, SecretUsage, WorkflowAttaching } from "../model/types";
 import { type Caller, grantOf } from "./access";
 import { guard, json, runsWorld } from "./access-handlers";
+import { told } from "./changes";
 import type { World } from "./fixtures";
 import { handleOf } from "./handles";
 import { problem } from "./problem";
@@ -226,12 +227,16 @@ export function secretHandlers(world: World, now: () => number) {
       if (bad) return bad;
       const body = await json<PutSecret>(request);
       if (body instanceof Response) return body;
-      return valueProblem(body) ?? put(caller, null, name, body);
+      return (
+        valueProblem(body) ?? told(world, { kind: "secret", name }, put(caller, null, name, body))
+      );
     }),
 
     http.delete("*/v1/secrets/:name", ({ request, params }) => {
       const caller = guard(world, request, "secrets:write");
-      return caller instanceof Response ? caller : remove(caller, null, String(params.name));
+      if (caller instanceof Response) return caller;
+      const name = String(params.name);
+      return told(world, { kind: "secret", name }, remove(caller, null, name));
     }),
 
     http.get("*/v1/secrets/:name/usage", ({ request, params }) => {
@@ -266,14 +271,15 @@ export function secretHandlers(world: World, now: () => number) {
       if (invalid) return invalid;
       if (body.labels !== undefined)
         return problem(400, "invalid-request", "A namespace's secret takes no labels.");
-      return put(caller, String(params.ns), name, body);
+      const namespace = String(params.ns);
+      return told(world, { kind: "secret", name, namespace }, put(caller, namespace, name, body));
     }),
 
     http.delete("*/v1/namespaces/:ns/secrets/:name", ({ request, params }) => {
       const caller = guard(world, request, "secrets:write");
-      return caller instanceof Response
-        ? caller
-        : remove(caller, String(params.ns), String(params.name));
+      if (caller instanceof Response) return caller;
+      const [namespace, name] = [String(params.ns), String(params.name)];
+      return told(world, { kind: "secret", name, namespace }, remove(caller, namespace, name));
     }),
 
     http.get("*/v1/namespaces/:ns/secrets/:name/usage", ({ request, params }) => {

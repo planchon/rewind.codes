@@ -29,20 +29,17 @@ export function FailureGroups({
   const linkState = useRunLinkState();
   const width = RANGES[win];
   const { bucket, ms: bucketMs } = BUCKETS[win];
-  const failures = useFailures(
-    `failures|${win}|${q}`,
-    () => {
-      const now = Date.now();
-      return {
-        ...(q ? { q } : {}),
-        since: new Date(now - width).toISOString(),
-        until: new Date(now).toISOString(),
-        bucket,
-        limit: 100,
-      };
-    },
-    30_000,
-  );
+  // The groups of the query's namespace, or of the organization: the counters know no other term.
+  const failures = useFailures(`failures|${win}|${q}`, () => {
+    const now = Date.now();
+    return {
+      ...(q ? { q } : {}),
+      since: new Date(now - width).toISOString(),
+      until: new Date(now).toISOString(),
+      bucket,
+      limit: 100,
+    };
+  });
   const fault = queryFault(failures.error);
   const groupLink = (fingerprint: string) =>
     queryLink(

@@ -381,11 +381,11 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
           );
         const q = new URL(request.url).searchParams;
         const query: Record<string, string> = {};
-        for (const key of ["toolset", "tool", "since", "until"]) {
+        for (const key of ["q", "prefix", "toolset", "tool", "since", "until"]) {
           const value = q.get(key);
           if (value) query[key] = value;
         }
-        return HttpResponse.json(toolStats(w, query, now()));
+        return reading(() => toolStats(w, query, now()));
       }),
     ),
 

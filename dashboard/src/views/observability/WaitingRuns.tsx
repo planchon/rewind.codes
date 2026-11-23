@@ -1,22 +1,21 @@
 // Observability's waiting runs: every run paused on the outside world, grouped by what it waits
 // for (a signal, an approval, a timer, a tool), with the line it is paused on and when it wakes.
 // The soonest to wake first. A row opens the run at its last step. Live: read again a second after
-// the last change, every 10 seconds while the change stream is down.
-import { Fragment, type ReactNode } from "react";
+// the last change of a run.
+import { Fragment, type ReactNode, useEffect } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { runPath, useRunLinkState } from "../../app/runLinks";
 import { Empty, LabelList, Loading, ProblemView, RunHandle, useNow } from "../../components/bits";
 import { StatusGlyph } from "../../components/Status";
 import { TableScroll } from "../../components/TableScroll";
 import { formatCount, formatDuration, formatRelative } from "../../model/format";
-import { joinQuery, labelTerm, withTerm } from "../../model/query";
+import { joinQuery, labelTerm, type QueryFault, withTerm } from "../../model/query";
+import { waitingRuns } from "../../model/scope";
 import type { RunStats, RunSummary, RunWait, WaitCounts, WaitKind } from "../../model/types";
 import { queryFault } from "../../state/errors";
 import { useRunSearch } from "../../state/runs";
 import { useScript } from "../../state/scripts";
 import { TableTop } from "../TableTop";
-
-const POLL = 10_000;
 
 type Tab = "all" | "signals" | "approvals" | "timers" | "tools";
 
@@ -32,8 +31,9 @@ function readTab(params: URLSearchParams): (typeof TABS)[number] {
   return TABS.find((t) => t.tab === params.get("tab")) ?? (TABS[0] as (typeof TABS)[number]);
 }
 
-function tabCount(tab: (typeof TABS)[number], runs: number, waiting: WaitCounts): number {
-  if (tab.kinds.length === 0) return runs;
+/** A tab's count, from the gauge of the active runs. */
+function tabCount(tab: (typeof TABS)[number], waiting: WaitCounts): number {
+  if (tab.kinds.length === 0) return waitingRuns(waiting);
   return tab.kinds.reduce((n, k) => n + waiting[k], 0);
 }
 
@@ -116,11 +116,14 @@ export function WaitingRuns({
   q,
   setQ,
   stats,
+  onFault,
 }: {
   q: string;
   setQ: (q: string) => void;
-  /** The statistics of the waiting runs the query matches, for the tabs' counts. */
+  /** The statistics of the query's namespace, or of the organization: the tabs' counts. */
   stats: RunStats | undefined;
+  /** Told of the term at fault of the query, which the search finds. */
+  onFault?: (fault: QueryFault | null) => void;
 }) {
   const [params, setParams] = useSearchParams();
   const tab = readTab(params);
@@ -128,13 +131,9 @@ export function WaitingRuns({
   const linkState = useRunLinkState();
   const now = useNow(10_000);
   const tabTerm = tab.kinds.length === 0 ? "waiting:*" : `waiting:${tab.kinds.join(",")}`;
-  const runs = useRunSearch({
-    q: joinQuery(q, tabTerm),
-    sort: "wakes",
-    pageSize: 100,
-    pollMs: POLL,
-  });
+  const runs = useRunSearch({ q: joinQuery(q, tabTerm), sort: "wakes", pageSize: 100 });
   const fault = queryFault(runs.error);
+  useEffect(() => onFault?.(queryFault(runs.error)), [runs.error, onFault]);
 
   const rows: Row[] = [];
   for (const run of runs.runs) {
@@ -290,9 +289,7 @@ export function WaitingRuns({
             }
           >
             {t.label}{" "}
-            <span className="count">
-              {stats ? formatCount(tabCount(t, stats.runs, stats.waiting)) : "–"}
-            </span>
+            <span className="count">{stats ? formatCount(tabCount(t, stats.waiting)) : "–"}</span>
           </button>
         ))}
       </div>

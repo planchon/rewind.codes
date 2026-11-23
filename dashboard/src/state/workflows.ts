@@ -1,15 +1,16 @@
 // Workflows: each by name with its latest version, a workflow's versions (each with its suite), the
 // versions whose script is a given one, and the tests (archi/05, "Suites and the gate"). A
 // workflow is saved by an agent, never by a run: no run's change touches them, and they are read
-// again every 60 s while the change stream is open, every 30 s while it is down. A test is named
-// by its digest: it never changes.
+// again when the change stream announces a workflow's new version. A test is named by its digest:
+// it never changes.
 import { useQuery } from "@tanstack/react-query";
-import type { Test, Workflow } from "../model/types";
+import type { ControlChange, Test, Workflow } from "../model/types";
 import { type PagedRead, usePaged } from "./paged";
 import { type Read, useQueryRead, useResource } from "./read";
 import { useStore } from "./store";
 
-const POLL = 30_000;
+/** Any workflow's new version. */
+const anyWorkflow = (change: ControlChange) => change.kind === "workflow";
 
 export type WorkflowList = PagedRead<Workflow, null>;
 
@@ -17,8 +18,8 @@ export type WorkflowList = PagedRead<Workflow, null>;
 export function useWorkflowList(): WorkflowList {
   const { api } = useStore();
   return usePaged("workflows|list", () => ({
-    kind: "polled",
-    pollMs: POLL,
+    kind: "control",
+    controls: anyWorkflow,
     pageSize: 50,
     keyOf: (w: Workflow) => w.name,
     readPage: async (after, limit, signal) => {
@@ -32,8 +33,8 @@ export function useWorkflowList(): WorkflowList {
 export function useWorkflowVersions(name: string | null): Read<Workflow[]> {
   const { api } = useStore();
   return useResource(name === null ? null : `workflows|versions|${name}`, () => ({
-    kind: "polled",
-    pollMs: POLL,
+    kind: "control",
+    controls: (change) => change.kind === "workflow" && change.name === name,
     load: (signal) => api.workflowVersions(name ?? "", signal),
   }));
 }
@@ -42,8 +43,9 @@ export function useWorkflowVersions(name: string | null): Read<Workflow[]> {
 export function useWorkflowsWithScript(script: string, enabled = true): Read<Workflow[]> {
   const { api } = useStore();
   return useResource(enabled ? `workflows|script|${script}` : null, () => ({
-    kind: "polled",
-    pollMs: POLL,
+    kind: "control",
+    // The change names the workflow, not its script: any new version may be of this script.
+    controls: anyWorkflow,
     load: async (signal) => (await api.workflows({ script }, signal)).workflows,
   }));
 }

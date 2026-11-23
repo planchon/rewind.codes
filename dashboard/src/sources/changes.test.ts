@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunSummary } from "../model/types";
-import { backoffDelay, type ChangeStreamState, followChanges } from "./changes";
+import type { ControlChange, RunSummary } from "../model/types";
+import { backoffDelay, type ChangeStreamState, controlChange, followChanges } from "./changes";
 import { Api } from "./client";
 
 /** A stream the test writes to, as the server would. */
@@ -23,17 +23,20 @@ function recorder() {
   const states: ChangeStreamState[] = [];
   const opens: boolean[] = [];
   const runs: RunSummary[] = [];
+  const controls: ControlChange[] = [];
   let resyncs = 0;
   return {
     states,
     opens,
     runs,
+    controls,
     get resyncs() {
       return resyncs;
     },
     handlers: {
       onOpen: (reopened: boolean) => opens.push(reopened),
       onRun: (run: RunSummary) => runs.push(run),
+      onControl: (change: ControlChange) => controls.push(change),
       onResync: () => {
         resyncs += 1;
       },
@@ -149,6 +152,52 @@ describe("the change stream", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(streams).toHaveLength(7);
     stream.close();
+  });
+
+  it("names what changed in the control plane, and skips what it cannot read", async () => {
+    vi.useFakeTimers();
+    let stream!: ReturnType<typeof sse>;
+    const api = new Api({
+      baseUrl: "http://rewind.test",
+      token: () => "rewind_sk_test",
+      fetch: async () => {
+        stream = sse();
+        return stream.response;
+      },
+    });
+    const r = recorder();
+    const changes = followChanges(api, r.handlers);
+    await vi.advanceTimersByTimeAsync(0);
+    stream.send(
+      [
+        'event: script\ndata: {"digest":"ab"}',
+        'event: workflow\ndata: {"name":"triage","version":"cd"}',
+        'event: secret\ndata: {"name":"github","namespace":"alice"}',
+        'event: secret\ndata: {"name":"zendesk"}',
+        'event: namespace\ndata: {"name":"bob"}',
+        "event: namespace\ndata: {}",
+        'event: connection\ndata: {"id":"conn_1"}',
+        'event: later\ndata: {"id":"x"}',
+        "event: script\ndata: {}",
+        ": keep-alive",
+      ]
+        .map((block) => `${block}\n\n`)
+        .join(""),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(r.controls).toEqual([
+      { kind: "script", digest: "ab" },
+      { kind: "workflow", name: "triage", version: "cd" },
+      { kind: "secret", name: "github", namespace: "alice" },
+      { kind: "secret", name: "zendesk" },
+      { kind: "namespace", name: "bob" },
+      { kind: "namespace" },
+      { kind: "connection", id: "conn_1" },
+    ]);
+    expect(r.runs).toEqual([]);
+    expect(controlChange("workflow", '{"name":"triage"}')).toBeNull();
+    expect(controlChange("connection", "not json")).toBeNull();
+    changes.close();
   });
 
   it("reopens at once when asked, with the token held then", async () => {

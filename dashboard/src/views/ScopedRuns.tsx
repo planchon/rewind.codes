@@ -78,7 +78,6 @@ export function ScopedRuns({
   scope,
   locked,
   limit = 20,
-  refetchMs = 15_000,
   hideScript = false,
   empty,
 }: {
@@ -91,8 +90,6 @@ export function ScopedRuns({
   scope: string;
   locked: readonly Locked[];
   limit?: number;
-  /** How often the runs are read while the change stream is down. */
-  refetchMs?: number;
   hideScript?: boolean;
   /** What the table says when the scope has no run (the filters aside). */
   empty: string;
@@ -101,8 +98,9 @@ export function ScopedRuns({
   const [params, setParams] = useSearchParams();
   const sort = readSort(params);
   const asked = joinQuery(scope, q);
-  const runs = useRunSearch({ q: asked, sort, pageSize: limit, pollMs: refetchMs });
-  const stats = useRunStats(`${name}|facets|${q}`, () => ({ q: asked, top: 10 }), refetchMs);
+  const runs = useRunSearch({ q: asked, sort, pageSize: limit });
+  // The facets of the headers: the statistics of the scope's namespace, if it names one.
+  const stats = useRunStats(`${name}|facets|${q}`, () => ({ q: asked, top: 10 }));
   const controls: RunTableControls = {
     q,
     onQuery: setQ,

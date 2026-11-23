@@ -8,6 +8,10 @@
 // as "N new", until the operator shows it, comes back to the page, or an answer arrives while the
 // table is at its top. A run that no longer matches stays until then, with its new status. A read
 // after "Load more" asks for as many runs as are shown.
+//
+// A page of `GET /v1/runs` may hold fewer runs than asked, or none, and still have a cursor: a
+// partition stopped at its scan budget. A read follows the cursor until it holds the runs it asked
+// for; only a page without a cursor is the last.
 import { createCollection } from "@tanstack/db";
 import { queryCollectionOptions } from "@tanstack/query-db-collection";
 import type { ListRunsQuery, RunSort, RunSummary } from "../model/types";
@@ -27,8 +31,6 @@ export interface SearchRequest {
   sort: RunSort;
   /** Runs per page: the first read, and each "Load more". */
   pageSize: number;
-  /** How often it is read while the change stream is down. */
-  pollMs: number | null;
 }
 
 /** An answer not shown yet: how many of its runs the table does not show. */
@@ -75,6 +77,7 @@ async function readRuns(
       seen.add(run.id);
       runs.push(run);
     }
+    // A short page, even an empty one, with a cursor is not the last.
     cursor = page.nextCursor ?? null;
   } while (cursor !== null && runs.length < count);
   return { runs, next: cursor };
@@ -100,7 +103,6 @@ function appendTail(shown: readonly string[], answer: readonly string[]): string
 
 export class RunSearch extends Kept implements Watched {
   readonly kind = "search" as const;
-  readonly pollMs: number | null;
   lastReadAt = 0;
   private count: number;
   private next: string | null = null;
@@ -137,7 +139,6 @@ export class RunSearch extends Kept implements Watched {
     gone: () => void,
   ) {
     super(gone);
-    this.pollMs = request.pollMs;
     this.count = request.pageSize;
     this.hits = createCollection(
       queryCollectionOptions<Hit>({

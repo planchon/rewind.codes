@@ -70,22 +70,32 @@ describe("the Tools' search", () => {
     expect(keep('"list_" -slack', TOOLS)).toEqual(["github.list_issues"]);
   });
 
-  it("asks the server for one toolset", () => {
-    expect(toolsSearch("toolset:079b37894847 tool:github.*").toolset).toBe("079b37894847");
-    expect(toolsSearch("toolset:xyz").fault?.message).toMatch(/digest/);
+  it("asks the server for one namespace, and the start of the tools' names", () => {
+    const search = toolsSearch("namespace:alice tool:github.*");
+    expect(search.namespace).toBe("alice");
+    expect(search.prefix).toBe("github.");
+    expect(toolsSearch("tool:github.close_issue").prefix).toBeNull();
+    expect(toolsSearch("tool:github.*,slack.*").prefix).toBeNull();
+    expect(toolsSearch("tool:github.* tool:slack.*").prefix).toBeNull();
+    expect(toolsSearch("-tool:github.*").prefix).toBeNull();
+    expect(toolsSearch("namespace:a,b").fault?.message).toMatch(/one end user/);
+    expect(toolsSearch("-namespace:a").fault?.message).toMatch(/excluded/);
     expect(toolsSearch("@agent:triage").fault).toMatchObject({ start: 0, end: 13 });
+    // Counters keep no toolset: an older link says so.
     expect(legacyToolsQuery(new URLSearchParams("toolset=079b3789"))).toBe("toolset:079b3789");
+    expect(toolsSearch("toolset:079b3789").fault?.message).toMatch(/not per toolset/);
   });
 
-  it("reads a window of the last 24 hours, and of a toolset", () => {
-    expect(toToolStatsQuery("24h", null, NOW)).toEqual({
+  it("reads a window of the last 24 hours, of a namespace and a prefix", () => {
+    expect(toToolStatsQuery("24h", { namespace: null, prefix: null }, NOW)).toEqual({
       since: "2026-11-11T10:00:00.000Z",
       until: "2026-11-12T10:00:00.000Z",
     });
-    expect(toToolStatsQuery("1h", "079b3789", NOW)).toEqual({
+    expect(toToolStatsQuery("1h", { namespace: "alice", prefix: "github." }, NOW)).toEqual({
       since: "2026-11-12T09:00:00.000Z",
       until: "2026-11-12T10:00:00.000Z",
-      toolset: "079b3789",
+      q: "namespace:alice",
+      prefix: "github.",
     });
   });
 });

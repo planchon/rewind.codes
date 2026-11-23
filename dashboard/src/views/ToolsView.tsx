@@ -1,7 +1,8 @@
 // Tools: latency, error rate and retries per tool, grouped by namespace (an MCP server or a
-// host-tool group), over a window, optionally for one toolset. Searched with the query bar of the
-// runs, which reads `toolset:` (sent to the server), `tool:` and a tool's name here; its figures
-// are the Overview's tiles, and each group of tools folds under its row.
+// host-tool group), over a window, for the organization or one end user. Searched with the query
+// bar of the runs, which reads `namespace:` and one `tool:` pattern (sent to the server), `tool:`
+// and a tool's name here; its figures are the Overview's tiles, and each group of tools folds under
+// its row.
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -191,8 +192,8 @@ export function ToolsView() {
   const { q, setQ } = useListQuery(legacyToolsQuery, LEGACY_NAMES);
   const [win, setWin] = useWindow();
   const search = toolsSearch(q);
-  const stats = useToolStats(`tools:${win}:${search.toolset ?? ""}`, () =>
-    toToolStatsQuery(win, search.toolset, Date.now()),
+  const stats = useToolStats(`tools:${win}:${search.namespace ?? ""}:${search.prefix ?? ""}`, () =>
+    toToolStatsQuery(win, search, Date.now()),
   );
   const tip = useTooltip();
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
@@ -242,7 +243,7 @@ export function ToolsView() {
         language={TOOLS_LANGUAGE}
         values={values}
         fault={search.fault}
-        placeholder="tool:github.* toolset:079b3789 close_issue"
+        placeholder="tool:github.* namespace:alice close_issue"
       />
 
       {search.fault ? (

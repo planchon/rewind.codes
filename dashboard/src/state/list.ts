@@ -1,7 +1,8 @@
 // A list the server answers whole (an organization's members, invitations, roles and keys, a
 // person's connections), kept in a query collection of its rows by key. It is read when a view
 // first shows it, again when a view comes back to it (unless it was just read), after each write,
-// and every few seconds while a view watches it. An equal answer changes nothing, and each row
+// when the change stream announces a change it shows (`controls`: a connection), and once when the
+// stream reopens or resyncs; never on a timer. An equal answer changes nothing, and each row
 // keeps its object until it changes; the rows keep the server's order, and a row a write adds
 // comes last until the server answers. A failed read keeps the rows read before.
 //
@@ -10,7 +11,9 @@
 import { createCollection, createOptimisticAction } from "@tanstack/db";
 import { queryCollectionOptions } from "@tanstack/query-db-collection";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
+import type { ControlChange } from "../model/types";
 import { collectionId, Kept, withRetry } from "./kept";
+import type { Watched } from "./live";
 import { type Read, toRead } from "./read";
 import type { ReadStatus, ResourceSnapshot } from "./resource";
 import { type Store, useStore } from "./store";
@@ -19,6 +22,8 @@ export interface ListInit<T> {
   load: (signal: AbortSignal) => Promise<T[]>;
   /** A row's key: its id, or its name. */
   key: (row: T) => string;
+  /** Whether a control-plane change touches the rows: they are then read again at once. */
+  controls?: (change: ControlChange) => boolean;
 }
 
 /** Within this long of a read, a view that comes back does not read again. */
@@ -35,13 +40,16 @@ interface Rereadable {
   refreshNow(): Promise<void>;
 }
 
-export class KeyedList<T extends object> extends Kept {
+export class KeyedList<T extends object> extends Kept implements Watched {
+  readonly kind = "control" as const;
   readonly collection;
   /** When the last answer arrived, in ms since the epoch; 0 before the first. */
   answeredAt = 0;
   private lastReadAt = 0;
   private readonly keyOf: (row: T) => string;
   private readonly load: (signal: AbortSignal) => Promise<T[]>;
+  private readonly controlled: ((change: ControlChange) => boolean) | null;
+  private unwatch: (() => void) | null = null;
   /** The server's last answer; `null` before the first. */
   private answer: T[] | null = null;
   private order: string[] = [];
@@ -64,6 +72,7 @@ export class KeyedList<T extends object> extends Kept {
     super(gone);
     this.keyOf = init.key;
     this.load = init.load;
+    this.controlled = init.controls ?? null;
     this.collection = createCollection(
       queryCollectionOptions<T>({
         id: collectionId(`list:${key}`),
@@ -91,6 +100,10 @@ export class KeyedList<T extends object> extends Kept {
   }
 
   getSnapshot = (): ResourceSnapshot<readonly T[]> => this.snapshot;
+
+  controls(change: ControlChange): boolean {
+    return this.controlled?.(change) ?? false;
+  }
 
   /** Reads it again; a read on its way is followed by one more. */
   refresh = (): void => {
@@ -146,14 +159,23 @@ export class KeyedList<T extends object> extends Kept {
   }
 
   protected override onRetained(): void {
+    // A list the stream announces changes of follows it; the others (the organization's members,
+    // keys, roles, invitations) are read again when it reopens, if another view opened it.
+    this.unwatch = this.store.live.watch(this, this.controlled !== null);
     // Back on the page: what it shows is read again, unless it was just read.
     if (this.snapshot.status !== "pending" && Date.now() - this.lastReadAt > FRESH_MS) {
       this.refresh();
     }
   }
 
+  protected override onReleased(): void {
+    this.unwatch?.();
+    this.unwatch = null;
+  }
+
   override dispose(): void {
     super.dispose();
+    this.unwatch?.();
     this.unsubscribe();
     void this.collection.cleanup();
   }
@@ -225,25 +247,14 @@ const noSubscribe = () => () => {};
 const pendingSnapshot = () => PENDING;
 const noRefresh = () => Promise.resolve();
 
-/**
- * A list of the store, held while the view shows it; `key` null holds none. `watchMs`: read again
- * this often while the view is shown and the tab visible.
- */
+/** A list of the store, held while the view shows it; `key` null holds none. */
 export function useKeyedList<T extends object>(
   key: string | null,
   init: (store: Store) => ListInit<T>,
-  watchMs: number | null = null,
 ): { list: KeyedList<T> | null; read: Read<readonly T[]> } {
   const store = useStore();
   const list = key === null ? null : keyedList(store, key, init);
   useEffect(() => list?.retain(), [list]);
-  useEffect(() => {
-    if (!list || watchMs === null) return;
-    const timer = setInterval(() => {
-      if (typeof document === "undefined" || !document.hidden) list.refresh();
-    }, watchMs);
-    return () => clearInterval(timer);
-  }, [list, watchMs]);
   const snap = useSyncExternalStore<ResourceSnapshot<readonly T[]>>(
     list?.subscribe ?? noSubscribe,
     list?.getSnapshot ?? pendingSnapshot,
@@ -260,7 +271,6 @@ export function useKeyedList<T extends object>(
 export function useList<T extends object>(
   key: string | null,
   init: (store: Store) => ListInit<T>,
-  watchMs: number | null = null,
 ): Read<readonly T[]> {
-  return useKeyedList(key, init, watchMs).read;
+  return useKeyedList(key, init).read;
 }

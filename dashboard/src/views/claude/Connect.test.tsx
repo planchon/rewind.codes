@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { emitChange } from "../../mocks/changes";
 import { CLAUDE_AI, connect } from "../../mocks/connections";
 import { createWorld } from "../../mocks/fixtures";
 import { NOW, renderApp, signedIn } from "../../test/app";
@@ -106,14 +107,21 @@ describe("Connect Claude", () => {
     expect(await within(check).findByText(/waiting for claude to connect/i)).toBeVisible();
     expect(within(check).getByText(/you have 1 connection/i)).toBeInTheDocument();
 
-    // Claude exchanges its code: a new connection.
-    connect(world.access, world.connections, {
+    // Claude exchanges its code: a new connection, which the change stream announces (told again
+    // until the stream that hears it is open).
+    const made = connect(world.access, world.connections, {
       userId: "user_01GRACE",
       client: CLAUDE_AI,
       organizations: [{ id: "org_01ACME", access: "run", allowedLabels: { via: "claude" } }],
       lastUsedAt: Date.now(),
     });
-    expect(await within(check).findByText("Connected", {}, { timeout: 5_000 })).toBeVisible();
+    await waitFor(
+      () => {
+        emitChange(world, { kind: "connection", id: made.id });
+        expect(within(check).getByText("Connected")).toBeVisible();
+      },
+      { timeout: 5_000 },
+    );
     expect(check).toHaveTextContent(/Claude, used just now/);
     expect(check).toHaveAccessibleName(/done/);
     expect(requested("/v1/connections").length).toBeGreaterThanOrEqual(2);
@@ -127,7 +135,13 @@ describe("Connect Claude", () => {
     const existing = world.connections.connections.find((c) => c.userId === "user_01GRACE");
     if (!existing) throw new Error("Grace has no connection");
     existing.lastUsedAt = Date.now();
-    expect(await within(check).findByText("Connected", {}, { timeout: 5_000 })).toBeVisible();
+    await waitFor(
+      () => {
+        emitChange(world, { kind: "connection", id: existing.id });
+        expect(within(check).getByText("Connected")).toBeVisible();
+      },
+      { timeout: 5_000 },
+    );
   });
 
   it("writes a first message naming the organization, a toolset and a namespace", async () => {
