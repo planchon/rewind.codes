@@ -26,6 +26,7 @@ import {
   allow5xx,
   type Api,
   canary,
+  type Reply,
   evidence,
   expect,
   expectHealthy,
@@ -165,6 +166,20 @@ class TaskServer {
   }
 }
 
+/**
+ * A request sent while a partition moves to another node: answered 503 `unavailable` until the
+ * new owner holds it, and sent again, as a client does (`archi/08-decisions.md`, "Taken while
+ * cutting the server over to the run plane").
+ */
+async function whileMoving(attempt: () => Promise<Reply>, timeoutMs = 60_000): Promise<Reply> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const reply = await attempt();
+    if (reply.status !== 503 || reply.slug !== "unavailable" || Date.now() > deadline) return reply;
+    await delay(200);
+  }
+}
+
 /** The calls the run scheduled, from its journal. */
 async function scheduled(run: string): Promise<number> {
   return eventTypes((await journal(tenant.api, run)).doc).filter((type) => type === "schedule_tool_call").length;
@@ -185,6 +200,8 @@ export default async function main(input: { n: number; call: boolean }) {
 
 test("the owner killed during an activation: the other node takes the partition over, the tool runs once", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
+  // Until the other node takes the partition over, its run's reads answer 503 and are sent again.
+  allow5xx("unavailable");
   const namespace = unique("owners-");
   const api = tenant.api.ns(namespace);
   // A loop of about 1.5 s of CPU on this machine, well under the 5 s limit on a slower node. The
@@ -223,6 +240,7 @@ test("the owner killed during an activation: the other node takes the partition 
 
 test("the owner killed while a host tool holds the run's call: the run completes elsewhere, its call scheduled once", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
+  allow5xx("unavailable");
   const namespace = unique("holds-");
   const api = tenant.api.ns(namespace);
   // The first hand-out is held: the host tool is working on it while the owner dies.
@@ -246,7 +264,7 @@ test("the owner killed while a host tool holds the run's call: the run completes
     // The host tool answers by its token: the new owner takes it, or has given that hand-out up
     // (the node that takes a partition over cannot know which tasks had left) and handed the call
     // again, as attempt 2 with the same idempotency key, which the server answers.
-    const answered = await tenant.api.as(workerKey).post(`/v1/tasks/${task.token}/complete`, { result: { recorded: "once" } });
+    const answered = await whileMoving(() => tenant.api.as(workerKey).post(`/v1/tasks/${task.token}/complete`, { result: { recorded: "once" } }));
     if (answered.status >= 300) expectProblem(answered, 410, "task-gone");
 
     const done = await ended(tenant.api, id, 120_000);
@@ -290,6 +308,7 @@ test("a node that stops hands its partitions over, and takes its share again whe
 
 test("a full restart: a timer due during the outage fires, a signal sent before is kept, a secret is read again", { tag: "@success" }, async () => {
   test.setTimeout(3 * 60_000);
+  allow5xx("unavailable");
   const api = tenant.api.ns("restart");
   const mcp: McpFixture = await startMcpFixture();
   const value = `${canary()}-restart`;
@@ -319,9 +338,11 @@ test("a full restart: a timer due during the outage fires, a signal sent before 
   const [first, ...others] = stack.info.nodes as [string, ...string[]];
   for (const name of others) await stack.kill(name, "SIGTERM");
   // The last node takes the signals, its partitions those of every node.
-  const sent = await api.post(`/v1/runs/${signal.id}/signals/go`, "sent before the restart", { headers: { "idempotency-key": unique("go-") } });
+  const go = unique("go-");
+  const sent = await whileMoving(() => api.post(`/v1/runs/${signal.id}/signals/go`, "sent before the restart", { headers: { "idempotency-key": go } }));
   expectOk(sent);
-  expectOk(await api.post(`/v1/runs/${reading.id}/signals/go`, {}));
+  const readingGo = unique("go-");
+  expectOk(await whileMoving(() => api.post(`/v1/runs/${reading.id}/signals/go`, {}, { headers: { "idempotency-key": readingGo } })));
   await stack.kill(first, "SIGTERM");
   // Everything is down past the timer's due time.
   await delay(5_000);
@@ -333,7 +354,11 @@ test("a full restart: a timer due during the outage fires, a signal sent before 
   expect(signalled.output?.value, JSON.stringify(signalled)).toEqual({ got: "sent before the restart" });
   const read = await ended(tenant.api, reading.id, 60_000);
   expect(read.output?.value, JSON.stringify(read)).toBe("after the restart");
-  expect(mcp.calls.map((c) => c.headers.authorization)).toEqual([`Bearer ${value}`]);
+  // The call may have been in flight when its node stopped: the next owner sends it again with
+  // the same idempotency key (`retry`), and each time with the run's secret.
+  expect(mcp.calls.length).toBeGreaterThanOrEqual(1);
+  expect(mcp.calls.every((c) => c.headers.authorization === `Bearer ${value}`), "every call carries the run's secret").toBe(true);
+  expect(new Set(mcp.calls.map((c) => JSON.stringify(c.meta?.["codes.rewind/idempotency-key"]))).size, "one idempotency key").toBe(1);
   await mcp.close();
   await expectHealthy(tenant);
   evidence("every node stopped 5 s, the signals sent to the last one before; the due timer fired at restart, the signals were delivered, and the run's attached ns/fx was read again for its call");

@@ -317,6 +317,11 @@ async function startEdge(port: number, servers: Map<string, ServerProcess>): Pro
       (answer) => {
         res.writeHead(answer.statusCode ?? 502, answer.headers);
         answer.pipe(res);
+        // A node that dies in the middle of an answer (an event stream, a held wait) cuts the
+        // client's too, as Caddy does: a piped answer that never ends would hold its client.
+        answer.on("close", () => {
+          if (!answer.complete) res.destroy();
+        });
       },
     );
     upstream.on("error", (error: NodeJS.ErrnoException) => {

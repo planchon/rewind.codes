@@ -1043,7 +1043,8 @@ test.describe("erasure", () => {
 
     expectOk(await tenant.api.delete(`/v1/namespaces/${namespace}`), 202);
     const cancelled = await tenant.api.get(`/v1/runs/${run.id}`, { query: { wait: "20s" } });
-    expect(cancelled.json?.status ?? "erased", cancelled.text).toMatch(/^(cancelled|erased)$/);
+    // Cancelled, then erased as soon as it ended: a 404.
+    expect(cancelled.status === 404 ? "erased" : cancelled.json?.status, cancelled.text).toMatch(/^(cancelled|erased)$/);
     expectProblem(await tenant.api.as(token.token).get("/v1/whoami"), 401, "unauthorized");
     expectProblem(await api.post("/v1/runs", { script: short(unique("again")) }), 409, "namespace-deleting");
     expectProblem(await tenant.api.post(`/v1/namespaces/${namespace}/tokens`, {}), 409, "namespace-deleting");
