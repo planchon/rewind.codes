@@ -1,8 +1,8 @@
 //! Several nodes of one deployment, each a server in this process, on Postgres and MinIO in
 //! Docker, linked over HTTP/2 (`archi/07-code-architecture.md`, "Tests", `rewind-server`'s row):
 //! runs started at one node and read, signalled and answered at another; the task stream and
-//! the change stream across nodes; a node that joins and one that leaves; a node killed while its
-//! runs are activated. Skipped, with a message, when Docker is absent, unless
+//! the change stream across nodes; a node that joins and one that leaves; a tenant's pool of
+//! executors-only nodes; a node killed while its runs are activated. Skipped, with a message, when Docker is absent, unless
 //! `REWIND_REQUIRE_DOCKER` is set (CI): they fail then.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -78,9 +78,24 @@ impl Deployment {
 
     /// A node of the deployment, of 4 partitions.
     async fn node(&self, id: &str) -> Node {
+        self.node_with(id, &[]).await
+    }
+
+    /// A node of the deployment, of 4 partitions, with more options.
+    async fn node_with(&self, id: &str, more: &[&str]) -> Node {
+        let running = self.launch(id, more).await;
+        let url = running.url().unwrap();
+        Node {
+            running: Some(running),
+            url,
+        }
+    }
+
+    /// A node of the deployment started with `more` options.
+    async fn launch(&self, id: &str, more: &[&str]) -> Running {
         let key = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
         let store = self.postgres.url();
-        let args = vec![
+        let mut args = vec![
             "rewind server",
             "--store",
             &store,
@@ -116,13 +131,9 @@ impl Deployment {
             "--calls",
             "4",
         ];
+        args.extend(more);
         let args = ServerArgs::try_parse_from(args).unwrap();
-        let running = rewind_server::start(args).await.unwrap();
-        let url = running.url().unwrap();
-        Node {
-            running: Some(running),
-            url,
-        }
+        rewind_server::start(args).await.unwrap()
     }
 }
 
@@ -131,12 +142,16 @@ impl Node {
         Client::remote(&self.url, Some(ADMIN_KEY)).unwrap()
     }
 
-    /// A client of this node with a key of the tenant `acme` (made by any node: the control
-    /// plane is shared).
+    /// A key of the tenant `acme` (made by any node: the control plane is shared).
     async fn key(&self, role: BuiltInRole) -> String {
+        self.key_of("acme", role).await
+    }
+
+    /// A key of `tenant`.
+    async fn key_of(&self, tenant: &str, role: BuiltInRole) -> String {
         self.admin()
             .create_api_key(&CreateApiKey {
-                tenant: Some("acme".into()),
+                tenant: Some(tenant.into()),
                 name: format!("a {} key of the tests", role.as_str()),
                 role: role.as_str().into(),
                 allowed_labels: Labels::new(),
@@ -343,6 +358,77 @@ async fn a_node_that_joins_and_one_that_leaves_hand_their_partitions_over() {
         );
     }
     b.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_tenant_with_a_pool_runs_on_the_nodes_of_its_pool_only() {
+    let Some(deployment) = Deployment::start() else {
+        return;
+    };
+    // a owns the partitions and runs the activations of every tenant but acme; p, a node of
+    // executors only, runs acme's.
+    let pools = ["--tenant-pool", "acme=acme-pool"];
+    let mut a = deployment.node_with("node-a", &pools).await;
+    let p = deployment
+        .launch(
+            "node-p",
+            &[
+                "--executors-only",
+                "--pool",
+                "acme-pool",
+                "--tenant-pool",
+                "acme=acme-pool",
+            ],
+        )
+        .await;
+    assert!(
+        p.url().is_none(),
+        "a node of executors only serves no HTTP route"
+    );
+    members(&a, 2).await;
+    let acme = a.key(BuiltInRole::Harness).await;
+    let beta = a.key_of("beta", BuiltInRole::Harness).await;
+    for (n, (key, namespace)) in [(&acme, "end-user-1"), (&beta, "end-user-2")]
+        .into_iter()
+        .enumerate()
+    {
+        let client = a.client(key, namespace);
+        let run = client
+            .start_run(&start(SIGNAL, json!({ "n": n })), None)
+            .await
+            .unwrap();
+        eventually(|| async { client.signal_run(&run.id, "go", &json!(n), None).await.ok() }).await;
+        let ended = client.get_run(&run.id, wait("30s")).await.unwrap();
+        assert_eq!(ended.status, RunStatus::Completed, "{}", run.id);
+    }
+
+    // Without a node of its pool, acme's runs wait for one; beta's run on at a.
+    p.stop().await;
+    members(&a, 1).await;
+    let waiting = a
+        .client(&acme, "end-user-3")
+        .start_run(&start(SIGNAL, json!({ "n": 3 })), None)
+        .await
+        .unwrap();
+    let client = a.client(&beta, "end-user-4");
+    let run = client
+        .start_run(&start(SIGNAL, json!({ "n": 4 })), None)
+        .await
+        .unwrap();
+    eventually(|| async { client.signal_run(&run.id, "go", &json!(4), None).await.ok() }).await;
+    let ended = client.get_run(&run.id, wait("30s")).await.unwrap();
+    assert_eq!(ended.status, RunStatus::Completed);
+    let at_a = a
+        .client(&acme, "end-user-3")
+        .get_run(&waiting.id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        at_a.status,
+        RunStatus::Pending,
+        "no node of acme-pool activated it"
+    );
+    a.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

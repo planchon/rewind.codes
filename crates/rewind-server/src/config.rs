@@ -15,6 +15,7 @@
 //! WorkOS's API key and cookie password) are never printed: a master key is named by its id, the
 //! first 8 bytes of its SHA-256 in hex.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::num::NonZeroU16;
@@ -102,6 +103,16 @@ pub struct ServerArgs {
     /// tenants of this pool here. The shared pool without it.
     #[arg(long, env = "REWIND_POOL")]
     pub pool: Option<String>,
+
+    /// A tenant whose activations run on a pool of its own, as `<tenant>=<pool>`: the owners send
+    /// them to the nodes started with `--pool <pool>`. Repeat, or separate with commas; give the
+    /// same list to every node.
+    #[arg(
+        long = "tenant-pool",
+        env = "REWIND_TENANT_POOLS",
+        value_delimiter = ','
+    )]
+    pub tenant_pools: Vec<String>,
 
     /// Where the HTTP API listens.
     #[arg(long, env = "REWIND_LISTEN", default_value = "127.0.0.1:8080")]
@@ -530,6 +541,8 @@ pub(crate) struct Config {
     pub(crate) node: NodeId,
     pub(crate) executors_only: bool,
     pub(crate) pool: Option<String>,
+    /// The tenants whose activations run on a pool of their own.
+    pub(crate) pools: BTreeMap<TenantId, String>,
     pub(crate) executors: usize,
     pub(crate) calls: usize,
     /// `None` for the embedded server, which keeps its own.
@@ -638,6 +651,20 @@ impl ServerArgs {
                 "--public-url {url:?}: expected an http:// or https:// URL"
             )));
         }
+        let mut pools = BTreeMap::new();
+        for pair in self
+            .tenant_pools
+            .iter()
+            .map(|pair| pair.trim())
+            .filter(|pair| !pair.is_empty())
+        {
+            let (tenant, pool) = pair.split_once('=').ok_or_else(|| {
+                ConfigError::new(format!("--tenant-pool {pair:?}: expected <tenant>=<pool>"))
+            })?;
+            let tenant = TenantId::new(tenant.trim().to_owned())
+                .map_err(|error| ConfigError::new(format!("--tenant-pool {pair:?}: {error}")))?;
+            pools.insert(tenant, pool.trim().to_owned());
+        }
         let partitions = |default: u16| {
             NonZeroU16::new(self.partitions.unwrap_or(default)).ok_or_else(|| {
                 ConfigError::new("--partitions must be at least 1: a deployment has 64")
@@ -684,6 +711,7 @@ impl ServerArgs {
                 node,
                 executors_only: false,
                 pool: None,
+                pools: BTreeMap::new(),
                 executors,
                 calls: self.calls,
                 master_keys: None,
@@ -770,10 +798,10 @@ impl ServerArgs {
                 address: self.link_address.clone(),
                 secret: secret.to_owned(),
             }),
-            _ if self.executors_only || self.pool.is_some() => {
+            _ if self.executors_only || self.pool.is_some() || !self.tenant_pools.is_empty() => {
                 return Err(ConfigError::new(
-                    "--executors-only and --pool are for a deployment of several nodes on \
-                     Postgres",
+                    "--executors-only, --pool and --tenant-pool are for a deployment of several \
+                     nodes on Postgres",
                 ));
             }
             _ => None,
@@ -833,6 +861,7 @@ impl ServerArgs {
             node,
             executors_only: self.executors_only,
             pool: self.pool,
+            pools,
             executors,
             calls: self.calls,
             master_keys: Some(master_keys),
@@ -998,7 +1027,13 @@ mod tests {
             "the secret is not printed"
         );
         let mut executors = linked.clone();
-        executors.extend(["--executors-only", "--pool", "acme"]);
+        executors.extend([
+            "--executors-only",
+            "--pool",
+            "acme",
+            "--tenant-pool",
+            "acme=acme, beta = shared-b",
+        ]);
         let executors = parse(&executors).unwrap_or_else(|error| panic!("{error}"));
         assert!(matches!(
             executors.listen,
@@ -1008,6 +1043,29 @@ mod tests {
             }
         ));
         assert_eq!(executors.pool.as_deref(), Some("acme"));
+        assert_eq!(
+            executors
+                .pools
+                .iter()
+                .map(|(tenant, pool)| (tenant.to_string(), pool.as_str()))
+                .collect::<Vec<_>>(),
+            [("acme".to_owned(), "acme"), ("beta".to_owned(), "shared-b")]
+        );
+        let mut wrong = linked.clone();
+        wrong.extend(["--tenant-pool", "acme"]);
+        assert!(parse(&wrong).is_err(), "a tenant pool is <tenant>=<pool>");
+        assert!(
+            parse(&[
+                "--store",
+                "turso:/tmp/j.db",
+                "--master-key",
+                &key,
+                "--tenant-pool",
+                "acme=a"
+            ])
+            .is_err(),
+            "a single node has no pools"
+        );
         let mut short = postgres.to_vec();
         short.extend(["--cluster-secret", "short"]);
         assert!(parse(&short).is_err());

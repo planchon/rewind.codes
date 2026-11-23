@@ -386,6 +386,7 @@ async fn start_wired(
     let mut node_config = NodeConfig::new(config.node.clone(), config.partitions);
     node_config.build.clone_from(&build);
     node_config.pool.clone_from(&config.pool);
+    node_config.pools.clone_from(&config.pools);
     node_config.executors_only = config.executors_only;
     node_config.executors = config.executors;
     node_config.calls = config.calls;
