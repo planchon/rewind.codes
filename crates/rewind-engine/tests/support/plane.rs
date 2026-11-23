@@ -159,6 +159,11 @@ impl World {
             .unwrap()
     }
 
+    pub async fn trace(&mut self, run: &RunRef) -> String {
+        let mut gateway = self.driver.gateway(&self.at);
+        self.edge.trace(&mut gateway, run).await.unwrap()
+    }
+
     pub async fn events(&mut self, run: &RunRef) -> Vec<&'static str> {
         self.history(run)
             .await

@@ -20,8 +20,8 @@ use rewind_engine::edge::EdgeError;
 use rewind_engine::plane::HostTools;
 use rewind_engine::ports::link::{HostFailure, Refusal, StreamAttach, StreamId};
 use rewind_engine::ports::{
-    CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind, Quotas,
-    RunArchive, RunOrder, RunQuery, Scope, TaskState, TenantId, Window,
+    BlobStore, CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind,
+    Quotas, RunArchive, RunOrder, RunQuery, Scope, SecretStore, TaskState, TenantId, Window,
 };
 use serde_json::json;
 use support::plane::{World, config};
@@ -739,8 +739,39 @@ async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() 
     let active = world.run(active).await;
     let ended = world.run(ended).await;
     assert_eq!(world.view(&ended).await.head.status, RunStatus::Completed);
-
+    // What the control plane keeps of the end user: a test recorded from its runs, a secret.
     let tenant = TenantId::local();
+    let mut recorded = rewind_core::Test::new("recorded");
+    recorded.origin = Some(rewind_core::TestOrigin {
+        run: ended.id,
+        version: rewind_core::Digest::of(b"v1"),
+        namespace: "gone".into(),
+    });
+    let suites = world.edge.suites(support::test_format());
+    let test = suites
+        .store_tests(&tenant, &[recorded], world.now())
+        .await
+        .unwrap()[0];
+    let secret = rewind_engine::ports::SecretId::of_namespace(
+        gone.clone(),
+        rewind_core::SecretName::new("github").unwrap(),
+    );
+    world
+        .plane
+        .secrets
+        .put(
+            &tenant,
+            &rewind_engine::ports::NewSecret {
+                id: secret.clone(),
+                value: rewind_engine::ports::Secret::new("token"),
+                labels: BTreeMap::new(),
+                by: "user:u_1".into(),
+            },
+            world.now(),
+        )
+        .await
+        .unwrap();
+
     world
         .plane
         .catalog
@@ -766,6 +797,35 @@ async fn a_namespace_erased_has_its_runs_cancelled_and_erased_then_is_dropped() 
             .unwrap(),
         None,
         "the control plane drops the namespace once its partition holds nothing of it"
+    );
+    let suites = world.edge.suites(support::test_format());
+    assert_eq!(
+        world.plane.catalog.get_test(&tenant, test).await.unwrap(),
+        None
+    );
+    assert_eq!(suites.load_test(&tenant, test).await.unwrap(), None);
+    assert_eq!(
+        world
+            .plane
+            .blobs
+            .get_in(
+                &rewind_engine::ports::BlobOwner::Tests(tenant.clone()),
+                test
+            )
+            .await
+            .unwrap(),
+        None,
+        "the tests recorded from its runs are erased with it"
+    );
+    assert_eq!(
+        world
+            .plane
+            .secrets
+            .meta(&tenant, &secret, rewind_engine::ports::Day(0))
+            .await
+            .unwrap(),
+        None,
+        "its secrets are erased with it"
     );
 }
 

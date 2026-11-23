@@ -8,7 +8,8 @@
 //! - [`driver`]: the same actors of every node stepped on one thread in virtual time: the
 //!   engine's tests and mock mode.
 //! - [`edge`]: the use cases at the edge (start, fork, signal, cancel, tasks, reads, searches,
-//!   statistics), through a [`edge::Gateway`] to the owner of the run's partition.
+//!   statistics, traces, tests recorded from runs), through a [`edge::Gateway`] to the owner of
+//!   the run's partition; workflow versions saved through their gate, in the control plane.
 //! - [`router`]: where a run's partition and its owner are.
 //! - [`plane`]: the adapters a node is wired with, and its configuration.
 //! - [`ports::link`]: what nodes send each other (`NodeLink`).
@@ -66,8 +67,7 @@ mod engine;
 mod executors;
 mod export;
 pub mod failures;
-mod fork;
-pub mod handles;
+pub mod fork;
 pub mod metrics;
 pub mod mock;
 pub mod node;

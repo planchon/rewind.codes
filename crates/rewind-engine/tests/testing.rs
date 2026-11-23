@@ -11,12 +11,12 @@ use rewind_core::{
     CallOrder, Expectations, ExpectedCall, ExpectedError, Matching, RunStatus, Script, SignalWhen,
     Test, TestOrigin, TestSignal, ToolOutcome, ToolRule, Toolset,
 };
-use rewind_engine::DriveOptions;
 use rewind_engine::ports::Delivery;
 use rewind_engine::testing::{
     DEFAULT_START, NoMockLoader, Subject, TestOptions, TestProblem, run_test, run_tests,
 };
 use serde_json::json;
+use support::plane::World;
 use support::*;
 
 /// Calls `a`, sleeps ten days, waits for `approval`, and completes with the approval and the
@@ -195,28 +195,18 @@ async fn a_run_waiting_for_the_outside_world_ends_its_test_active() {
 #[tokio::test]
 async fn a_recorded_run_replays_as_a_test_with_its_seed_and_start() {
     // A "real" run, answered by a tool that is not there in the test.
-    let engine = engine(
+    let mut world = World::new(
         sleepy(),
         RecordingDispatcher::new(|_| Ok(json!({ "live": 42 }))),
-    );
-    let run = engine
-        .start_run(request("sleepy", json!({})))
-        .await
-        .unwrap()
-        .run;
-    engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .unwrap();
-    engine
+    )
+    .await;
+    let run = world.run(request("sleepy", json!({}))).await;
+    world
         .signal(&run, "approval", json!("yes"), None)
         .await
         .unwrap();
-    engine
-        .run_until_idle_virtual(&DriveOptions::default())
-        .await
-        .unwrap();
-    let original = engine.export_history(&run).await.unwrap();
+    world.idle().await;
+    let original = world.history(&run).await;
     let recorded = Test::record(
         &original,
         TestOrigin {
@@ -348,4 +338,21 @@ async fn rules_answer_by_args_and_static_responses_come_last() {
         .find(|entry| entry.event.name() == "tool_call_completed")
         .unwrap();
     assert!(format!("{:?}", completed.event).contains("static"));
+}
+
+#[test]
+fn a_run_of_tests_is_a_future_a_server_can_spawn() {
+    fn spawnable<T: Send>(_: &T) {}
+    let script = script();
+    let toolset = toolset();
+    let subject = Subject {
+        script: &script,
+        toolset: &toolset,
+        interface: None,
+    };
+    let tests = [test()];
+    let executor = sleepy();
+    let options = TestOptions::default();
+    let run = run_tests(&executor, &NoMockLoader, &subject, &tests, &options);
+    spawnable(&run);
 }

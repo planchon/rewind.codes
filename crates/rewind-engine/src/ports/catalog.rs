@@ -38,6 +38,17 @@ pub enum CatalogError {
     Backend(String),
 }
 
+/// What a use case reports of a catalog that failed: a conflict as a conflict, the rest as the
+/// backend's error.
+impl From<CatalogError> for crate::ports::StoreError {
+    fn from(error: CatalogError) -> Self {
+        match error {
+            CatalogError::Conflict(message) => crate::ports::StoreError::Conflict(message),
+            other => crate::ports::StoreError::Backend(other.to_string()),
+        }
+    }
+}
+
 /// How long the deletion of tests may take: a test whose deletion started longer ago is marked
 /// again by [`CatalogStore::unreferenced_tests`], since the cleanup that started it stopped.
 pub const TEST_DELETION_TIMEOUT: Duration = Duration::from_secs(3_600);

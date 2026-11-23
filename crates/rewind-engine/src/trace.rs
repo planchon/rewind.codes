@@ -18,13 +18,13 @@ use std::fmt::Write as _;
 
 use rewind_core::{
     Annotation, Command, Completion, Digest, Event, HistoryEntry, JsonValue, Lifecycle, Payload,
-    RunState, RunStatus, Seq, Timestamp, canonical_json,
+    RunId, RunState, RunStatus, Seq, Timestamp, canonical_json,
 };
 
 use crate::engine::{Engine, EngineError};
 use crate::ports::{
-    BlobStore, Clock, Entropy, JournalStore, PayloadRecord, RunRecord, RunRef, ScriptExecutor,
-    SecretStore, ToolDispatcher, WebhookSender,
+    BlobStore, Clock, Entropy, ForkParent, JournalStore, PayloadRecord, Quarantine, RunHead,
+    RunRecord, RunRef, ScriptExecutor, SecretStore, ToolDispatcher, WebhookSender,
 };
 
 /// Characters of a payload in a trace line.
@@ -106,12 +106,58 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
         payloads,
         now,
     } = input;
+    let shown = Shown {
+        run: record.run.id,
+        script: record.script,
+        toolset: record.toolset,
+        status: record.status,
+        quarantine: record.quarantine.as_ref(),
+        parent: record.metadata.parent.as_ref(),
+    };
+    render(&shown, history, payloads, now)
+}
+
+/// The trace of a run, from its head and history: the history of its attempt, with the rows of
+/// the payloads it holds by digest (their size and preview).
+pub fn render_run(
+    head: &RunHead,
+    history: &[HistoryEntry],
+    payloads: &BTreeMap<Digest, PayloadRecord>,
+    now: Timestamp,
+) -> String {
+    let shown = Shown {
+        run: head.run.id,
+        script: head.script,
+        toolset: head.toolset,
+        status: head.status,
+        quarantine: head.quarantine.as_ref(),
+        parent: head.metadata.parent.as_ref(),
+    };
+    render(&shown, history, payloads, now)
+}
+
+/// What a trace shows of a run besides its history.
+struct Shown<'a> {
+    run: RunId,
+    script: Digest,
+    toolset: Digest,
+    status: RunStatus,
+    quarantine: Option<&'a Quarantine>,
+    parent: Option<&'a ForkParent>,
+}
+
+fn render(
+    record: &Shown<'_>,
+    history: &[HistoryEntry],
+    payloads: &BTreeMap<Digest, PayloadRecord>,
+    now: Timestamp,
+) -> String {
     let mut out = String::new();
     let state = RunState::from_history(history).ok();
     let _ = writeln!(
         out,
         "run {}  {}",
-        record.run.id,
+        record.run,
         headline(record, state.as_ref(), history, now)
     );
     let started_at = history.first().map(|entry| entry.recorded_at);
@@ -126,7 +172,7 @@ pub fn render_trace(input: TraceInput<'_>) -> String {
         }
         None => second.push_str(" · not started"),
     }
-    if let Some(parent) = &record.metadata.parent {
+    if let Some(parent) = record.parent {
         let _ = write!(second, " · forked from {}", parent.run);
         if let Some(at) = parent.at {
             let _ = write!(second, " (live from entry {at})");
@@ -214,7 +260,7 @@ fn pretty(value: &JsonValue) -> String {
 
 /// The run's state in a few words: its outcome, or what it waits for.
 fn headline(
-    record: &RunRecord,
+    record: &Shown<'_>,
     state: Option<&RunState>,
     history: &[HistoryEntry],
     now: Timestamp,
@@ -239,7 +285,7 @@ fn headline(
         Some(None) => waiting(state, now),
         None => "invalid history".to_owned(),
     };
-    if let Some(quarantine) = &record.quarantine {
+    if let Some(quarantine) = record.quarantine {
         let kind = match quarantine.kind {
             crate::ports::QuarantineKind::NonDeterminism => "non_determinism",
             crate::ports::QuarantineKind::Failures => "failures",

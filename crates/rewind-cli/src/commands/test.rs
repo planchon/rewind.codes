@@ -271,7 +271,9 @@ async fn local(
             | StartError::NulCharacter(_)),
         ) => CliError::usage(format!("the run cannot start: {refused}")),
         TestError::Start(refused) => CliError::internal(format!("the run cannot start: {refused}")),
-        TestError::Engine(error) => CliError::internal(format!("the tests could not run: {error}")),
+        TestError::Unavailable(message) => {
+            CliError::internal(format!("the tests could not run: {message}"))
+        }
         TestError::Mocks(message) => CliError::internal(message),
     })?;
     let results: Vec<TestResult> = reports

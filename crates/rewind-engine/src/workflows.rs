@@ -112,7 +112,7 @@ pub enum RegisterError {
 
 /// Two versions with the same name, description, script, toolset, schemas, labels and
 /// attachments, whatever their suites.
-fn same_content(a: &Workflow, b: &Workflow) -> bool {
+pub(crate) fn same_content(a: &Workflow, b: &Workflow) -> bool {
     a.labels() == b.labels()
         && a.secrets() == b.secrets()
         && a.name() == b.name()
@@ -178,7 +178,10 @@ where
         request: RegisterWorkflow,
         checker: &K,
         kit: &TestKit<'_, L>,
-    ) -> Result<StoredWorkflow, RegisterError> {
+    ) -> Result<StoredWorkflow, RegisterError>
+    where
+        X: ScriptExecutor<Instance: 'static> + Clone + 'static,
+    {
         text::refuse_nul("the script", request.script.source())?;
         text::refuse_nul("the workflow's name", &request.name)?;
         if let Some(description) = &request.description {

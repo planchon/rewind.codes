@@ -20,13 +20,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rewind_core::{
     Digest, ERASED_TEST_REASON, Expectations, HistoryEntry, RecordError, RetiredTest, RunId,
-    RunPath, Suite, SuiteTest, Test, TestOrigin, UpdatedTest, Workflow,
+    RunPath, Suite, SuiteTest, Test, TestOrigin, Timestamp, UpdatedTest, Workflow,
 };
 
 use crate::engine::Engine;
 use crate::ports::{
-    BlobError, BlobStore, Clock, Entropy, JournalStore, NamespaceName, ScriptExecutor, SecretStore,
-    StoreError, TenantId, TestRecord, ToolDispatcher, WebhookSender,
+    BlobError, BlobOwner, BlobStore, CatalogStore, Clock, Entropy, JournalStore, NamespaceName,
+    ScriptExecutor, SecretStore, StoreError, TenantId, TestRecord, ToolDispatcher, WebhookSender,
 };
 use crate::testing::TestOptions;
 
@@ -436,6 +436,320 @@ where
         }
         Ok(documents.into_iter().map(|(digest, _, _)| digest).collect())
     }
+}
+
+// -------------------------------------------------------------------------------------------
+// Suites in the control plane
+
+/// The tests of a tenant where the control plane keeps them: their rows in the catalog, their
+/// documents as blobs of the tenant's tests ([`BlobOwner::Tests`]), in the stored format the
+/// composition root gives.
+#[derive(Debug, Clone, Copy)]
+pub struct Suites<'a, C, B> {
+    pub catalog: &'a C,
+    pub blobs: &'a B,
+    pub format: TestFormat,
+}
+
+impl<C: CatalogStore, B: BlobStore> Suites<'_, C, B> {
+    /// A stored test, by digest; `None` for one never stored, erased, or being deleted.
+    pub async fn load_test(
+        &self,
+        tenant: &TenantId,
+        digest: Digest,
+    ) -> Result<Option<Test>, SuiteLoadError> {
+        if self
+            .catalog
+            .get_test(tenant, digest)
+            .await
+            .map_err(StoreError::from)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let owner = BlobOwner::Tests(tenant.clone());
+        let Some(bytes) = self.blobs.get_in(&owner, digest).await? else {
+            return Ok(None);
+        };
+        let text = String::from_utf8(bytes).map_err(|error| SuiteLoadError::Corrupt {
+            digest,
+            message: error.to_string(),
+        })?;
+        (self.format.decode)(&text)
+            .map(Some)
+            .map_err(|message| SuiteLoadError::Corrupt { digest, message })
+    }
+
+    /// The tests of a version's suite, in its order; an erased test is `None`.
+    pub async fn load_suite(
+        &self,
+        tenant: &TenantId,
+        workflow: &Workflow,
+    ) -> Result<Vec<LoadedTest>, SuiteLoadError> {
+        let mut loaded = Vec::with_capacity(workflow.suite().tests.len());
+        for entry in &workflow.suite().tests {
+            loaded.push(LoadedTest {
+                name: entry.name.clone(),
+                digest: entry.test,
+                test: self.load_test(tenant, entry.test).await?,
+            });
+        }
+        Ok(loaded)
+    }
+
+    /// The test a [`TestInput`] gives.
+    pub async fn resolve_test(
+        &self,
+        tenant: &TenantId,
+        input: &TestInput,
+    ) -> Result<Test, SuiteLoadError> {
+        let test = match input {
+            TestInput::Inline(test) => (**test).clone(),
+            TestInput::Stored(digest) => self
+                .load_test(tenant, *digest)
+                .await?
+                .ok_or(SuiteError::UnknownTest(*digest))?,
+            TestInput::From { from, expect } => {
+                let mut test = self
+                    .load_test(tenant, *from)
+                    .await?
+                    .ok_or(SuiteError::UnknownTest(*from))?;
+                test.expect = expect.clone();
+                test
+            }
+        };
+        test.check()
+            .map_err(|error| SuiteError::Invalid(error.to_string()))?;
+        Ok(test)
+    }
+
+    /// Composes the suite of a new version: the parent's tests, those of an erased namespace
+    /// left out, minus `retire`, with `update` applied, plus `tests`.
+    pub async fn compose_suite(
+        &self,
+        tenant: &TenantId,
+        parent: Option<&Workflow>,
+        changes: &SuiteChanges,
+    ) -> Result<ComposedSuite, SuiteLoadError> {
+        let mut retired = Vec::new();
+        let mut updated = Vec::new();
+        // name → (digest, test)
+        let mut suite: BTreeMap<String, (Digest, Test)> = BTreeMap::new();
+        if let Some(parent) = parent {
+            for loaded in self.load_suite(tenant, parent).await? {
+                match loaded.test {
+                    Some(test) => {
+                        suite.insert(loaded.name, (loaded.digest, test));
+                    }
+                    None => retired.push(RetiredTest {
+                        name: loaded.name,
+                        test: loaded.digest,
+                        reason: ERASED_TEST_REASON.to_owned(),
+                    }),
+                }
+            }
+        }
+        let inherited: BTreeSet<String> = suite.keys().cloned().collect();
+        let known = || {
+            if inherited.is_empty() {
+                " (it has no test)".to_owned()
+            } else {
+                format!(
+                    " (it has {})",
+                    inherited
+                        .iter()
+                        .map(|name| format!("{name:?}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+        };
+        let mut retiring = BTreeSet::new();
+        for retirement in &changes.retire {
+            if retirement.reason.trim().is_empty() {
+                let name = retirement.names.first().cloned().unwrap_or_default();
+                return Err(SuiteError::NoReason(name).into());
+            }
+            for name in &retirement.names {
+                let Some((digest, _)) = suite.remove(name) else {
+                    return Err(SuiteError::NotInherited {
+                        verb: "retire names",
+                        name: name.clone(),
+                        known: known(),
+                    }
+                    .into());
+                };
+                retiring.insert(name.clone());
+                retired.push(RetiredTest {
+                    name: name.clone(),
+                    test: digest,
+                    reason: retirement.reason.clone(),
+                });
+            }
+        }
+        for update in &changes.update {
+            if update.reason.trim().is_empty() {
+                return Err(SuiteError::NoReason(update.name.clone()).into());
+            }
+            if retiring.contains(&update.name) {
+                return Err(SuiteError::RetiredAndUpdated(update.name.clone()).into());
+            }
+            let Some((from, inherited_test)) = suite.remove(&update.name) else {
+                return Err(SuiteError::NotInherited {
+                    verb: "update names",
+                    name: update.name.clone(),
+                    known: known(),
+                }
+                .into());
+            };
+            let mut replacement = match &update.with {
+                UpdateWith::Expect(expect) => Test {
+                    expect: expect.clone(),
+                    ..inherited_test
+                },
+                UpdateWith::Test(input) => self.resolve_test(tenant, input).await?,
+            };
+            replacement.name = update.name.clone();
+            let (to, _) = self.format.document(&replacement);
+            updated.push(UpdatedTest {
+                name: update.name.clone(),
+                from,
+                to,
+                reason: update.reason.clone(),
+            });
+            suite.insert(update.name.clone(), (to, replacement));
+        }
+        for input in &changes.tests {
+            let test = self.resolve_test(tenant, input).await?;
+            if suite.contains_key(&test.name) {
+                return Err(SuiteError::Duplicate(test.name).into());
+            }
+            let (digest, _) = self.format.document(&test);
+            suite.insert(test.name.clone(), (digest, test));
+        }
+        let mut tests = Vec::with_capacity(suite.len());
+        let mut entries = Vec::with_capacity(suite.len());
+        for (name, (digest, test)) in suite {
+            let (_, document) = self.format.document(&test);
+            if document.len() > MAX_TEST_BYTES {
+                return Err(SuiteError::TooLarge {
+                    name,
+                    size: document.len(),
+                    max: MAX_TEST_BYTES,
+                }
+                .into());
+            }
+            entries.push(SuiteTest { name, test: digest });
+            tests.push(test);
+        }
+        Ok(ComposedSuite {
+            tests,
+            suite: Suite {
+                parent: parent.map(Workflow::version),
+                tests: entries,
+                retired,
+                updated,
+            },
+        })
+    }
+
+    /// Stores tests: reserves their rows, then writes their blobs. A test whose deletion has
+    /// started cannot be stored until its row is gone (`Conflict`).
+    pub async fn store_tests(
+        &self,
+        tenant: &TenantId,
+        tests: &[Test],
+        now: Timestamp,
+    ) -> Result<Vec<Digest>, SuiteLoadError> {
+        let documents = documents(tests, self.format);
+        let records = records(&documents);
+        let deleting = self
+            .catalog
+            .reserve_tests(tenant, &records, now)
+            .await
+            .map_err(StoreError::from)?;
+        if let Some(digest) = deleting.first() {
+            return Err(StoreError::Conflict(format!(
+                "the test {digest} is being deleted: save again in a few minutes"
+            ))
+            .into());
+        }
+        let owner = BlobOwner::Tests(tenant.clone());
+        for (digest, document, _) in &documents {
+            self.blobs
+                .put_in(&owner, *digest, document.clone().into_bytes())
+                .await?;
+        }
+        Ok(documents.into_iter().map(|(digest, _, _)| digest).collect())
+    }
+}
+
+/// How many tests [`clean_tests`] takes at once.
+pub const CLEANED_AT_ONCE: usize = 500;
+
+/// The control plane's daily job of tests (`archi/06-storage-and-scale.md`, "Retention and
+/// deletion"; `archi/05-testing-and-observability.md`, "Where tests are stored"): deletes the
+/// tests no version references, stored more than [`TEST_GRACE`](crate::ports::TEST_GRACE)
+/// before `now`. It marks their rows, deletes their blobs, then drops the rows still marked, a
+/// batch at a time until none is left. Returns how many rows it dropped.
+///
+/// A round that stops halfway leaves rows whose deletion started: a later round marks them again
+/// after [`TEST_DELETION_TIMEOUT`](crate::ports::TEST_DELETION_TIMEOUT). The tests of an erased
+/// namespace are the owner of its partition's to erase, with the namespace.
+pub async fn clean_tests<C: CatalogStore, B: BlobStore>(
+    catalog: &C,
+    blobs: &B,
+    now: Timestamp,
+) -> Result<usize, SuiteLoadError> {
+    let mut dropped = 0;
+    loop {
+        let marked = catalog
+            .unreferenced_tests(now, CLEANED_AT_ONCE)
+            .await
+            .map_err(StoreError::from)?;
+        if marked.is_empty() {
+            return Ok(dropped);
+        }
+        for (tenant, digest) in &marked {
+            blobs
+                .delete_in(&BlobOwner::Tests(tenant.clone()), *digest)
+                .await?;
+        }
+        dropped += catalog
+            .drop_tests(&marked, false)
+            .await
+            .map_err(StoreError::from)?;
+        if marked.len() < CLEANED_AT_ONCE {
+            return Ok(dropped);
+        }
+    }
+}
+
+/// The documents of tests: their digest, their canonical document, and the namespace a recorded
+/// test came from.
+fn documents(tests: &[Test], format: TestFormat) -> Vec<(Digest, String, Option<NamespaceName>)> {
+    tests
+        .iter()
+        .map(|test| {
+            let (digest, document) = format.document(test);
+            let namespace = test
+                .origin
+                .as_ref()
+                .and_then(|origin| NamespaceName::new(&origin.namespace).ok());
+            (digest, document, namespace)
+        })
+        .collect()
+}
+
+fn records(documents: &[(Digest, String, Option<NamespaceName>)]) -> Vec<TestRecord> {
+    documents
+        .iter()
+        .map(|(digest, document, namespace)| TestRecord {
+            digest: *digest,
+            namespace: namespace.clone(),
+            size: document.len() as u64,
+        })
+        .collect()
 }
 
 // -------------------------------------------------------------------------------------------

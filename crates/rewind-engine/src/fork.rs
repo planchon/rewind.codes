@@ -25,17 +25,17 @@ use std::fmt;
 use std::time::Duration;
 
 use rewind_core::{
-    Attachments, Command, Completion, Event, HistoryEntry, Interruption, JsonValue, Lifecycle,
-    Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunMode, RunStarted, RunStatus,
-    Script, Seq, ToolFailure, ToolFailureKind, Toolset,
+    Attachments, Command, Completion, Event, HistoryEntry, Interruption, JournalDocument,
+    JsonValue, Lifecycle, Next, NonDeterminism, Payload, ReplayCursor, Replayed, RunId, RunMode,
+    RunStarted, RunStatus, Script, Seq, ToolFailure, ToolFailureKind, Toolset,
 };
 
 use crate::activation::{Batch, CountCpu, Grace, abort_reason};
 use crate::adapters::StaticTypeChecker;
 use crate::attachments::AttachRights;
 use crate::engine::{
-    AttachedScript, Engine, EngineError, StartError, idempotency_key, refuse_nul_in_metadata,
-    type_check,
+    AttachedScript, Engine, EngineError, Limits, StartError, idempotency_key,
+    refuse_nul_in_metadata, type_check,
 };
 use crate::payloads;
 use crate::ports::{
@@ -477,6 +477,83 @@ where
                 .await?;
         }
         Ok(Some(instance))
+    }
+}
+
+/// Whether `script` is compatible with a run's journal, and if not, where it diverges; and what
+/// a fork of the run with it would reuse (`rewind replay <run> --script fixed.ts`,
+/// `archi/05-testing-and-observability.md`, "Replay, debugging and forks"). The script is
+/// followed against the journal on `executor` as a fork's first activation follows its parent,
+/// as the run itself (it reads the run's id); every payload of the journal is held as a value.
+/// Nothing is written and no tool is called.
+pub async fn compatibility<X: ScriptExecutor>(
+    executor: &X,
+    journal: &JournalDocument,
+    script: &Script,
+    at: Option<u64>,
+    limits: &Limits,
+) -> Result<Compatibility, ForkError> {
+    let Some(HistoryEntry {
+        event: Event::Lifecycle(Lifecycle::RunStarted(started)),
+        ..
+    }) = journal.entries.first()
+    else {
+        return Err(ForkError::ParentNotStarted(journal.run));
+    };
+    let compiled = executor
+        .compile(script, &journal.toolset)
+        .map_err(|invalid| ForkError::Start(StartError::InvalidScript(invalid)))?;
+    let started = RunStarted {
+        script: script.digest(),
+        ..started.clone()
+    };
+    let run = RunRef::new(crate::ports::TenantId::local(), journal.run);
+    let mut batch = Batch::for_check(&run, limits);
+    // Every payload is in the journal: nothing is read from elsewhere.
+    let nowhere = crate::adapters::MemoryBlobs::new();
+    let with = FollowWith {
+        executor,
+        payloads: &nowhere,
+        cpu: &Uncounted,
+    };
+    let followed = follow_parent(
+        &with,
+        &mut batch,
+        &mut NoHeartbeat,
+        ForkSource {
+            run: &run,
+            parent: ForkParent {
+                run: journal.run,
+                at,
+            },
+            started,
+            compiled: &compiled,
+            toolset: &journal.toolset,
+        },
+        &journal.entries,
+    )
+    .await?;
+    let mut reused: Vec<Seq> = followed.reused.iter().filter_map(completion_seq).collect();
+    reused.sort();
+    Ok(Compatibility {
+        point: followed.point,
+        reused,
+        redispatched: followed.redispatched,
+        unknown: followed.unknown,
+        status: batch.state.status(),
+    })
+}
+
+/// The CPU time of a check, which counts toward no namespace.
+struct Uncounted;
+
+impl CountCpu for Uncounted {
+    fn count_cpu(
+        &self,
+        _tenant: &crate::ports::TenantId,
+        _namespace: &crate::ports::NamespaceName,
+        _cpu: Duration,
+    ) {
     }
 }
 

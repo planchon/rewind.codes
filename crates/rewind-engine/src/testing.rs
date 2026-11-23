@@ -2,20 +2,25 @@
 //!
 //! ```text
 //! check_test ── stale? incompatible? ── no isolate started ──────────────► report (not run)
-//! run_test ──── world → MockDispatcher ── Engine (in memory, virtual clock, seed) ──┐
+//! run_test ──── world → MockDispatcher ── Driver: one node, one partition ───────────┐
+//!               (memory adapters, virtual clock at the test's start, its seed)       │
 //!               signals: the cassette's at their time, the test's in order          │
 //!               history ──► Observed { status, output, error, calls } ──► expect ───┴► report
 //! run_tests ─── every test of a suite, several at once, in the order given
 //! ```
 //!
-//! A test runs in its own engine wired with in-memory adapters, a virtual clock started at the
-//! test's start and an entropy giving the test's seed: its result is a function of the script,
-//! the toolset, the test and the epoch. The script under test is a parameter ([`Subject`]).
+//! A test runs on a run plane of its own, stepped by the [`Driver`]: one node holding one
+//! partition, wired with in-memory adapters, a virtual clock started at the test's start and an
+//! entropy giving the test's seed; host tools are dispatched to the test's world as every other
+//! call. Its result is a function of the script, the toolset, the test and the epoch. The
+//! script under test is a parameter ([`Subject`]).
 //! TypeScript mock handlers come through a [`MockLoader`]: `rewind-runtime` runs them in an
 //! isolate of their own.
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZeroU16;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -27,12 +32,15 @@ use rewind_core::{
 };
 
 use crate::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
+    MemoryArchive, MemoryBlobs, MemoryCatalog, MemoryCluster, MemoryPartitions, MemorySecrets,
+    MemorySpanExporter, MemoryWebhooks, SeededEntropy, VirtualClock,
 };
-use crate::drive::DriveOptions;
-use crate::engine::{Adapters, Engine, EngineConfig, EngineError, StartError, StartRun};
+use crate::driver::{DriveError, Driver, PlaneClock, Steps};
+use crate::edge::Edge;
+use crate::engine::{StartError, StartRun};
 use crate::mock::{MockDispatcher, Mocks, NoMocks};
-use crate::ports::{Enqueued, Entropy, ScriptExecutor, ToolDispatcher};
+use crate::plane::{HostTools, NodeConfig, Wiring};
+use crate::ports::{Enqueued, Entropy, NodeId, QuarantineKind, ScriptExecutor, ToolDispatcher};
 use crate::schema::{Refused, Validator};
 
 /// When a test starts when it does not say: 2026-01-01T00:00:00Z, so that a report is the same
@@ -127,8 +135,9 @@ pub enum TestError {
     /// The script was refused at start: no test can run.
     #[error(transparent)]
     Start(#[from] StartError),
-    #[error(transparent)]
-    Engine(#[from] EngineError),
+    /// The run plane a test runs on failed, for a reason that is not the test's.
+    #[error("the test could not run: {0}")]
+    Unavailable(String),
     /// The mock handlers could not be run, for a reason that is not the test's.
     #[error("the mock handlers could not run: {0}")]
     Mocks(String),
@@ -146,7 +155,7 @@ pub enum MockLoadError {
 /// Loads the TypeScript mock handlers of a test. `rewind-runtime` runs them in an isolate of
 /// their own, with the sandbox's globals and the time of a clock started at `start`.
 pub trait MockLoader: Sync {
-    type Handlers: ToolDispatcher;
+    type Handlers: ToolDispatcher + 'static;
 
     fn load(
         &self,
@@ -302,6 +311,7 @@ fn refused_text(refused: Refused) -> String {
 
 /// Runs every test against the subject, [`PARALLEL_TESTS`] at once, and reports them in the
 /// order given. The script is compiled once first: a script refused at start fails them all.
+/// Each test runs on a clone of `executor`.
 pub async fn run_tests<X, L>(
     executor: &X,
     loader: &L,
@@ -310,7 +320,7 @@ pub async fn run_tests<X, L>(
     options: &TestOptions,
 ) -> Result<Vec<TestReport>, TestError>
 where
-    X: ScriptExecutor,
+    X: ScriptExecutor<Instance: 'static> + Clone + 'static,
     L: MockLoader,
 {
     if tests.is_empty() {
@@ -344,7 +354,7 @@ pub async fn run_test<X, L>(
     options: &TestOptions,
 ) -> Result<TestReport, TestError>
 where
-    X: ScriptExecutor,
+    X: ScriptExecutor<Instance: 'static> + Clone + 'static,
     L: MockLoader,
 {
     if let Some((problem, failures)) = check_test(test, subject) {
@@ -399,22 +409,7 @@ where
             .map(|signal| (signal.name.clone(), signal.payload.clone(), signal.when)),
     );
 
-    let engine = Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor,
-            dispatcher,
-            clock: VirtualClock::new(start),
-            entropy: TestEntropy {
-                inner: SeededEntropy::new(1),
-                seed: test.seed,
-            },
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        EngineConfig::default(),
-    );
+    let mut world = TestWorld::new(executor.clone(), dispatcher, start, test.seed).await?;
     let mut request = StartRun::new(
         subject.script.clone(),
         subject.toolset.clone(),
@@ -422,46 +417,70 @@ where
     );
     request.mode = RunMode::Mock;
     request.ttl = options.ttl;
-    let run = engine.start_run(request).await?.run;
-
-    let drive = DriveOptions::default();
-    let mut failures = Vec::new();
-    let mut drive_failures = |report: crate::DriveReport| {
-        for (run, error) in report.failures {
-            failures.push(format!("an activation of run {} failed: {error}", run.id));
-        }
-        if report.interrupted {
-            failures.push(
-                "the run never became idle in virtual time: does it start timers forever?".into(),
-            );
-        }
+    let run = {
+        let mut gateway = world.driver.gateway(&world.node);
+        world.edge.start_run(&mut gateway, request).await?.run
     };
+
+    let mut failures = Vec::new();
     // Each signal drives the run until its time; the last drive takes the run as far as it
-    // goes.
+    // goes. A run that never becomes idle is driven no further.
     let mut undelivered = Vec::new();
+    let mut idle = true;
     for (name, payload, when) in signals {
-        match when {
-            SignalWhen::Blocked => drive_failures(engine.run_until_idle_virtual(&drive).await?),
-            SignalWhen::After(after) => {
-                drive_failures(
-                    engine
-                        .run_virtual_until(&drive, start.saturating_add(after))
-                        .await?,
-                );
-            }
+        let driven = match when {
+            SignalWhen::Blocked => world.driver.run_until_idle_virtual().await,
+            SignalWhen::After(after) => world.driver.run_until(start.saturating_add(after)).await,
+        };
+        idle = drove(driven, &mut failures)?;
+        if !idle {
+            break;
         }
-        if engine.signal(&run, name.clone(), payload, None).await? == Enqueued::RunEnded {
+        let mut gateway = world.driver.gateway(&world.node);
+        let enqueued = world
+            .edge
+            .signal(&mut gateway, &run, name.clone(), payload, None)
+            .await
+            .map_err(unavailable)?;
+        if enqueued == Enqueued::RunEnded {
             undelivered.push(name);
         }
     }
-    drive_failures(engine.run_until_idle_virtual(&drive).await?);
+    if idle {
+        drove(world.driver.run_until_idle_virtual().await, &mut failures)?;
+    }
 
-    let history = engine.export_history(&run).await?;
-    let state = RunState::from_history(&history).map_err(|error| EngineError::CorruptHistory {
-        run_id: run.id,
-        error,
+    let mut gateway = world.driver.gateway(&world.node);
+    let view = world
+        .edge
+        .get_run(&mut gateway, &run)
+        .await
+        .map_err(unavailable)?
+        .ok_or_else(|| TestError::Unavailable(format!("run {} is not found", run.id)))?;
+    let history = world
+        .edge
+        .export_journal(&mut gateway, &run)
+        .await
+        .map_err(unavailable)?
+        .entries;
+    let trace = world
+        .edge
+        .trace(&mut gateway, &run)
+        .await
+        .map_err(unavailable)?;
+    let state = RunState::from_history(&history).map_err(|error| {
+        TestError::Unavailable(format!("the history of run {} is invalid: {error}", run.id))
     })?;
-    let trace = engine.trace(&run).await?;
+    if let Some(quarantine) = &view.head.quarantine {
+        let kind = match quarantine.kind {
+            QuarantineKind::NonDeterminism => "non_determinism",
+            QuarantineKind::Failures => "failures",
+        };
+        failures.push(format!(
+            "the run is quarantined ({kind}): {}",
+            quarantine.reason
+        ));
+    }
     for name in undelivered {
         failures.push(format!(
             "the signal {name:?} was not delivered: the run had already ended"
@@ -521,6 +540,106 @@ where
         trace,
         history,
     })
+}
+
+/// Steps a test's run is driven at most: a guard against scripts that never stop (an endless
+/// `setInterval` in virtual time).
+pub const MAX_TEST_STEPS: usize = 100_000;
+
+/// The plane a test runs on: the memory adapters, the subject's executor, the test's world as
+/// the dispatcher, a virtual clock and the test's entropy.
+type TestPlane<X, M> = Wiring<
+    MemoryCatalog,
+    MemoryPartitions,
+    MemoryArchive,
+    MemoryBlobs,
+    X,
+    MockDispatcher<M>,
+    MemorySecrets,
+    MemorySpanExporter,
+    MemoryWebhooks,
+    VirtualClock,
+    TestEntropy,
+>;
+
+/// One node holding the one partition of a test, stepped by the driver.
+struct TestWorld<X, M>
+where
+    X: ScriptExecutor<Instance: 'static> + 'static,
+    M: ToolDispatcher + 'static,
+{
+    driver: Driver<TestPlane<X, M>, MemoryCluster>,
+    edge: Edge<TestPlane<X, M>>,
+    node: NodeId,
+}
+
+impl<X, M> TestWorld<X, M>
+where
+    X: ScriptExecutor<Instance: 'static> + 'static,
+    M: ToolDispatcher + 'static,
+{
+    async fn new(
+        executor: X,
+        dispatcher: MockDispatcher<M>,
+        start: Timestamp,
+        seed: Option<Seed>,
+    ) -> Result<Self, TestError> {
+        let blobs = MemoryBlobs::new();
+        let plane = Arc::new(Wiring {
+            catalog: MemoryCatalog::new(),
+            partitions: MemoryPartitions::new(),
+            archive: MemoryArchive::with_blobs(blobs.clone()),
+            blobs,
+            executor,
+            dispatcher,
+            secrets: MemorySecrets::new(),
+            spans: MemorySpanExporter::new(),
+            webhooks: MemoryWebhooks::new(),
+            clock: VirtualClock::new(start),
+            entropy: TestEntropy {
+                inner: SeededEntropy::new(1),
+                seed,
+            },
+        });
+        let node = NodeId::new("test").map_err(unavailable)?;
+        let mut config = NodeConfig::new(node.clone(), NonZeroU16::MIN);
+        config.host_tools = HostTools::Dispatched;
+        // Every timer of the run is held by the wheel: none is read again.
+        config.horizon = Duration::from_secs(100 * 365 * 86_400);
+        let mut driver = Driver::new(
+            MemoryCluster::new(1),
+            Arc::new(PlaneClock(Arc::clone(&plane))),
+        );
+        driver.max_steps = MAX_TEST_STEPS;
+        driver
+            .add_node(Arc::clone(&plane), config.clone())
+            .await
+            .map_err(unavailable)?;
+        driver.run_until_idle().await.map_err(unavailable)?;
+        Ok(Self {
+            driver,
+            edge: Edge::new(plane, config),
+            node,
+        })
+    }
+}
+
+/// Whether a drive left the run idle; a run that never becomes idle is a failure of the test.
+fn drove(driven: Result<Steps, DriveError>, failures: &mut Vec<String>) -> Result<bool, TestError> {
+    match driven {
+        Ok(_) => Ok(true),
+        Err(DriveError::NeverIdle(_)) => {
+            failures.push(
+                "the run never became idle in virtual time: does it start timers forever?".into(),
+            );
+            Ok(false)
+        }
+        Err(error) => Err(unavailable(error)),
+    }
+}
+
+fn unavailable(error: impl std::fmt::Display) -> TestError {
+    TestError::Unavailable(error.to_string())
 }
 
 /// The entropy of a test: run ids from a seeded generator, and the test's seed for the run.

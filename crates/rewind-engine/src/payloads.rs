@@ -31,7 +31,7 @@ use crate::ports::{
 };
 
 /// Characters of a payload kept as its preview.
-const PREVIEW_CHARS: usize = 256;
+pub(crate) const PREVIEW_CHARS: usize = 256;
 
 /// The size thresholds of the payload tiers, in bytes of canonical JSON. Load tests confirm the
 /// defaults.

@@ -4,10 +4,9 @@
 
 mod support;
 
-use rewind_core::Timestamp;
-use rewind_engine::DriveOptions;
-use rewind_engine::ports::{Delivery, VirtualTime};
+use rewind_engine::ports::Delivery;
 use serde_json::json;
+use support::plane::World;
 use support::*;
 
 /// Lists issues, logs, waits for `approval` with a timeout of 3 days, then fails.
@@ -31,23 +30,21 @@ fn triage() -> FakeExecutor {
 
 #[tokio::test]
 async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
-    let engine = engine(
+    let mut world = World::new(
         triage(),
         RecordingDispatcher::new(|_| {
             Ok(json!([{ "number": 1 }, { "number": 2 }, { "number": 3 }]))
         }),
-    );
-    let run = engine
-        .start_run(request("triage", json!({ "repo": "acme/api" })))
+    )
+    .await;
+    let run = world
+        .start(request("triage", json!({ "repo": "acme/api" })))
         .await
         .unwrap()
         .run;
-    engine
-        .run_until_idle(&DriveOptions::default())
-        .await
-        .unwrap();
-    engine.clock().advance_to(Timestamp(T0.0 + HOUR));
-    let trace = engine.trace(&run).await.unwrap();
+    world.settle().await;
+    world.advance(HOUR);
+    let trace = world.trace(&run).await;
     let lines: Vec<&str> = trace.lines().collect();
     assert_eq!(
         lines[0],
@@ -72,15 +69,12 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
         "{trace}"
     );
 
-    engine
+    world
         .signal(&run, "approval", json!({ "close": "x".repeat(300) }), None)
         .await
         .unwrap();
-    engine
-        .run_until_idle(&DriveOptions::default())
-        .await
-        .unwrap();
-    let trace = engine.trace(&run).await.unwrap();
+    world.settle().await;
+    let trace = world.trace(&run).await;
     let lines: Vec<&str> = trace.lines().collect();
     assert_eq!(
         lines[0],
@@ -103,8 +97,21 @@ async fn the_trace_folds_each_call_with_its_outcome_and_truncates_payloads() {
     assert!(lines[10].contains("failed · TypeError: decision.close is undefined"));
 
     // One entry in full.
-    let entry = engine.trace_entry(&run, 6).await.unwrap().unwrap();
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let entry = world
+        .edge
+        .trace_entry(&mut gateway, &run, 6)
+        .await
+        .unwrap()
+        .unwrap();
     assert!(entry.starts_with("entry 6 · signal_received · +1h00m (2026-01-01T01:00:00Z)"));
     assert!(entry.contains(&"x".repeat(300)), "{entry}");
-    assert_eq!(engine.trace_entry(&run, 99).await.unwrap(), None);
+    assert_eq!(
+        world
+            .edge
+            .trace_entry(&mut gateway, &run, 99)
+            .await
+            .unwrap(),
+        None
+    );
 }

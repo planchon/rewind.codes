@@ -12,10 +12,11 @@ use rewind_core::{
     ERASED_TEST_REASON, Expectations, ExpectedCall, RunStatus, Script, Test, TestOrigin,
     TestSignal, ToolOutcome, ToolRule, Toolset, WorkflowSchemas,
 };
-use rewind_engine::DriveOptions;
 use rewind_engine::adapters::StaticTypeChecker;
+use rewind_engine::edge::{RecordFrom, RecordingError};
+use rewind_engine::ports::BlobStore as _;
 use rewind_engine::ports::{
-    Delivery, JournalStore, NamespaceName, StoreError, TenantId, ToolDeclarations,
+    CatalogStore, Delivery, NamespaceName, StoreError, TenantId, ToolDeclarations,
     WorkflowDeclarations,
 };
 use rewind_engine::suites::{
@@ -24,6 +25,7 @@ use rewind_engine::suites::{
 use rewind_engine::testing::TestProblem;
 use rewind_engine::{RegisterError, RegisterWorkflow};
 use serde_json::json;
+use support::plane::World;
 use support::*;
 
 /// `close` takes `{ repo }` and completes with `{ closed: 1 }` once `close` answered; `close2`
@@ -107,21 +109,23 @@ fn closes() -> Test {
     test
 }
 
-async fn setup() -> TestEngine {
-    let engine = engine(programs(), RecordingDispatcher::echo());
-    engine
-        .journal()
+async fn setup() -> World {
+    let world = World::new(programs(), RecordingDispatcher::echo()).await;
+    world
+        .plane
+        .catalog
         .put_toolset(&TenantId::local(), &toolset(), &ToolDeclarations::default())
         .await
         .unwrap();
-    engine
+    world
 }
 
 #[tokio::test]
 async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
-    let engine = setup().await;
+    let world = setup().await;
     let checker = StaticTypeChecker::default();
-    let v1 = engine
+    let v1 = world
+        .edge
         .register_workflow(
             save(
                 "v1",
@@ -142,23 +146,27 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
     // The test is stored, under the digest the version holds.
     let digest = suite.tests[0].test;
     assert!(
-        engine
-            .journal()
+        world
+            .plane
+            .catalog
             .get_test(&TenantId::local(), digest)
             .await
             .unwrap()
             .is_some()
     );
     assert_eq!(
-        engine
-            .load_test(&TenantId::local(), digest, test_format())
+        world
+            .edge
+            .suites(test_format())
+            .load_test(&TenantId::local(), digest)
             .await
             .unwrap(),
         Some(closes())
     );
 
     // v2 regresses: the inherited test refuses it, and nothing is stored.
-    let refused = engine
+    let refused = world
+        .edge
         .register_workflow(save("v2", SuiteChanges::default()), &checker, &kit())
         .await;
     let Err(RegisterError::TestsFailed(reports)) = refused else {
@@ -171,8 +179,9 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
         reports[0].failures,
         ["the output is {\"closed\":0}, which does not contain {\"closed\":1}"]
     );
-    let versions = engine
-        .journal()
+    let versions = world
+        .plane
+        .catalog
         .workflow_versions(&TenantId::local(), "triage", &BTreeMap::new())
         .await
         .unwrap();
@@ -183,7 +192,8 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
         output: Some(json!({ "closed": 0 })),
         ..closes().expect
     };
-    let v2 = engine
+    let v2 = world
+        .edge
         .register_workflow(
             save(
                 "v2",
@@ -210,8 +220,10 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
         suite.updated[0].reason,
         "closed issues are counted elsewhere now"
     );
-    let replaced = engine
-        .load_test(&TenantId::local(), suite.tests[0].test, test_format())
+    let replaced = world
+        .edge
+        .suites(test_format())
+        .load_test(&TenantId::local(), suite.tests[0].test)
         .await
         .unwrap()
         .unwrap();
@@ -221,10 +233,11 @@ async fn a_version_inherits_its_parents_suite_and_is_saved_only_if_it_passes() {
 
 #[tokio::test]
 async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
-    let engine = setup().await;
+    let world = setup().await;
     let checker = StaticTypeChecker::default();
     let with = |suite: SuiteChanges| save("v1", suite);
-    engine
+    world
+        .edge
         .register_workflow(
             with(SuiteChanges {
                 tests: vec![TestInput::Inline(Box::new(closes()))],
@@ -279,14 +292,19 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
     for (changes, message) in cases {
         let mut request = save("v2", changes);
         request.description = Some("v2".into());
-        match engine.register_workflow(request, &checker, &kit()).await {
+        match world
+            .edge
+            .register_workflow(request, &checker, &kit())
+            .await
+        {
             Err(RegisterError::Suite(error)) => assert_eq!(error.to_string(), message),
             other => panic!("{message}: {other:?}"),
         }
     }
 
     // Retired with a reason, the regression is saved, and the reason stays in the lineage.
-    let v2 = engine
+    let v2 = world
+        .edge
         .register_workflow(
             save(
                 "v2",
@@ -308,17 +326,19 @@ async fn retiring_and_updating_need_a_reason_and_name_inherited_tests() {
 
 #[tokio::test]
 async fn an_unchanged_save_returns_the_version_saved_first() {
-    let engine = setup().await;
+    let world = setup().await;
     let checker = StaticTypeChecker::default();
     let suite = || SuiteChanges {
         tests: vec![TestInput::Inline(Box::new(closes()))],
         ..SuiteChanges::default()
     };
-    let first = engine
+    let first = world
+        .edge
         .register_workflow(save("v1", suite()), &checker, &kit())
         .await
         .unwrap();
-    let again = engine
+    let again = world
+        .edge
         .register_workflow(save("v1", SuiteChanges::default()), &checker, &kit())
         .await
         .unwrap();
@@ -327,7 +347,7 @@ async fn an_unchanged_save_returns_the_version_saved_first() {
 
 #[tokio::test]
 async fn a_save_sent_again_returns_the_version_it_made() {
-    let engine = setup().await;
+    let world = setup().await;
     let checker = StaticTypeChecker::default();
     let first = || {
         save(
@@ -338,11 +358,15 @@ async fn a_save_sent_again_returns_the_version_it_made() {
             },
         )
     };
-    let v1 = engine
+    let v1 = world
+        .edge
         .register_workflow(first(), &checker, &kit())
         .await
         .unwrap();
-    let again = engine.register_workflow(first(), &checker, &kit()).await;
+    let again = world
+        .edge
+        .register_workflow(first(), &checker, &kit())
+        .await;
     assert_eq!(again.unwrap(), v1, "its test is not added a second time");
 
     // A version that retires the test and adds another, sent twice: the second answers the
@@ -364,18 +388,22 @@ async fn a_save_sent_again_returns_the_version_it_made() {
         request.description = Some("v2".into());
         request
     };
-    let v2 = engine
+    let v2 = world
+        .edge
         .register_workflow(second(), &checker, &kit())
         .await
         .unwrap();
     assert_eq!(v2.workflow.suite().parent, Some(v1.workflow.version()));
-    let again = engine.register_workflow(second(), &checker, &kit()).await;
+    let again = world
+        .edge
+        .register_workflow(second(), &checker, &kit())
+        .await;
     assert_eq!(again.unwrap(), v2);
 
     // Named as the parent, the version itself gets the changes, which do not apply to it.
     let mut onto = second();
     onto.suite.parent = Some(v2.workflow.version());
-    match engine.register_workflow(onto, &checker, &kit()).await {
+    match world.edge.register_workflow(onto, &checker, &kit()).await {
         Err(RegisterError::Suite(error)) => assert!(
             error.to_string().starts_with("retire names \"closes one\""),
             "{error}"
@@ -386,7 +414,7 @@ async fn a_save_sent_again_returns_the_version_it_made() {
 
 #[tokio::test]
 async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
-    let engine = setup().await;
+    let world = setup().await;
     let checker = StaticTypeChecker::default();
     let mut recorded = closes();
     recorded.name = "recorded".into();
@@ -395,21 +423,25 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
         version: rewind_core::Digest::of(b"v0"),
         namespace: "alice".into(),
     });
-    let digests = engine
-        .store_tests(&TenantId::local(), &[recorded.clone()], test_format())
+    let digests = world
+        .edge
+        .suites(test_format())
+        .store_tests(&TenantId::local(), &[recorded.clone()], world.now())
         .await
         .unwrap();
     let alice = NamespaceName::new("alice").unwrap();
     assert_eq!(
-        engine
-            .journal()
+        world
+            .plane
+            .catalog
             .namespace_tests(&TenantId::local(), &alice, 10)
             .await
             .unwrap(),
         digests
     );
     // Given by digest, with a new expectation.
-    let v1 = engine
+    let v1 = world
+        .edge
         .register_workflow(
             save(
                 "v1",
@@ -433,7 +465,8 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
         v1,
         Err(RegisterError::Suite(SuiteError::Duplicate(_)))
     ));
-    let v1 = engine
+    let v1 = world
+        .edge
         .register_workflow(
             save(
                 "v1",
@@ -453,14 +486,16 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     assert_eq!(v1.workflow.suite().tests.len(), 2);
 
     // Alice's namespace is erased: her test goes.
-    engine
-        .journal()
+    world
+        .plane
+        .catalog
         .drop_tests(&[(TenantId::local(), digests[0])], true)
         .await
         .unwrap();
     let mut next = save("v1", SuiteChanges::default());
     next.description = Some("the same, described".into());
-    let v2 = engine
+    let v2 = world
+        .edge
         .register_workflow(next, &checker, &kit())
         .await
         .unwrap();
@@ -477,7 +512,8 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
     assert_eq!(suite.retired[0].name, "recorded");
     assert_eq!(suite.retired[0].reason, ERASED_TEST_REASON);
     // A test unknown by digest cannot be given.
-    let unknown = engine
+    let unknown = world
+        .edge
         .register_workflow(
             save(
                 "v1",
@@ -498,22 +534,27 @@ async fn tests_of_an_erased_namespace_are_left_out_of_the_next_suite() {
 
 #[tokio::test]
 async fn a_test_being_deleted_cannot_be_stored_until_its_row_is_gone() {
-    let engine = setup().await;
-    let digests = engine
-        .store_tests(&TenantId::local(), &[closes()], test_format())
+    let world = setup().await;
+    let digests = world
+        .edge
+        .suites(test_format())
+        .store_tests(&TenantId::local(), &[closes()], world.now())
         .await
         .unwrap();
     let later = T0.saturating_add(rewind_engine::ports::TEST_GRACE);
     assert_eq!(
-        engine
-            .journal()
+        world
+            .plane
+            .catalog
             .unreferenced_tests(later, 10)
             .await
             .unwrap(),
         [(TenantId::local(), digests[0])]
     );
-    let refused = engine
-        .store_tests(&TenantId::local(), &[closes()], test_format())
+    let refused = world
+        .edge
+        .suites(test_format())
+        .store_tests(&TenantId::local(), &[closes()], world.now())
         .await;
     assert!(
         matches!(
@@ -526,49 +567,45 @@ async fn a_test_being_deleted_cannot_be_stored_until_its_row_is_gone() {
     );
 }
 
+/// Calls `a` `count` times and completes with the count; with a count of 0, waits for
+/// `approval`.
+fn closer() -> FakeExecutor {
+    FakeExecutor::new().with(
+        "closer",
+        |run| {
+            let count = run.input["count"].as_u64().unwrap();
+            for number in 0..count {
+                run.call("a", json!({ "number": number }));
+            }
+            if count == 0 {
+                run.await_signal("approval");
+            }
+        },
+        |run, delivery| match delivery {
+            Delivery::SignalReceived { .. } => run.complete(json!({ "closed": 0 })),
+            Delivery::ToolCallCompleted { seq, .. } if seq.0 >= 2 || run.input["count"] == 1 => {
+                run.complete(json!({ "closed": run.input["count"].clone() }));
+            }
+            _ => {}
+        },
+    )
+}
+
 #[tokio::test]
 async fn recording_keeps_the_newest_run_of_each_path() {
-    let engine = engine(
-        FakeExecutor::new().with(
-            "closer",
-            |run| {
-                let count = run.input["count"].as_u64().unwrap();
-                for number in 0..count {
-                    run.call("a", json!({ "number": number }));
-                }
-                if count == 0 {
-                    run.await_signal("approval");
-                }
-            },
-            |run, delivery| match delivery {
-                Delivery::SignalReceived { .. } => run.complete(json!({ "closed": 0 })),
-                Delivery::ToolCallCompleted { seq, .. }
-                    if seq.0 >= 2 || run.input["count"] == 1 =>
-                {
-                    run.complete(json!({ "closed": run.input["count"].clone() }));
-                }
-                _ => {}
-            },
-        ),
-        RecordingDispatcher::echo(),
-    );
+    let mut world = World::new(closer(), RecordingDispatcher::echo()).await;
     let mut runs = Vec::new();
     for count in [1, 2, 3, 0] {
-        let run = engine
-            .start_run(request("closer", json!({ "count": count })))
-            .await
-            .unwrap()
-            .run;
-        engine
-            .run_until_idle_virtual(&DriveOptions::default())
-            .await
-            .unwrap();
-        runs.push(run);
+        runs.push(
+            world
+                .run(request("closer", json!({ "count": count })))
+                .await,
+        );
     }
     // The run waiting for approval never ends: it is not recorded.
     let mut recorder = Recorder::new(20, test_format());
     for run in runs.iter().rev() {
-        let history = engine.export_history(run).await.unwrap();
+        let history = world.history(run).await;
         recorder.offer(
             &history,
             TestOrigin {
@@ -601,4 +638,209 @@ async fn recording_keeps_the_newest_run_of_each_path() {
     let test = &recorder.recorded[0].test;
     assert_eq!(test.expect.output, Some(json!({ "closed": 3 })));
     let _: &[TestSignal] = &test.signals;
+}
+
+/// The workflow `closer`, saved without tests over the tools `a` and `b`.
+async fn closer_workflow(world: &World) -> rewind_engine::ports::StoredWorkflow {
+    let toolset = Toolset::from_host_tools(["a", "b", "cleanup"]).unwrap();
+    world
+        .plane
+        .catalog
+        .put_toolset(&TenantId::local(), &toolset, &ToolDeclarations::default())
+        .await
+        .unwrap();
+    let mut save = save("closer", SuiteChanges::default());
+    save.name = "closer".into();
+    save.toolset = toolset.digest();
+    save.schemas = WorkflowSchemas {
+        input: json!({ "type": "object" }),
+        output: json!({}),
+        signals: BTreeMap::from([("approval".to_owned(), json!({}))]),
+    };
+    world
+        .edge
+        .register_workflow(save, &StaticTypeChecker::default(), &kit())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_edge_records_the_workflow_s_ended_runs_it_finds_and_stores_their_tests() {
+    let mut world = World::new(closer(), RecordingDispatcher::echo()).await;
+    let version = closer_workflow(&world).await;
+    let mut runs = Vec::new();
+    for count in [1, 2, 3, 0] {
+        let mut start = rewind_engine::StartWorkflow {
+            tenant: TenantId::local(),
+            namespace: NamespaceName::new("alice").unwrap(),
+            version: version.workflow.version(),
+            input: json!({ "count": count }),
+            ttl: None,
+            metadata: Default::default(),
+            idempotency_key: None,
+        };
+        start.metadata.labels.insert("team".into(), "core".into());
+        let mut gateway = world.driver.gateway(&world.at.clone());
+        let created = world
+            .edge
+            .start_workflow(&mut gateway, start)
+            .await
+            .unwrap();
+        runs.push(created.run);
+        world.idle().await;
+    }
+    // A run that is no workflow's.
+    let other = world.run(request("closer", json!({ "count": 1 }))).await;
+
+    let scope = rewind_engine::ports::Scope::Tenant(TenantId::local());
+    let query = rewind_engine::ports::RunQuery::new(TenantId::local());
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let recording = world
+        .edge
+        .record_tests(
+            &mut gateway,
+            "closer",
+            RecordFrom::Search { scope, query },
+            20,
+            test_format(),
+        )
+        .await
+        .unwrap();
+    // Newest first (the highest run id), one per path; the run still waiting is not even a
+    // candidate.
+    let mut recorded: Vec<_> = recording
+        .recorded
+        .iter()
+        .map(|recorded| (recorded.path.to_string(), recorded.run))
+        .collect();
+    recorded.sort();
+    assert_eq!(
+        recorded,
+        [
+            ("a → completed".to_owned(), runs[0].id),
+            ("a×n → completed".to_owned(), runs[1].id.max(runs[2].id)),
+        ]
+    );
+    assert!(
+        recording.recorded[0].run > recording.recorded[1].run,
+        "newest first"
+    );
+    assert!(recording.skipped.is_empty(), "{:?}", recording.skipped);
+    assert_eq!(recording.digests.len(), 2);
+    let stored = world
+        .edge
+        .suites(test_format())
+        .load_test(&TenantId::local(), recording.digests[0])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored, recording.recorded[0].test);
+    let origin = stored.origin.unwrap();
+    assert_eq!(origin.version, version.workflow.version());
+    assert_eq!(origin.namespace, "alice");
+    assert_eq!(
+        world
+            .plane
+            .catalog
+            .namespace_tests(
+                &TenantId::local(),
+                &NamespaceName::new("alice").unwrap(),
+                10
+            )
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "a recorded test is indexed under its namespace"
+    );
+
+    // Runs named: a run still waiting is skipped, a run of no workflow refused.
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let named = world
+        .edge
+        .record_tests(
+            &mut gateway,
+            "closer",
+            RecordFrom::Runs(vec![runs[3].clone(), runs[1].clone()]),
+            20,
+            test_format(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(named.recorded.len(), 1);
+    assert_eq!(named.recorded[0].run, runs[1].id);
+    assert_eq!(named.skipped.len(), 1);
+    assert_eq!(named.skipped[0].run, runs[3].id);
+    let refused = world
+        .edge
+        .record_tests(
+            &mut gateway,
+            "closer",
+            RecordFrom::Runs(vec![other.clone()]),
+            20,
+            test_format(),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(RecordingError::NotOfWorkflow { run, .. }) if run == other.id),
+        "{refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_daily_job_deletes_the_tests_no_version_references_after_their_grace() {
+    let world = setup().await;
+    let suites = world.edge.suites(test_format());
+    let mut kept = closes();
+    kept.name = "kept".into();
+    let v1 = world
+        .edge
+        .register_workflow(
+            save(
+                "v1",
+                SuiteChanges {
+                    tests: vec![TestInput::Inline(Box::new(kept))],
+                    ..SuiteChanges::default()
+                },
+            ),
+            &StaticTypeChecker::default(),
+            &kit(),
+        )
+        .await
+        .unwrap();
+    let mut loose = closes();
+    loose.name = "loose".into();
+    let loose = suites
+        .store_tests(&TenantId::local(), &[loose], world.now())
+        .await
+        .unwrap()[0];
+    let tenant = TenantId::local();
+    let clean =
+        |at| rewind_engine::suites::clean_tests(&world.plane.catalog, &world.plane.blobs, at);
+    assert_eq!(clean(world.now()).await.unwrap(), 0, "within its grace");
+    let later = T0.saturating_add(rewind_engine::ports::TEST_GRACE);
+    assert_eq!(clean(later).await.unwrap(), 1);
+    assert_eq!(suites.load_test(&tenant, loose).await.unwrap(), None);
+    assert_eq!(
+        world
+            .plane
+            .blobs
+            .get_in(
+                &rewind_engine::ports::BlobOwner::Tests(tenant.clone()),
+                loose
+            )
+            .await
+            .unwrap(),
+        None,
+        "its blob is deleted"
+    );
+    let referenced = v1.workflow.suite().tests[0].test;
+    assert!(
+        suites
+            .load_test(&tenant, referenced)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(clean(later).await.unwrap(), 0);
 }

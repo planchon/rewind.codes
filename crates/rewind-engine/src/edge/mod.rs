@@ -17,6 +17,15 @@
 //! | [`Edge::complete_task`], [`Edge::fail_task`], [`Edge::defer_task`], [`Edge::approve_task`], [`Edge::reject_task`] | the token's run | the task's state |
 //! | [`Edge::get_run`], [`Edge::history`], [`Edge::export_journal`], [`Edge::tool_tasks`] | | the partition, or the archive |
 //! | [`Edge::search`], [`Edge::statistics`], [`Edge::shapes`] | the partitions of the scope, merged | each partition's index and counters |
+//! | [`Edge::trace`], [`Edge::trace_entry`] | | the run's head and history |
+//! | [`Edge::record_tests`] | the tests stored in the control plane | the runs searched, their history |
+//! | [`Edge::register_workflow`], [`Edge::run_tests`], [`Edge::suites`] | the catalog, the gate's tests on a driver of their own | |
+
+mod test_runs;
+mod trace;
+mod workflows;
+
+pub use test_runs::{RecordFrom, Recording, RecordingError};
 
 use std::collections::BTreeMap;
 use std::future::Future;

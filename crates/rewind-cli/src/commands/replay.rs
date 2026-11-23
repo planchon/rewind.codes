@@ -5,28 +5,20 @@
 //! (`GET /v1/runs/{id}/journal`); either way the replay runs here, on a fresh V8 executor,
 //! and calls no tool. Without `--script`, the run's own script must reproduce the journal
 //! exactly: a divergence is non-determinism. With `--script`, the corrected script is followed
-//! against the journal as a fork would follow it (`Engine::compatibility`): the report says
-//! where it stops following the run, and which calls a fork would reuse, call again, or fail
-//! with `outcome_unknown`.
+//! against the journal as a fork would follow it (`rewind_engine::fork::compatibility`): the
+//! report says where it stops following the run, and which calls a fork would reuse, call
+//! again, or fail with `outcome_unknown`.
 
 use std::path::Path;
-use std::time::Duration;
 
 use rewind_api::runs::JournalExport;
 use rewind_core::{
-    Command, Completion, Event, HistoryEntry, JournalDocument, Lifecycle, NonDeterminism, RunState,
-    Script, Seq, Timestamp,
+    Command, Completion, Event, HistoryEntry, JournalDocument, NonDeterminism, Script, Seq,
 };
-use rewind_engine::adapters::{
-    MemoryBlobs, MemoryJournal, MemorySecrets, MemoryWebhooks, SeededEntropy, VirtualClock,
-};
-use rewind_engine::mock::NoMocks;
-use rewind_engine::ports::{
-    Activation, CreateRun, JournalStore, NewRun, RunMetadata, RunRef, ScriptExecutor, TenantId,
-    ToolDeclarations,
-};
+use rewind_engine::adapters::MemoryBlobs;
+use rewind_engine::ports::{RunRef, ScriptExecutor, TenantId};
 use rewind_engine::replay::{self, ReplayEnd, ReplayError, ReplayInput};
-use rewind_engine::{Adapters, Compatibility, Engine, EngineConfig, ForkError, ForkPoint};
+use rewind_engine::{Compatibility, ForkError, ForkPoint, Limits};
 use rewind_runtime::{SandboxLimits, V8Executor};
 use serde::Serialize;
 
@@ -202,17 +194,6 @@ pub(crate) async fn replay_journal(journal: &JournalDocument) -> Result<ReplayRe
     Ok(report)
 }
 
-type LocalEngine<'a> = Engine<
-    MemoryJournal,
-    MemoryBlobs,
-    &'a V8Executor,
-    NoMocks,
-    VirtualClock,
-    SeededEntropy,
-    MemorySecrets,
-    MemoryWebhooks,
->;
-
 /// Follows a journal with a corrected script, as a fork would.
 pub(crate) async fn compatibility(
     journal: &JournalDocument,
@@ -232,25 +213,15 @@ pub(crate) async fn compatibility(
         return Ok(report);
     }
     let executor = executor()?;
-    let now = journal
-        .entries
-        .last()
-        .map_or(Timestamp(0), |entry| entry.recorded_at);
-    let engine: LocalEngine<'_> = Engine::new(
-        Adapters {
-            journal: MemoryJournal::new(),
-            blobs: MemoryBlobs::new(),
-            executor: &executor,
-            dispatcher: NoMocks,
-            clock: VirtualClock::new(now),
-            entropy: SeededEntropy::new(0),
-            secrets: MemorySecrets::new(),
-            webhooks: MemoryWebhooks::new(),
-        },
-        EngineConfig::default(),
-    );
-    let run = load(engine.journal(), journal, now).await?;
-    let found: Compatibility = match engine.compatibility(&run, script, at).await {
+    let found: Compatibility = match rewind_engine::fork::compatibility(
+        &executor,
+        journal,
+        script,
+        at,
+        &Limits::default(),
+    )
+    .await
+    {
         Ok(found) => found,
         Err(ForkError::Start(refused)) => {
             return Err(CliError::ScriptRefused {
@@ -358,84 +329,4 @@ fn tools_by_seq(entries: &[HistoryEntry]) -> Vec<(Seq, String)> {
             _ => None,
         })
         .collect()
-}
-
-/// Puts a journal document in a store of its own, as the run it records: its toolset, the run
-/// created from its `run_started`, and its history committed at once.
-async fn load(
-    store: &MemoryJournal,
-    journal: &JournalDocument,
-    now: Timestamp,
-) -> Result<RunRef, CliError> {
-    let fail = |error: &dyn std::fmt::Display| {
-        CliError::internal(format!(
-            "cannot load the journal of run {}: {error}",
-            journal.run
-        ))
-    };
-    let Some(HistoryEntry {
-        event: Event::Lifecycle(Lifecycle::RunStarted(started)),
-        recorded_at,
-        ..
-    }) = journal.entries.first()
-    else {
-        return Err(fail(&"it does not start with run_started"));
-    };
-    let tenant = TenantId::local();
-    let run = RunRef::new(tenant.clone(), journal.run);
-    store
-        .put_toolset(&tenant, &journal.toolset, &ToolDeclarations::default())
-        .await
-        .map_err(|error| fail(&error))?;
-    let created = store
-        .create_run(
-            NewRun {
-                run: run.clone(),
-                // A local replay, in the embedded server's namespace.
-                namespace: rewind_engine::ports::NamespaceName::new(
-                    rewind_engine::ports::NamespaceName::LOCAL,
-                )
-                .map_err(|error| fail(&error))?,
-                // The document says what ran by its script alone.
-                origin: rewind_core::script_doc(journal.script.source())
-                    .and_then(|doc| rewind_core::origin_slug(&doc.title))
-                    .unwrap_or_else(|| rewind_core::SCRIPT_ORIGIN.to_owned()),
-                started: started.clone(),
-                metadata: RunMetadata::default(),
-                created_at: *recorded_at,
-            },
-            None,
-        )
-        .await
-        .map_err(|error| fail(&error))?;
-    if !matches!(created, CreateRun::Created(_)) {
-        return Err(fail(&"the store refused the run"));
-    }
-    let lease = store
-        .acquire_run(&run, "rewind-cli", now, Duration::from_secs(60))
-        .await
-        .map_err(|error| fail(&error))?
-        .ok_or_else(|| fail(&"the run cannot be leased"))?;
-    let consumed = store
-        .take_inbox(&lease)
-        .await
-        .map_err(|error| fail(&error))?
-        .into_iter()
-        .map(|item| item.id)
-        .collect();
-    let status = RunState::from_history(&journal.entries)
-        .map_err(|error| fail(&error))?
-        .status();
-    store
-        .commit_activation(
-            &lease,
-            Activation::new(journal.entries.clone(), consumed, status),
-            now,
-        )
-        .await
-        .map_err(|error| fail(&error))?;
-    if !status.is_terminal() {
-        store.release(&lease).await.map_err(|error| fail(&error))?;
-    }
-    Ok(run)
 }

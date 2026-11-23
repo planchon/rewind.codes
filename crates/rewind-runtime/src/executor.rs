@@ -30,8 +30,9 @@ pub enum SetupError {
     TimeZoneNotUtc(Option<String>),
 }
 
-/// Runs scripts in V8 isolates, under every determinism epoch whose glue this build embeds.
-#[derive(Debug)]
+/// Runs scripts in V8 isolates, under every determinism epoch whose glue this build embeds. A
+/// clone runs scripts as the original does: each instance has a thread of its own.
+#[derive(Debug, Clone)]
 pub struct V8Executor {
     limits: SandboxLimits,
     epochs: Vec<Epoch>,
