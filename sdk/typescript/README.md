@@ -124,7 +124,7 @@ const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSour
 | `rewind.runs`                | `start` (a script, or a `workflow`), `get`, `list` and `listAll` (`q`: the query language, `sort`, `workflow`, `startedBy`), `stats`, `failures`, `signal`, `cancel`, `fork`, `trace`, `entry`, `events`, `journal` (`as: "cassette"`), `release`, `giveUp`, `delete`; `start` and `fork` take `secrets` |
 | `rewind.tasks`               | `stream` (the task stream), `defer`, `complete`, `fail`, `approve`, `reject`                                                                                                                                                                                                                             |
 | `rewind.approvals`           | `pending(run)`, `args`, `approve`, `reject`                                                                                                                                                                                                                                                              |
-| `rewind.payloads`            | `get`: a value left out above 256 KiB                                                                                                                                                                                                                                                                    |
+| `rewind.payloads`            | `get(digest, { run })`: a value left out above 256 KiB, read through its run                                                                                                                                                                                                                             |
 | `rewind.namespaces`          | `list` and `listAll` (`prefix`, `above`, `order`, `month`), `get`, `put` (exceptions), `rename`, `delete`, `alerts`                                                                                                                                                                                      |
 | `rewind.namespaces.secrets`  | `list`, `put`, `delete`, `usage`: an end user's own secrets, attached as `ns/<name>`                                                                                                                                                                                                                     |
 | `rewind.namespaces.defaults` | `get`, `put`: the default limits of every namespace, and the ceiling                                                                                                                                                                                                                                     |
@@ -136,7 +136,7 @@ const outcome = await rewind.namespace(user.id).scripts.test({ script: fixedSour
 | `rewind.webhooks`            | `verify`                                                                                                                                                                                                                                                                                                 |
 | `rewind.tools`               | `stats`                                                                                                                                                                                                                                                                                                  |
 | `rewind.apiKeys`             | `create`, `revoke`                                                                                                                                                                                                                                                                                       |
-| `rewind.server`              | `info`, `stop`                                                                                                                                                                                                                                                                                           |
+| `rewind.server`              | `info` (the version and epochs, the node that answered, the partitions and nodes), `stop`                                                                                                                                                                                                                |
 
 Every call takes an `AbortSignal` (`signal`). The types are those of the API, generated from the OpenAPI document and
 exported under their names (`Run`, `Toolset`, `HandedTask`, `WebhookEvent`…).
@@ -165,8 +165,8 @@ key for that, the caller's or one the client draws.
 `nextCursor`: the server stopped at its scan budget; `listAll` follows the cursor to the last page. `runs.stats`,
 `runs.failures`, `scripts.list` and `tools.stats` answer from hourly counters: a scope (`q: "namespace:<name>"`, the
 client's own namespace, or every namespace it reaches) and a window of whole hours; another term of `q` is refused
-with `invalid-query`, and a key or a token limited to labels with `forbidden`. `tools.stats` also takes `prefix`, the
-start of a tool's name.
+with `invalid-query`, and a key or a token limited to labels with `forbidden`. `scripts.list` also takes `tool` and
+`digest`; `tools.stats` takes `prefix`, the start of a tool's name, and `tool`.
 
 **The event stream.** `runs.events(id, { follow: true })` is an async iterator over the run's journal entries as they
 are committed, ending with `{ type: "end" }`. A dropped connection resumes after the last entry received.

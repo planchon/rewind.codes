@@ -37,7 +37,15 @@ describe("the client", () => {
       server.on(
         "GET",
         "/v1/server",
-        json({ embedded: false, epochs: [1], roles: ["api"], version: "0.1.0", virtualTime: false }),
+        json({
+          embedded: false,
+          epochs: [1],
+          node: "node-1",
+          partitions: 64,
+          nodes: 2,
+          version: "0.1.0",
+          virtualTime: false,
+        }),
       );
       const info = await fromEnv.server.info();
       expect(info.version).toBe("0.1.0");
@@ -53,7 +61,15 @@ describe("the client", () => {
     server.on(
       "GET",
       "/v1/server",
-      json({ embedded: true, epochs: [1], roles: ["api", "worker"], version: "0.1.0", virtualTime: false }),
+      json({
+        embedded: true,
+        epochs: [1],
+        node: "node-1",
+        partitions: 1,
+        nodes: 1,
+        version: "0.1.0",
+        virtualTime: false,
+      }),
     );
     await rewind.server.info();
     await new Rewind({ url: server.url, apiKey: "" }).server.info();
@@ -509,10 +525,10 @@ describe("the client", () => {
     expect((await rewind.runs.trace(RUN_ID)).format).toBe("llm");
     expect((await rewind.runs.entry(RUN_ID, 7)).idx).toBe(7);
     expect(await rewind.runs.journal(RUN_ID, { as: "cassette" })).toEqual({ version: 1, kind: "cassette" });
-    expect(await rewind.payloads.get("ab")).toEqual({ big: true });
+    // A payload is read through the run that holds it.
     expect(await rewind.payloads.get("ab", { run: RUN_ID })).toEqual({ big: true });
     const reads = server.calls("GET", "/v1/payloads/ab");
-    expect(reads.map((read) => read.query.get("run"))).toEqual([null, RUN_ID]);
+    expect(reads.map((read) => read.query.get("run"))).toEqual([RUN_ID]);
   });
 
   it("checks and tests scripts, and reads the scripts executed", async () => {
@@ -538,9 +554,12 @@ describe("the client", () => {
     expect(tested.passed).toBe(true);
     expect(tested.tests.map((t) => t.name)).toEqual(["waits"]);
     expect(server.requests[1]?.body).toEqual({ script: "x", tests, workflow: "triage" });
-    expect((await rewind.scripts.list({ q: "namespace:alice", since: "2026-11-11T00:00:00Z" })).scripts).toEqual([]);
+    const listed = await rewind.scripts.list({ q: "namespace:alice", since: "2026-11-11T00:00:00Z", tool: "github.x" });
+    expect(listed.scripts).toEqual([]);
     expect(server.requests[2]?.query.get("q")).toBe("namespace:alice");
     expect(server.requests[2]?.query.get("since")).toBe("2026-11-11T00:00:00Z");
+    expect(server.requests[2]?.query.get("tool")).toBe("github.x");
+    expect(server.requests[2]?.query.has("label")).toBe(false);
     expect((await rewind.scripts.get("dd")).source).toBe("src");
   });
 
@@ -750,6 +769,8 @@ describe("the client", () => {
     const toolStats = server.calls("GET", "/v1/tools/stats")[0]?.query;
     expect(toolStats?.get("prefix")).toBe("github.");
     expect(toolStats?.get("q")).toBe("namespace:alice");
+    await rewind.tools.stats({ tool: "github.close_issue" });
+    expect(server.calls("GET", "/v1/tools/stats")[1]?.query.get("tool")).toBe("github.close_issue");
     await rewind.server.stop();
   });
 });

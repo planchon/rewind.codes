@@ -30,6 +30,10 @@ export interface ListScriptsParams extends RequestOptions {
   since?: Date | string | undefined;
   /** Scripts of the runs started before this time, rounded up to the hour. Now by default. */
   until?: Date | string | undefined;
+  /** Only this script: its digest. */
+  digest?: string | undefined;
+  /** Only scripts that called this tool. */
+  tool?: string | undefined;
   /** At most this many scripts (50 by default, 500 at most). */
   limit?: number | undefined;
   cursor?: string | undefined;
@@ -92,6 +96,8 @@ export class Scripts {
               q: params.q,
               since: timeParam(params.since),
               until: timeParam(params.until),
+              digest: params.digest,
+              tool: params.tool,
               limit: params.limit,
               cursor: params.cursor,
             },

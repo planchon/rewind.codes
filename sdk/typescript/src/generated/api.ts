@@ -1711,27 +1711,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Claim host-tool tasks (long-poll)
-         * @description The tasks of the runs the caller sees: an end user's token claims those of its
-         *     namespace, a key limited to labels those of the runs carrying them.
-         */
-        get: operations["claimTasks"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/tasks/stream": {
         parameters: {
             query?: never;
@@ -1831,8 +1810,8 @@ export interface paths {
         put?: never;
         /**
          * Answer later
-         * @description The task waits for `/complete` or `/fail` with the same token, without heartbeats, up to
-         *     its timeout.
+         * @description The task waits for `/complete` or `/fail` with the same token, whether the stream it was
+         *     handed on stays open or not, up to its timeout.
          */
         post: operations["deferTask"];
         delete?: never;
@@ -1852,23 +1831,6 @@ export interface paths {
         put?: never;
         /** Fail a task */
         post: operations["failTask"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/tasks/{token}/heartbeat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Keep a claim alive */
-        post: operations["heartbeatTask"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3035,7 +2997,7 @@ export interface components {
         /**
          * @description `POST /v1/tasks/{token}/defer`: the handler will answer later, possibly days later, with
          *     `/complete` or `/fail` and the same token, whether the task stream it was handed on stays open
-         *     or not: its slot on the stream is free, and no heartbeat is needed meanwhile.
+         *     or not: its slot on the stream is free.
          */
         DeferTask: {
             timeout?: components["schemas"]["Duration"] | null;
@@ -3433,14 +3395,6 @@ export interface components {
             /** @description W3C trace context, with the tool call's span as parent. */
             traceparent?: string | null;
             tracestate?: string | null;
-        };
-        /** @description `POST /v1/tasks/{token}/heartbeat`: the worker is still working on the task. */
-        HeartbeatAck: {
-            /**
-             * Format: int64
-             * @description The claim now expires if no heartbeat comes within this many milliseconds.
-             */
-            heartbeatTimeoutMs: number;
         };
         /** @description A function of the harness, called by scripts and executed by the harness's SDK worker. */
         HostTool: {
@@ -4557,10 +4511,6 @@ export interface components {
             firstRunAt: string;
             /** @description The first line of the source that is not blank, for display. */
             headline: string;
-            /** @description The labels its runs carried, with the number of runs for each `key:value`. */
-            labels?: {
-                [key: string]: number;
-            };
             /** Format: date-time */
             lastRunAt: string;
             /** @description Runs of this script, by status. */
@@ -4663,23 +4613,32 @@ export interface components {
         ServerInfo: {
             /** @description `rewind server --embedded`: one tenant, `local`, on a unix socket without a key. */
             embedded: boolean;
-            /** @description The determinism epochs this server's workers support. New runs start under the last. */
+            /** @description The determinism epochs this server's executors support. New runs start under the last. */
             epochs: number[];
             /** @description The URL MCP clients add as a connector, `{public-url}/mcp`; null without a public URL. */
             mcpUrl?: string | null;
+            /** @description The node that answered. */
+            node: string;
+            /**
+             * Format: int32
+             * @description The nodes of the deployment alive now, executors-only nodes included.
+             */
+            nodes: number;
             /**
              * @description People connect MCP clients with OAuth (`/oauth`): the server has a public URL and a
              *     sign-in. Without it, `/mcp` takes API keys and end users' tokens only.
              */
             oauth?: boolean;
-            roles: components["schemas"]["ServerRole"][];
+            /**
+             * Format: int32
+             * @description The partitions of the deployment: 64 by default, 1 for the embedded server.
+             */
+            partitions: number;
             /** @description The version of the `rewind` binary. A CLI of another version restarts an embedded server. */
             version: string;
             /** @description Time is virtual: timers fire as soon as nothing else can advance. */
             virtualTime: boolean;
         };
-        /** @enum {string} */
-        ServerRole: "api" | "worker";
         ServerSummary: {
             auth?: components["schemas"]["Auth"] | null;
             name: string;
@@ -4927,54 +4886,6 @@ export interface components {
             /** @description Its digest: `GET /v1/tests/{digest}`. */
             digest: string;
             name: string;
-        };
-        /**
-         * @description A claimed host-tool call. The worker keeps the claim alive with heartbeats, and answers
-         *     with `/complete` or `/fail`, or `/defer` to answer later.
-         */
-        Task: {
-            /** @description The arguments, validated against the tool's input schema. */
-            args: unknown;
-            /**
-             * Format: int32
-             * @description From 1. Above 1, an earlier attempt was interrupted.
-             */
-            attempt: number;
-            /**
-             * Format: int64
-             * @description The claim expires if no heartbeat comes within this many milliseconds.
-             */
-            heartbeatTimeoutMs: number;
-            /** @description The task's id, as listed in the run's state. */
-            id: string;
-            /**
-             * @description `{run_id}/{seq}` (a fork's call made again keeps its parent's), the same on every
-             *     attempt: the handler uses it to recognize a call it already made.
-             */
-            idempotencyKey: string;
-            /** @description The run's labels. */
-            labels: components["schemas"]["Labels"];
-            /** @description The namespace of the run: the end user the handler acts for. */
-            namespace: components["schemas"]["NamespaceName"];
-            runId: string;
-            /** Format: int32 */
-            seq: number;
-            /**
-             * Format: int64
-             * @description The tool's execution timeout, in milliseconds: past it, the call is not waited for any
-             *     more. Absent when the tool has none, the default of host tools: the run's TTL bounds it.
-             */
-            timeoutMs?: number | null;
-            /** @description The claim's secret token: `/v1/tasks/{token}/…`. It changes with each claim. */
-            token: string;
-            tool: string;
-            /** @description W3C trace context, with the tool call's span as parent. */
-            traceparent?: string | null;
-            tracestate?: string | null;
-        };
-        /** @description The tasks claimed; empty when `wait` passed without one. */
-        TaskBatch: {
-            tasks: components["schemas"]["Task"][];
         };
         /**
          * @description The data of a `gone` event: a task handed on this stream no longer waits for its answer. Its
@@ -12144,8 +12055,6 @@ export interface operations {
                 until?: string;
                 /** @description Only this script: its digest. */
                 digest?: string;
-                /** @description Only scripts that ran with this label, as `key:value`. Repeat to require several. */
-                label?: string[];
                 /** @description Only scripts that called this tool. */
                 tool?: string;
                 /** @description At most this many scripts (50 by default, 500 at most). */
@@ -13059,88 +12968,6 @@ export interface operations {
             };
         };
     };
-    claimTasks: {
-        parameters: {
-            query?: {
-                /** @description Only tasks of runs of this toolset. */
-                toolset?: string;
-                /** @description Only these tools. Repeat for several. All the toolset's host tools when absent. */
-                tool?: string[];
-                /** @description At most this many tasks (1 by default, 100 at most). */
-                limit?: number;
-                /**
-                 * @description How long to wait for a task before answering with none. 30 seconds by default, 60 at
-                 *     most.
-                 */
-                wait?: string;
-            };
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The tasks claimed; none when `wait` passed. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TaskBatch"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
     streamTasks: {
         parameters: {
             query?: {
@@ -13669,88 +13496,6 @@ export interface operations {
                 };
             };
             /** @description The task no longer exists (`task-gone`). */
-            410: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description A fault of the platform (`internal`). */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The server cannot serve the request now (`unavailable`). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-        };
-    };
-    heartbeatTask: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description The namespace (the end user) a key's or a member's request reads: only its resources. With an end user's token, its own namespace or nothing; another is `forbidden`. */
-                "Rewind-Namespace"?: string;
-                /** @description The organization (`org_…`) a connection's request acts in: required on the tenant's data with a connection's token (`rewind_ct_…`), which names no tenant. Another caller may repeat its own tenant; another is `forbidden`. */
-                "Rewind-Organization"?: string;
-            };
-            path: {
-                /** @description The claim's token. */
-                token: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Extended. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HeartbeatAck"];
-                };
-            };
-            /** @description The request is malformed (`invalid-request`). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description No token, or an unknown, revoked or expired one (`unauthorized`). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The caller's grant does not hold the permission this operation needs, which the message names, or its allowed labels do not cover the request (`forbidden`). */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/problem+json": components["schemas"]["Problem"];
-                };
-            };
-            /** @description The task no longer exists: stop working on it (`task-gone`). */
             410: {
                 headers: {
                     [name: string]: unknown;

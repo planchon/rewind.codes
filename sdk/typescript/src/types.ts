@@ -136,8 +136,8 @@ export type SecretScope = Schemas["SecretScope"];
 /** What reads a secret, and what deleting it would stop. */
 export type SecretUsage = Schemas["SecretUsage"];
 export type SeriesBucket = Schemas["SeriesBucket"];
+/** What the server is: its version and epochs, the node that answered, the partitions and nodes of the deployment. */
 export type ServerInfo = Schemas["ServerInfo"];
-export type ServerRole = Schemas["ServerRole"];
 export type ServerSummary = Schemas["ServerSummary"];
 export type Severity = Schemas["Severity"];
 export type SignalAccepted = Schemas["SignalAccepted"];

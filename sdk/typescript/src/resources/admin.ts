@@ -37,24 +37,20 @@ export class Subscriptions {
 }
 
 export interface PayloadOptions extends RequestOptions {
-  /**
-   * A run whose journal holds the payload. Required with a key limited to labels, which reads only
-   * the payloads of the runs it sees.
-   */
-  run?: string | undefined;
+  /** The run whose journal holds the payload: a payload belongs to its run, and is read through it. */
+  run: string;
 }
 
 /** Payloads by digest: the values left out of run states, streams and webhooks above 256 KiB. */
 export class Payloads {
   constructor(private readonly transport: Transport) {}
 
-  /** The JSON value of a payload, read through `run` when given. */
-  get(digest: string, options: PayloadOptions = {}): Promise<unknown> {
-    const query = options.run === undefined ? undefined : { run: options.run };
+  /** The JSON value of a payload, read through the run that holds it. */
+  get(digest: string, options: PayloadOptions): Promise<unknown> {
     return this.transport.send(
       () =>
         this.transport.api.GET("/v1/payloads/{digest}", {
-          params: { path: { digest }, query },
+          params: { path: { digest }, query: { run: options.run } },
           signal: options.signal,
         }),
       { retry: true, signal: options.signal },
@@ -70,6 +66,8 @@ export interface ToolStatsParams extends RequestOptions {
   q?: string | undefined;
   /** Only the tools whose name starts with this (`github.`). */
   prefix?: string | undefined;
+  /** Only this tool. */
+  tool?: string | undefined;
   /** Rounded down to the hour; 24 hours ago by default. */
   since?: Date | string | undefined;
   /** Rounded up to the hour; now by default. */
@@ -90,6 +88,7 @@ export class Tools {
             query: {
               q: params.q,
               prefix: params.prefix,
+              tool: params.tool,
               since: timeParam(params.since),
               until: timeParam(params.until),
             },
@@ -128,7 +127,7 @@ export class ApiKeys {
 export class Server {
   constructor(private readonly transport: Transport) {}
 
-  /** The server's version, determinism epochs and roles. */
+  /** The server's version and determinism epochs, the node that answered, and the deployment's partitions and nodes. */
   info(options: RequestOptions = {}): Promise<ServerInfo> {
     return this.transport.send(() => this.transport.api.GET("/v1/server", { signal: options.signal }), {
       retry: true,

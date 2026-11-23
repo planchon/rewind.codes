@@ -23,9 +23,13 @@ request.
   the run ends or is quarantined, or `wait` passes, however long; nothing is asked again once it answered. A connection
   cut while it is held is sent again with the time left; a start or a fork that waits carries an idempotency key (one
   the client draws when none is given). `MAX_REQUEST_WAIT_MS` is removed.
-- The statistics take a scope and a window only: `runs.stats`, `runs.failures`, `scripts.list` (`q`, `since`, `until`)
-  and `tools.stats` (`q`, `prefix`, `since`, `until`); `q` holds at most one `namespace:` term (`invalid-query`
-  otherwise). `scripts.list` loses `labels` and `tool`, `tools.stats` loses `toolset` and `tool`.
+- The statistics take a scope and a window: `runs.stats`, `runs.failures`, `scripts.list` (`q`, `since`, `until`,
+  `digest`, `tool`) and `tools.stats` (`q`, `prefix`, `tool`, `since`, `until`); `q` holds at most one `namespace:` term
+  (`invalid-query` otherwise), and a key or a token limited to labels is refused (`forbidden`): counters know no
+  labels. `scripts.list` loses `labels`, `tools.stats` loses `toolset`; `ScriptSummary.labels` is removed.
+- `payloads.get(digest, { run })` requires `run`: a payload is read through the run that holds it.
+- `server.info()` answers the node that answered (`node`), the deployment's `partitions` and `nodes`; `roles` and the
+  type `ServerRole` are removed.
 - The generated types describe the change stream's control-plane events (`script`, `workflow`, `secret`, `namespace`,
   `connection`: `ScriptChanged`, `WorkflowChanged`, `SecretChanged`, `NamespaceChanged`, `ConnectionChanged`), the
   facet of workflows, and the pages of `GET /v1/runs` that may be short with a cursor.
