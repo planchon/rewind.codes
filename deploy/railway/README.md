@@ -13,10 +13,10 @@ WorkOS's waitlist: they sign in to the dashboard ([sign-in](#sign-in)).
 | `api.rewind.codes` | Railway, service `edge` | Caddy ([`edge/Caddyfile`](edge/Caddyfile)): every request to the node |
 | (private) | Railway, service `node` | `rewind server`: the HTTP API, keys and the dashboard's sign-in, and the node of the run plane (the owners of the partitions, the organization actors, the executors with V8, tool calls, timers, retention) |
 | (private) | Railway, `Postgres` | The control plane: tenants, namespaces, keys, grants, scripts, toolsets, workflows, secrets, subscriptions, the nodes and the partition map; the nodes' liveness locks in its database `postgres`. Railway's Postgres template, with a 5 GB volume |
-| (private) | Railway, bucket `payloads` | The bucket (S3): the partitions, the archive of ended runs, the payloads above 64 KiB and the test documents |
+| (private) | AWS S3, bucket `rewind.codes-paris-prod-23112026-13b80` | The bucket: the partitions, the archive of ended runs, the payloads above 64 KiB and the test documents |
 
 The Railway project is `rewind`, environment `production`, region `europe-west4` (Amsterdam);
-the bucket is in `ams`. DNS for `rewind.codes` is on Vercel: `api` is a CNAME to the target
+the bucket is on AWS S3 in `eu-west-3` (Paris), the closest S3 region. DNS for `rewind.codes` is on Vercel: `api` is a CNAME to the target
 Railway gives the edge's custom domain, with its `_railway-verify.api` TXT record.
 
 ## Sleeping
@@ -48,16 +48,18 @@ A deploy uploads the working tree from the repository's root, one service at a t
 `railway up --service node`, `--service edge` (`RAILWAY_DOCKERFILE_PATH` is set on each). A
 release build of the server takes Railway about 10 minutes. The deploy that moves runs to
 partitions runs `rewind server migrate-runs` once, with the node's variables, before the node
-starts ([`deploy/`](../README.md#upgrades)).
+starts ([`deploy/`](../README.md#upgrades)): as the node's pre-deploy command for that one
+deploy, removed after it. A redeploy reuses its deployment's start command; a changed start
+command takes a new deploy (`railway up`).
 
 ## Variables
 
 | Variable | Services | Value |
 | --- | --- | --- |
 | `REWIND_STORE` | node | `${{Postgres.DATABASE_URL}}`, on the private network |
-| `REWIND_BUCKET` | node | `s3://${{payloads.BUCKET}}` |
-| `REWIND_S3_ENDPOINT`, `REWIND_S3_REGION` | node | `${{payloads.ENDPOINT}}`, `${{payloads.REGION}}` |
-| `REWIND_S3_ACCESS_KEY_ID`, `REWIND_S3_SECRET_ACCESS_KEY` | node | References to the bucket's credentials: a reset of the credentials follows |
+| `REWIND_BUCKET` | node | `s3://rewind.codes-paris-prod-23112026-13b80` |
+| `REWIND_S3_REGION` | node | `eu-west-3`; no endpoint, AWS S3's own |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | node | The key of the IAM user `rewind-railway-prod`, allowed only that bucket's objects and listing, over TLS ([08](../../archi/08-decisions.md#taken-for-the-object-storage-rewrite-november-2026)). Railway gives its services no identity token for a role, so the key lives only in these variables; rotate it in IAM and here together |
 | `REWIND_MASTER_KEY` | node | 32 random bytes in base64. Back it up with the database: without it every stored credential is lost |
 | `REWIND_CLUSTER_SECRET` | node | 32 random bytes in hexadecimal (`openssl rand -hex 32`): it authenticates the node link, and every node of the deployment shares it |
 | `REWIND_NODE_ID` | node | `node`: the node's id, and the `service.instance.id` of its telemetry |
