@@ -21,7 +21,9 @@ describe("Api", () => {
         return HttpResponse.json({
           version: "0.1.0",
           epochs: [1],
-          roles: ["api"],
+          node: "node-1",
+          partitions: 64,
+          nodes: 1,
           embedded: false,
           virtualTime: false,
         });
@@ -39,7 +41,9 @@ describe("Api", () => {
         return HttpResponse.json({
           version: "0.1.0",
           epochs: [1],
-          roles: ["api"],
+          node: "node-1",
+          partitions: 1,
+          nodes: 1,
           embedded: true,
           virtualTime: false,
         });

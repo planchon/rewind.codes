@@ -59,6 +59,32 @@ function withRuns(
 }
 
 /** The runs of one namespace, and the scripts they ran; every namespace without one. */
+/**
+ * As `withRuns`, for the routes that answer from the hourly counters (archi/05, "Statistics"):
+ * refused to a grant limited to labels, since counters know no labels.
+ */
+function withCounters(
+  world: World,
+  request: Request,
+  answer: (world: World, caller: Caller) => Response,
+): Response {
+  return withRuns(world, request, (w, caller) => {
+    const grant =
+      caller.kind === "socket"
+        ? null
+        : world.access.grants
+            .get(caller.tenant ?? "")
+            ?.get(caller.kind === "key" ? `key:${caller.key.id}` : `user:${caller.user.id}`);
+    if (Object.keys(grant?.allowedLabels ?? {}).length > 0)
+      return problem(
+        403,
+        "forbidden",
+        "statistics come from counters, which know no labels: a grant or a token limited to labels cannot read them. Search the runs instead (GET /v1/runs)",
+      );
+    return answer(w, caller);
+  });
+}
+
 function inNamespace(world: World, namespace: string | null): World {
   if (namespace === null) return world;
   const runs = world.runs.filter((r) => r.namespace === namespace);
@@ -122,7 +148,9 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       HttpResponse.json({
         version: "0.1.0",
         epochs: [1],
-        roles: ["api", "worker"],
+        node: "node-1",
+        partitions: world.embedded ? 1 : 64,
+        nodes: 1,
         embedded: world.embedded,
         virtualTime: false,
         // `mcpUrl` and `oauth`, as the world serves MCP.
@@ -162,7 +190,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     ),
 
     http.get("*/v1/runs/stats", ({ request }) =>
-      withRuns(world, request, (w) => {
+      withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: RunStatsQuery = {};
         for (const key of ["q", "since", "until", "bucket"] as const) {
@@ -176,7 +204,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     ),
 
     http.get("*/v1/runs/failures", ({ request }) =>
-      withRuns(world, request, (w) => {
+      withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: FailuresQuery = {};
         for (const key of ["q", "since", "until", "bucket"] as const) {
@@ -310,22 +338,16 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     ),
 
     http.get("*/v1/scripts", ({ request }) =>
-      withRuns(world, request, (w) => {
+      withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
-        const tool = q.get("tool");
-        const cursor = q.get("cursor");
+        const query: Record<string, string> = {};
+        for (const key of ["tool", "since", "until", "cursor"]) {
+          const value = q.get(key);
+          if (value) query[key] = value;
+        }
         const limit = int(q.get("limit"));
         return HttpResponse.json(
-          listScripts(
-            w,
-            {
-              label: q.getAll("label"),
-              ...(tool ? { tool } : {}),
-              ...(cursor ? { cursor } : {}),
-              ...(limit !== undefined ? { limit } : {}),
-            },
-            now(),
-          ),
+          listScripts(w, { ...query, ...(limit !== undefined ? { limit } : {}) }, now()),
         );
       }),
     ),
@@ -366,19 +388,7 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
     }),
 
     http.get("*/v1/tools/stats", ({ request }) =>
-      withRuns(world, request, (w, caller) => {
-        const grant =
-          caller.kind === "socket"
-            ? null
-            : world.access.grants
-                .get(caller.tenant ?? "")
-                ?.get(caller.kind === "key" ? `key:${caller.key.id}` : `user:${caller.user.id}`);
-        if (Object.keys(grant?.allowedLabels ?? {}).length > 0)
-          return problem(
-            403,
-            "forbidden",
-            "A grant limited to labels cannot read the tool statistics, which span every run.",
-          );
+      withCounters(world, request, (w) => {
         const q = new URL(request.url).searchParams;
         const query: Record<string, string> = {};
         for (const key of ["q", "prefix", "toolset", "tool", "since", "until"]) {
@@ -389,12 +399,21 @@ export function createHandlers(world: World, options: HandlerOptions = {}) {
       }),
     ),
 
+    // A payload belongs to its run, and is read through it.
     http.get("*/v1/payloads/:digest", ({ request, params }) =>
       withRuns(world, request, (w) => {
         const digest = String(params.digest);
+        const run = new URL(request.url).searchParams.get("run");
+        if (!run)
+          return problem(
+            400,
+            "invalid-request",
+            `run is required: a payload belongs to its run, and is read through it (GET /v1/payloads/${digest}?run=<id>)`,
+          );
+        if (!find(w, run)) return noRun(run);
         return w.payloads.has(digest)
           ? HttpResponse.json(w.payloads.get(digest) as never)
-          : problem(404, "not-found", `No payload ${digest} for this tenant.`);
+          : problem(404, "not-found", `no payload ${digest} in the journal of run ${run}`);
       }),
     ),
   ];

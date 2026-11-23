@@ -397,14 +397,14 @@ export function AccountMenu({
   );
 }
 
-/** The server's version and roles, as the account menu shows them. */
+/** The server's version and epochs, and the nodes of a deployment, as the account menu shows them. */
 export function useServerLine(): string {
   const server = useServer();
   const epochs = server.epochs.join(", ");
   return [
     `rewind ${server.version}`,
     `epoch${server.epochs.length > 1 ? "s" : ""} ${epochs}`,
-    server.embedded ? "embedded" : null,
+    server.embedded ? "embedded" : `${server.nodes} node${server.nodes === 1 ? "" : "s"}`,
     server.virtualTime ? "virtual time" : null,
   ]
     .filter(Boolean)

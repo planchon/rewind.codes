@@ -29,7 +29,7 @@ import { NamespaceName } from "../../components/NamespaceName";
 import { PageHeader } from "../../components/PageHeader";
 import { isCancellation } from "../../model/ending";
 import { formatCount, formatDuration, formatPercent } from "../../model/format";
-import { fieldTerm, joinQuery, labelTerm, queryLink, queryTime } from "../../model/query";
+import { fieldTerm, joinQuery, queryLink, queryTime } from "../../model/query";
 import {
   crossingDay,
   cumulativeCpu,
@@ -498,10 +498,6 @@ function ScriptList({ name, scope, count }: { name: string; scope: string; count
       <ScriptTable
         scripts={scripts}
         scope={scope}
-        onPickLabel={(pair) => {
-          const at = pair.indexOf(":");
-          open(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
-        }}
         onPickTool={(tool) => open(fieldTerm("tool", tool))}
         empty="No script ran in this namespace yet."
       />

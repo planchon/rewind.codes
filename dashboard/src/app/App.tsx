@@ -54,25 +54,28 @@ function Reading() {
   return <Outlet />;
 }
 
-/** Tool statistics are refused to a grant limited to labels. */
-function ToolStats() {
+/**
+ * The views drawn from the statistics, which come from counters that know no labels: refused to
+ * a grant limited to labels (archi/05, "Statistics").
+ */
+function Statistics({ children }: { children: ReactNode }) {
   const access = useAccess();
-  if (!access.toolStats) {
+  if (!access.statistics) {
     return (
       <div className="page">
         <div className="no-permission" role="alert">
           <h1>
-            <Lock size={15} aria-hidden="true" /> Tool statistics span every run
+            <Lock size={15} aria-hidden="true" /> Statistics span every run
           </h1>
           <p>
-            Your grant only reaches the runs carrying its labels, and the statistics of the tools
-            count every run of the organization.
+            Your grant only reaches the runs carrying its labels, and the statistics count every run
+            of the organization. Search your runs in Observability.
           </p>
         </div>
       </div>
     );
   }
-  return <ToolsView />;
+  return children;
 }
 
 /**
@@ -92,7 +95,8 @@ function Moved({ to }: { to: string }) {
 /** The first view the caller may open. */
 function Home() {
   const access = useAccess();
-  if (access.can("runs:read")) return <Navigate to="/overview" replace />;
+  if (access.can("runs:read"))
+    return <Navigate to={access.statistics ? "/overview" : "/observability"} replace />;
   if (access.can("namespaces:read")) return <Navigate to="/namespaces" replace />;
   if (access.can("secrets:read")) return <Navigate to="/secrets" replace />;
   if (access.sections.length > 0) return <Navigate to="/organization" replace />;
@@ -112,21 +116,41 @@ export const routes: RouteObject[] = [
       {
         element: <Reading />,
         children: [
-          { path: "overview", element: <OverviewView /> },
+          {
+            path: "overview",
+            element: (
+              <Statistics>
+                <OverviewView />
+              </Statistics>
+            ),
+          },
           { path: "observability", element: <ObservabilityView /> },
           { path: "observability/:view", element: <ObservabilityView /> },
           { path: "runs", element: <Moved to="/observability" /> },
           { path: "waiting", element: <Moved to="/observability/waiting" /> },
           { path: "failures", element: <Moved to="/observability/failures" /> },
-          // One route for every section: the page stays mounted, and its event stream open. A run
-          // is named by its UUID or by its handle, `namespace/origin/suffix` (`runPath`).
-          { path: "runs/*", lazy: runView },
-          { path: "scripts", element: <ScriptsView /> },
+          // One route for every section: the page stays mounted, and its event stream open.
+          { path: "runs/:id/:section?", lazy: runView },
+          {
+            path: "scripts",
+            element: (
+              <Statistics>
+                <ScriptsView />
+              </Statistics>
+            ),
+          },
           {
             path: "scripts/:digest",
             lazy: async () => ({ Component: (await import("../views/ScriptView")).ScriptView }),
           },
-          { path: "tools", element: <ToolStats /> },
+          {
+            path: "tools",
+            element: (
+              <Statistics>
+                <ToolsView />
+              </Statistics>
+            ),
+          },
         ],
       },
       // Testing reads the workflows with the toolsets (`toolsets:read`): its views check it.

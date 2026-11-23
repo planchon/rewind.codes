@@ -1,10 +1,9 @@
 // Scripts: named by their digest, a script's source never changes. The list of the scripts the runs
-// ran, each with its runs by outcome, is read again within 10 s of a run's change, and at once when
-// the change stream announces a script run for the first time.
+// ran, each with its runs by outcome, from the hourly counters, is read again within 10 s of a run's
+// change, and at once when the change stream announces a script run for the first time.
 import { useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
-import type { ListScriptsQuery, Script, ScriptSummary, SetScriptTitle } from "../model/types";
-import { type Action, useAction } from "./actions";
+import { RANGES, type RangeKey } from "../model/filters";
+import type { ListScriptsQuery, Script, ScriptSummary } from "../model/types";
 import { type PagedRead, usePaged } from "./paged";
 import { type Read, useQueryRead } from "./read";
 import { useStore } from "./store";
@@ -22,8 +21,13 @@ export function useScript(digest: string | undefined): Read<Script> {
 }
 
 export interface ScriptListOptions {
-  /** What `GET /v1/scripts` filters by: labels, one tool; `limit` is the page size (50). */
-  query: Omit<ListScriptsQuery, "cursor">;
+  /** What `GET /v1/scripts` filters by: one tool; `limit` is the page size (50). */
+  query: Omit<ListScriptsQuery, "cursor" | "since" | "until">;
+  /**
+   * The scripts of the runs started in this window, up to now: read again at each page, the
+   * server rounding it out to whole hours. Every run's without it.
+   */
+  range?: RangeKey | undefined;
   /** One end user's scripts, counted over their runs (`Rewind-Namespace`); every one's if `null`. */
   namespace: string | null;
   /** `false` reads nothing (a query at fault). */
@@ -33,17 +37,24 @@ export interface ScriptListOptions {
 export type ScriptList = PagedRead<ScriptSummary, null>;
 
 /** The distinct scripts the runs ran, the most recently run first, page after page. */
-export function useScriptList({ query, namespace, enabled = true }: ScriptListOptions): ScriptList {
+export function useScriptList({
+  query,
+  range,
+  namespace,
+  enabled = true,
+}: ScriptListOptions): ScriptList {
   const { api } = useStore();
   const { limit, ...filter } = query;
-  return usePaged(enabled ? `scripts|${JSON.stringify([filter, namespace, limit])}` : null, () => ({
+  const key = JSON.stringify([filter, range ?? null, namespace, limit]);
+  return usePaged(enabled ? `scripts|${key}` : null, () => ({
     kind: "aggregate",
     controls: (change) => change.kind === "script",
     pageSize: limit ?? 50,
     keyOf: (s: ScriptSummary) => s.digest,
     readPage: async (after, pageLimit, signal) => {
+      const since = range ? { since: new Date(Date.now() - RANGES[range]).toISOString() } : {};
       const page = await api.scripts(
-        { ...filter, limit: pageLimit, ...(after ? { cursor: after } : {}) },
+        { ...filter, ...since, limit: pageLimit, ...(after ? { cursor: after } : {}) },
         signal,
         namespace,
       );

@@ -90,8 +90,20 @@ describe("sign-in", () => {
     await user.type(screen.getByLabelText("Verification code"), codeFor(world, "alan@example.net"));
     expect(await screen.findByRole("heading", { name: "All runs" })).toBeInTheDocument();
     expect(callsTo("/auth/email-verification", "POST")).toHaveLength(1);
-    // Alan's grant is limited to labels: the tool statistics are not for him.
+    // Alan's grant is limited to labels: the statistics, from counters that know no labels, are
+    // not for him, and none is asked for.
     expect(screen.queryByRole("link", { name: "Tools" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Scripts" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Overview" })).toBeNull();
+    // Alan's calls: those of the previous test may still be in flight.
+    const alan = callsTo("/v1/whoami").at(-1)?.headers.get("Authorization");
+    expect(alan).toBeTruthy();
+    const counted = ["/v1/runs/stats", "/v1/runs/failures", "/v1/scripts", "/v1/tools/stats"];
+    expect(
+      counted
+        .flatMap((path) => callsTo(path))
+        .filter((c) => c.headers.get("Authorization") === alan),
+    ).toHaveLength(0);
   });
 
   it("puts an unknown email on the waitlist", async () => {

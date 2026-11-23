@@ -12,9 +12,9 @@ import {
 const NOW = Date.parse("2026-11-12T10:00:00Z");
 
 describe("the Scripts' search", () => {
-  it("sends its labels and one tool", () => {
-    expect(scriptsSearch("@agent:triage @env:prod tool:github.close_issue")).toEqual({
-      query: { limit: 50, label: ["agent:triage", "env:prod"], tool: "github.close_issue" },
+  it("sends one tool", () => {
+    expect(scriptsSearch("tool:github.close_issue")).toEqual({
+      query: { limit: 50, tool: "github.close_issue" },
       namespace: null,
       fault: null,
     });
@@ -22,8 +22,8 @@ describe("the Scripts' search", () => {
   });
 
   it("narrows to one namespace, which the header names", () => {
-    expect(scriptsSearch("namespace:alice @agent:triage")).toEqual({
-      query: { limit: 50, label: ["agent:triage"] },
+    expect(scriptsSearch("namespace:alice tool:crm.provision")).toEqual({
+      query: { limit: 50, tool: "crm.provision" },
       namespace: "alice",
       fault: null,
     });
@@ -35,13 +35,15 @@ describe("the Scripts' search", () => {
     expect(scriptsSearch("-namespace:alice").fault?.message).toMatch(/excluded/);
   });
 
-  it("underlines what the list cannot read, in characters", () => {
-    expect(scriptsSearch("@agent:triage status:failed").fault).toMatchObject({
-      start: 14,
-      end: 27,
+  it("underlines what the list cannot read, in characters: labels among them", () => {
+    expect(scriptsSearch("tool:x status:failed").fault).toMatchObject({ start: 7, end: 20 });
+    expect(scriptsSearch("namespace:alice @agent:triage").fault).toMatchObject({
+      start: 16,
+      end: 29,
+      message: expect.stringMatching(/know no labels/),
     });
-    expect(scriptsSearch("é -@agent:triage").fault).toMatchObject({ start: 0, end: 1 });
-    expect(scriptsSearch("-@agent:triage").fault?.message).toMatch(/excluded/);
+    expect(scriptsSearch("é tool:x").fault).toMatchObject({ start: 0, end: 1 });
+    expect(scriptsSearch("-tool:x").fault?.message).toMatch(/excluded/);
     expect(scriptsSearch("tool:github.*").fault?.message).toMatch(/one tool/);
     expect(scriptsSearch("tool:a tool:b").fault).toMatchObject({ start: 7, end: 13 });
   });

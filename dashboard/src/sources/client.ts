@@ -351,7 +351,7 @@ export class Api {
     return this.unwrap(await this.client.GET("/v1/tools/stats", { params: { query }, signal }));
   }
 
-  /** A payload's value, read through the run whose journal holds it: a key limited to labels must. */
+  /** A payload's value, read through the run whose journal holds it, as the server requires. */
   async payload(digest: string, run: string, signal?: AbortSignal): Promise<unknown> {
     return this.unwrap(
       await this.client.GET("/v1/payloads/{digest}", {

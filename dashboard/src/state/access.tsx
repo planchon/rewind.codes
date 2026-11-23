@@ -70,8 +70,12 @@ export interface Access {
   role: string | null;
   /** The parts of the Organization view the caller may open. */
   sections: Section[];
-  /** The Tools view: tool statistics are refused to a grant limited to labels. */
-  toolStats: boolean;
+  /**
+   * The statistics (archi/05, "Statistics"): the Overview, Scripts, Tools, the failure groups and
+   * the counts of the runs come from counters, which know no labels, and are refused to a grant
+   * limited to labels.
+   */
+  statistics: boolean;
 }
 
 export function accessOf(identity: Identity): Access {
@@ -92,7 +96,7 @@ export function accessOf(identity: Identity): Access {
     sections: SECTIONS.filter(
       (s) => can(s.permission) && (!s.needsOrganization || organization !== null),
     ),
-    toolStats: can("runs:read") && !limited,
+    statistics: can("runs:read") && !limited,
   };
 }
 

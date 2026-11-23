@@ -603,11 +603,16 @@ function emptyCounts(): RunCounts {
   return { pending: 0, active: 0, completed: 0, failed: 0, cancelled: 0, aborted: 0 };
 }
 
+/** The scripts of the runs started in the window, whole hours as the counters keep them. */
 export function listScripts(world: World, query: ListScriptsQuery, now: number): ScriptPage {
+  const hour = 3_600_000;
+  const since = query.since ? Math.floor(Date.parse(query.since) / hour) * hour : null;
+  const until = Math.ceil((query.until ? Date.parse(query.until) : now) / hour) * hour;
   const byDigest = new Map<string, ScriptSummary>();
   for (const fixture of started(world, now)) {
-    const s = summarize(world, fixture, now);
-    if (!hasLabels(s.labels, query.label)) continue;
+    const s = summarize(fixture, now);
+    const at = Date.parse(s.startedAt);
+    if ((since !== null && at < since) || at >= until) continue;
     let summary = byDigest.get(s.script);
     if (!summary) {
       const headline = fixture.script.source.split("\n").find((l) => l.trim() !== "") ?? "";
@@ -622,7 +627,6 @@ export function listScripts(world: World, query: ListScriptsQuery, now: number):
         lastRunAt: s.startedAt,
         runs: emptyCounts(),
         tools: [],
-        labels: {},
       };
       byDigest.set(s.script, summary);
     }
@@ -630,10 +634,6 @@ export function listScripts(world: World, query: ListScriptsQuery, now: number):
     if (s.startedAt < summary.firstRunAt) summary.firstRunAt = s.startedAt;
     if (s.startedAt > summary.lastRunAt) summary.lastRunAt = s.startedAt;
     for (const tool of s.tools) if (!summary.tools.includes(tool)) summary.tools.push(tool);
-    const labels = summary.labels ?? {};
-    for (const [k, v] of Object.entries(s.labels))
-      labels[`${k}:${v}`] = (labels[`${k}:${v}`] ?? 0) + 1;
-    summary.labels = labels;
   }
   const scripts = [...byDigest.values()]
     .filter((s) => !query.tool || s.tools.includes(query.tool))

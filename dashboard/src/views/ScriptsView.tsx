@@ -1,23 +1,30 @@
 // Scripts: every distinct script executed (content-addressed, so deduplicated), with its runs by
-// outcome, the tools it called and the labels it ran with. Searched with the query bar of the
-// runs, which reads labels and one tool here, what `GET /v1/scripts` filters by, and one
-// namespace, sent as `Rewind-Namespace`: the scripts of one end user, counted over their runs.
+// outcome and the tools it called over a window, from the hourly counters (archi/05,
+// "Statistics"), which know no labels. Searched with the query bar of the runs, which reads one
+// tool here, what `GET /v1/scripts` filters by, and one namespace, sent as `Rewind-Namespace`: the
+// scripts of one end user, counted over their runs.
 import { useMemo } from "react";
 import { Link, useNavigate } from "react-router";
-import { Ago, Empty, LabelList, Loading, ProblemView } from "../components/bits";
+import { Ago, Digest, Empty, Loading, ProblemView } from "../components/bits";
 import { NamespaceName } from "../components/NamespaceName";
 import { PageHeader } from "../components/PageHeader";
 import { QueryBar } from "../components/QueryBar";
 import { StatusGlyph } from "../components/Status";
-import { TableScroll } from "../components/TableScroll";
-import { legacyScriptsQuery, RANGES, SCRIPTS_LANGUAGE, scriptsSearch } from "../model/filters";
+import {
+  legacyScriptsQuery,
+  RANGES,
+  type RangeKey,
+  SCRIPTS_LANGUAGE,
+  scriptsSearch,
+} from "../model/filters";
 import { formatCount } from "../model/format";
-import { fieldTerm, joinQuery, labelTerm, queryLink, splitTerms, withTerm } from "../model/query";
+import { fieldTerm, joinQuery, queryLink, splitTerms } from "../model/query";
 import { RUN_STATUSES, type RunCounts, type ScriptSummary } from "../model/types";
 import { useRunStats } from "../state/aggregates";
 import { type ScriptList, useScriptList } from "../state/scripts";
-import { useListQuery, useRunQueryValues } from "./search";
-import { TableTop } from "./TableTop";
+import { Seg } from "./FilterBits";
+import { useListQuery, useRunQueryValues, useWindow, WINDOW_WORDS, WINDOWS } from "./search";
+import { TableToolbar } from "./TableTop";
 
 const LEGACY_NAMES = ["label", "tool"] as const;
 
@@ -71,22 +78,13 @@ export function Outcomes({
   );
 }
 
-function topLabels(labels: Record<string, number> | undefined, n: number): string[] {
-  return Object.entries(labels ?? {})
-    .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
-    .slice(0, n)
-    .map(([pair]) => pair);
-}
-
 function ScriptRow({
   script,
   scope,
-  onPickLabel,
   onPickTool,
 }: {
   script: ScriptSummary;
   scope: string;
-  onPickLabel: (p: string) => void;
   onPickTool: (t: string) => void;
 }) {
   const navigate = useNavigate();
@@ -150,13 +148,6 @@ function ScriptRow({
           {script.tools.length === 0 && <span className="muted">–</span>}
         </span>
       </td>
-      <td className="wrap">
-        <LabelList
-          labels={topLabels(script.labels, 3)}
-          counts={script.labels ?? {}}
-          onPick={onPickLabel}
-        />
-      </td>
       <td className="dim">
         <Ago ms={Date.parse(script.lastRunAt)} />
         <span className="cell-sub">
@@ -169,18 +160,16 @@ function ScriptRow({
 
 /**
  * The table of scripts, shared by Scripts and a namespace's page: each script's runs by outcome,
- * its tools, its labels, when it last ran. `scope` is the term its links to the runs add.
+ * its tools, when it last ran. `scope` is the term its links to the runs add.
  */
 export function ScriptTable({
   scripts,
   scope,
-  onPickLabel,
   onPickTool,
   empty = "No script matches this search.",
 }: {
   scripts: ScriptList;
   scope: string;
-  onPickLabel: (pair: string) => void;
   onPickTool: (tool: string) => void;
   empty?: string;
 }) {
@@ -203,19 +192,12 @@ export function ScriptTable({
               <th className="right">Runs</th>
               <th>Outcomes</th>
               <th>Tools</th>
-              <th>Labels</th>
               <th>Last run</th>
             </tr>
           </thead>
           <tbody>
             {list.map((s) => (
-              <ScriptRow
-                key={s.digest}
-                script={s}
-                scope={scope}
-                onPickLabel={onPickLabel}
-                onPickTool={onPickTool}
-              />
+              <ScriptRow key={s.digest} script={s} scope={scope} onPickTool={onPickTool} />
             ))}
           </tbody>
         </table>
@@ -239,8 +221,8 @@ export function ScriptTable({
 }
 
 /**
- * What the bar suggests: the namespaces, labels and tools of the last 30 days' runs, and the
- * namespaces whose name starts with what is typed.
+ * What the bar suggests: the namespaces and tools of the last 30 days' runs, and the namespaces
+ * whose name starts with what is typed.
  */
 function useScriptFacets() {
   const facets = useRunStats("scripts-facets", () => ({
@@ -265,27 +247,38 @@ function useScriptFacets() {
 
 export function ScriptsView() {
   const { q, setQ } = useListQuery(legacyScriptsQuery, LEGACY_NAMES);
+  const [win, setWin] = useWindow();
   const search = scriptsSearch(q);
   const scripts = useScriptList({
     query: search.query,
+    range: win,
     namespace: search.namespace,
     enabled: search.fault === null,
   });
   const suggestions = useScriptFacets();
-  const addTerm = (term: string) => setQ(withTerm(q, term));
   const scope = search.namespace ? fieldTerm("namespace", search.namespace) : "";
 
   return (
     <div className="page">
-      <PageHeader title="Scripts" />
+      <PageHeader
+        title="Scripts"
+        actions={
+          <Seg<RangeKey>
+            label="Window"
+            value={win}
+            onChange={setWin}
+            options={WINDOWS.map((w) => ({ value: w, label: w, title: WINDOW_WORDS[w] }))}
+          />
+        }
+      />
       <p className="page-intro">
         {search.namespace ? (
           <>
-            The sources the runs of <NamespaceName name={search.namespace} /> executed, the most
-            recently run first; their runs are that end user's.
+            The sources the runs of <NamespaceName name={search.namespace} /> executed in{" "}
+            {WINDOW_WORDS[win]}, the most recently run first; their runs are that end user's.
           </>
         ) : (
-          "Every distinct source executed, the most recently run first."
+          `Every distinct source executed in ${WINDOW_WORDS[win]}, the most recently run first.`
         )}
       </p>
       <QueryBar
@@ -296,7 +289,7 @@ export function ScriptsView() {
         values={suggestions.values}
         onTyping={suggestions.onTyping}
         fault={search.fault}
-        placeholder="namespace:alice @agent:triage tool:github.close_issue"
+        placeholder="namespace:alice tool:github.close_issue"
       />
       {search.fault ? (
         <Empty>Fix the query to see the scripts: the term at fault is underlined above.</Empty>
@@ -304,10 +297,7 @@ export function ScriptsView() {
         <ScriptTable
           scripts={scripts}
           scope={scope}
-          onPickLabel={(pair) => {
-            const at = pair.indexOf(":");
-            addTerm(labelTerm(pair.slice(0, at), pair.slice(at + 1)));
-          }}
+          empty={`No script matches this search in ${WINDOW_WORDS[win]}.`}
           onPickTool={(tool) =>
             setQ(
               joinQuery(

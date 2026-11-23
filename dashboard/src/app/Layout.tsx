@@ -87,12 +87,14 @@ function MainNav() {
     <div className="nav">
       {reads && (
         <>
-          <NavItem
-            to={queryLink("/overview", q, extra)}
-            icon={<LayoutGrid size={16} />}
-            label="Overview"
-            current={pathname === "/overview"}
-          />
+          {access.statistics && (
+            <NavItem
+              to={queryLink("/overview", q, extra)}
+              icon={<LayoutGrid size={16} />}
+              label="Overview"
+              current={pathname === "/overview"}
+            />
+          )}
           <NavItem
             to={queryLink("/observability", q, extra)}
             icon={<Eye size={16} />}
@@ -101,12 +103,14 @@ function MainNav() {
             opensSidebar
             {...(reopen ? { onReopen: reopen } : {})}
           />
-          <NavItem
-            to="/scripts"
-            icon={<FileCode size={16} />}
-            label="Scripts"
-            current={pathname.startsWith("/scripts")}
-          />
+          {access.statistics && (
+            <NavItem
+              to="/scripts"
+              icon={<FileCode size={16} />}
+              label="Scripts"
+              current={pathname.startsWith("/scripts")}
+            />
+          )}
         </>
       )}
       {access.can("toolsets:read") && (
@@ -119,8 +123,8 @@ function MainNav() {
           {...(reopen ? { onReopen: reopen } : {})}
         />
       )}
-      {/* Tool statistics need `runs:read`, and a grant not limited to labels. */}
-      {access.toolStats && (
+      {/* Statistics need `runs:read`, and a grant not limited to labels. */}
+      {access.statistics && (
         <NavItem
           to="/tools"
           icon={<Wrench size={16} />}

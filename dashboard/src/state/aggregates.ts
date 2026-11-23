@@ -6,6 +6,9 @@
 //
 // These routes take a scope and a window only: the query sent holds the view's one `namespace:`
 // term, or none, and the server's fault at that term is placed back where the view's query has it.
+// Counters know no labels: a grant limited to labels reads none of them, and its views are told so
+// without asking the server, which would answer 403.
+import { useMemo } from "react";
 import { statsScope } from "../model/scope";
 import type {
   FailureGroupPage,
@@ -16,8 +19,29 @@ import type {
   ToolStatsQuery,
 } from "../model/types";
 import { ApiError } from "../sources/client";
-import { type Read, useResource } from "./read";
+import { useAccess } from "./access";
+import { type Read, toRead, useResource } from "./read";
 import { useStore } from "./store";
+
+/** What the server answers a grant limited to labels on these routes. */
+const REFUSED = new ApiError(403, {
+  type: "urn:rewind:problem:forbidden",
+  title: "Forbidden",
+  status: 403,
+  detail:
+    "Statistics come from counters, which know no labels: a grant limited to labels cannot read them. Search the runs instead.",
+});
+
+/** A read of the statistics, or their refusal when the caller's grant is limited to labels. */
+function useCounted<T>(key: string, load: (signal: AbortSignal) => Promise<T>): Read<T> {
+  const { statistics } = useAccess();
+  const read = useResource(statistics ? key : null, () => ({ kind: "aggregate", load }));
+  const refused = useMemo(
+    () => toRead<T>({ status: "error", data: undefined, error: REFUSED }, false, async () => {}),
+    [],
+  );
+  return statistics ? read : refused;
+}
 
 /** `read` of the query cut down to its scope; a fault at the scope's term placed in the view's query. */
 async function scoped<Q extends { q?: string | null }, T>(
@@ -41,26 +65,23 @@ async function scoped<Q extends { q?: string | null }, T>(
 /** Counts, series, durations and facets of the runs of a scope. */
 export function useRunStats(key: string, makeQuery: () => RunStatsQuery): Read<RunStats> {
   const { api } = useStore();
-  return useResource(`stats|${key}`, () => ({
-    kind: "aggregate",
-    load: (signal) => scoped(makeQuery(), (query) => api.runStats(query, signal)),
-  }));
+  return useCounted(`stats|${key}`, (signal) =>
+    scoped(makeQuery(), (query) => api.runStats(query, signal)),
+  );
 }
 
 /** Failed, cancelled and aborted runs of a scope, grouped by fingerprint. */
 export function useFailures(key: string, makeQuery: () => FailuresQuery): Read<FailureGroupPage> {
   const { api } = useStore();
-  return useResource(`failures|${key}`, () => ({
-    kind: "aggregate",
-    load: (signal) => scoped(makeQuery(), (query) => api.failures(query, signal)),
-  }));
+  return useCounted(`failures|${key}`, (signal) =>
+    scoped(makeQuery(), (query) => api.failures(query, signal)),
+  );
 }
 
 /** Latency, errors and retries per tool, over the calls of a scope. */
 export function useToolStats(key: string, makeQuery: () => ToolStatsQuery): Read<ToolStatsPage> {
   const { api } = useStore();
-  return useResource(`tool-stats|${key}`, () => ({
-    kind: "aggregate",
-    load: (signal) => scoped(makeQuery(), (query) => api.toolStats(query, signal)),
-  }));
+  return useCounted(`tool-stats|${key}`, (signal) =>
+    scoped(makeQuery(), (query) => api.toolStats(query, signal)),
+  );
 }

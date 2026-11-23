@@ -50,14 +50,15 @@ function useViews(): Choice[] {
       to: "/observability/failures",
       kind: "view",
     },
-    reads && { key: "scripts", label: "Scripts", to: "/scripts", kind: "view" },
+    reads &&
+      access.statistics && { key: "scripts", label: "Scripts", to: "/scripts", kind: "view" },
     access.can("toolsets:read") && {
       key: "testing",
       label: "Testing",
       to: "/testing",
       kind: "view",
     },
-    reads && access.toolStats && { key: "tools", label: "Tools", to: "/tools", kind: "view" },
+    reads && access.statistics && { key: "tools", label: "Tools", to: "/tools", kind: "view" },
     access.can("namespaces:read") && {
       key: "namespaces",
       label: "Namespaces",

@@ -6,11 +6,12 @@ import { scriptDoc } from "../mocks/handles";
 import { renderApp, search } from "../test/app";
 
 describe("ScriptsView", () => {
-  it("lists every distinct script with its runs by outcome and its tools", async () => {
-    renderApp("/scripts");
+  it("lists every distinct script of the window with its runs by outcome and its tools", async () => {
+    renderApp("/scripts?window=30d");
     const table = await screen.findByRole("table");
     const rows = within(table).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(9);
+    expect(within(table).queryByRole("columnheader", { name: "Labels" })).toBeNull();
     const forecast = rows.find((r) =>
       within(r).queryByText("// One-shot lookup started by the support agent."),
     );
@@ -39,17 +40,31 @@ describe("ScriptsView", () => {
     ).toBe(true);
   });
 
-  it("searches by label, and underlines what the list cannot read", async () => {
+  it("counts the window's runs, the last 24 hours by default", async () => {
+    const user = userEvent.setup();
+    const { router, requested } = renderApp("/scripts");
+    const table = await screen.findByRole("table");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(7));
+    const since = (u: URL) => Date.parse(u.searchParams.get("since") ?? "");
+    const day = requested("/v1/scripts").at(-1) as URL;
+    expect(Date.now() - since(day)).toBeGreaterThanOrEqual(86_400_000 - 60_000);
+    expect(Date.now() - since(day)).toBeLessThan(86_400_000 + 60_000);
+
+    await user.click(screen.getByRole("button", { name: "30d" }));
+    await waitFor(() => expect(search(router).get("window")).toBe("30d"));
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(10));
+    const month = requested("/v1/scripts").at(-1) as URL;
+    expect(Date.now() - since(month)).toBeGreaterThanOrEqual(30 * 86_400_000 - 60_000);
+  });
+
+  it("underlines a label, which the counters know nothing of, and what the list cannot read", async () => {
     const user = userEvent.setup();
     const { router, requested } = renderApp("/scripts?label=agent:triage");
-    // An older link's filter is read as the query it means.
+    // An older link's filter is read as the query it means, which the list cannot read.
     await waitFor(() => expect(search(router).get("q")).toBe("@agent:triage"));
     expect(search(router).get("label")).toBeNull();
-    await waitFor(() =>
-      expect(
-        requested("/v1/scripts").some((u) => u.searchParams.getAll("label")[0] === "agent:triage"),
-      ).toBe(true),
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(/know no labels/);
+    expect(requested("/v1/scripts")).toHaveLength(0);
 
     const bar = screen.getByRole("combobox", { name: "Query" });
     await user.clear(bar);

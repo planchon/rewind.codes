@@ -39,7 +39,7 @@ export const DESCRIPTIONS: Record<Permission, string> = {
     "List the secrets of the organization and of the namespaces, their metadata and usage, never a value; read the signing keys' ids.",
   "secrets:write": "Put and delete secrets.",
   "secrets:use": "Attach an organization's secret to a run or a workflow.",
-  "tasks:work": "Claim host-tool tasks, and heartbeat, defer, complete or fail them.",
+  "tasks:work": "Receive host-tool tasks on the task stream, and defer, complete or fail them.",
   "tasks:approve": "Approve or reject a parked task.",
   "subscriptions:read": "List the lifecycle webhooks.",
   "subscriptions:write": "Create and delete lifecycle webhooks.",

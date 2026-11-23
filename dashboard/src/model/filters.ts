@@ -48,18 +48,18 @@ function legacy(params: URLSearchParams, terms: (params: URLSearchParams) => str
   return joinQuery(params.get("q") ?? "", ...parts);
 }
 
-// Scripts: `GET /v1/scripts?label=…&tool=…`, narrowed to one namespace by `Rewind-Namespace`
+// Scripts: `GET /v1/scripts?tool=…` over a window, narrowed to one namespace by `Rewind-Namespace`
 
 export const SCRIPTS_LANGUAGE: QueryLanguage = {
   fields: [
     { name: "namespace", doc: "the scripts one end user's runs ran: namespace:alice" },
     { name: "tool", doc: "scripts that called this tool: tool:github.close_issue" },
   ],
-  labels: true,
+  labels: false,
 };
 
 const SCRIPTS_TERMS =
-  "Scripts are searched by namespace (namespace:alice), label (@agent:triage) and tool (tool:github.list_issues)";
+  "Scripts are searched by namespace (namespace:alice) and tool (tool:github.list_issues): the list comes from counters, which know no labels";
 
 export interface ScriptsSearch {
   query: ListScriptsQuery;
@@ -69,12 +69,12 @@ export interface ScriptsSearch {
 }
 
 /**
- * The request of `GET /v1/scripts` a query means: its labels and one tool as parameters, and one
- * namespace as the header that narrows every read to an end user's runs.
+ * The request of `GET /v1/scripts` a query means: one tool as a parameter, and one namespace as
+ * the header that narrows the list to an end user's runs. The list comes from the hourly
+ * counters (archi/05, "Statistics"), which know no labels.
  */
 export function scriptsSearch(q: string, limit = 50): ScriptsSearch {
   const query: ListScriptsQuery = { limit };
-  const labels: string[] = [];
   let namespace: string | null = null;
   for (const term of splitTerms(q)) {
     const values = valuesOf(term);
@@ -88,11 +88,6 @@ export function scriptsSearch(q: string, limit = 50): ScriptsSearch {
       if (problem) return fault(problem);
       if (namespace !== null) return fault("One namespace at a time");
       namespace = name;
-      continue;
-    }
-    if (term.kind === "label" && term.field) {
-      if (values.length !== 1) return fault("One value per label: @agent:triage");
-      labels.push(`${term.field}:${values[0]}`);
     } else if (term.kind === "field" && term.field === "tool") {
       if (values.length !== 1 || values[0]?.includes("*"))
         return fault("tool: names one tool: tool:github.list_issues");
@@ -102,11 +97,13 @@ export function scriptsSearch(q: string, limit = 50): ScriptsSearch {
       return fault(SCRIPTS_TERMS);
     }
   }
-  if (labels.length > 0) query.label = labels;
   return { query, namespace, fault: null };
 }
 
-/** `?label=agent:triage&tool=x`, as the Scripts view's links wrote it. */
+/**
+ * `?label=agent:triage&tool=x`, as the Scripts view's links wrote it: a label is read as its term,
+ * which the bar then underlines, since the list cannot filter by label.
+ */
 export function legacyScriptsQuery(params: URLSearchParams): string | null {
   return legacy(params, (p) => [
     ...p

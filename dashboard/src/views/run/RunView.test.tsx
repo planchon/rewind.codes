@@ -154,6 +154,8 @@ describe("RunView", () => {
     await user.click(within(result).getByRole("button", { name: /Load the value \(\d+ KB\)/ }));
     expect(await within(result).findByText(/Issue 4100: flaky test in ci/)).toBeInTheDocument();
     expect(requested(path)).toHaveLength(1);
+    // Read through its run, as the server requires.
+    expect(requested(path)[0]?.searchParams.get("run")).toBe(run.id);
   });
 
   it("follows a run live: new entries appear, then its end", async () => {
