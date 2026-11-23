@@ -155,7 +155,7 @@ impl PartitionStore for SlatePartitions {
         let db = builder
             .build()
             .await
-            .map_err(|err| crate::error::partition(partition, err))?;
+            .map_err(|err| crate::error::opening(partition, err))?;
         let generation = {
             let mut opens = self
                 .inner

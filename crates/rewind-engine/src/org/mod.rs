@@ -788,7 +788,12 @@ impl<P: Plane> OrgActor<P> {
             })
             .map(|(id, _)| id.clone())
             .collect();
-        let mut held = BTreeSet::new();
+        // A stream attached again keeps the tasks it holds.
+        let mut held = self
+            .streams
+            .remove(&attach.stream)
+            .map(|stream| stream.held)
+            .unwrap_or_default();
         for id in returning {
             if let Some(stream) = self.streams.remove(&id) {
                 for task in &stream.held {

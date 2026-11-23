@@ -1102,7 +1102,9 @@ impl TryFrom<OwnerNotice> for link::OwnerNotice {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum EdgeNotice {
-    HandOut { stream: String, task: HostTask },
+    HandOut { stream: String, task: Box<HostTask> },
+    Gone { stream: String, token: String },
+    Reopened { partition: u16 },
 }
 
 impl From<&link::EdgeNotice> for EdgeNotice {
@@ -1111,6 +1113,9 @@ impl From<&link::EdgeNotice> for EdgeNotice {
             link::EdgeNotice::HandOut { stream, task } => EdgeNotice::HandOut {
                 stream: stream.0.clone(),
                 task: task.into(),
+            },
+            link::EdgeNotice::Reopened { partition } => EdgeNotice::Reopened {
+                partition: partition.get(),
             },
         }
     }
@@ -1124,6 +1129,9 @@ impl TryFrom<EdgeNotice> for link::EdgeNotice {
             EdgeNotice::HandOut { stream, task } => link::EdgeNotice::HandOut {
                 stream: link::StreamId(stream),
                 task: task.try_into()?,
+            },
+            EdgeNotice::Reopened { partition } => link::EdgeNotice::Reopened {
+                partition: PartitionId::new(partition),
             },
         })
     }

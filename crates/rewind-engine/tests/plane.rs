@@ -663,6 +663,65 @@ async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
     assert_eq!(error.kind, ToolFailureKind::Timeout);
 }
 
+/// The organization actor of a tenant lives in its home partition's owner: when the partition
+/// is opened again (here after a read found it opened elsewhere), the new actor starts without
+/// the streams the previous one held, and every edge attaches its streams of the tenant again.
+#[tokio::test]
+async fn a_stream_attached_before_its_home_partition_is_opened_again_is_still_handed_tasks() {
+    let mut node = config("node-a", 1);
+    node.host_tools = HostTools::Streams;
+    let store = Interleaved::new();
+    let mut world = World::over(
+        store.clone(),
+        one_call(),
+        RecordingDispatcher::echo(),
+        1,
+        &[node],
+    )
+    .await;
+    let at = world.at.clone();
+    let mut stream = world
+        .driver
+        .attach_stream(
+            &at,
+            TenantId::local(),
+            StreamAttach {
+                stream: StreamId("s1".into()),
+                worker: "w1".into(),
+                node: at.clone(),
+                namespace: None,
+                labels: BTreeMap::new(),
+                toolset: None,
+                tools: Default::default(),
+                slots: 4,
+            },
+        )
+        .unwrap();
+    let first = world.run(request("one_call", json!({}))).await;
+    let task = support::plane::handed(&mut stream).remove(0);
+    world.complete(&task.token, json!("one")).await.unwrap();
+    world.idle().await;
+
+    store.fence_next_read();
+    assert_eq!(world.view(&first).await.head.status, RunStatus::Completed);
+    assert_eq!(store.opens(), 2, "the partition was opened again");
+
+    let second = world.run(request("one_call", json!({}))).await;
+    let handed = support::plane::handed(&mut stream);
+    assert_eq!(
+        handed.len(),
+        1,
+        "the new actor hands the task to the stream"
+    );
+    assert_eq!(handed[0].task.run, second);
+    world
+        .complete(&handed[0].token, json!("two"))
+        .await
+        .unwrap();
+    world.idle().await;
+    assert_eq!(world.view(&second).await.head.status, RunStatus::Completed);
+}
+
 #[tokio::test]
 async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token() {
     let mut node = config("node-a", 1);

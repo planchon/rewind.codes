@@ -972,6 +972,13 @@ fn every_request_and_notice_of_the_organizations_round_trips() {
         stream: StreamId("stream-1".into()),
         task: host_task(),
     })));
+    round_trip::<_, super::NodeRequest>(&NodeRequest::Edge(Box::new(EdgeNotice::Gone {
+        stream: StreamId("stream-1".into()),
+        token: host_task().token,
+    })));
+    round_trip::<_, super::NodeRequest>(&NodeRequest::Edge(Box::new(EdgeNotice::Reopened {
+        partition: PartitionId::new(7),
+    })));
 }
 
 #[test]

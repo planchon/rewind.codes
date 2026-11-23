@@ -371,6 +371,11 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 let (stream, event) = match *notice {
                     EdgeNotice::HandOut { stream, task } => (stream, StreamEvent::Task(task)),
                     EdgeNotice::Gone { stream, token } => (stream, StreamEvent::Gone(token)),
+                    EdgeNotice::Reopened { partition } => {
+                        let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
+                        effects.extend(self.attach_again(partition));
+                        return effects;
+                    }
                 };
                 let mut effects = vec![Effect::Reply(reply, NodeReply::Done)];
                 let tenant = match (&event, self.streams.get(&stream)) {
@@ -741,6 +746,25 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             },
             asker: None,
         }])
+    }
+
+    /// The streams of this edge whose tenant is homed in `partition`, attached again to the
+    /// tenant's organization actor: the partition was opened, and its actors are new.
+    fn attach_again(&mut self, partition: PartitionId) -> Vec<Effect<P>> {
+        let effects = self
+            .streams
+            .values()
+            .filter(|(tenant, _, _)| home_partition(tenant, self.config.partitions) == partition)
+            .map(|(tenant, attach, _)| Effect::Request {
+                to: Target::Home(tenant.clone()),
+                request: NodeRequest::Organization {
+                    tenant: tenant.clone(),
+                    request: Box::new(OrgRequest::Attach(attach.clone())),
+                },
+                asker: None,
+            })
+            .collect();
+        self.route(effects)
     }
 
     /// An SDK stream closed at this edge.

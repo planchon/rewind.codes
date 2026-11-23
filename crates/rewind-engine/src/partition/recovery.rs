@@ -121,6 +121,27 @@ impl<P: Plane> Owner<P> {
             tasks = tasks.len(),
             "partition opened"
         );
+        // The organization actors homed here start without streams: every edge attaches its
+        // streams of their tenants again.
+        let mut edges: Vec<crate::ports::NodeId> = self
+            .nodes
+            .iter()
+            .filter(|node| !node.executors_only)
+            .map(|node| node.id.clone())
+            .collect();
+        if !edges.contains(&self.node) {
+            edges.push(self.node.clone());
+        }
+        for edge in edges {
+            self.tell(
+                crate::node::message::Target::Node(edge),
+                crate::ports::link::NodeRequest::Edge(Box::new(
+                    crate::ports::link::EdgeNotice::Reopened {
+                        partition: self.partition,
+                    },
+                )),
+            );
+        }
 
         let mut unit = Unit::new();
         for head in &runnable {

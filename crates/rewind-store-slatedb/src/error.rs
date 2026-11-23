@@ -23,3 +23,13 @@ pub(crate) fn partition(partition: PartitionId, err: slatedb::Error) -> Partitio
         _ => PartitionError::Backend(err.to_string()),
     }
 }
+
+/// A SlateDB error of an open. Two opens that create a partition's first manifest at once race
+/// on it, and the one that loses finds it written: the other open is under way, which fences
+/// this one.
+pub(crate) fn opening(partition: PartitionId, err: slatedb::Error) -> PartitionError {
+    if matches!(err.kind(), ErrorKind::Data) && err.to_string().contains("version already exists") {
+        return PartitionError::Fenced { partition };
+    }
+    self::partition(partition, err)
+}

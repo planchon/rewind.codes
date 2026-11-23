@@ -487,7 +487,8 @@ pub enum OwnerNotice {
     CountsWanted { tenant: TenantId },
 }
 
-/// What an organization actor tells the edge that holds an SDK stream.
+/// What an organization actor tells the edge that holds an SDK stream, or the owner of a
+/// partition every edge.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(
     clippy::large_enum_variant,
@@ -500,6 +501,10 @@ pub enum EdgeNotice {
     /// its run ended, its call timed out or was cancelled, or it was handed out again. Its slot
     /// on the stream is free.
     Gone { stream: StreamId, token: TaskToken },
+    /// The partition was opened, by a new owner or again by the same node: the organization
+    /// actors homed there start without the streams their previous actors held. The edge
+    /// attaches its streams of the tenants homed there again.
+    Reopened { partition: PartitionId },
 }
 
 /// What an SDK stream receives (`GET /v1/tasks/stream`, its events `task` and `gone`).
