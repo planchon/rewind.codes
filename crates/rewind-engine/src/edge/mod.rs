@@ -188,6 +188,12 @@ impl<P: Plane> Edge<P> {
         request: StartRun,
         checker: Option<&K>,
     ) -> Result<Created, StartError> {
+        // What the request alone refuses is refused before its namespace's first use.
+        let input = self.bounded_input(request.input)?;
+        text::refuse_nul("the script", request.script.source())?;
+        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.typescript)?;
+        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.prompt)?;
+        refuse_nul_in_metadata(&request.metadata, request.idempotency_key.as_deref())?;
         let namespace = self.namespace(&request.tenant, &request.namespace).await?;
         let bounds = self.bounds(&request.tenant, &request.namespace).await?;
         let ttl =
@@ -196,11 +202,6 @@ impl<P: Plane> Edge<P> {
                 max: bounds.max_ttl,
             })?;
         bounds.check_lines(&request.script)?;
-        let input = self.bounded_input(request.input)?;
-        text::refuse_nul("the script", request.script.source())?;
-        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.typescript)?;
-        text::refuse_nul(text::TOOLSET_TEXT, &request.declarations.prompt)?;
-        refuse_nul_in_metadata(&request.metadata, request.idempotency_key.as_deref())?;
         let executor = self.plane.executor();
         let epoch = *executor.epochs().last().ok_or(StartError::NoEpoch)?;
         let compiled = executor
@@ -283,6 +284,7 @@ impl<P: Plane> Edge<P> {
                 refused,
             )));
         }
+        let input = self.bounded_input(request.input)?;
         let partition = self.namespace(&request.tenant, &request.namespace).await?;
         let bounds = self.bounds(&request.tenant, &request.namespace).await?;
         let ttl =
@@ -308,7 +310,6 @@ impl<P: Plane> Edge<P> {
             Ok(()) => {}
             Err(refused) => return Err(StartError::SecretRequired(refused)),
         }
-        let input = self.bounded_input(request.input)?;
         let mut metadata = request.metadata;
         metadata.workflow = Some(RunWorkflow {
             name: workflow.name().to_owned(),
