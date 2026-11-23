@@ -57,18 +57,6 @@ impl<T> ReadyQueue<T> {
         Some(item)
     }
 
-    /// Takes a run out of the queue, if it is there.
-    pub(crate) fn remove(&mut self, tenant: &TenantId, run: RunId) -> Option<T> {
-        let runs = self.runs.get_mut(tenant)?;
-        let key = runs.keys().find(|(_, _, queued)| *queued == run).cloned()?;
-        let item = runs.remove(&key);
-        if runs.is_empty() {
-            self.runs.remove(tenant);
-            self.turns.retain(|turn| turn != tenant);
-        }
-        item
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.runs.values().map(BTreeMap::len).sum()
     }
@@ -104,7 +92,7 @@ mod tests {
         queue.push(a.clone(), 0, Timestamp(5), RunId::from_u128(1), "first");
         queue.push(a.clone(), 0, Timestamp(1), RunId::from_u128(1), "again");
         assert_eq!(queue.len(), 1);
-        assert_eq!(queue.remove(&a, RunId::from_u128(1)), Some("again"));
+        assert_eq!(queue.pop(), Some("again"));
         assert_eq!(queue.pop(), None);
     }
 }

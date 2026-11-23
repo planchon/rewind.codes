@@ -51,7 +51,7 @@ use crate::ports::{
 use crate::tasks::calls::CallDone;
 use commit::Unit;
 pub(crate) use recovery::Opened;
-pub(crate) use runs::{end_value, history_of};
+pub(crate) use runs::history_of;
 use wheel::Wheel;
 
 /// A message to the owner of a partition.

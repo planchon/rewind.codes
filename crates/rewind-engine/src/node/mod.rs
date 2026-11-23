@@ -39,7 +39,7 @@ use crate::ports::{
     home_partition,
 };
 use crate::tasks::calls::Calls;
-use message::{Asker, Effect, Message, ReplyTo, Target, job};
+use message::{Effect, Message, ReplyTo, Target, job};
 
 /// A message to the node actor.
 #[derive(Debug)]
@@ -376,7 +376,8 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 self.owners.remove(&partition);
                 Vec::new()
             }
-            NodeMsg::OpenFailed(partition, _) => {
+            NodeMsg::OpenFailed(partition, error) => {
+                tracing::error!(node = %self.config.node, %partition, %error, "the partition could not be opened: tried again");
                 self.owners.remove(&partition);
                 let at = crate::ports::Clock::now(self.plane.clock())
                     .saturating_add(std::time::Duration::from_secs(1));

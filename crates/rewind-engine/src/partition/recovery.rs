@@ -18,7 +18,7 @@
 
 use std::sync::Arc;
 
-use rewind_core::Timestamp;
+
 
 use crate::node::NodeMsg;
 use crate::node::message::{Effect, Message, job};
@@ -27,7 +27,7 @@ use crate::partition::{Internal, Owner, OwnerMsg, Phase};
 use crate::plane::{LogOf, Plane};
 use crate::ports::partition::Change;
 use crate::ports::{
-    CatalogStore, NamespaceName, PartitionLog, PartitionStore, Recovery, RunRef, TaskState,
+    CatalogStore, NamespaceName, PartitionLog, PartitionStore, Recovery, TaskState,
     TenantId, namespace_partition,
 };
 

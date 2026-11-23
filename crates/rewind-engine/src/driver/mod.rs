@@ -101,12 +101,19 @@ pub trait VirtualClockHandle: Send + Sync {
     fn advance_to(&self, at: Timestamp);
 }
 
-impl<C: VirtualTime> VirtualClockHandle for C {
+/// The virtual clock of a plane, as the driver moves it.
+#[derive(Debug)]
+pub struct PlaneClock<P>(pub Arc<P>);
+
+impl<P: Plane> VirtualClockHandle for PlaneClock<P>
+where
+    P::Clock: VirtualTime,
+{
     fn now(&self) -> Timestamp {
-        crate::ports::Clock::now(self)
+        crate::ports::Clock::now(self.0.clock())
     }
     fn advance_to(&self, at: Timestamp) {
-        VirtualTime::advance_to(self, at);
+        VirtualTime::advance_to(self.0.clock(), at);
     }
 }
 
@@ -663,6 +670,14 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
         }
     }
 
+    /// The edge of node `at`, as a [`Gateway`](crate::edge::Gateway) for the use cases.
+    pub fn gateway(&mut self, at: &NodeId) -> DriverGateway<'_, P, K> {
+        DriverGateway {
+            driver: self,
+            at: at.clone(),
+        }
+    }
+
     /// Takes what a receiver holds now.
     pub fn drain<T>(receiver: &mut UnboundedReceiver<T>) -> Vec<T> {
         let mut items = Vec::new();
@@ -674,6 +689,34 @@ impl<P: Plane, K: Cluster + 'static> Driver<P, K> {
 }
 
 
+
+/// The edge of a node of the driver: requests go to the owner of their partition, through the
+/// driver's link when another node owns it, and the driver steps until they are answered.
+pub struct DriverGateway<'a, P: Plane, K: Cluster + 'static> {
+    driver: &'a mut Driver<P, K>,
+    at: NodeId,
+}
+
+impl<P: Plane, K: Cluster + 'static> fmt::Debug for DriverGateway<'_, P, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DriverGateway").field("at", &self.at).finish()
+    }
+}
+
+impl<P: Plane, K: Cluster + 'static> crate::edge::Gateway for DriverGateway<'_, P, K> {
+    async fn partition(
+        &mut self,
+        partition: PartitionId,
+        request: crate::ports::link::PartitionRequest,
+    ) -> Result<crate::ports::link::PartitionReply, crate::edge::EdgeError> {
+        let reply = self
+            .driver
+            .route(&self.at, partition, request)
+            .await
+            .map_err(|error| crate::edge::EdgeError::Unavailable(error.to_string()))?;
+        crate::edge::partition_reply(reply)
+    }
+}
 
 fn min(a: Option<Timestamp>, b: Option<Timestamp>) -> Option<Timestamp> {
     match (a, b) {

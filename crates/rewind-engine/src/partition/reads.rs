@@ -60,11 +60,30 @@ impl<P: Plane> Owner<P> {
                     }
                     .await,
                 ),
-                PartitionRequest::History { run, from } => PartitionReply::History(
+                PartitionRequest::History { run, from, values } => PartitionReply::History(
                     async {
                         let Some(head) = log.run(&run).await.map_err(unavailable)? else {
                             return Ok(None);
                         };
+                        if values && head.sealed != Some(head.attempt) {
+                            let mut entries = log
+                                .history(&run, head.attempt, from)
+                                .await
+                                .map_err(unavailable)?;
+                            for entry in &mut entries {
+                                if let Some(payload) = crate::payloads::payload_mut(&mut entry.event)
+                                    && let rewind_core::Payload::Digest(digest) = payload
+                                    && let Some(value) = log
+                                        .payload(&run, *digest)
+                                        .await
+                                        .map_err(unavailable)?
+                                        .and_then(|record| record.value)
+                                {
+                                    *payload = rewind_core::Payload::Value(value);
+                                }
+                            }
+                            return Ok(Some(entries));
+                        }
                         if head.sealed == Some(head.attempt) {
                             let sealed = plane
                                 .archive()

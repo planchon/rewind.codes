@@ -23,12 +23,12 @@ use crate::ports::link::{
     OrgRequest, OwnerNotice, PartitionReply, PartitionRequest, Purpose, Refusal, SignalAtOwner,
     StartAtOwner,
 };
-use crate::ports::partition::{Activation, Change, CreateRun};
+use crate::ports::partition::{Change, CreateRun};
 use crate::ports::{
-    ArchiveError, Attempt, BlobStore, CatalogStore, Clock, Created, DueTimer, Enqueued,
+    ArchiveError, Attempt, BlobStore, CatalogStore, Created, DueTimer, Enqueued,
     InboxItem, LinkError, Namespace, NamespaceName, NodeId, PartitionLog, Projection,
     Quarantine, QuarantineKind, RunArchive, RunHead, RunRef, RunSummary, TenantId, TimerChange,
-    TimerKind, Trigger, Watcher, WebhookTarget, home_partition,
+    TimerKind, Trigger, Watcher, WebhookTarget,
 };
 use crate::text;
 
@@ -1874,9 +1874,4 @@ async fn drop_namespace<P: Plane>(
         .await
         .map_err(|error| error.to_string())?;
     Ok(())
-}
-
-/// The home of a tenant's organization actor.
-pub(crate) fn home(tenant: &TenantId, partitions: std::num::NonZeroU16) -> rewind_core::PartitionId {
-    home_partition(tenant, partitions)
 }

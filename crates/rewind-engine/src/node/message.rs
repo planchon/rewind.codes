@@ -62,7 +62,7 @@ impl<P: Plane> fmt::Debug for Message<P> {
 
 /// Who waits for the reply to a request.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ReplyTo {
+pub(crate) enum ReplyTo {
     /// A caller of this process (the edge's use cases), by the id the runtime gave it.
     Waiter(u64),
     /// An owner of this node.
@@ -75,9 +75,9 @@ pub enum ReplyTo {
 
 /// An owner that asked, and the tag it gave its request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Asker {
-    pub partition: PartitionId,
-    pub tag: u64,
+pub(crate) struct Asker {
+    pub(crate) partition: PartitionId,
+    pub(crate) tag: u64,
 }
 
 /// Where a request goes.

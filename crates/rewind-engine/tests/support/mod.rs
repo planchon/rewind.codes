@@ -3,6 +3,8 @@
 
 #![allow(dead_code, unreachable_pub)]
 
+pub mod plane;
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

@@ -12,7 +12,7 @@
 //! read again. A store that cannot be reached is tried again after a backoff.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+
 use std::time::Duration;
 
 use rewind_core::RunId;
@@ -484,6 +484,3 @@ impl<P: Plane> Owner<P> {
         }
     }
 }
-
-/// The log of an owner, shared with the jobs that read it.
-pub(crate) type SharedLog<P> = Arc<crate::plane::LogOf<P>>;

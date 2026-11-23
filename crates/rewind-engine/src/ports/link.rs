@@ -199,8 +199,13 @@ pub enum PartitionRequest {
     /// The run, live or sealed: answered `Run`.
     GetRun { run: RunRef },
     /// The entries of the run's attempt from `from`, from its partition or its sealed journal:
-    /// answered `History`.
-    History { run: RunRef, from: u64 },
+    /// answered `History`. With `values`, every payload up to 64 KiB is inlined as a value, as
+    /// the sealed journal holds it; larger ones stay digests, their values in the run's blobs.
+    History {
+        run: RunRef,
+        from: u64,
+        values: bool,
+    },
     /// The run's tool tasks: answered `Tasks`.
     Tasks { run: RunRef },
     /// A page of the partition's summaries: answered `Found`.

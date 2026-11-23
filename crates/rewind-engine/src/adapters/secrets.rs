@@ -36,11 +36,31 @@ struct State {
 #[derive(Debug, Default)]
 pub struct MemorySecrets {
     state: Mutex<State>,
+    changes: Option<crate::adapters::ControlPlaneChanges>,
 }
 
 impl MemorySecrets {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A store whose writes send their `ControlPlaneChange::Secret` through `changes`, as the
+    /// stores of the control plane do in their transaction: the owners resume the calls parked
+    /// for a secret put again.
+    pub fn with_changes(changes: crate::adapters::ControlPlaneChanges) -> Self {
+        Self {
+            state: Mutex::default(),
+            changes: Some(changes),
+        }
+    }
+
+    fn changed(&self, tenant: &TenantId, secret: &SecretId) {
+        if let Some(changes) = &self.changes {
+            changes.send(crate::ports::ControlPlaneChange::Secret {
+                tenant: tenant.clone(),
+                secret: secret.clone(),
+            });
+        }
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, State>, SecretError> {
@@ -112,6 +132,7 @@ impl SecretStore for MemorySecrets {
         }
         let mut state = self.lock()?;
         let key = (tenant.clone(), secret.id.clone());
+        self.changed(tenant, &secret.id);
         Ok(match state.secrets.get_mut(&key) {
             Some(stored) => {
                 stored.value = secret.value.clone();
@@ -194,11 +215,15 @@ impl SecretStore for MemorySecrets {
     }
 
     async fn delete(&self, tenant: &TenantId, secret: &SecretId) -> Result<bool, SecretError> {
-        Ok(self
-            .lock()?
+        let mut state = self.lock()?;
+        let existed = state
             .secrets
             .remove(&(tenant.clone(), secret.clone()))
-            .is_some())
+            .is_some();
+        if existed {
+            self.changed(tenant, secret);
+        }
+        Ok(existed)
     }
 
     async fn delete_namespace(

@@ -1,0 +1,656 @@
+//! The use cases of the run plane, in the driver: the owner, its executors, its call executor
+//! and its organization actor, with memory adapters and a fake executor
+//! (`archi/07-code-architecture.md`, "Inside a node", "Tests"). The behaviours are those the
+//! journal's engine keeps (`tests/engine.rs`, `tests/tasks.rs`, `tests/quotas.rs`).
+
+#![allow(clippy::unwrap_used, clippy::too_many_lines)]
+
+mod support;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
+
+use rewind_core::{
+    AbortKind, CancelReason, Completion, Event, Interruption, Lifecycle, RunStatus, Seq, Timestamp,
+    ToolFailure, ToolFailureKind, ToolPolicy, Toolset,
+};
+use rewind_engine::edge::EdgeError;
+use rewind_engine::ports::link::{HostFailure, Refusal, StreamAttach, StreamId};
+use rewind_engine::ports::{
+    CatalogStore, Delivery, Dispatched, Enqueued, NamespaceName, Page, QuarantineKind, Quotas,
+    RunArchive, RunOrder, RunQuery, Scope, TaskState, TenantId, Window,
+};
+use rewind_engine::plane::HostTools;
+use serde_json::json;
+use support::plane::{World, config};
+use support::{DAY, FakeExecutor, HOUR, RecordingDispatcher, request, result_of};
+
+fn chain() -> FakeExecutor {
+    FakeExecutor::new().with(
+        "chain",
+        |run| {
+            run.call("a", json!({ "n": 1 }));
+        },
+        |run, delivery| {
+            let n = result_of(delivery)["n"].as_i64().unwrap();
+            if n < 3 {
+                run.call("b", json!({ "n": n + 1 }));
+            } else {
+                run.complete(json!({ "n": n }));
+            }
+        },
+    )
+}
+
+fn approval() -> FakeExecutor {
+    FakeExecutor::new().with(
+        "approval",
+        |run| run.await_signal("approval"),
+        |run, delivery| match delivery {
+            Delivery::SignalReceived { payload, .. } => run.complete(payload.clone()),
+            Delivery::CancelRequested { .. } => run.fail("CancelledError", "run cancelled"),
+            other => panic!("unexpected {other:?}"),
+        },
+    )
+}
+
+fn one_call() -> FakeExecutor {
+    FakeExecutor::new().with(
+        "one_call",
+        |run| {
+            run.call("a", json!({ "x": 1 }));
+        },
+        |run, delivery| match delivery {
+            Delivery::ToolCallCompleted { result, .. } => run.complete(result.clone()),
+            Delivery::ToolCallFailed { error, .. } => run.fail("ToolError", &error.message),
+            other => panic!("unexpected {other:?}"),
+        },
+    )
+}
+
+/// The toolset of `request`, with `a` under `policy`.
+fn with_policy(mut request: rewind_engine::StartRun, policy: ToolPolicy) -> rewind_engine::StartRun {
+    let mut tools: Vec<rewind_core::Tool> = request.toolset.tools().to_vec();
+    for tool in &mut tools {
+        if tool.name == "a" {
+            tool.policy = policy;
+        }
+    }
+    request.toolset = Toolset::new(Vec::new(), tools).unwrap();
+    request
+}
+
+#[tokio::test]
+async fn a_run_calls_its_tools_ends_and_is_sealed() {
+    let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
+    let run = world.run(request("chain", json!({}))).await;
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Completed);
+    assert_eq!(
+        world.events(&run).await,
+        vec![
+            "run_started",
+            "schedule_tool_call",
+            "tool_call_completed",
+            "schedule_tool_call",
+            "tool_call_completed",
+            "schedule_tool_call",
+            "tool_call_completed",
+            "complete_run",
+        ]
+    );
+    // Sealed: the attempt's journal is in the archive, and the run is read from there.
+    assert_eq!(view.head.sealed, Some(view.head.attempt));
+    let sealed = world
+        .plane
+        .archive
+        .get(&run, view.head.attempt)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sealed.entries.len(), 8);
+    let summary = view.summary.unwrap();
+    assert_eq!(summary.status, RunStatus::Completed);
+    assert_eq!(summary.tool_calls, 3);
+    // Every call carried `{run}/{seq}`.
+    let keys: Vec<String> = world
+        .plane
+        .dispatcher
+        .calls()
+        .iter()
+        .map(|call| call.idempotency_key.clone())
+        .collect();
+    assert_eq!(
+        keys,
+        ["1", "2", "3"].map(|seq| format!("{}/{seq}", run.id)).to_vec()
+    );
+}
+
+#[tokio::test]
+async fn a_start_key_starts_one_run_and_a_signal_key_is_taken_once() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let mut first = request("approval", json!({}));
+    first.idempotency_key = Some("conversation-7".into());
+    let created = world.start(first.clone()).await.unwrap();
+    assert!(created.created);
+    let again = world.start(first).await.unwrap();
+    assert_eq!(again.run, created.run);
+    assert!(!again.created, "the key answers its run, whatever else");
+    world.idle().await;
+    let run = created.run;
+    // Virtual time does not jump to the deadline: only the outside world wakes the run.
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    assert_eq!(world.now(), support::T0);
+
+    let accepted = world
+        .signal(&run, "approval", json!({ "by": "paul" }), Some("approval-1"))
+        .await
+        .unwrap();
+    assert_eq!(accepted, Enqueued::Accepted);
+    let duplicate = world
+        .signal(&run, "approval", json!({ "by": "paul" }), Some("approval-1"))
+        .await
+        .unwrap();
+    assert_eq!(duplicate, Enqueued::Duplicate);
+    world.idle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+    assert_eq!(
+        world.events(&run).await,
+        ["run_started", "signal_awaited", "signal_received", "complete_run"]
+    );
+    let ended = world
+        .signal(&run, "approval", json!(null), None)
+        .await
+        .unwrap();
+    assert_eq!(ended, Enqueued::RunEnded);
+    // A name Rewind keeps is refused.
+    let reserved = world.signal(&run, "rewind:ended:x", json!(null), None).await;
+    assert!(matches!(reserved, Err(EdgeError::Refused(Refusal::Signal(_)))), "{reserved:?}");
+}
+
+#[tokio::test]
+async fn a_ten_day_sleep_takes_no_wall_clock_time() {
+    let programs = FakeExecutor::new().with(
+        "sleeper",
+        |run| {
+            run.timer(10 * DAY);
+        },
+        |run, delivery| {
+            assert!(matches!(delivery, Delivery::TimerFired { .. }));
+            run.complete(json!({ "at": run.now.0 }));
+        },
+    );
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let run = world.run(request("sleeper", json!({}))).await;
+    let history = world.history(&run).await;
+    assert_eq!(
+        history.iter().map(|entry| entry.event.name()).collect::<Vec<_>>(),
+        ["run_started", "start_timer", "timer_fired", "complete_run"]
+    );
+    assert_eq!(history[2].recorded_at, Timestamp(support::T0.0 + 10 * DAY));
+}
+
+#[tokio::test]
+async fn the_deadline_cancels_a_run_through_the_normal_path() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let mut request = request("approval", json!({}));
+    request.ttl = Some(Duration::from_millis(HOUR));
+    let run = world.run(request).await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Active);
+    world.advance(2 * HOUR);
+    world.settle().await;
+    let history = world.history(&run).await;
+    assert_eq!(
+        history[2].event,
+        Event::Completion(Completion::CancelRequested {
+            reason: CancelReason::Ttl
+        })
+    );
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Cancelled);
+}
+
+#[tokio::test]
+async fn cancellation_gives_the_script_one_grace_delivery() {
+    let programs = FakeExecutor::new()
+        .with(
+            "cleans_up",
+            |run| {
+                run.timer(30 * DAY);
+            },
+            |run, _| run.complete(json!("cleaned up")),
+        )
+        .with(
+            "lingers",
+            |run| {
+                run.timer(30 * DAY);
+            },
+            |run, _| {
+                run.call("cleanup", json!({}));
+            },
+        );
+    let mut world = World::new(programs, RecordingDispatcher::echo()).await;
+    let polite = world.start(request("cleans_up", json!({}))).await.unwrap().run;
+    let stubborn = world.start(request("lingers", json!({}))).await.unwrap().run;
+    world.settle().await;
+    for run in [&polite, &stubborn] {
+        assert_eq!(world.cancel(run).await.unwrap(), Enqueued::Accepted);
+    }
+    world.settle().await;
+    assert_eq!(world.view(&polite).await.head.status, RunStatus::Completed);
+    assert_eq!(
+        world.events(&stubborn).await,
+        ["run_started", "start_timer", "cancel_requested", "run_aborted"]
+    );
+    let history = world.history(&stubborn).await;
+    let Event::Lifecycle(Lifecycle::RunAborted(reason)) = &history[3].event else {
+        unreachable!()
+    };
+    assert_eq!(reason.kind, AbortKind::Cancelled);
+    assert!(world.tasks(&stubborn).await.is_empty(), "no call was left");
+}
+
+fn non_deterministic() -> FakeExecutor {
+    let starts = Arc::new(AtomicU32::new(0));
+    FakeExecutor::new().with(
+        "flaky_platform",
+        move |run| {
+            let n = starts.fetch_add(1, Ordering::SeqCst);
+            run.call("a", json!({ "n": n }));
+        },
+        |run, _| {
+            run.timer(DAY);
+        },
+    )
+}
+
+fn replaying(world_config: &mut rewind_engine::plane::NodeConfig) {
+    world_config.cache.max_instances = 0;
+}
+
+#[tokio::test]
+async fn a_replay_mismatch_quarantines_the_run_and_commits_nothing() {
+    let mut node = config("node-a", 1);
+    replaying(&mut node);
+    let mut world = World::with(non_deterministic(), RecordingDispatcher::echo(), 1, &[node]).await;
+    let run = world.run(request("flaky_platform", json!({}))).await;
+    // The second activation replays, diverges, and commits nothing.
+    assert_eq!(world.events(&run).await, ["run_started", "schedule_tool_call"]);
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Active, "quarantine is not a status");
+    let quarantine = view.head.quarantine.clone().unwrap();
+    assert_eq!(quarantine.kind, QuarantineKind::NonDeterminism);
+    assert_eq!(
+        quarantine.reason,
+        "history entry 1 is tool call #1 a({\"n\":0}), but the script emitted tool call #1 a({\"n\":1})"
+    );
+    assert!(view.summary.unwrap().quarantine.is_some(), "the index shows it");
+
+    // Released after a fix that fixes nothing: quarantined again at its next activation.
+    assert!(world.release(&run).await);
+    world.advance(DAY);
+    world.settle().await;
+    assert!(world.view(&run).await.head.quarantine.is_some());
+
+    // An operator gives up.
+    assert!(world.give_up(&run).await);
+    let history = world.history(&run).await;
+    let Event::Lifecycle(Lifecycle::RunAborted(reason)) = &history.last().unwrap().event else {
+        panic!("{history:?}")
+    };
+    assert_eq!(reason.kind, AbortKind::NonDeterminism);
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Aborted);
+    assert_eq!(view.head.quarantine, None);
+    assert!(!world.give_up(&run).await);
+}
+
+#[tokio::test]
+async fn a_quarantined_run_is_given_up_at_its_deadline() {
+    let mut node = config("node-a", 1);
+    replaying(&mut node);
+    let mut world = World::with(non_deterministic(), RecordingDispatcher::echo(), 1, &[node]).await;
+    let mut request = request("flaky_platform", json!({}));
+    request.ttl = Some(Duration::from_millis(2 * DAY));
+    let run = world.run(request).await;
+    world.idle().await;
+    assert!(world.view(&run).await.head.quarantine.is_some());
+    world.advance(2 * DAY);
+    world.settle().await;
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Aborted);
+    assert_eq!(view.head.quarantine, None);
+}
+
+#[tokio::test]
+async fn failing_activations_are_tried_again_by_a_timer_then_quarantined() {
+    // The script loads once; every later start fails inside the executor: a replay that cannot
+    // go on, worth trying again later.
+    let starts = Arc::new(AtomicU32::new(0));
+    let programs = FakeExecutor::new().with(
+        "unlucky",
+        move |run| {
+            if starts.fetch_add(1, Ordering::SeqCst) > 0 {
+                run.refuse(rewind_engine::ports::ExecutorError::Internal("out of threads".into()));
+                return;
+            }
+            run.timer(1_000);
+        },
+        |run, _| run.complete(json!("done")),
+    );
+    let mut node = config("node-a", 1);
+    replaying(&mut node);
+    let mut world = World::with(programs, RecordingDispatcher::echo(), 1, &[node]).await;
+    let run = world.run(request("unlucky", json!({}))).await;
+    let view = world.view(&run).await;
+    let quarantine = view.head.quarantine.unwrap();
+    assert_eq!(quarantine.kind, QuarantineKind::Failures);
+    assert!(quarantine.reason.contains("out of threads"), "{}", quarantine.reason);
+    assert_eq!(view.head.failures, 5);
+    // Each failure waited for its timer: 30 s apart.
+    assert_eq!(world.now(), Timestamp(support::T0.0 + 1_000 + 4 * 30_000));
+    assert_eq!(world.events(&run).await, ["run_started", "start_timer"]);
+}
+
+#[tokio::test]
+async fn a_call_under_approval_waits_for_the_harness() {
+    let mut world = World::new(one_call(), RecordingDispatcher::echo()).await;
+    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    policy.approval = true;
+    let approved = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    let rejected = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    for run in [&approved, &rejected] {
+        let tasks = world.tasks(run).await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].state, TaskState::Approval);
+        let summary = world.view(run).await.summary.unwrap();
+        assert_eq!(
+            summary.waits[0].task,
+            Some(rewind_engine::ports::TaskPhase::Approval),
+            "the index shows what the call waits for"
+        );
+    }
+    assert!(world.plane.dispatcher.calls().is_empty(), "nothing was sent");
+    let task = world.tasks(&approved).await[0].task.clone();
+    world.approve(&task).await.unwrap();
+    world.idle().await;
+    assert_eq!(world.view(&approved).await.head.status, RunStatus::Completed);
+
+    let task = world.tasks(&rejected).await[0].task.clone();
+    world.reject(&task, "not today").await.unwrap();
+    world.idle().await;
+    let history = world.history(&rejected).await;
+    let Event::Completion(Completion::ToolCallFailed { error, .. }) = &history[2].event else {
+        panic!("{history:?}")
+    };
+    assert_eq!(error.message, "not today");
+    assert_eq!(world.view(&rejected).await.head.status, RunStatus::Failed);
+    // A task that no longer waits is refused.
+    assert!(matches!(
+        world.approve(&task).await,
+        Err(EdgeError::Refused(Refusal::TaskGone))
+    ));
+}
+
+#[tokio::test]
+async fn transient_failures_are_retried_with_backoff_under_retry_only() {
+    let attempts = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&attempts);
+    let dispatcher = RecordingDispatcher::dispatching(move |call, _| {
+        if counted.fetch_add(1, Ordering::SeqCst) < 2 {
+            return Dispatched::Transient(ToolFailure {
+                kind: ToolFailureKind::Unavailable,
+                message: "busy".into(),
+                data: None,
+            });
+        }
+        Dispatched::Result(call.args.clone())
+    });
+    let mut world = World::new(one_call(), dispatcher).await;
+    let run = world.run(request("one_call", json!({}))).await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+    let calls = world.plane.dispatcher.calls();
+    assert_eq!(
+        calls.iter().map(|call| call.attempt).collect::<Vec<_>>(),
+        [1, 2, 3],
+        "each try is an attempt more"
+    );
+    assert!(calls.iter().all(|call| call.idempotency_key == calls[0].idempotency_key));
+    // The backoff of the first two attempts passed, in virtual time.
+    assert!(world.now() > Timestamp(support::T0.0 + 2_000));
+
+    // Under at_most_once, a transient failure is the outcome.
+    let attempts = Arc::new(AtomicU32::new(0));
+    let counted = Arc::clone(&attempts);
+    let dispatcher = RecordingDispatcher::dispatching(move |_, _| {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Dispatched::Transient(ToolFailure {
+            kind: ToolFailureKind::Unavailable,
+            message: "busy".into(),
+            data: None,
+        })
+    });
+    let mut world = World::new(one_call(), dispatcher).await;
+    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    policy.on_interruption = Interruption::AtMostOnce;
+    let run = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Failed);
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_deferred_call_is_answered_through_its_token_or_times_out() {
+    let dispatcher = RecordingDispatcher::dispatching(|_, _| Dispatched::Deferred);
+    let mut world = World::new(one_call(), dispatcher).await;
+    let answered = world.run(request("one_call", json!({}))).await;
+    let tasks = world.tasks(&answered).await;
+    assert!(matches!(tasks[0].state, TaskState::Deferred { .. }), "{tasks:?}");
+    let token = world.plane.dispatcher.calls()[0].token.clone();
+    world.complete(&token, json!({ "later": true })).await.unwrap();
+    world.idle().await;
+    let view = world.view(&answered).await;
+    assert_eq!(view.head.status, RunStatus::Completed);
+    // Answered once: the token is gone.
+    assert!(matches!(
+        world.complete(&token, json!({})).await,
+        Err(EdgeError::Refused(Refusal::TaskGone))
+    ));
+
+    // A deferred call that nobody answers fails at its deadline, bounded by its execution
+    // timeout.
+    let mut policy = ToolPolicy::default_for(&rewind_core::ToolRoute::Host { group: None });
+    policy.execution_timeout = Some(Duration::from_secs(60));
+    let late = world.run(with_policy(request("one_call", json!({})), policy)).await;
+    assert_eq!(world.view(&late).await.head.status, RunStatus::Active);
+    world.advance(61_000);
+    world.settle().await;
+    let history = world.history(&late).await;
+    let Event::Completion(Completion::ToolCallFailed { error, .. }) = &history[2].event else {
+        panic!("{history:?}")
+    };
+    assert_eq!(error.kind, ToolFailureKind::Timeout);
+}
+
+#[tokio::test]
+async fn host_tasks_are_handed_to_sdk_streams_and_answered_through_their_token() {
+    let mut node = config("node-a", 1);
+    node.host_tools = HostTools::Streams;
+    let mut world = World::with(one_call(), RecordingDispatcher::echo(), 1, &[node]).await;
+    let at = world.at.clone();
+    let mut stream = world
+        .driver
+        .attach_stream(
+            &at,
+            TenantId::local(),
+            StreamAttach {
+                stream: StreamId("s1".into()),
+                worker: "w1".into(),
+                node: at.clone(),
+                namespace: None,
+                labels: BTreeMap::new(),
+                toolset: None,
+                tools: Default::default(),
+                slots: 4,
+            },
+        )
+        .unwrap();
+    let run = world.run(request("one_call", json!({}))).await;
+    let handed = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    assert_eq!(handed.len(), 1);
+    let task = &handed[0];
+    assert_eq!(task.tool, "a");
+    assert_eq!(task.attempt, 1);
+    assert_eq!(task.idempotency_key, format!("{}/1", run.id));
+    assert!(world.plane.dispatcher.calls().is_empty(), "a host tool is not dispatched");
+    world.complete(&task.token, json!({ "from": "harness" })).await.unwrap();
+    world.idle().await;
+    assert_eq!(world.view(&run).await.head.status, RunStatus::Completed);
+
+    // A failure the handler says is transient is tried again, handed out with a new token.
+    let again = world.run(request("one_call", json!({}))).await;
+    let first = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    world
+        .fail(
+            &first[0].token,
+            HostFailure {
+                message: "try later".into(),
+                data: None,
+                retryable: true,
+            },
+        )
+        .await
+        .unwrap();
+    world.idle().await;
+    let second = rewind_engine::driver::Driver::<support::plane::TestPlane, rewind_engine::adapters::MemoryCluster>::drain(&mut stream);
+    assert_eq!(second.len(), 1);
+    assert_eq!(second[0].attempt, 2);
+    assert_ne!(second[0].token, first[0].token);
+    world.complete(&second[0].token, json!({})).await.unwrap();
+    world.idle().await;
+    assert_eq!(world.view(&again).await.head.status, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn a_start_above_the_active_runs_limit_is_refused() {
+    let mut world = World::new(approval(), RecordingDispatcher::echo()).await;
+    let tenant = TenantId::local();
+    let local = NamespaceName::new("local").unwrap();
+    let quotas = Quotas {
+        active_runs: Some(1),
+        ..Quotas::default()
+    };
+    world
+        .plane
+        .catalog
+        .put_namespace(&tenant, &local, Some(&quotas), world.partitions, world.now())
+        .await
+        .unwrap();
+    let first = world.run(request("approval", json!({}))).await;
+    let refused = world.start(request("approval", json!({}))).await;
+    let Err(rewind_engine::StartError::QuotaExceeded(exceeded)) = refused else {
+        panic!("{refused:?}")
+    };
+    assert_eq!(exceeded.quota, rewind_engine::ports::QuotaKind::ActiveRuns);
+    assert_eq!((exceeded.limit, exceeded.used), (1, 1));
+    // A retried request with its key still returns its run; once the first ends, a start goes.
+    world.cancel(&first).await.unwrap();
+    world.idle().await;
+    world.start(request("approval", json!({}))).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_erased_run_leaves_nothing_and_retention_erases_an_ended_one() {
+    let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
+    let run = world.run(request("chain", json!({}))).await;
+    assert!(world.erase(&run).await);
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    assert_eq!(world.edge.get_run(&mut gateway, &run).await.unwrap(), None);
+    assert_eq!(world.plane.archive.get(&run, Default::default()).await.unwrap(), None);
+    assert!(!world.erase(&run).await);
+
+    // The retention of the tenant, a year by default, erases an ended run.
+    let kept = world.run(request("chain", json!({}))).await;
+    world.advance(366 * DAY);
+    world.settle().await;
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    assert_eq!(world.edge.get_run(&mut gateway, &kept).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn webhooks_and_spans_leave_through_the_outbox() {
+    let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
+    world
+        .plane
+        .catalog
+        .put_subscription(&rewind_engine::ports::Subscription {
+            tenant: TenantId::local(),
+            id: "sub-1".into(),
+            url: "https://harness.example.com/hooks".into(),
+            secret: rewind_engine::ports::Secret::new("whsec".to_owned()),
+            events: Default::default(),
+            labels: BTreeMap::new(),
+        })
+        .await
+        .unwrap();
+    let mut request = request("chain", json!({}));
+    request.mode = rewind_core::RunMode::Live;
+    let run = world.run(request).await;
+    let delivered = world.plane.webhooks.deliveries();
+    assert!(
+        delivered
+            .iter()
+            .any(|(_, event)| event.run == Some(run.id) && event.kind.event_type().as_str() == "run.completed"),
+        "{delivered:?}"
+    );
+    let spans = world.plane.spans.spans();
+    assert!(!spans.is_empty(), "the run's spans are exported");
+}
+
+#[tokio::test]
+async fn searches_and_statistics_read_the_partitions_of_the_scope() {
+    let mut world = World::new(chain(), RecordingDispatcher::echo()).await;
+    for _ in 0..3 {
+        world.run(request("chain", json!({}))).await;
+    }
+    let tenant = TenantId::local();
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let found = world
+        .edge
+        .search(
+            &mut gateway,
+            &Scope::Tenant(tenant.clone()),
+            &RunQuery::new(tenant.clone()),
+            RunOrder::Started,
+            &Page::first(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found.summaries.len(), 2);
+    assert!(found.cursor.is_some(), "a page at its limit has a cursor");
+    let rest = world
+        .edge
+        .search(
+            &mut gateway,
+            &Scope::Tenant(tenant.clone()),
+            &RunQuery::new(tenant.clone()),
+            RunOrder::Started,
+            &Page::after(found.cursor.unwrap(), 2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rest.summaries.len(), 1);
+    let window = Window::covering(support::T0, Timestamp(support::T0.0 + DAY));
+    let (counters, gauges) = world
+        .edge
+        .statistics(&mut gateway, &Scope::Tenant(tenant), window)
+        .await
+        .unwrap();
+    assert_eq!(counters.created, 3);
+    assert_eq!(counters.runs.started, 3);
+    assert_eq!(counters.runs.ended[&RunStatus::Completed], 3);
+    assert_eq!(counters.tools["a"].calls, 3);
+    assert!(counters.cpu > Duration::ZERO, "the CPU of the calls that executed is counted");
+    assert_eq!(gauges.active_runs, 0);
+    let _ = Seq(1);
+}

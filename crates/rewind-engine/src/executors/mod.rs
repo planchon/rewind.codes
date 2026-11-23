@@ -29,7 +29,7 @@ use crate::plane::{InstanceOf, LogOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, ParentHistory, Purpose};
 use crate::ports::{
     CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef,
-    TaskRecord, Trigger,
+    Trigger,
 };
 pub(crate) use activation::Warm;
 use queue::ReadyQueue;
@@ -137,11 +137,6 @@ impl<P: Plane> Executors<P> {
     /// The instances kept.
     pub(crate) fn cached(&self) -> usize {
         self.cache.len()
-    }
-
-    /// Whether the executors hold the run's instance at its history length.
-    pub(crate) fn warm(&self, run: &RunRef, history_len: u64) -> bool {
-        self.durable.get(run) == Some(&history_len)
     }
 
     pub(crate) fn handle(&mut self, message: ExecMsg<P>) -> Vec<Effect<P>> {
@@ -415,12 +410,4 @@ async fn parent_history<P: Plane>(
         payloads,
         sealed: None,
     }))
-}
-
-/// The tool tasks of a request, by seq.
-pub(crate) fn tasks_by_seq(tasks: &[TaskRecord]) -> BTreeMap<rewind_core::Seq, TaskRecord> {
-    tasks
-        .iter()
-        .map(|task| (task.task.task.seq, task.clone()))
-        .collect()
 }

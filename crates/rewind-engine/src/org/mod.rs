@@ -186,10 +186,6 @@ impl<P: Plane> OrgActor<P> {
         (actor, asks)
     }
 
-    pub(crate) fn state(&self) -> &OrganizationState {
-        &self.state
-    }
-
     pub(crate) fn handle(&mut self, message: OrgMsg, now: Timestamp) -> Vec<OrgEffect<P>> {
         let mut out = Vec::new();
         match message {
