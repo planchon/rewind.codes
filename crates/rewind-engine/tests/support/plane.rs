@@ -17,14 +17,16 @@ use rewind_engine::edge::{Edge, EdgeError};
 use rewind_engine::plane::{HostTools, NodeConfig, Wiring};
 use rewind_engine::ports::link::{HostFailure, HostTask, RunView, StreamEvent};
 use rewind_engine::ports::{
-    Clock, Created, Enqueued, NodeId, RunRef, TaskRef, TaskToken, TenantId, ToolTask,
+    Clock, Created, Enqueued, NodeId, PartitionStore, RunRef, TaskRef, TaskToken, TenantId,
+    ToolTask,
 };
 
 use super::{FakeExecutor, RecordingDispatcher, T0};
 
-pub type TestPlane = Wiring<
+/// The plane of the tests, over the memory partitions unless a test wires its own store.
+pub type TestPlane<S = MemoryPartitions> = Wiring<
     MemoryCatalog,
-    MemoryPartitions,
+    S,
     MemoryArchive,
     MemoryBlobs,
     FakeExecutor,
@@ -36,13 +38,13 @@ pub type TestPlane = Wiring<
     SeededEntropy,
 >;
 
-pub type TestDriver = Driver<TestPlane, MemoryCluster>;
+pub type TestDriver<S = MemoryPartitions> = Driver<TestPlane<S>, MemoryCluster>;
 
 /// Nodes of one cluster in one process, sharing the plane's stores.
-pub struct World {
-    pub plane: Arc<TestPlane>,
-    pub driver: TestDriver,
-    pub edge: Edge<TestPlane>,
+pub struct World<S: PartitionStore<Log: 'static> + 'static = MemoryPartitions> {
+    pub plane: Arc<TestPlane<S>>,
+    pub driver: TestDriver<S>,
+    pub edge: Edge<TestPlane<S>>,
     pub cluster: MemoryCluster,
     /// The node the edge's requests enter.
     pub at: NodeId,
@@ -57,7 +59,7 @@ pub type Stream = tokio::sync::mpsc::UnboundedReceiver<StreamEvent>;
 pub fn received(stream: &mut Stream) -> (Vec<HostTask>, Vec<TaskToken>) {
     let mut tasks = Vec::new();
     let mut gone = Vec::new();
-    for event in TestDriver::drain(stream) {
+    for event in TestDriver::<MemoryPartitions>::drain(stream) {
         match event {
             StreamEvent::Task(task) => tasks.push(task),
             StreamEvent::Gone(token) => gone.push(token),
@@ -99,12 +101,32 @@ impl World {
         partitions: u16,
         nodes: &[NodeConfig],
     ) -> Self {
+        Self::over(
+            MemoryPartitions::new(),
+            programs,
+            dispatcher,
+            partitions,
+            nodes,
+        )
+        .await
+    }
+}
+
+impl<S: PartitionStore<Log: 'static> + 'static> World<S> {
+    /// Nodes with these configurations, over `partitions` partitions kept in `store`.
+    pub async fn over(
+        store: S,
+        programs: FakeExecutor,
+        dispatcher: RecordingDispatcher,
+        partitions: u16,
+        nodes: &[NodeConfig],
+    ) -> Self {
         let changes = ControlPlaneChanges::new();
         let cluster = MemoryCluster::with_changes(partitions, changes.clone());
         let blobs = MemoryBlobs::new();
         let plane = Arc::new(Wiring {
             catalog: MemoryCatalog::with_changes(changes.clone()),
-            partitions: MemoryPartitions::new(),
+            partitions: store,
             archive: MemoryArchive::with_blobs(blobs.clone()),
             blobs,
             executor: programs,

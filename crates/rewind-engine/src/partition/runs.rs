@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rewind_core::{
-    CancelReason, Completion, Digest, HistoryEntry, JsonValue, Payload, RunId, RunStatus, Seq,
-    end_signal_name, is_reserved_signal, starter_ended,
+    CancelReason, Completion, Digest, JsonValue, Payload, RunId, RunStatus, Seq, end_signal_name,
+    is_reserved_signal, starter_ended,
 };
 
 use crate::executors::{ExecMsg, LocalRun, derive};
@@ -1803,7 +1803,7 @@ async fn end_reads<P: Plane>(
                 continue;
             };
             let end = if head.is_ended() {
-                end_value(plane, log, &head).await?
+                end_value(plane, log, &child_ref).await?
             } else {
                 None
             };
@@ -1813,13 +1813,17 @@ async fn end_reads<P: Plane>(
     Ok(reads)
 }
 
-/// The end of a run that ended, as its watchers receive it.
+/// The end of a run that ended, as its watchers receive it; `None` while it has not ended, or
+/// once it is erased.
 pub(crate) async fn end_value<P: Plane>(
     plane: &P,
     log: &crate::plane::LogOf<P>,
-    head: &RunHead,
+    run: &RunRef,
 ) -> Result<Option<JsonValue>, String> {
-    let history = history_of(plane, log, head).await?;
+    let Some(read) = super::read_attempt(plane, log, run, 0, true).await? else {
+        return Ok(None);
+    };
+    let history = read.into_entries(0);
     let state = rewind_core::RunState::from_history(&history).map_err(|error| error.to_string())?;
     let Some(outcome) = state.outcome() else {
         return Ok(None);
@@ -1830,46 +1834,21 @@ pub(crate) async fn end_value<P: Plane>(
     let rewind_core::RunOutcome::Completed { output } = outcome else {
         return Ok(None);
     };
-    let source = crate::executors::activation::Carried {
-        records: Default::default(),
-        blobs: plane.blobs(),
-        owners: vec![crate::ports::BlobOwner::Run(head.run.clone())],
-    };
     let output = match output {
-        Payload::Digest(digest) => match log
-            .payload(&head.run, *digest)
-            .await
-            .map_err(|error| error.to_string())?
-            .and_then(|record| record.value)
-        {
-            Some(value) => value,
-            None => crate::payloads::load(&source, &head.run.tenant, output)
+        Payload::Digest(_) => {
+            // Above 64 KiB: in the run's blobs.
+            let source = crate::executors::activation::Carried {
+                records: Default::default(),
+                blobs: plane.blobs(),
+                owners: vec![crate::ports::BlobOwner::Run(run.clone())],
+            };
+            crate::payloads::load(&source, &run.tenant, output)
                 .await
-                .map_err(|error| error.to_string())?,
-        },
+                .map_err(|error| error.to_string())?
+        }
         Payload::Value(value) => value.clone(),
     };
     Ok(Some(rewind_core::RunEnd::Completed { output }.to_json()))
-}
-
-/// The attempt's history: from the partition, or the archive once sealed.
-pub(crate) async fn history_of<P: Plane>(
-    plane: &P,
-    log: &crate::plane::LogOf<P>,
-    head: &RunHead,
-) -> Result<Vec<HistoryEntry>, String> {
-    if head.sealed == Some(head.attempt) {
-        return Ok(plane
-            .archive()
-            .get(&head.run, head.attempt)
-            .await
-            .map_err(|error| error.to_string())?
-            .map(|sealed| sealed.entries)
-            .unwrap_or_default());
-    }
-    log.history(&head.run, head.attempt, 0)
-        .await
-        .map_err(|error| error.to_string())
 }
 
 /// Writes the ended attempt's journal to the archive, every payload up to 64 KiB inlined, and

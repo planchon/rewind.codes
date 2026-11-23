@@ -28,7 +28,7 @@ use crate::partition::OwnerMsg;
 use crate::plane::{InstanceOf, LogOf, NodeConfig, Plane};
 use crate::ports::link::{ActivationRequest, ActivationResult, ParentHistory, Purpose};
 use crate::ports::{
-    CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunArchive, RunHead, RunRef, Trigger,
+    CatalogStore, IndexedSummary, PartitionLog, PayloadRecord, RunHead, RunRef, Trigger,
 };
 pub(crate) use activation::Warm;
 use queue::ReadyQueue;
@@ -391,35 +391,23 @@ async fn parent_history<P: Plane>(
             run.id
         )
     };
-    let Some(head) = log
-        .run(&parent_ref)
+    let read = crate::partition::read_attempt(plane, log, &parent_ref, 0, true)
         .await
-        .map_err(|e| failed(e.to_string()))?
-    else {
-        return Ok(None);
-    };
-    if head.sealed == Some(head.attempt) {
-        let sealed = plane
-            .archive()
-            .get(&parent_ref, head.attempt)
-            .await
-            .map_err(|e| failed(e.to_string()))?;
-        return Ok(sealed.map(|sealed| ParentHistory {
+        .map_err(failed)?;
+    Ok(read.map(|read| match read {
+        crate::partition::AttemptRead::Live {
+            entries, payloads, ..
+        } => ParentHistory {
+            run: parent,
+            entries,
+            payloads,
+            sealed: None,
+        },
+        crate::partition::AttemptRead::Sealed { sealed, .. } => ParentHistory {
             run: parent,
             entries: Vec::new(),
             payloads: Vec::new(),
-            sealed: Some(Box::new(sealed)),
-        }));
-    }
-    let entries = log
-        .history(&parent_ref, head.attempt, 0)
-        .await
-        .map_err(|e| failed(e.to_string()))?;
-    let payloads = records(log, &parent_ref, activation::digests_of(&entries)).await?;
-    Ok(Some(ParentHistory {
-        run: parent,
-        entries,
-        payloads,
-        sealed: None,
+            sealed: Some(sealed),
+        },
     }))
 }

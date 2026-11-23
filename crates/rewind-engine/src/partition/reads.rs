@@ -18,8 +18,8 @@ use crate::partition::{Flight, Owner};
 use crate::plane::Plane;
 use crate::ports::link::{NodeReply, PartitionReply, PartitionRequest, Refusal, RunView};
 use crate::ports::{
-    Day, DayUsage, Hour, Month, NamespaceName, PartitionError, PartitionLog, QuotaAlert,
-    RunArchive, Scope, TaskState, TenantId, Usage, Window,
+    Day, DayUsage, Hour, Month, NamespaceName, PartitionError, PartitionLog, QuotaAlert, Scope,
+    TaskState, TenantId, Usage, Window,
 };
 
 /// A refusal in the shape of the request's reply.
@@ -106,50 +106,10 @@ impl<P: Plane> Owner<P> {
                     .await,
                 ),
                 PartitionRequest::History { run, from, values } => PartitionReply::History(
-                    async {
-                        let Some(head) = log.run(&run).await.map_err(unavailable)? else {
-                            return Ok(None);
-                        };
-                        if values && head.sealed != Some(head.attempt) {
-                            let mut entries = log
-                                .history(&run, head.attempt, from)
-                                .await
-                                .map_err(unavailable)?;
-                            for entry in &mut entries {
-                                if let Some(payload) =
-                                    crate::payloads::payload_mut(&mut entry.event)
-                                    && let rewind_core::Payload::Digest(digest) = payload
-                                    && let Some(value) = log
-                                        .payload(&run, *digest)
-                                        .await
-                                        .map_err(unavailable)?
-                                        .and_then(|record| record.value)
-                                {
-                                    *payload = rewind_core::Payload::Value(value);
-                                }
-                            }
-                            return Ok(Some(entries));
-                        }
-                        if head.sealed == Some(head.attempt) {
-                            let sealed = plane
-                                .archive()
-                                .get(&run, head.attempt)
-                                .await
-                                .map_err(unavailable)?;
-                            return Ok(sealed.map(|sealed| {
-                                sealed
-                                    .entries
-                                    .into_iter()
-                                    .filter(|entry| entry.index >= from)
-                                    .collect()
-                            }));
-                        }
-                        log.history(&run, head.attempt, from)
-                            .await
-                            .map(Some)
-                            .map_err(unavailable)
-                    }
-                    .await,
+                    super::attempt::read_attempt(&*plane, &*log, &run, from, values)
+                        .await
+                        .map(|read| read.map(|read| read.into_entries(from)))
+                        .map_err(unavailable),
                 ),
                 PartitionRequest::Tasks { run } => PartitionReply::Tasks(
                     async {

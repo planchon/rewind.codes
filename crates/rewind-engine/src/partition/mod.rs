@@ -20,6 +20,7 @@
 //! anything: an owner that opens the partition after another rebuilds the messages from the
 //! records ([`recovery`]).
 
+mod attempt;
 mod commit;
 mod outbox;
 mod reads;
@@ -49,10 +50,10 @@ use crate::ports::{
     PartitionLog, RunHead, RunRef, TaskRecord, TaskRef, TenantId, home_partition,
 };
 use crate::tasks::calls::CallDone;
+pub(crate) use attempt::{AttemptRead, read_attempt};
 use commit::Unit;
 pub(crate) use reads::buckets;
 pub(crate) use recovery::Opened;
-pub(crate) use runs::history_of;
 use wheel::Wheel;
 
 /// A message to the owner of a partition.

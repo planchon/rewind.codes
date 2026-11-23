@@ -24,6 +24,7 @@ use rewind_engine::ports::{
     Quotas, RunArchive, RunOrder, RunQuery, Scope, SecretStore, TaskState, TenantId, Window,
 };
 use serde_json::json;
+use support::late_seal::LateSeal;
 use support::plane::{World, config};
 use support::{DAY, FakeExecutor, HOUR, RecordingDispatcher, request, result_of};
 
@@ -132,6 +133,55 @@ async fn a_run_calls_its_tools_ends_and_is_sealed() {
             .map(|seq| format!("{}/{seq}", run.id))
             .to_vec()
     );
+}
+
+/// A read of a history is two reads, the head then the entries: the seal of the attempt,
+/// committed between them, deletes the entries the head counts. The read still answers the
+/// whole history, from the archive, never an ended run with an empty one.
+#[tokio::test]
+async fn a_history_read_while_its_attempt_is_sealed_is_whole() {
+    let store = LateSeal::new();
+    let mut world = World::over(
+        store.clone(),
+        chain(),
+        RecordingDispatcher::echo(),
+        1,
+        &[config("node-a", 1)],
+    )
+    .await;
+    store.hold_next_seal();
+    let run = world.run(request("chain", json!({}))).await;
+    // The run has ended, and its seal is being committed.
+    assert!(store.holding());
+    let view = world.view(&run).await;
+    assert_eq!(view.head.status, RunStatus::Completed);
+    assert_eq!(view.head.sealed, None);
+    assert_eq!(view.head.history_len, 8);
+
+    // The history, read as the run's view reads it: the seal lands after the head is read.
+    let history = world.history(&run).await;
+    assert_eq!(store.applied(), 1);
+    assert_eq!(history.len(), 8);
+    assert_eq!(history[7].event.name(), "complete_run");
+    assert_eq!(world.view(&run).await.head.sealed, Some(view.head.attempt));
+
+    // The journal's export, as `GET /v1/runs/{id}/journal` reads it.
+    let mut world = World::over(
+        LateSeal::new(),
+        chain(),
+        RecordingDispatcher::echo(),
+        1,
+        &[config("node-a", 1)],
+    )
+    .await;
+    let store = world.plane.partitions.clone();
+    store.hold_next_seal();
+    let run = world.run(request("chain", json!({}))).await;
+    assert!(store.holding());
+    let mut gateway = world.driver.gateway(&world.at.clone());
+    let journal = world.edge.export_journal(&mut gateway, &run).await.unwrap();
+    assert_eq!(store.applied(), 1);
+    assert_eq!(journal.entries.len(), 8);
 }
 
 #[tokio::test]

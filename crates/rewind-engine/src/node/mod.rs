@@ -644,19 +644,21 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 let sink = sink.clone();
                 effects.push(job(async move {
                     use crate::ports::PartitionLog;
-                    if let Ok(Some(head)) = log.run(&run).await
-                        && let Ok(history) =
-                            crate::partition::history_of(&*plane, &*log, &head).await
+                    if let Ok(Some(read)) =
+                        crate::partition::read_attempt(&*plane, &*log, &run, from, false).await
                     {
+                        let namespace = match &read {
+                            crate::partition::AttemptRead::Live { head, .. }
+                            | crate::partition::AttemptRead::Sealed { head, .. } => {
+                                head.namespace.clone()
+                            }
+                        };
                         let summary = log.summary(&run).await.ok().flatten();
                         let _ = sink.send(Changed {
                             run: run.clone(),
-                            namespace: head.namespace.clone(),
+                            namespace,
                             summary: summary.map(|indexed| indexed.summary),
-                            entries: history
-                                .into_iter()
-                                .filter(|entry| entry.index >= from)
-                                .collect(),
+                            entries: read.into_entries(from),
                         });
                     }
                     Message::Nothing
