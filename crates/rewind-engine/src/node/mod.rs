@@ -92,6 +92,9 @@ pub struct Node<P: Plane, M: Membership + 'static> {
     streams: BTreeMap<StreamId, (TenantId, StreamAttach, UnboundedSender<StreamEvent>)>,
     /// The membership ended: the node opens no partition any more.
     lost: bool,
+    /// The partitions whose owner found them opened by another node, while the node reads the
+    /// map again: their requests wait for the answer, rather than meet `NotOwner` in between.
+    fenced: BTreeMap<PartitionId, Vec<OwnerMsg<P>>>,
 }
 
 impl<P: Plane, M: Membership + 'static> fmt::Debug for Node<P, M> {
@@ -150,6 +153,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             subscriptions: BTreeMap::new(),
             streams: BTreeMap::new(),
             lost: false,
+            fenced: BTreeMap::new(),
         }
     }
 
@@ -268,7 +272,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         let effects = match message {
             Message::Owner(partition, message) => match self.owners.get_mut(&partition) {
                 Some(owner) => owner.handle(message),
-                None => refuse_missing_owner(partition, message),
+                None => self.missing_owner(partition, message),
             },
             Message::Executors(message) => self.executors.handle(message),
             Message::Calls(message) => self.calls.handle(message),
@@ -338,24 +342,21 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     fn inbound(&mut self, request: NodeRequest, reply: ReplyTo) -> Vec<Effect<P>> {
         match request {
             NodeRequest::Partition { partition, request } => {
+                let message = OwnerMsg::Request(request, reply);
                 match self.owners.get_mut(&partition) {
-                    Some(owner) if !owner.is_closed() => {
-                        owner.handle(OwnerMsg::Request(request, reply))
-                    }
-                    _ => vec![Effect::Reply(reply, NodeReply::NotOwner { partition })],
+                    Some(owner) if !owner.is_closed() => owner.handle(message),
+                    _ => self.missing_owner(partition, message),
                 }
             }
             NodeRequest::Organization { tenant, request } => {
                 let home = home_partition(&tenant, self.config.partitions);
+                let message = OwnerMsg::Org {
+                    tenant,
+                    message: OrgMsg::Request(request, reply),
+                };
                 match self.owners.get_mut(&home) {
-                    Some(owner) if !owner.is_closed() => owner.handle(OwnerMsg::Org {
-                        tenant,
-                        message: OrgMsg::Request(request, reply),
-                    }),
-                    _ => vec![Effect::Reply(
-                        reply,
-                        NodeReply::NotOwner { partition: home },
-                    )],
+                    Some(owner) if !owner.is_closed() => owner.handle(message),
+                    _ => self.missing_owner(home, message),
                 }
             }
             NodeRequest::Owner { partition, notice } => match self.owners.get_mut(&partition) {
@@ -404,7 +405,9 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 self.owners.remove(&partition);
                 // Another node opened it: its new owner, or a node whose open, begun while the
                 // map named it, ended after this one's. The map the cluster holds says which:
-                // read again, it opens the partition again if it is still this node's.
+                // read again, it opens the partition again if it is still this node's. Its
+                // requests wait for the map meanwhile.
+                self.fenced.entry(partition).or_default();
                 vec![self.read_map()]
             }
             NodeMsg::OpenFailed(partition, error) => {
@@ -467,7 +470,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
             NodeMsg::RefreshNodes => vec![self.read_nodes()],
             NodeMsg::MembershipFailed(error) => {
                 tracing::error!(node = %self.config.node, %error, "the cluster could not be reached");
-                Vec::new()
+                self.release_fenced()
             }
             NodeMsg::Lost(error) => self.lose(&error),
             NodeMsg::Resync => vec![self.rebalance(None)],
@@ -479,11 +482,51 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
     fn lose(&mut self, error: &str) -> Vec<Effect<P>> {
         tracing::error!(node = %self.config.node, %error, "the node lost its membership: it gives its partitions up");
         self.lost = true;
-        let mut effects = Vec::new();
+        let mut effects = self.release_fenced();
         for (_, mut owner) in std::mem::take(&mut self.owners) {
             effects.extend(owner.handle(OwnerMsg::Close));
         }
         effects
+    }
+
+    /// A message for a partition the node holds no open owner of: a request waits while the
+    /// node reads the map after its owner was fenced, and is answered `NotOwner` otherwise.
+    fn missing_owner(&mut self, partition: PartitionId, message: OwnerMsg<P>) -> Vec<Effect<P>> {
+        match (self.fenced.get_mut(&partition), &message) {
+            (Some(waiting), OwnerMsg::Request(..) | OwnerMsg::Org { .. }) => {
+                waiting.push(message);
+                Vec::new()
+            }
+            _ => refuse_missing_owner(partition, message),
+        }
+    }
+
+    /// The requests that waited for the map after a fence, once the map is applied: to the
+    /// partition's owner here, or answered `NotOwner`, and they find the owner the map names.
+    fn deliver_fenced(&mut self) -> Vec<Effect<P>> {
+        let mut effects = Vec::new();
+        for (partition, waiting) in std::mem::take(&mut self.fenced) {
+            for message in waiting {
+                match self.owners.get_mut(&partition) {
+                    Some(owner) if !owner.is_closed() => effects.extend(owner.handle(message)),
+                    _ => effects.extend(refuse_missing_owner(partition, message)),
+                }
+            }
+        }
+        effects
+    }
+
+    /// The requests that waited for the map after a fence, answered `NotOwner`: the map could
+    /// not be read, or the node gave its partitions up.
+    fn release_fenced(&mut self) -> Vec<Effect<P>> {
+        std::mem::take(&mut self.fenced)
+            .into_iter()
+            .flat_map(|(partition, waiting)| {
+                waiting
+                    .into_iter()
+                    .flat_map(move |message| refuse_missing_owner(partition, message))
+            })
+            .collect()
     }
 
     /// Whether the node lost its membership.
@@ -521,7 +564,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
                 .is_some_and(|known| known.epoch > owner.epoch)
         });
         if stale {
-            return Vec::new();
+            return self.deliver_fenced();
         }
         let previous = std::mem::replace(&mut self.map, map);
         let me = self.config.node.clone();
@@ -551,6 +594,7 @@ impl<P: Plane, M: Membership + 'static> Node<P, M> {
         for partition in gained {
             effects.extend(self.open(partition));
         }
+        effects.extend(self.deliver_fenced());
         // An organization actor whose home moved lost its streams: they are attached again.
         let moved: Vec<StreamAttach> = self
             .streams

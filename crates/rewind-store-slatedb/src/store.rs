@@ -18,7 +18,7 @@ use slatedb::admin::Admin;
 use slatedb::config::{DurabilityLevel, ReadOptions, ScanOptions};
 use slatedb::db_cache::moka::{MokaCache, MokaCacheOptions};
 use slatedb::db_cache::{DbCache, SplitCache};
-use slatedb::{Db, IterationOrder};
+use slatedb::{CompactorBuilder, Db, IterationOrder};
 
 use crate::codec::{self, decode};
 use crate::config::{Bucket, Options};
@@ -31,8 +31,8 @@ use crate::{Error, keys};
 /// it as its writer: SlateDB raises the writer epoch in the manifest and writes a fence into the
 /// WAL, so the previous writer's next write fails and it learns it is fenced, wherever it runs.
 /// Within one store, a log opened before is also fenced at once, before it writes anything. An
-/// open claims the epoch after the one it read when it began: when another open ended in
-/// between, it fails as fenced rather than fencing that later writer.
+/// open claims the writer and compactor epochs after the ones it read when it began: when another
+/// open ended in between, it fails as fenced rather than fencing that later writer.
 ///
 /// Records are the partition records of `rewind-format`, under the keys of [`crate::keys`].
 /// The clones of a store share its object store, its block cache and its count of opens.
@@ -126,19 +126,33 @@ impl PartitionStore for SlatePartitions {
         node: &NodeId,
     ) -> Result<SlateLog, PartitionError> {
         let path = self.path(partition);
-        // The open claims the writer epoch after the one it reads first: an open that began
-        // before another one ended fails, fenced, instead of fencing the later one. A node whose
-        // open was under way when the partition moved away never takes it back.
-        let observed = Admin::builder(path.clone(), Arc::clone(&self.inner.object_store))
-            .build()
-            .read_manifest(None)
-            .await
-            .map_err(|err| crate::error::partition(partition, err))?
-            .map_or(0, |manifest| manifest.writer_epoch());
-        let db = Db::builder(path, Arc::clone(&self.inner.object_store))
-            .with_settings(self.inner.options.settings())
+        // The open claims the writer epoch, and its compactor the compactor epoch, after the ones
+        // it reads first: an open that began before another one ended fails, fenced, instead of
+        // fencing that later writer or its compactor. A node whose open was under way when the
+        // partition moved away never takes it back.
+        let (writer, compactor) =
+            Admin::builder(path.clone(), Arc::clone(&self.inner.object_store))
+                .build()
+                .read_manifest(None)
+                .await
+                .map_err(|err| crate::error::partition(partition, err))?
+                .map_or((0, 0), |manifest| {
+                    (manifest.writer_epoch(), manifest.compactor_epoch())
+                });
+        let mut settings = self.inner.options.settings();
+        let compaction = settings.compactor_options.take();
+        let mut builder = Db::builder(path.clone(), Arc::clone(&self.inner.object_store))
+            .with_settings(settings)
             .with_db_cache(Arc::clone(&self.inner.cache), u64::from(partition.get()))
-            .with_expected_epoch(observed)
+            .with_expected_epoch(writer);
+        if let Some(options) = compaction {
+            builder = builder.with_compactor_builder(
+                CompactorBuilder::new(path, Arc::clone(&self.inner.object_store))
+                    .with_options(options)
+                    .with_expected_epoch(compactor),
+            );
+        }
+        let db = builder
             .build()
             .await
             .map_err(|err| crate::error::partition(partition, err))?;
