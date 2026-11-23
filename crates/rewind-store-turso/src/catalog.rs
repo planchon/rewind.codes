@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{Digest, PartitionId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
@@ -928,6 +928,25 @@ impl CatalogStore for TursoCatalog {
     async fn list_tenants(&self) -> Result<Vec<Tenant>, CatalogError> {
         let connection = self.store.connection().await?;
         Ok(tenancy::list_tenants(&connection).await?)
+    }
+
+    async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
+        let connection = self.store.connection().await?;
+        let row = sql::query_row(
+            &connection,
+            "SELECT partition FROM legacy_runs WHERE id = ?",
+            vec![sql::run_id(run)],
+        )
+        .await?;
+        row.map(|row| {
+            let partition = row.int(0)?;
+            u16::try_from(partition).map(PartitionId::new).map_err(|_| {
+                CatalogError::Backend(format!(
+                    "the partition {partition} of the moved run {run} is out of range"
+                ))
+            })
+        })
+        .transpose()
     }
 
     // ---------------------------------------------------------------------------------------

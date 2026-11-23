@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 
-use rewind_core::{Digest, PartitionId, Script, Timestamp, Toolset, Workflow};
+use rewind_core::{Digest, PartitionId, RunId, Script, Timestamp, Toolset, Workflow};
 use rewind_engine::ports::catalog::{NamespaceFilter, NamespacePage};
 use rewind_engine::ports::{
     CatalogError, CatalogStore, CompiledScript, ControlPlaneChange, DeleteNamespace, DisplayName,
@@ -1114,6 +1114,24 @@ impl CatalogStore for PostgresCatalog {
     async fn list_tenants(&self) -> Result<Vec<Tenant>, CatalogError> {
         let mut conn = self.pool.acquire().await.map_err(Error::from)?;
         Ok(tenancy::list_tenants(&mut conn).await?)
+    }
+
+    async fn legacy_partition(&self, run: RunId) -> Result<Option<PartitionId>, CatalogError> {
+        let partition: Option<i32> =
+            sqlx::query_scalar("SELECT partition FROM legacy_runs WHERE id = $1")
+                .bind(run.as_uuid())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(Error::from)?;
+        partition
+            .map(|partition| {
+                u16::try_from(partition).map(PartitionId::new).map_err(|_| {
+                    CatalogError::Backend(format!(
+                        "the partition {partition} of the moved run {run} is out of range"
+                    ))
+                })
+            })
+            .transpose()
     }
 
     // ---------------------------------------------------------------------------------------

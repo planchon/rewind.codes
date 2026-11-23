@@ -1606,3 +1606,19 @@ The stream's contract and the dashboard's layers stay.
 | `namespaces.partition` is set for the rows created before it by `place_namespaces`, run once before the catalog serves | A migration computing the hash in SQL | The hash is the engine's, in Rust. |
 | The Turso cluster's members live in the process, and its partition map and epochs in the database | A cluster of one member only | The cluster suite joins three members; embedded, there is one. |
 | The archive's cache keeps an attempt when it reads one, never when it puts it | Caching at put | Another process may have written the first put, which is the one kept. |
+
+### Taken while building the actors of the run plane (November 2026)
+
+| Decision | Alternative rejected | Why |
+| --- | --- | --- |
+| Actors never read a store: their reads are jobs whose results come back as messages; the owner keeps the runs it touches in memory and loads one on demand | Actors awaiting their reads | A state machine with no I/O can be stepped one message at a time by the driver. |
+| One tokio task drives every actor of a node; store jobs, remote requests and activations run in tasks of their own | One task per actor | The node's task waits on its channel and on the wheel's earliest timer, nothing else. |
+| Inbox and outbox ids come from a counter per partition, rebuilt at recovery from the highest id | Ids drawn at random | Ordered and unique within the partition. |
+| The edge checks the script, the TTL, the input, the attachments and the namespace, and draws the run's id and seed; the owner applies the start key, asks the organization actor to admit the start, and creates the run | Every check at the owner | The owner's mailbox only does what needs its state. |
+| Recovery counts as interrupted every `ready` task that is due, host tasks included: attempt + 1 and a new token; an answer carrying the old token is refused as gone | Keeping the old token | Recovery cannot know whether the task was handed out. |
+| Tokens are `rewind_tk_{run}_{hex}` for tasks and `rewind_wh_{run}_{hex}` for webhooks, drawn from a CSPRNG; the owner keeps their SHA-256 | Opaque tokens looked up in a table | They route to the run's owner from any process. |
+| A run is quarantined when its started activations without an end reach 5, as with failures | Above 5 | One threshold for both counts. |
+| Admissions carry the owner's partition epoch; a report from a newer epoch releases them; a restarted organization actor takes the admissions it saved as epoch 0; a slot asked for again is granted again | Admissions without an epoch | A stale owner's admissions would otherwise stay held. |
+| `Change::Summary` writes a run's summary alone, for the task phases (parked, deferred, approved) outside activations; parked calls are found through the index when a secret is put again | Recovery returning parked tasks | A secret put again must find every call parked for it. |
+| The driver runs store work first, then activations, then calls ordered by run id; it opens partitions with a horizon of 100 years and jumps the clock only to timers that wake something by themselves | Any order | The e2e corpus records the same journal byte for byte as the recorded one. |
+| A deployment with one partition routes any run id to partition 0 | Refusing a version 7 id without `legacy_runs` | The embedded server and the corpus's recorded journals hold version 7 ids. |

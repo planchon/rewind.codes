@@ -363,6 +363,17 @@ impl Apply<'_> {
                 after.head.attempts = after.head.attempts.saturating_add(1);
                 self.write_run(Some(&before), Some(&after)).await
             }
+            Change::Summary { run, summary } => {
+                if summary.summary.run != run {
+                    return Err(PartitionError::Conflict(format!(
+                        "the summary of run {run} names another run"
+                    )));
+                }
+                let before = self.existing(&run).await?;
+                let mut after = before.clone();
+                after.summary = Some(*summary);
+                self.write_run(Some(&before), Some(&after)).await
+            }
             Change::Quarantine { run, quarantine } => {
                 let before = self.existing(&run).await?;
                 let mut after = before.clone();
