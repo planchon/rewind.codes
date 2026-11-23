@@ -186,9 +186,16 @@ nodes' variables:
 rewind server migrate-runs
 ```
 
-It writes the ended runs to the archive, with their summaries and the end of their retention, and the live ones into
-their partitions, each with its payloads; then it drops `legacy`. Watch it: if it stops, run it again, and each run it
-already moved is skipped. A moved run keeps its id.
+Run it while no node runs. It writes the ended runs to the archive, with their summaries and the end of their
+retention, and the live ones into their partitions, each with its payloads; then it drops `legacy`. It prints a line
+per run and exits 0 once every run moved, 70 when one did not (`legacy` is kept then): run it again, and each run it
+already moved is skipped. A moved run keeps its id. `--blobs` (`REWIND_BLOBS`) says where the server kept its blobs
+before, a directory or `s3://<bucket>`: the bucket by default.
+
+A task that was handed to a worker before the move is handed again, as its next attempt: its old token is refused.
+
+The embedded server moves its directory's runs the same way: `rewind server migrate-runs --embedded` in the project,
+once; `rewind` refuses to start the embedded server on a `.rewind/` that still holds a `journal.db`.
 
 ## Production
 
