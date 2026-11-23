@@ -798,9 +798,9 @@ CREATE TABLE legacy_runs (
 
 /// The tables of runs set aside (`archi/08-decisions.md`, "Taken while writing the object-storage
 /// spec": the migration): runs live in the partition of the run plane and in the archive, and the
-/// database holds the control plane only. The tables the runs of the previous design were kept
-/// in take the prefix `legacy_`, their indexes with them (`runs` becomes `legacy_journal_runs`:
-/// `legacy_runs` is the control plane's table of the runs moved): the runs, their histories, inboxes,
+/// database holds the control plane only. The tables the journal store kept its runs in take the
+/// prefix `legacy_`, their indexes with them (`runs` becomes `legacy_journal_runs`: `legacy_runs`
+/// is the control plane's table of the runs moved): the runs, their histories, inboxes,
 /// signal keys, timers, tool tasks, webhook tokens and watchers, the payloads and their
 /// references, the feed, the read model's tables, and the namespaces' use per day, quota alerts
 /// and script counts. `rewind server migrate-runs` reads them, moves each run into the partition

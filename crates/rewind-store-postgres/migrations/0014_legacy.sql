@@ -3,7 +3,7 @@
 -- archive; the database holds the control plane only (`archi/06-storage-and-scale.md`, "Where
 -- data lives").
 --
--- The tables the runs of the previous design were kept in move to the schema `legacy`, with
+-- The tables the journal store kept its runs in move to the schema `legacy`, with
 -- their indexes, constraints, sequences and statistics: the runs, their histories, inboxes,
 -- signal keys, timers, tool tasks, webhook tokens and watchers, the payloads and their
 -- references, the feed, the read model's summaries, labels, waits, search text, quarantine and
