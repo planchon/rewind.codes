@@ -42,7 +42,7 @@ use crate::ports::{
     QUARANTINE_AFTER_FAILURES, QuarantineKind, RunHead, RunRef, ScriptExecutor, ScriptInstance,
     StartScript, TenantId, Trigger,
 };
-use crate::replay::{self, NoHeartbeat, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
+use crate::replay::{self, Rebuilt, ReplayEnd, ReplayError, ReplayInput};
 use crate::text;
 use tracing::Instrument as _;
 
@@ -321,7 +321,6 @@ async fn work<P: Plane>(
                     }
                     Err(ReplayError::History(error)) => return Err(corrupt(error)),
                     Err(ReplayError::Blob(err)) => return Err(err.into()),
-                    Err(ReplayError::LeaseLost(err)) => return Err(err.into()),
                 }
             }
             (instance, state, history)
@@ -672,7 +671,7 @@ where
     K: Clock,
 {
     let parent_id = source.parent.run;
-    let followed = follow_parent(with, batch, &mut NoHeartbeat, source, parent).await?;
+    let followed = follow_parent(with, batch, source, parent).await?;
     tracing::info!(parent = %parent_id, point = %followed.point, "the fork goes live");
     let Some(mut instance) = followed.instance else {
         return Ok(None);

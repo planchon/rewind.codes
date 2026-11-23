@@ -39,7 +39,6 @@ use crate::ports::{
     CompiledScript, Emitted, ForkParent, RunRef, ScriptExecutor, ScriptInstance, StartScript,
     StoreError, TraceContext,
 };
-use crate::replay::{Heartbeat, NoHeartbeat};
 use crate::start::StartError;
 
 /// A request to fork a run (`POST /v1/runs/{id}/fork`, `rewind fork`, `retry_run`).
@@ -52,7 +51,9 @@ pub struct ForkRun {
     pub at: Option<u64>,
     /// The fork's input; the parent's when `None`.
     pub input: Option<JsonValue>,
-    /// The fork's TTL, from now; [`EngineConfig::default_ttl`](crate::EngineConfig) when `None`.
+    /// The fork's TTL, from now; the namespace's default
+    /// ([`NodeConfig::default_ttl`](crate::plane::NodeConfig::default_ttl) within its bounds) when
+    /// `None`.
     pub ttl: Option<Duration>,
     /// The fork's labels; the parent's when `None`.
     pub labels: Option<BTreeMap<String, String>>,
@@ -89,8 +90,6 @@ pub enum ForkError {
     ParentNotFound(RunId),
     #[error("run {0} has not started yet: there is nothing to fork")]
     ParentNotStarted(RunId),
-    #[error("the journal of run {0} is archived: it cannot be forked")]
-    ParentArchived(RunId),
     /// The fork cannot start, for the reasons a run cannot: an invalid script, TTL or input, the
     /// tenant's quota.
     #[error(transparent)]
@@ -231,7 +230,6 @@ pub async fn compatibility<X: ScriptExecutor>(
     let followed = follow_parent(
         &with,
         &mut batch,
-        &mut NoHeartbeat,
         ForkSource {
             run: &run,
             parent: ForkParent {
@@ -271,10 +269,9 @@ impl CountCpu for Uncounted {
 
 /// Runs the fork's script against the parent's history, copying the parent's triggers into
 /// `batch` while the script's commands match the parent's.
-pub(crate) async fn follow_parent<X, S, C, H>(
+pub(crate) async fn follow_parent<X, S, C>(
     with: &FollowWith<'_, X, S, C>,
     batch: &mut Batch<'_>,
-    heartbeat: &mut H,
     source: ForkSource<'_>,
     history: &[HistoryEntry],
 ) -> Result<Followed<X::Instance>, EngineError>
@@ -282,7 +279,6 @@ where
     X: ScriptExecutor,
     S: payloads::PayloadSource,
     C: CountCpu,
-    H: Heartbeat,
 {
     {
         let parent_id = source.parent.run;
@@ -325,7 +321,6 @@ where
         };
         let trigger = Event::Lifecycle(Lifecycle::RunStarted(source.started));
         let mut inherited = BTreeSet::new();
-        heartbeat.beat().await?;
         let (mut instance, mut point) = match with.executor.start(start).await {
             Ok((instance, emitted)) => {
                 // The fork's script runs for the first time: its calls execute, though they
@@ -397,7 +392,6 @@ where
             let completion = with_values(with.payloads, tenant, completion).await?;
             let recorded_at = batch.recorded_at(cursor.logical_now());
             let delivery = payloads::delivery(with.payloads, tenant, &completion).await?;
-            heartbeat.beat().await?;
             let trigger = Event::Completion(completion);
             let delivered = instance.deliver(delivery, recorded_at).await;
             batch.count_cpu(with.cpu, instance.cpu_time());

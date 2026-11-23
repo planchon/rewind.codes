@@ -28,10 +28,7 @@ use rewind_core::{
 };
 
 use crate::failures;
-use crate::ports::{
-    RunHead, RunSnapshot, TaskPhase, TaskProgress, TaskState, ToolTask, Wait, WaitKind,
-    WebhookEvent, WebhookEventKind,
-};
+use crate::ports::{RunHead, RunSnapshot, Wait, WaitKind, WebhookEvent, WebhookEventKind};
 
 /// The lifecycle events of the entries from `from` to the end of `history`, which leave the
 /// run in `state`: the run's end (`run.completed`, `run.failed`), or, when the range leaves the
@@ -114,21 +111,6 @@ fn waiting_for(state: &RunState, toolset: Option<&Toolset>) -> Vec<String> {
         }
     }
     waiting
-}
-
-/// A task's state as the read model keeps it: its seq, its attempt and its phase.
-pub fn task_progress(task: &ToolTask) -> TaskProgress {
-    TaskProgress {
-        seq: task.task.seq,
-        attempt: task.attempt,
-        phase: match task.state {
-            TaskState::Approval => TaskPhase::Approval,
-            TaskState::Ready { .. } => TaskPhase::Ready,
-            TaskState::Claimed { .. } => TaskPhase::Claimed,
-            TaskState::Deferred { .. } => TaskPhase::Deferred,
-            TaskState::Parked(_) => TaskPhase::Parked,
-        },
-    }
 }
 
 /// The first line of a script that is not blank, trimmed: what free text searches in a script.

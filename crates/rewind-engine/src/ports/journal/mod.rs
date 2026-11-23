@@ -73,14 +73,8 @@ pub struct WebhookTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StoreError {
-    /// The lease was lost: another worker acquired the run since.
-    #[error("the lease on run {run_id} is lost (fence {fence} is stale)")]
-    Fenced { run_id: RunId, fence: u64 },
     #[error("run {0} not found")]
     RunNotFound(RunId),
-    /// The run's journal was archived: its history is in the archive, not in the store.
-    #[error("the journal of run {0} is archived")]
-    Archived(RunId),
     /// A write that would break an invariant of the store, such as a history index that is
     /// already taken.
     #[error("conflict: {0}")]

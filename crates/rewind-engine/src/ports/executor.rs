@@ -95,7 +95,7 @@ pub trait ScriptExecutor: Send + Sync {
     /// last one; a run of another epoch is never offered to this executor.
     fn epochs(&self) -> &[Epoch];
 
-    /// Checks a script against the toolset it will run with, and compiles it. Everything that
+    /// Checks a script against the toolset it runs with, and compiles it. Everything that
     /// can be refused without running the script is refused here: syntax errors, imports of
     /// modules or names that do not exist, a missing default export. Imports are checked
     /// against the last epoch, the one new runs start under; the compiled form does not depend

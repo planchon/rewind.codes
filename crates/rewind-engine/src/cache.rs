@@ -1,11 +1,12 @@
 //! The instance cache of sticky execution (`archi/03-execution.md`, "Sticky execution").
 //!
-//! After a commit, the worker keeps the script instance, with the run's state, in a cache bounded
-//! by a number of instances and by the memory they hold. The next activation of the run on this
-//! worker is a **hit** when the cached state's history length is the run's: only the new
-//! triggers are delivered, without a replay. Otherwise it is a **miss**: a new instance replays
-//! the history. The store gives a run's next activation to its sticky worker first; an evicted
-//! instance gives that priority up (`JournalStore::forget_sticky`).
+//! After a commit, the executors of a node keep the script instance, with the run's state and
+//! history, in a cache bounded by a number of instances and by the memory they hold. The next
+//! activation of the run on this node is a **hit** when the cached state's history length is
+//! the one the run's commit made durable: only the new triggers are delivered, without a replay.
+//! Otherwise it is a **miss**: a new instance replays the history. A run's owner sends its next
+//! activation to the node that ran the last one while that node lives
+//! (`archi/07-code-architecture.md`, "Inside a node").
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -13,7 +14,7 @@ use rewind_core::RunState;
 
 use crate::ports::{RunRef, ScriptInstance};
 
-/// The bounds of a worker's instance cache. When either is passed, the least recently used
+/// The bounds of a node's instance cache. When either is passed, the least recently used
 /// instances are evicted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheConfig {
@@ -38,8 +39,8 @@ pub(crate) struct Cached<I> {
     pub(crate) instance: I,
     /// The run's state after the last commit: its history length tells a hit from a miss.
     pub(crate) state: RunState,
-    /// The run's history as committed, kept by the run plane's executors: a hit derives the
-    /// run's summary and spans without reading it again. Empty on the journal's path.
+    /// The run's history as committed: a hit derives what its new entries project without
+    /// reading the history again.
     pub(crate) history: Vec<rewind_core::HistoryEntry>,
 }
 

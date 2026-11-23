@@ -140,9 +140,8 @@ impl<P: Plane> Edge<P> {
         &self.plane
     }
 
-    /// The partition of a run, from its id: the 16 bits of a run of the run plane, the control
-    /// plane's `legacy_runs` for a run of the previous design, the only one of an embedded
-    /// deployment.
+    /// The partition of a run, from its id: the 16 bits its id holds, the control plane's
+    /// `legacy_runs` for a run `migrate-runs` moved, the only one of an embedded deployment.
     pub async fn partition_of(&self, run: RunId) -> Result<PartitionId, EdgeError> {
         crate::router::partition_of(self.plane.catalog(), self.config.partitions, run)
             .await

@@ -13,7 +13,7 @@
 //!
 //! | Instrument | Kind | Attributes | Measures |
 //! | --- | --- | --- | --- |
-//! | `rewind.activation.duration` | histogram, s (span `activation`) | `rewind.outcome`: `committed`, `nothing_to_do`, `quarantined`, `failed`, `lease_lost` | an activation, from its lease to its commit or its failure |
+//! | `rewind.activation.duration` | histogram, s (span `activation`) | `rewind.outcome`: `committed`, `quarantined`, `released`, `failed`, `miss` | an activation on an executor, from its request to what it commits or why it cannot; `miss`: the instance was not kept and the request did not carry the history |
 //! | `rewind.activation.inbox` | histogram | | the triggers an activation took from its run's inbox: the inbox's depth |
 //! | `rewind.replay.duration` | histogram, s (span `replay`) | `rewind.outcome`: `end_of_history`, `aborted`, `non_determinism`, `error` | rebuilding an instance from its history |
 //! | `rewind.instance_cache.lookups` | counter | `rewind.result`: `hit`, `miss` | activations of a started run, by whether its instance was kept (sticky execution) |
@@ -22,12 +22,9 @@
 //! | `rewind.tool_attempt.duration` | histogram, s (span `tool_attempt`) | `rewind.tool`, `rewind.outcome`: `result`, `failed`, `transient`, `deferred`, `parked` | one dispatch of a tool call, to its answer |
 //! | `rewind.tool_attempt.retries` | counter | `rewind.tool` | transient failures dispatched again after a backoff |
 //!
-//! Lease contention shows as activations whose outcome is `lease_lost`: another worker took
-//! the run over.
-//!
-//! Run metrics, projected from committed entries by the projector's `otel` consumer once the
-//! feed item is acknowledged, for every run (sampling is for traces), mock runs aside unless
-//! their telemetry is exported:
+//! Run metrics, derived from an activation's new entries and recorded by the run's owner once
+//! the batch that commits them is durable, for every run (sampling is for traces), mock runs
+//! aside unless their telemetry is exported:
 //!
 //! | Instrument | Kind | Attributes | Measures |
 //! | --- | --- | --- | --- |

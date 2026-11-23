@@ -2,8 +2,9 @@
 //! (`archi/06-storage-and-scale.md`, "Namespaces", "Quotas").
 //!
 //! The namespace is run metadata, like the tenant: it lives with the ports, never in the core,
-//! and never in an event. The `JournalStore` keeps namespaces, their use and their alerts, since
-//! it checks the quotas where it creates a run.
+//! and never in an event. The catalog keeps namespaces and their quotas; the partitions count
+//! their use, and the tenant's organization actor checks the quotas where it admits a run and
+//! raises the alerts.
 
 use std::fmt;
 use std::time::Duration;
@@ -15,8 +16,8 @@ use super::tenancy::{Tenant, TenantId};
 const DAY_MS: u64 = 86_400_000;
 
 /// A namespace: the customer's own id for one of its end users. 1 to 128 ASCII letters,
-/// digits, `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: the store uses it for
-/// the tenant's own rows of use and alerts.
+/// digits, `-`, `_`, `.`, `:` and `@`, case-sensitive. `*` is not a name: an alert of the
+/// tenant's ceiling names it in its id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NamespaceName(String);
 

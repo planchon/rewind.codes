@@ -9,8 +9,8 @@ license.workspace = true
 
 [features]
 # The conformance suites every adapter of `CatalogStore`, `PartitionStore`, `RunArchive`,
-# `Cluster`, `JournalStore`, `AccessStore`, `BlobStore`, `ReadModel`, `SecretStore`,
-# `SpanExporter` and `WebhookSender` must pass.
+# `Cluster`, `AccessStore`, `BlobStore`, `SecretStore`, `SpanExporter` and `WebhookSender` must
+# pass.
 conformance = []
 
 [dependencies]

@@ -5,8 +5,8 @@
 //! abort's kind) and its message with the parts that vary replaced by placeholders. Its
 //! **fingerprint**, the first 16 hexadecimal digits of the SHA-256 of the signature, names its
 //! failure group: models write a new script for most conversations, so runs are grouped by
-//! cause, across scripts. The projector computes both, so every adapter of the read model stores
-//! the same values.
+//! cause, across scripts. The activation that ends the run computes both, in the batch that
+//! commits its end, so every partition store keeps the same values.
 //!
 //! The message is rewritten by these rules, in this order, each on what the previous ones left:
 //!

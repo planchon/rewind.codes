@@ -1,3 +1,9 @@
+//! The read model of the run index (`archi/05-testing-and-observability.md`, "Read model",
+//! "Query language"): one summary per run, live or ended, that the run's owner writes in its
+//! partition in the batch that commits what changed the run, an activation's entries among
+//! them, so a summary is as recent as the partition's last durable batch; and the searches
+//! that read the summaries of the partitions of a scope, in an order, by pages.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound;
 
@@ -7,10 +13,8 @@ use crate::ports::journal::{Quarantine, QuarantineKind};
 use crate::ports::namespaces::NamespaceName;
 use crate::ports::tenancy::{RunRef, TenantId};
 
-/// The run as a whole, folded by the projector from its history up to the last entry it
-/// applies (`archi/05-testing-and-observability.md`, "Read model"). Of the snapshots of a run,
-/// the read model keeps the one with the highest `history_len`; with equal lengths they are
-/// equal, whichever arrives first.
+/// The run as a whole, folded from its history ([`run_snapshot`](crate::projector::run_snapshot)):
+/// its status and mode, what it waits for, how it ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSnapshot {
     /// The entries folded.
@@ -39,8 +43,8 @@ pub struct Wait {
     /// When the wait ends by itself: a timer's due time, a signal's timeout.
     pub until: Option<Timestamp>,
     pub callsite: Option<Callsite>,
-    /// For a call, the furthest state its task reached ([`ReadModel::record_tasks`]). Filled
-    /// by the read model when it returns the wait; ignored by [`ReadModel::apply`].
+    /// For a call, the phase of its task, as the owner's tool tasks have it when the summary
+    /// is written.
     pub task: Option<TaskPhase>,
 }
 
@@ -68,7 +72,7 @@ pub enum WaitKind {
     Timer,
     /// A tool call Rewind sends itself (MCP tools, built-ins).
     Call,
-    /// A host tool's call, answered by the harness's worker.
+    /// A host tool's call, answered by an SDK worker through its stream.
     Host,
 }
 
@@ -143,30 +147,7 @@ pub enum TaskPhase {
     Parked,
 }
 
-/// A call's task at some point of its life.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct TaskProgress {
-    pub seq: Seq,
-    /// Claims so far: 0 before the first.
-    pub attempt: u32,
-    pub phase: TaskPhase,
-}
-
-impl TaskProgress {
-    /// The order a task's states follow, which only moves forward: by attempt, then within an
-    /// attempt approval or claim, then parked or deferred, then ready again. Of the records of
-    /// a call, the read model keeps the highest.
-    pub fn rank(&self) -> (u32, u8) {
-        let step = match self.phase {
-            TaskPhase::Approval | TaskPhase::Claimed => 0,
-            TaskPhase::Deferred | TaskPhase::Parked => 1,
-            TaskPhase::Ready => 2,
-        };
-        (self.attempt, step)
-    }
-}
-
-/// A run's quarantine, as the read model keeps it.
+/// A run's quarantine, as its summary shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QuarantineNote {
     pub kind: QuarantineKind,
@@ -184,7 +165,7 @@ impl From<&Quarantine> for QuarantineNote {
     }
 }
 
-/// One run of the read model.
+/// A run as the run index holds it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunSummary {
     pub run: RunRef,
@@ -195,7 +176,7 @@ pub struct RunSummary {
     pub script: Digest,
     pub headline: String,
     pub toolset: Digest,
-    /// `active` until a terminal entry is projected; never `pending`.
+    /// `pending` until its first activation commits, then `active` until a terminal entry.
     pub status: RunStatus,
     pub mode: Option<RunMode>,
     pub labels: BTreeMap<String, String>,
@@ -204,17 +185,17 @@ pub struct RunSummary {
     pub workflow: Option<String>,
     /// For a run a script started, that run.
     pub started_by: Option<RunId>,
-    /// `recorded_at` of `run_started`, once projected.
+    /// `recorded_at` of `run_started`, once committed.
     pub started_at: Option<Timestamp>,
     /// `recorded_at` of the terminal entry.
     pub ended_at: Option<Timestamp>,
-    /// The latest `recorded_at` projected.
+    /// `recorded_at` of the last entry; the run's creation before its first.
     pub last_activity_at: Timestamp,
-    /// `schedule_tool_call` entries projected.
+    /// The `schedule_tool_call` entries of its history.
     pub tool_calls: u64,
-    /// `tool_call_failed` entries projected.
+    /// The `tool_call_failed` entries of its history.
     pub errors: u64,
-    /// The highest index projected, plus one.
+    /// The entries of its history.
     pub history_len: u64,
     /// The latest snapshot's waits, in its order, each call's with its task's furthest state.
     pub waits: Vec<Wait>,
@@ -249,8 +230,8 @@ impl RunSummary {
         }
     }
 
-    /// How long the run took, in milliseconds, once it has ended: `None` before (or while its
-    /// start is not projected). An end recorded before the start counts as 0.
+    /// How long the run took, in milliseconds, once it has started and ended: `None` before.
+    /// An end recorded before the start counts as 0.
     pub fn duration(&self) -> Option<u64> {
         let (started, ended) = (self.started_at?, self.ended_at?);
         Some(ended.0.saturating_sub(started.0))
@@ -336,7 +317,7 @@ pub enum Predicate {
     Signal(Vec<TextMatch>),
     Started(Range<Timestamp>),
     Ended(Range<Timestamp>),
-    /// The latest `recorded_at` projected.
+    /// `recorded_at` of the run's last entry.
     Activity(Range<Timestamp>),
     /// From start to end, in milliseconds: ended runs only.
     Duration(Range<u64>),

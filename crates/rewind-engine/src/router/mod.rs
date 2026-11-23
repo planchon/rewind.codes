@@ -1,8 +1,8 @@
 //! The router of a process (`archi/06-storage-and-scale.md`, "Partitions, owners and nodes":
 //! the edge; `archi/07-code-architecture.md`, "Inside a node").
 //!
-//! It finds the partition of a run from its id: the 16 bits a run id of the run plane holds, the
-//! control plane's `legacy_runs` for a run moved from the previous design (whose version 7 id
+//! It finds the partition of a run from its id: the 16 bits a run id holds, the control plane's
+//! `legacy_runs` for a run `migrate-runs` moved from the `legacy` schema (whose version 7 id
 //! names no partition), and partition 0 in a deployment of one partition. It finds the owner of
 //! a partition from the partition map, cached, dropped on `ControlPlaneChange::PartitionMap`;
 //! an owner that answers `NotOwner` makes it read the map again and try once more.
@@ -25,9 +25,8 @@ pub enum Route {
     Unowned,
 }
 
-/// The partition of a run among `partitions`: the 16 bits a run id of the run plane holds, the
-/// control plane's `legacy_runs` for a run of the previous design, or partition 0 when the
-/// deployment has one. `None`: no partition holds the run.
+/// The partition of a run among `partitions`: the 16 bits a run id holds, the control plane's
+/// `legacy_runs` for a run `migrate-runs` moved, or partition 0 when the deployment has one. `None`: no partition holds the run.
 pub async fn partition_of<C: CatalogStore>(
     catalog: &C,
     partitions: NonZeroU16,

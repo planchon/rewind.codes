@@ -3,8 +3,8 @@
 //!
 //! One trace per run. Its id is the harness's when the run was started with a `traceparent`,
 //! the run id otherwise. Span ids are derived from the run (`H` is a truncated SHA-256), so a
-//! span exported again after a crash is the same span, and live service spans can name journal
-//! spans as parents before those are exported:
+//! span exported again after a crash is the same span, and live service spans can name the
+//! spans of a run's entries as parents before those are exported:
 //!
 //! | Span | Id | From → to |
 //! | --- | --- | --- |

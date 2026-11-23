@@ -99,8 +99,8 @@ pub enum ExportError {
 /// "The other ports"). Nothing about a script is exported from the isolate, the runtime or a
 /// replay.
 ///
-/// Spans have deterministic ids: exporting one twice gives the same span. The projector
-/// exports each feed item at least once.
+/// Spans have deterministic ids: exporting one twice gives the same span. A partition's
+/// outbox exports the spans of each batch at least once.
 pub trait SpanExporter: Send + Sync {
     fn export(&self, spans: Vec<Span>) -> impl Future<Output = Result<(), ExportError>> + Send;
 

@@ -1,5 +1,5 @@
-//! Runs as the store knows them: creation, run metadata, the record kept for queries,
-//! quarantine and retention.
+//! What a run carries beside its history: its metadata, what a start or a signal did, its
+//! quarantine.
 
 use std::collections::BTreeMap;
 
@@ -11,7 +11,7 @@ use crate::ports::tenancy::RunRef;
 /// Given by the harness when it starts a run, and stored with the run. The script never sees
 /// it and it is not part of the journal's events, so it is never replayed and never ends up
 /// in a cassette (`archi/05-testing-and-observability.md`, "Run metadata"). The tenant is in
-/// the run's [`RunRef`], and the idempotency key is given to `create_run` beside it.
+/// the run's [`RunRef`], and the idempotency key is given with the start beside it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunMetadata {
     /// A bounded string map (agent, conversation…), to filter runs and as span attributes.
@@ -23,7 +23,7 @@ pub struct RunMetadata {
     /// For a run of a workflow, the workflow and the version it executes.
     pub workflow: Option<RunWorkflow>,
     /// For a run a script started, that run and the call (`archi/03-execution.md`, "Workflows
-    /// across runs"). `create_run` makes the starter its first watcher.
+    /// across runs"). The run's creation makes the starter its first watcher.
     pub started_by: Option<StartedBy>,
     /// The labels every run this run's scripts reach carries: the allowed labels of the API key
     /// that started the first run of its tree, inherited by every run it starts. Empty: any run
@@ -51,7 +51,7 @@ pub struct TraceContext {
     pub tracestate: Option<String>,
 }
 
-/// The run a `create_run` resolved to.
+/// The run a start resolved to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Created {
     pub run: RunRef,
@@ -59,18 +59,18 @@ pub struct Created {
     pub created: bool,
 }
 
-/// What `enqueue` did with a completion.
+/// What a signal, a cancellation or a webhook's request did to a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Enqueued {
     Accepted,
-    /// The idempotency key was already seen for this run: nothing was enqueued.
+    /// The idempotency key was already taken for this run: nothing was enqueued.
     Duplicate,
     /// The run has ended: nothing was enqueued.
     RunEnded,
 }
 
 /// Why a run is set aside (`archi/03-execution.md`, "Non-determinism and quarantine").
-/// Quarantine is service state, like a lease: it is not in the history.
+/// Quarantine is service state, kept in the run's head: it is not in the history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Quarantine {
     pub kind: QuarantineKind,
@@ -78,8 +78,8 @@ pub struct Quarantine {
     /// never finished.
     pub reason: String,
     pub since: Timestamp,
-    /// The build of the last worker that retried the run after a deploy, if any: a worker of
-    /// a new build retries each quarantined run of its epochs once.
+    /// The build of the last node that retried the run after a deploy, if any: a node of a
+    /// new build retries each quarantined run of its epochs once.
     pub retried_by: Option<String>,
 }
 
@@ -89,11 +89,11 @@ pub enum QuarantineKind {
     /// `run_aborted { non_determinism }`.
     NonDeterminism,
     /// The run's activations failed [`QUARANTINE_AFTER_FAILURES`] times in a row, or never
-    /// finished: their worker died during them. Given up, the run ends with
+    /// finished: their node died during them. Given up, the run ends with
     /// `run_aborted { internal }`.
     Failures,
 }
 
 /// Consecutive failed activations after which a run is quarantined: an activation that never
-/// finished, because its worker died during it, counts as a failed one.
+/// finished, because its node died during it, counts as a failed one.
 pub const QUARANTINE_AFTER_FAILURES: u32 = 5;

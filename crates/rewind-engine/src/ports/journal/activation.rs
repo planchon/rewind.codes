@@ -1,4 +1,5 @@
-//! Leases, inboxes and what an activation commits (`archi/03-execution.md`, "Activations").
+//! What wakes a run, and the payloads its entries hold by digest (`archi/03-execution.md`,
+//! "Activations"; `archi/06-storage-and-scale.md`, "Payloads").
 
 use rewind_core::{Completion, Digest, JsonValue, RunStarted, Timestamp};
 

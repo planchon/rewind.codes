@@ -37,7 +37,7 @@ pub struct ToolCall {
     /// The harness approved the call after a schema change (`tool.schema_changed`): send it
     /// against the tool's current schema, without checking it against the pinned one again.
     pub schema_change_approved: bool,
-    /// The token of the claim. A handler that answers later keeps it and answers through it
+    /// The token of this attempt. A handler that answers later keeps it and answers through it
     /// ([`Dispatched::Deferred`]).
     pub token: TaskToken,
     /// The W3C trace context to forward, with the tool call span as parent, so the server's own
@@ -120,7 +120,7 @@ pub enum Dispatched {
     /// puts the task back to `ready` with backoff; under `at_most_once`, it fails the call with
     /// this failure.
     Transient(ToolFailure),
-    /// The handler took the claim's token and will answer through it, maybe days later: the
+    /// The handler took the call's token and answers through it later, maybe days later: the
     /// task is `deferred`.
     Deferred,
     /// The task waits for the harness: the schema changed at dispatch
@@ -132,7 +132,7 @@ pub enum Dispatched {
 
 /// Executes tool calls outside the sandbox: MCP servers, APIs and built-ins, or mocks in mock
 /// mode (`archi/07-code-architecture.md`, "The other ports"). Host tools have no dispatcher:
-/// their tasks are claimed by the harness's worker.
+/// their tasks are handed to the SDK workers' streams.
 ///
 /// `dispatch(call, auth)`: `auth` is what the engine resolved from the server's `auth`: nothing,
 /// the attached secret's value, or the tenant's signing key. The engine parks a call itself

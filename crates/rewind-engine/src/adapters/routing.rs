@@ -10,7 +10,7 @@ use crate::ports::{CallAuth, Dispatched, ToolCall, ToolDispatcher};
 /// | MCP tools | `mcp`: `rewind-mcp`, or mocks |
 /// | API tools | `api`: `rewind-openapi`'s `ApiDispatcher`, or mocks |
 /// | Built-ins (`http`, and `webhook` in mock mode: the engine answers it for live runs) | `builtins`: `rewind-mcp`'s `HttpTool`, or mocks |
-/// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are claimed by the harness's worker and never dispatched |
+/// | Host tools | `host`: mocks, in mock mode only. Outside it, host tools are handed to the SDK workers' streams and never dispatched |
 ///
 /// [`Unrouted`] stands for a route without a dispatcher. A call's [`CallAuth`] goes only to the
 /// dispatcher of its route.

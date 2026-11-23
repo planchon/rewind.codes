@@ -7,8 +7,6 @@
 //! emitted as telemetry. The replay itself is a span of service telemetry, timed as
 //! `rewind.replay.duration`.
 
-use std::future::Future;
-
 use tracing::Instrument as _;
 
 use rewind_core::{
@@ -34,7 +32,7 @@ impl PayloadSource for InJournal {
 
 use crate::ports::{
     BlobError, CompiledScript, Emitted, ExecutorError, InvalidScript, RunRef, ScriptExecutor,
-    ScriptInstance, StartScript, StoreError,
+    ScriptInstance, StartScript,
 };
 use crate::{metrics, payloads};
 
@@ -77,26 +75,6 @@ pub enum ReplayError {
     Executor(#[from] ExecutorError),
     #[error(transparent)]
     Blob(#[from] BlobError),
-    /// The heartbeat could not renew the lease: another worker may hold the run now.
-    #[error("the lease was lost during the replay: {0}")]
-    LeaseLost(StoreError),
-}
-
-/// Called between the steps of a replay, so that a long replay keeps its lease
-/// (`archi/06-storage-and-scale.md`, "Leases, fencing, workers"). Each step is one call into
-/// the script, bounded by its CPU budget.
-pub trait Heartbeat: Send {
-    fn beat(&mut self) -> impl Future<Output = Result<(), StoreError>> + Send;
-}
-
-/// No lease to keep: a replay outside an activation (`rewind replay`, the corpus).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoHeartbeat;
-
-impl Heartbeat for NoHeartbeat {
-    async fn beat(&mut self) -> Result<(), StoreError> {
-        Ok(())
-    }
 }
 
 /// Re-executes a script against a history, loading the payloads it delivers from `payloads`.
@@ -109,44 +87,27 @@ where
     X: ScriptExecutor,
     P: PayloadSource,
 {
-    replay_with_heartbeat(executor, payloads, &mut NoHeartbeat, input).await
-}
-
-/// [`replay`], calling `heartbeat` before each call into the script.
-pub async fn replay_with_heartbeat<X, P, H>(
-    executor: &X,
-    payloads: &P,
-    heartbeat: &mut H,
-    input: ReplayInput<'_>,
-) -> Result<Rebuilt<X::Instance>, ReplayError>
-where
-    X: ScriptExecutor,
-    P: PayloadSource,
-    H: Heartbeat,
-{
     let span = tracing::info_span!(
         "replay",
         entries = input.history.len() as u64,
         histogram.rewind.replay.duration = tracing::field::Empty,
         rewind.outcome = tracing::field::Empty,
     );
-    let replayed = rebuild(executor, payloads, heartbeat, input)
+    let replayed = rebuild(executor, payloads, input)
         .instrument(span.clone())
         .await;
     span.record(metrics::OUTCOME, metrics::replay_outcome(&replayed));
     replayed
 }
 
-async fn rebuild<X, P, H>(
+async fn rebuild<X, P>(
     executor: &X,
     payloads: &P,
-    heartbeat: &mut H,
     input: ReplayInput<'_>,
 ) -> Result<Rebuilt<X::Instance>, ReplayError>
 where
     X: ScriptExecutor,
     P: PayloadSource,
-    H: Heartbeat,
 {
     let mut cursor = ReplayCursor::new(input.history)?;
     let compiled = match input.compiled {
@@ -168,7 +129,6 @@ where
         started_at: cursor.started_at(),
     };
 
-    heartbeat.beat().await.map_err(ReplayError::LeaseLost)?;
     let (mut instance, emitted) = match executor.start(start).await {
         Ok(started) => started,
         Err(err) => return stopped(&mut cursor, None, err),
@@ -181,7 +141,6 @@ where
         match cursor.on_idle()? {
             Next::Deliver { completion, .. } => {
                 let delivery = payloads::delivery(payloads, tenant, completion).await?;
-                heartbeat.beat().await.map_err(ReplayError::LeaseLost)?;
                 let emitted = match instance.deliver(delivery, cursor.logical_now()).await {
                     Ok(emitted) => emitted,
                     Err(err) => return stopped(&mut cursor, Some(instance), err),

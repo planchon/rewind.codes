@@ -119,7 +119,7 @@ pub use partition::{
 };
 pub use read_model::{
     Ending, Latency, Predicate, QuarantineNote, Range, RunOrder, RunQuery, RunSnapshot, RunSummary,
-    SearchCursor, TaskPhase, TaskProgress, Term, TextMatch, Wait, WaitKind, WaitingFor,
+    SearchCursor, TaskPhase, Term, TextMatch, Wait, WaitKind, WaitingFor,
 };
 pub use secrets::{
     DailyReads, LastRead, MasterKeyId, NewSecret, PrivateKey, PublicKey, PutSecret,

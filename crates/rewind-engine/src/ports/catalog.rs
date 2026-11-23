@@ -360,9 +360,9 @@ pub trait CatalogStore: Send + Sync {
     ) -> impl Future<Output = Result<DropNamespace, CatalogError>> + Send;
 
     // ---------------------------------------------------------------------------------------
-    // Runs of the previous design
+    // Runs `migrate-runs` moved
 
-    /// The partition a run moved from the tables of the previous design lives in: its id is a
+    /// The partition a run `migrate-runs` moved from the `legacy` schema lives in: its id is a
     /// version 7 UUID, whose bits name no partition (`archi/06-storage-and-scale.md`,
     /// "Partitions, owners and nodes": `legacy_runs`). `None` for a run `migrate-runs` did not
     /// move. A catalog that holds no such run answers `None`, which is the default.

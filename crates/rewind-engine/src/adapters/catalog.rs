@@ -37,7 +37,7 @@ struct State {
     subscriptions: BTreeMap<(TenantId, String), Subscription>,
     tenants: BTreeMap<TenantId, Tenant>,
     namespaces: BTreeMap<(TenantId, NamespaceName), Namespace>,
-    /// `legacy_runs`: where the runs of the previous design live.
+    /// `legacy_runs`: where the runs `migrate-runs` moved live.
     legacy: BTreeMap<RunId, PartitionId>,
 }
 
@@ -94,8 +94,8 @@ impl MemoryCatalog {
         }
     }
 
-    /// Records where a run of the previous design lives, as `migrate-runs` does: its version 7 id
-    /// names no partition.
+    /// Records where a run moved from the `legacy` schema lives, as `migrate-runs` does: its
+    /// version 7 id names no partition.
     pub fn put_legacy_run(&self, run: RunId, partition: PartitionId) -> Result<(), CatalogError> {
         self.lock()?.legacy.insert(run, partition);
         Ok(())

@@ -2,17 +2,18 @@
 //! "Workflows across runs").
 //!
 //! ```text
-//! register_workflow ── checks (name, schemas, script, tsgo) ──► put_script, put_workflow
-//! start_workflow ───── input checked against the version ─────► create (metadata.workflow)
+//! Edge::register_workflow ── checks (name, schemas, script, tsgo, suite) ──► put_script, put_workflow
+//! Edge::start_workflow ───── input checked against the version ───────────► the owner creates the run
 //!
-//! a script's workflows.<name>.start  ──► start_child  ──► create (started_by, the call's key)
-//!          workflows.<name>.signal ──► signal_run   ──► enqueue on the target (the call's key)
-//! the target's terminal commit ──────────────────────► rewind:ended:<id> to its watchers
-//! a fork's copied starts ────────────► watch_inherited ──► watch_run, the end if it is there
+//! a script's workflows.<name>.start  ──► call executor ──► the child's owner creates it
+//!                                                          (started_by, the call's key)
+//!          workflows.<name>.signal ──► call executor ──► a signal to the target (the call's key)
+//! the target's terminal commit ──────────────────────────► rewind:ended:<id> to its watchers
+//! a fork's copied starts ──► the fork watches the runs they started, their end if it is there
 //! ```
 //!
 //! In mock mode, a start is answered by the mock sources: their answer is the child's end, which
-//! follows the start at once ([`mock_start`](Engine::mock_start)).
+//! follows the start at once, and no child runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -139,7 +140,8 @@ pub struct StartWorkflow {
     pub namespace: NamespaceName,
     pub version: Digest,
     pub input: JsonValue,
-    /// The run's TTL; [`EngineConfig::default_ttl`](crate::EngineConfig::default_ttl) when
+    /// The run's TTL; the namespace's default
+    /// ([`NodeConfig::default_ttl`](crate::plane::NodeConfig::default_ttl) within its bounds) when
     /// `None`.
     pub ttl: Option<Duration>,
     /// Its `workflow` is set from the version.

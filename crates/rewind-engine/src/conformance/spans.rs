@@ -249,7 +249,7 @@ pub async fn spans_reach_the_backend_as_exported<E: SpanExporter + Collector>(ex
 }
 
 pub async fn a_span_exported_twice_is_the_same_span<E: SpanExporter + Collector>(exporter: &E) {
-    // A feed item applied twice, then a later one that ends the run.
+    // A batch's spans exported twice, then a later batch's that end the run.
     exporter
         .export(vec![call_span(1), timer_span()])
         .await

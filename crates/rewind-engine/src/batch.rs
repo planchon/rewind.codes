@@ -12,7 +12,7 @@ use std::cmp::max;
 use std::time::Duration;
 
 use rewind_core::{
-    AbortKind, AbortReason, Digest, Event, HistoryEntry, HistoryError, Lifecycle, RunId, RunState,
+    AbortKind, AbortReason, Event, HistoryEntry, HistoryError, Lifecycle, RunId, RunState,
     Timestamp,
 };
 
@@ -29,38 +29,14 @@ pub enum EngineError {
     Store(#[from] StoreError),
     #[error(transparent)]
     Blob(#[from] BlobError),
-    #[error("run {0} not found")]
-    RunNotFound(RunId),
     /// A command names a tool its run's toolset does not have.
     #[error("run {run_id} called {tool}, which its toolset does not have")]
     UnknownTool { run_id: RunId, tool: String },
     #[error(transparent)]
     Secret(#[from] SecretError),
-    /// No such tool task for this tenant: it was answered, its run ended, or its claim was
-    /// taken over by another worker. An outcome reported for it is dropped.
-    #[error(
-        "the task no longer exists: it was answered, its run ended, or its claim was taken over"
-    )]
-    TaskGone,
-    /// Only a task waiting for the harness (`approval` or `parked`) can be approved or rejected.
-    #[error("task {task} is {state}: only a task waiting for the harness is approved or rejected")]
-    TaskNotWaiting { task: String, state: &'static str },
-    /// A tool result above the engine's payload limit.
-    #[error("the result is {size} bytes as canonical JSON, above the limit of {max} bytes")]
-    ResultTooLarge { size: usize, max: usize },
-    /// A text to store (a signal's idempotency key) holds a NUL character.
+    /// A text to store holds a NUL character.
     #[error(transparent)]
     NulCharacter(#[from] NulCharacter),
-    #[error("run {0} has ended")]
-    RunEnded(RunId),
-    #[error("script {0} not found")]
-    ScriptNotFound(Digest),
-    #[error("toolset {0} not found")]
-    ToolsetNotFound(Digest),
-    /// A signal the run does not take: a name Rewind keeps, or, for a run of a workflow, a
-    /// signal its version does not declare or a payload that does not match.
-    #[error("{0}")]
-    SignalRefused(String),
     #[error("the history of run {run_id} is invalid: {error}")]
     CorruptHistory { run_id: RunId, error: HistoryError },
     #[error("the inbox of run {run_id} is invalid: {message}")]
