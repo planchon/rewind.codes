@@ -1,7 +1,6 @@
-import { EventSourceParserStream } from "eventsource-parser/stream";
-
 import { RewindConnectionError } from "../errors.js";
 import type { Transport } from "../http.js";
+import { sseMessages } from "../sse.js";
 import type { Duration, HandedTask, TaskGone, TaskStreamEvent } from "../types.js";
 import type { RequestOptions } from "./toolsets.js";
 
@@ -88,8 +87,7 @@ export class Tasks {
               },
             }),
           );
-    const messages = bytes.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream());
-    for await (const message of messages) {
+    for await (const message of sseMessages(bytes, signal)) {
       if (message.event === "task") {
         yield { type: "task", task: JSON.parse(message.data) as HandedTask };
       } else if (message.event === "gone") {

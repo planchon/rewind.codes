@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 
 import type { HandedTask, Payload, Run, Toolset, Workflow } from "../src/types.js";
 
@@ -102,4 +104,14 @@ export async function until(condition: () => boolean, timeoutMs = 2_000): Promis
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+/**
+ * A full garbage collection, as memory pressure brings one: what only a weak reference holds is gone after it.
+ */
+export function collectGarbage(): void {
+  setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  gc();
+  gc();
 }

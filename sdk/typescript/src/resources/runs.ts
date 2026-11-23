@@ -1,9 +1,8 @@
-import { EventSourceParserStream } from "eventsource-parser/stream";
-
 import { durationParam, toMillis } from "../duration.js";
 import { RewindApiError, RewindConnectionError, RewindError } from "../errors.js";
 import { backoff, checkIdempotencyKey, messageOf, sleep, throwIfAborted, type Transport } from "../http.js";
 import { labelParams, timeParam } from "../params.js";
+import { sseMessages } from "../sse.js";
 import {
   type Duration,
   type Entry,
@@ -463,8 +462,7 @@ export class Runs {
         if (body === null) {
           throw new RewindConnectionError(`the event stream of run ${id} has no body`);
         }
-        const messages = body.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream());
-        for await (const message of messages) {
+        for await (const message of sseMessages(body, signal)) {
           const event = JSON.parse(message.data) as StreamEvent;
           if (event.type === "entry") {
             next = event.idx + 1;

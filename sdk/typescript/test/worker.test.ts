@@ -15,7 +15,7 @@ import {
   type WorkerErrorInfo,
   type WorkerTimings,
 } from "../src/index.js";
-import { NAMESPACE, RUN_ID, TOOLSET, task, until } from "./fixtures.js";
+import { NAMESPACE, RUN_ID, TOOLSET, collectGarbage, task, until } from "./fixtures.js";
 import { MockServer, noContent, problem, type JsonReply, type MockReply, type MockRequest } from "./mock-server.js";
 
 /** A task stream the server holds open: the test writes its events. */
@@ -441,6 +441,18 @@ describe("the host-tool worker", () => {
     worker = rewind.worker({ tools: { ask_user: () => "ok" }, signal: controller.signal, onError: () => undefined });
     controller.abort();
     await worker.done;
+  });
+
+  it("stops while the server holds its stream open, after a garbage collection", async () => {
+    const w = start({ ask_user: () => "ok" });
+    const stream = await open(1);
+    // Node's fetch follows the caller's signal through its own request, held weakly: once it is collected, only the
+    // worker's own hold on the stream can end it.
+    collectGarbage();
+    await sleepMs(20);
+    const stopped = await Promise.race([w.stop().then(() => true), sleepMs(2_000).then(() => false)]);
+    expect(stopped).toBe(true);
+    await until(() => stream.closed);
   });
 
   it("stops on a refused key, and opens the stream again after other failures", async () => {

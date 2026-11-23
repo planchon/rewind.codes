@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { Rewind, RewindConnectionError, type StreamEvent } from "../src/index.js";
-import { HANDLE, NAMESPACE, RUN_ID, payload } from "./fixtures.js";
+import { HANDLE, NAMESPACE, RUN_ID, collectGarbage, payload, until } from "./fixtures.js";
 import { MockServer, problem, sse } from "./mock-server.js";
 
 let server: MockServer;
@@ -55,6 +55,39 @@ describe("the event stream", () => {
     expect(events.map((e) => (e.type === "entry" ? e.idx : e.type))).toEqual([0, 1, 2, "end"]);
     expect(server.requests.map((r) => r.query.get("from"))).toEqual(["0", "2"]);
     expect(server.requests.every((r) => r.query.get("follow") === "true")).toBe(true);
+  });
+
+  it("ends a followed stream the server holds open when its signal aborts, after a garbage collection", async () => {
+    let closed = false;
+    server.on(
+      "GET",
+      "/v1/runs/{id}/events",
+      () => (response) =>
+        new Promise<void>((resolve) => {
+          response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+          response.write(`event: entry\nid: 0\ndata: ${JSON.stringify(entry(0).data)}\n\n`);
+          response.on("close", () => {
+            closed = true;
+            resolve();
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const events = rewind.runs.events(RUN_ID, { follow: true, signal: controller.signal });
+    expect((await events.next()).value).toMatchObject({ type: "entry", idx: 0 });
+    const next = events.next();
+    collectGarbage();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort(new Error("enough"));
+    const outcome = await Promise.race([
+      next.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve("still reading"), 2_000)),
+    ]);
+    expect(outcome).toBe("enough");
+    await until(() => closed);
   });
 
   it("reconnects to a server it cannot reach for a while, as to a dropped stream", async () => {
