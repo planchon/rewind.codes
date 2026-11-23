@@ -2,7 +2,7 @@
 //! "Inside a node", "Tests").
 //!
 //! One node holds the one partition of the deployment, over the memory adapters, with the V8
-//! executor and the scenario's tools, in virtual time from [`T0`](crate::T0). A harness's
+//! executor and the scenario's tools, in virtual time from [`T0`]. A harness's
 //! worker is an SDK stream at the node's edge: it is handed the host tasks and answers them
 //! through their token; a worker that crashes closes its stream, and another worker opens one.
 //! The entropy draws the scenario's ids and seeds in order, whatever the partition, so a case's
